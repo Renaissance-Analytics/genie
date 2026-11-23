@@ -31,6 +31,7 @@ import { makeServiceExec } from './service-exec.js';
 import { doctorHoldNow } from './genie-running-file.js';
 import { openLifecycleLog } from './lifecycle-log.js';
 import { genieRoot, legacyProviderHomes, osaHomeDir, runtimeDir, sessionsDir, userHome } from './paths.js';
+import { writeDataRootManifest } from './data-root.js';
 import { WorkspaceStorage, type ChatFile } from './workspace-storage-host.js';
 import { storageFeaturePort } from './storage-feature-port.js';
 import type { InUseFolder } from '../core/workspace-storage.js';
@@ -210,7 +211,7 @@ import { setWin32ProcessReader } from '../core/process-tree.js';
 import { restrictPrivateDirectories, sharedWindowsHelper } from './private-credentials.js';
 import { writeTextPrivate } from './store.js';
 import { openRelayMember, PopKeypair } from './relay-member.js';
-import { mintConnectGrant, relayHostPorts, startRelayHost } from './tynn-network.js';
+import { connectableWorkstations, mintConnectGrant, relayHostPorts, startRelayHost } from './tynn-network.js';
 import { AgentToolCalls } from './mcp-interrupt.js';
 import { testReadyDelayMs } from './host-wait-window.js';
 import { RemoteBrowsers } from './remote-browsers.js';
@@ -369,6 +370,8 @@ async function main(): Promise<void> {
     const pipeAcl = await restrictHostPipe(server, endpoint);
     if (pipeAcl?.ok === true) lifecycleLog(`host pipe: its user and SYSTEM only (${pipeAcl.sddl})`);
     else if (pipeAcl) { say(`the host pipe keeps Windows' default access: ${pipeAcl.reason}`); lifecycleLog(`host pipe: NOT restricted: ${pipeAcl.reason}`); }
+    // THE DATA ROOT'S MANIFEST (P7.2; data-root.ts): what in this root is state and what is this machine's, written by the host that holds the endpoint.
+    await writeDataRootManifest(home, build).catch((error: unknown) => { const line = `data root: the manifest was not written: ${error instanceof Error ? error.message : String(error)}`; say(line); lifecycleLog(line); });
     /*
      * SAFE MODE (Tynn #386; safe-mode-host.ts), opened here: only the host that holds the endpoint reads and removes the
      * clean-exit marker (a second host exited above, touching nothing). With no marker the last run did not end cleanly,
@@ -1442,6 +1445,12 @@ async function main(): Promise<void> {
                 : Promise.resolve({ ok: false as const, reason: 'sign in to Tynn to connect to a Tynn workstation' })),
             // Through the one socket this host dials with (device-socket.ts): the machine's roots, no redirects.
             open: (input) => openRelayMember({ socket: (url) => deviceSocket(url), ...input }),
+            // The machine's name as Tynn lists it, for the words a refusal is said in (relay-e2e.ts `e2eWords`).
+            name: async (workstationId) => {
+                if (!tynnAccountNow) return null;
+                const listed = await connectableWorkstations((path, init) => tynnAccountNow!.request(path, init), new Set());
+                return listed.ok ? listed.workstations.find((w) => w.id === workstationId)?.name ?? null : null;
+            },
         },
         browsers: new RemoteBrowsers(siteDoor),
     });

@@ -19,8 +19,20 @@ export interface FakeSocket extends RelaySocket {
 /** genie-cloud's host heartbeat interval (`relay-server/server.ts` `heartbeatMs`). */
 const HEARTBEAT_MS = 30_000;
 
-export function fakeRelay(verifyHost: (hello: Record<string, unknown>) => string | null) {
+/**
+ * A RELAY THAT IS NOT HONEST (audit M-a, P9.2): what its operator could do with the frames it carries. Each hook gets one
+ * routed frame (after the dial-in handshakes, the member's already stamped with its sid) and returns what is delivered
+ * instead: `[text]` is honest, `[]` drops it, anything else rewrites, repeats or adds. Absent = honest.
+ */
+export interface RelayTamper {
+    fromMember?(text: string, sid: string): string[];
+    fromHost?(text: string, sid: string): string[];
+}
+
+export function fakeRelay(verifyHost: (hello: Record<string, unknown>) => string | null, tamper: RelayTamper = {}) {
     const log: string[] = [];
+    /** Every frame this relay was handed, as it read it: what its operator sees. */
+    const wire: Array<{ from: 'member' | 'host'; text: string }> = [];
     const hosts = new Map<string, FakeSocket>();
     const sessions = new Map<string, { workstationId: string; member: FakeSocket }>();
     const helloOf = new Map<FakeSocket, string | null>();
@@ -52,7 +64,8 @@ export function fakeRelay(verifyHost: (hello: Record<string, unknown>) => string
             }
             const s = sessions.get(String(msg.sid));
             if (!s) return;
-            s.member.deliver(text);
+            wire.push({ from: 'host', text });
+            for (const out of tamper.fromHost ? tamper.fromHost(text, String(msg.sid)) : [text]) s.member.deliver(out);
             if (msg.channel === 'control' && (msg.kind === 'close' || msg.kind === 'error')) dropSession(String(msg.sid));
             return;
         }
@@ -64,12 +77,16 @@ export function fakeRelay(verifyHost: (hello: Record<string, unknown>) => string
             if (!host) { socket.deliver(JSON.stringify({ type: 'error', code: 'no-host', reason: 'workstation not connected' })); socket.drop(); return; }
             const fresh = `sid_${++nextSid}`;
             sessions.set(fresh, { workstationId: String(msg.workstationId), member: socket });
+            wire.push({ from: 'member', text });
             socket.deliver(JSON.stringify({ type: 'member-welcome', sid: fresh }));
             host.deliver(JSON.stringify({ kind: 'open', channel: 'control', sid: fresh, payload: { grant: msg.grant } }));
             return;
         }
         // Stamp the authoritative sid: a member cannot speak for another session.
-        hosts.get(sessions.get(sid)!.workstationId)?.deliver(JSON.stringify({ ...msg, sid }));
+        const stamped = JSON.stringify({ ...msg, sid });
+        wire.push({ from: 'member', text: stamped });
+        const host = hosts.get(sessions.get(sid)!.workstationId);
+        for (const out of tamper.fromMember ? tamper.fromMember(stamped, sid) : [stamped]) host?.deliver(out);
     };
 
     const onClosed = (socket: FakeSocket) => {
@@ -118,7 +135,10 @@ export function fakeRelay(verifyHost: (hello: Record<string, unknown>) => string
         queueMicrotask(() => { if (closed) return; (s as { readyState: number }).readyState = 1; s.onopen?.({}); });
         return s;
     };
-    return { socket, log, hosts, sessions };
+    /** The relay speaking for itself: a frame of its own making, to a session's host or to its member. */
+    const toHost = (sid: string, text: string) => { const s = sessions.get(sid); if (s) hosts.get(s.workstationId)?.deliver(text); };
+    const toMember = (sid: string, text: string) => { sessions.get(sid)?.member.deliver(text); };
+    return { socket, log, hosts, sessions, wire, toHost, toMember };
 }
 
 

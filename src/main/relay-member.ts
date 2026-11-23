@@ -1,13 +1,19 @@
 import { generateKeyPairSync, sign, type KeyObject } from 'node:crypto';
 import type { ClientTransport } from '../core/remote-protocol.js';
+import { e2eWords, hostKeyOf, RelayE2eError, startMember, type FrameCipher, type MemberExchange } from './relay-e2e.js';
 import { pipeSiteStream, type SiteFrame, type SiteOpen, type SitePipe } from './relay-site.js';
-import { decodeFrame, decodeMemberControl, encodeFrame, encodeMemberHello, OPEN, popSignedInput, textOf, type PopJwk, type RelaySocketFactory } from './relay-wire.js';
+import { decodeFrame, decodeMemberControl, encodeFrame, encodeMemberHello, OPEN, popSignedInput, textOf, type Frame, type PopJwk, type RelaySocketFactory } from './relay-wire.js';
 
 /**
  * A MEMBER OF THE TYNN NETWORK (Tynn #837) — Genie 1's `remote/relay-client.ts` + `relay-pop.ts`, carrying Genie 2's
  * own protocol. Main dials `<relay>/ws/member` with the Tynn grant (never the renderer: the grant and the proof key stay
  * here), the relay answers with the session id, the host challenges, the member proves the key the grant is bound to —
  * and from then on Genie 2's text messages travel as `rest` data frames, in both directions.
+ *
+ * END TO END (audit M-a, host split P9.2; relay-e2e.ts): before anything of Genie's own is sent, the host must prove it
+ * holds the key TYNN named for the workstation with this grant, and the member proves the grant's key to it. After that
+ * every `rest` and `site` frame is sealed, and one that does not open ends the connection. There is no plain path: with
+ * no key from Tynn the relay is not dialled, and a host that does not answer the handshake is sent nothing.
  *
  * A refusal anywhere (the relay's, the host's) closes the transport with its reason, kept for whoever shows it.
  */
@@ -34,10 +40,22 @@ export class PopKeypair {
         return { jwk: this.publicJwk, sig: sign(null, popSignedInput(nonce, workstationId, sid), this.#privateKey).toString('base64url') };
     }
 
+    /**
+     * This key's signature for the end-to-end handshake (relay-e2e.ts): only over that handshake's own labelled string,
+     * so the key can never be made to sign a proof-of-possession digest, or anything else, through here.
+     */
+    signHandshake(data: Buffer): Buffer {
+        if (!this.#privateKey) throw new Error('the proof key was discarded');
+        if (!data.subarray(0, HANDSHAKE_LABEL.length).equals(HANDSHAKE_LABEL)) throw new Error('not the end-to-end handshake');
+        return sign(null, data, this.#privateKey);
+    }
+
     discard(): void {
         this.#privateKey = null;
     }
 }
+
+const HANDSHAKE_LABEL = Buffer.from('genie-relay-e2e v1 member\n', 'utf8');
 
 /** A transport over the relay that can say why it closed. */
 export interface RelayMemberTransport extends ClientTransport {
@@ -89,11 +107,25 @@ export function openRelayMember(input: {
     relayUrl: string;
     workstationId: string;
     grant: string;
+    /**
+     * `host_public_key` as Tynn returned it with THIS grant (tynn-network.ts `mintConnectGrant`): the only key the host is
+     * checked against. `null` (Tynn named none) refuses before the relay is dialled.
+     */
+    hostPublicKey: string | null;
+    /** The workstation's name, for the words a person reads; absent = "the workstation you asked for". */
+    name?: string | null;
     pop: PopKeypair;
     timeoutMs?: number;
+    /** How long the host has to answer the handshake after this member's proof; a host from before P9.2 never does. */
+    e2eTimeoutMs?: number;
     /** Fetch a fresh grant during the session (genie#1401); absent = the session lasts as long as its first grant. */
     renew?: RenewGrant;
 }): Promise<RelayMemberResult> {
+    // No key from Tynn: there is nothing to check the host against, so nothing is dialled and nothing is sent.
+    if (hostKeyOf(input.hostPublicKey) === null) {
+        input.pop.discard();
+        return Promise.resolve({ ok: false, reason: e2eWords.noKey(input.name) });
+    }
     return new Promise((resolve) => {
         const ws = input.socket(`${input.relayUrl.replace(/\/+$/, '')}/ws/member`);
         const messages = new Set<(text: string) => void>();
@@ -106,7 +138,20 @@ export function openRelayMember(input: {
         const streams = new Map<string, SiteStream>();
         let nextReq = 0;
         let renewTimer: ReturnType<typeof setTimeout> | null = null;
+        /** The handshake in flight, then the session's cipher: nothing of Genie's own moves before `cipher` is set. */
+        let exchange: MemberExchange | null = null;
+        let cipher: FrameCipher | null = null;
+        let e2eTimer: ReturnType<typeof setTimeout> | null = null;
 
+        /** The one way a rest or site frame leaves: sealed, at the moment of the write. */
+        const sendSealed = (frame: Frame): void => {
+            if (closed || cipher === null || ws.readyState !== OPEN) return;
+            try {
+                ws.send(encodeFrame(cipher.seal(frame)));
+            } catch (error) {
+                closeOnce(error instanceof RelayE2eError && error.code === 'limit' ? e2eWords.limit(input.name) : e2eWords.changed(input.name));
+            }
+        };
         /** Schedule the next renewal for the grant in use, which expires at `expiresAt`. */
         const scheduleRenew = (expiresAt: number | null, retry = false) => {
             if (renewTimer) clearTimeout(renewTimer);
@@ -126,12 +171,13 @@ export function openRelayMember(input: {
             } catch (error) {
                 fresh = { ok: false, reason: error instanceof Error ? error.message : String(error) };
             }
-            if (closed || sid === null || ws.readyState !== OPEN) return;
+            if (closed || sid === null || cipher === null || ws.readyState !== OPEN) return;
             if (!fresh.ok) {
                 scheduleRenew(current, true);
                 return;
             }
-            ws.send(encodeFrame({ kind: 'data', channel: 'control', sid, payload: { type: 'grant-renew', grant: fresh.token } }));
+            // Inside the seal (relay-e2e.ts): only this member can hand the host a renewal, and the relay reads neither it nor the grant.
+            sendSealed({ kind: 'data', channel: 'control', sid, payload: { type: 'grant-renew', grant: fresh.token } });
             scheduleRenew(expiresAtOf(fresh.token));
         };
 
@@ -147,6 +193,10 @@ export function openRelayMember(input: {
             because = reason;
             if (renewTimer) clearTimeout(renewTimer);
             renewTimer = null;
+            if (e2eTimer) clearTimeout(e2eTimer);
+            e2eTimer = null;
+            exchange = null;
+            cipher = null;
             input.pop.discard();
             for (const stream of [...streams.values()]) {
                 stream.settle?.({ ok: false, reason: reason ?? 'the connection to the host closed' });
@@ -161,21 +211,21 @@ export function openRelayMember(input: {
 
         const transport: RelayMemberTransport = {
             send: (text) => {
-                if (closed || sid === null || ws.readyState !== OPEN) return;
-                ws.send(encodeFrame({ kind: 'data', channel: 'rest', sid, payload: text }));
+                if (closed || sid === null) return;
+                sendSealed({ kind: 'data', channel: 'rest', sid, payload: text });
             },
             onMessage: (l) => { messages.add(l); return () => { messages.delete(l); }; },
             onClose: (l) => { closes.add(l); return () => { closes.delete(l); }; },
             close: () => closeOnce(null),
             closedBecause: () => because,
             openSite: (host) => new Promise<SiteOpen>((resolve) => {
-                if (closed || sid === null || ws.readyState !== OPEN) {
+                if (closed || sid === null || cipher === null || ws.readyState !== OPEN) {
                     resolve({ ok: false, reason: because ?? 'not connected to the host' });
                     return;
                 }
                 const reqId = `site_${++nextReq}`;
                 const session = sid;
-                const say = (f: SiteFrame) => { if (!closed && ws.readyState === OPEN) ws.send(encodeFrame({ ...f, channel: 'site', sid: session, reqId })); };
+                const say = (f: SiteFrame) => { sendSealed({ ...f, channel: 'site', sid: session, reqId }); };
                 const stream: SiteStream = { settle: null, pipe: null, early: [] };
                 const timer = setTimeout(() => {
                     if (!stream.settle) return;
@@ -196,7 +246,7 @@ export function openRelayMember(input: {
             if (stream.settle) {
                 const p = frame.payload as { t?: unknown; ca?: unknown } | undefined;
                 if (frame.kind === 'data' && p?.t === 'open') {
-                    const say = (f: SiteFrame) => { if (!closed && ws.readyState === OPEN && sid !== null) ws.send(encodeFrame({ ...f, channel: 'site', sid, reqId })); };
+                    const say = (f: SiteFrame) => { if (sid !== null) sendSealed({ ...f, channel: 'site', sid, reqId }); };
                     stream.settle({
                         ok: true,
                         ...(typeof p.ca === 'string' ? { ca: p.ca } : {}),
@@ -236,8 +286,14 @@ export function openRelayMember(input: {
                     return;
                 }
                 sid = reply.sid;
-                scheduleRenew(expiresAtOf(input.grant));
-                finish({ ok: true, transport });
+                // The handshake starts at once, ahead of the proof: the host answers it only after the grant and the proof hold.
+                try {
+                    exchange = startMember({ workstationId: input.workstationId, sid, grant: input.grant, hostPublicKey: input.hostPublicKey, memberJwk: input.pop.publicJwk, sign: (data) => input.pop.signHandshake(data) });
+                } catch {
+                    closeOnce(e2eWords.noKey(input.name));
+                    return;
+                }
+                ws.send(encodeFrame({ kind: 'data', channel: 'control', sid, payload: exchange.init }));
                 return;
             }
             let frame: ReturnType<typeof decodeFrame>;
@@ -255,15 +311,51 @@ export function openRelayMember(input: {
                 if (frame.kind === 'data' && payload?.type === 'pop-challenge' && typeof payload.nonce === 'string') {
                     const proof = input.pop.prove(payload.nonce, input.workstationId, sid);
                     ws.send(encodeFrame({ kind: 'data', channel: 'control', sid, payload: { type: 'pop-proof', jwk: proof.jwk, sig: proof.sig } }));
+                    // A host of this build answers the handshake as soon as the proof holds; one from before it never does.
+                    if (cipher === null && e2eTimer === null) e2eTimer = setTimeout(() => closeOnce(e2eWords.oldHost(input.name)), input.e2eTimeoutMs ?? 10_000);
+                    return;
+                }
+                if (frame.kind === 'data' && payload?.type === 'e2e-accept') {
+                    // Answered once: a second accept, or one nobody asked for, is somebody else's.
+                    if (exchange === null || cipher !== null) {
+                        closeOnce(e2eWords.changed(input.name));
+                        return;
+                    }
+                    const asked = exchange;
+                    exchange = null;
+                    let done: ReturnType<MemberExchange['accept']>;
+                    try {
+                        done = asked.accept(frame.payload);
+                    } catch {
+                        // The host did not prove it holds the key Tynn named: nothing of Genie's own was sent, and nothing will be.
+                        closeOnce(e2eWords.notProved(input.name));
+                        return;
+                    }
+                    if (e2eTimer) clearTimeout(e2eTimer);
+                    e2eTimer = null;
+                    ws.send(encodeFrame({ kind: 'data', channel: 'control', sid, payload: done.finish }));
+                    cipher = done.cipher;
+                    scheduleRenew(expiresAtOf(input.grant));
+                    finish({ ok: true, transport });
                 }
                 return;
             }
-            if (frame.channel === 'rest' && frame.kind === 'data' && typeof frame.payload === 'string') {
-                for (const l of messages) l(frame.payload);
+            if (frame.channel !== 'rest' && frame.channel !== 'site') return;
+            // Everything else is the host's, sealed: one frame that does not open ends the connection, and is not delivered.
+            let opened: Frame;
+            try {
+                if (cipher === null) throw new RelayE2eError('plain', 'a frame before the handshake');
+                opened = cipher.open(frame);
+            } catch {
+                closeOnce(e2eWords.changed(input.name));
                 return;
             }
-            if (frame.channel === 'site' && frame.reqId) {
-                siteFrame(frame.reqId, { kind: frame.kind, ...(frame.payload !== undefined ? { payload: frame.payload } : {}), ...(frame.reason !== undefined ? { reason: frame.reason } : {}) });
+            if (opened.channel === 'rest' && opened.kind === 'data' && typeof opened.payload === 'string') {
+                for (const l of messages) l(opened.payload);
+                return;
+            }
+            if (opened.channel === 'site' && opened.reqId) {
+                siteFrame(opened.reqId, { kind: opened.kind, ...(opened.payload !== undefined ? { payload: opened.payload } : {}), ...(opened.reason !== undefined ? { reason: opened.reason } : {}) });
             }
         };
         ws.onclose = () => closeOnce(because ?? 'the relay closed the connection');
