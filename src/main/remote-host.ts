@@ -1,4 +1,5 @@
 import { LatestPush } from '../core/latest-push.js';
+import { readRegistryRead } from './registry-protocol.js';
 import { randomBytes } from 'node:crypto';
 import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
 import { REMOTE_FRAME_MAX_BYTES, fitRemoteFrame } from '../core/remote-frame.js';
@@ -102,6 +103,10 @@ export interface HostApi {
     remoteWatch?(): unknown;
     /** genie-host's settings, for main's own client saying settings.watch (settings-watch.ts; Tynn #998). Absent = nothing. */
     settingsWatch?(): unknown;
+    /** genie-host's registry, for main's own client saying registry.watch (registry-protocol.ts; Tynn #1007). Absent = nothing. */
+    registryWatch?(): unknown;
+    /** One read of genie-host's registry, for main's own client saying registry.read (Tynn #1007). Absent = refused. */
+    registryRead?(method: string): Promise<unknown>;
     /** Release transient view state for this admitted connection; never an invocation from the wire. */
     releaseCaller?(context: CallContext): void;
     readonly marketplace?: () => MarketplaceApi | null;
@@ -227,6 +232,11 @@ interface Connection {
      * genie-host's settings (`local-settings`) when they change, and nothing else; no other connection hears them.
      */
     settingsOnly: boolean;
+    /**
+     * A REGISTRY-ONLY CONNECTION (`registry.watch`, Tynn #1007 2g-4e): main's own client, for its window registry. It hears
+     * that genie-host's registry was written (`local-registry`), and nothing else; no other connection hears it.
+     */
+    registryOnly: boolean;
     /**
      * A TAKE OVER WINDOW (Tynn #529 part A): the window it was opened from, its one terminal, whether its click started the
      * TUI, and, once its window lost the baton or left, why it may type no more.
@@ -642,7 +652,7 @@ export class RemoteHost {
     }
 
     #accept(socket: ServerConnection): void {
-        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, agentPush: null, watching: new Map(), activityViews: new Set(), tynnWatches: new Map(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null, batonWatch: false, deckOnly: false, deckSent: null, summaryOnly: false, remoteOnly: false, settingsOnly: false, companion: null, negotiated: null, outside: null };
+        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, agentPush: null, watching: new Map(), activityViews: new Set(), tynnWatches: new Map(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null, batonWatch: false, deckOnly: false, deckSent: null, summaryOnly: false, remoteOnly: false, settingsOnly: false, registryOnly: false, companion: null, negotiated: null, outside: null };
         this.#connections.set(connection.id, connection);
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
@@ -993,6 +1003,19 @@ export class RemoteHost {
                 if (!connection.local || connection.socket.preAuth?.own !== true) return refuse(`${this.#hostName}'s settings are watched by its own Genie only`);
                 connection.settingsOnly = true;
                 return ok(this.#api.settingsWatch?.() ?? null);
+            // That genie-host's registry was written, and nothing else (Tynn #1007, 2g-4e): main's own client only.
+            case 'registry.watch':
+                if (!connection.local || connection.socket.preAuth?.own !== true) return refuse(`${this.#hostName}'s registry is watched by its own Genie only`);
+                connection.registryOnly = true;
+                return ok(this.#api.registryWatch?.() ?? null);
+            // One read of genie-host's registry (Tynn #1007, 2g-4e): main's own client only, the read named strictly.
+            case 'registry.read': {
+                if (!connection.local || connection.socket.preAuth?.own !== true) return refuse(`${this.#hostName}'s registry is read by its own Genie only`);
+                const read = readRegistryRead(args);
+                if (typeof read !== 'string') return refuse(read.reason);
+                if (!this.#api.registryRead) return refuse(`${this.#hostName} keeps no registry`);
+                return ok(await this.#api.registryRead(read));
+            }
             case 'baton.status': {
                 const holder = this.#baton.holder();
                 return ok({ driver: holder?.label ?? null, mine: holder?.connectionId === connection.id, locked: this.#locked });
@@ -1376,7 +1399,7 @@ export class RemoteHost {
         // Read once for every deck-only connection: the Deck, said only when it changed (Tynn #941, 2f-2).
         let deck: { items: readonly unknown[]; key: string } | null = null;
         for (const c of windows) {
-            if (c.summaryOnly || c.remoteOnly || c.settingsOnly) continue;
+            if (c.summaryOnly || c.remoteOnly || c.settingsOnly || c.registryOnly) continue;
             if (c.deckOnly) {
                 deck ??= (() => { const items = deckItemsOf(snapshot); return { items, key: JSON.stringify(items) }; })();
                 if (deck.key !== c.deckSent) { c.deckSent = deck.key; this.#send(c, { kind: 'event', channel: LOCAL_EVENT_CHANNELS.deck, payload: { items: deck.items } }); }
@@ -1401,6 +1424,10 @@ export class RemoteHost {
             if (c.auth === null) continue;
             // A deck-only connection hears the Deck and nothing else (Tynn #941, 2f-2); a summary-only one, the summary (#953).
             if (c.deckOnly) continue;
+            if (c.registryOnly || channel === LOCAL_EVENT_CHANNELS.registry) {
+                if (c.registryOnly && channel === LOCAL_EVENT_CHANNELS.registry) this.#send(c, { kind: 'event', channel, payload });
+                continue;
+            }
             if (c.settingsOnly || channel === LOCAL_EVENT_CHANNELS.settings) {
                 if (c.settingsOnly && channel === LOCAL_EVENT_CHANNELS.settings) this.#send(c, { kind: 'event', channel, payload });
                 continue;

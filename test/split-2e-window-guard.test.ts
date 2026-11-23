@@ -113,11 +113,21 @@ describe('the window serves nothing (step 2e)', () => {
     });
 });
 
-/** Every use main.ts makes of its engine client: the member, or `call:<method>` for a raw call. */
+/**
+ * Every use main.ts makes of its engine client: the member, or `call:<method>` for a raw call. An ALIAS of the client
+ * (`const engineLink = agentEngineLink.client`) is followed, and a client handed whole to a function is `whole:<alias>`,
+ * which no list may hold (Tynn #1007, 2g-4e: main.ts read the registry as `engineLink.stores()`, unseen).
+ */
 export function engineUses(text: string): string[] {
     const uses = new Set<string>();
-    for (const m of code(text).matchAll(/(?<![\w$-])client\??\.(\w+)(\s*\(\s*'([^']*)')?/g)) {
-        uses.add(m[1] === 'call' ? `call:${m[3] ?? '?'}` : m[1]!);
+    const source = code(text);
+    const add = (member: string, method: string | undefined) => uses.add(member === 'call' ? `call:${method ?? '?'}` : member);
+    for (const m of source.matchAll(/(?<![\w$-])client\??\.(\w+)(\s*\(\s*'([^']*)')?/g)) add(m[1]!, m[3]);
+    const aliases = [...source.matchAll(/\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*[\w$.?]*\bclient\b(?!\s*\??\.)/g)].map((m) => m[1]!);
+    for (const alias of new Set(aliases)) {
+        for (const m of source.matchAll(new RegExp(`(?<![\\w$./-])${alias}\\??\\.(\\w+)(\\s*\\(\\s*'([^']*)')?`, 'g'))) add(m[1]!, m[3]);
+        // Handed whole: an argument of a call, never an `if (alias)` test.
+        if (new RegExp(`(?<!\\b(?:if|while|switch)\\s*)\\(\\s*${alias}\\s*[,)]|,\\s*${alias}\\s*[,)]`).test(source)) uses.add(`whole:${alias}`);
     }
     return [...uses].sort();
 }
@@ -149,6 +159,13 @@ describe('the window\'s engine link carries only the link, window capabilities, 
         // genie-host's; main unseals an older Genie's secrets once and hands them over (keychain.adoptLegacy).
         // catalog and plugins left in 2g-3c (#961): compose read nothing from them in the window.
         flows: '2g', hosting: '2g',
+        // Seen in 2g-4e (#1007) once the scanner followed main's `engineLink` alias; each is a task on 2g-4d (#955).
+        // pushWindowView and v1Import left in 2g-4d B (#1044).
+        onSpawnFrame: '2g', runHostTool: '2g', spawnLink: '2g',
+        // The Files watch (#955 task #1472); IssueWatch and the Tynn panels' watches (G-1, #934 task #1474).
+        onFilesEvent: '2g', filesWatch: '2g', filesUnwatch: '2g',
+        issueWatch: '2g', tynnBoardWatch: '2g', tynnBoardUnwatch: '2g', onTynnBoardEvent: '2g', tynnIssuesWatch: '2g', tynnIssuesUnwatch: '2g',
+        onTynnIssuesEvent: '2g', tynnFeaturesWatch: '2g', tynnFeaturesUnwatch: '2g', onTynnFeaturesEvent: '2g',
         // recordsChanged left in 2g-3 (#954): genie-host reads its own registry.
         // remoteAccess left in 2g-4a (#997): main's notifications read genie-host's remote.watch.
         stores: '2g', supervisor: '2g',
@@ -169,5 +186,18 @@ describe('the window\'s engine link carries only the link, window capabilities, 
             .toEqual(['call:engine.thing', 'heartbeat', 'hosting']);
         expect(ratchet([['newThing', 'move:2g']], []).joined).toEqual(['newThing']);
         expect(ratchet([['hosting', 'window:chrome']], ['hosting']).relabelled).toEqual(['hosting']);
+    });
+
+    it('CONTROL: the scanner follows an alias of the engine client, and names a client handed over whole (Tynn #1007, 2g-4e)', () => {
+        // main.ts:1471 read the registry as `engineLink.stores()` through `const engineLink = agentEngineLink.client`: unseen.
+        expect(engineUses("const engineLink = agentEngineLink.client;\nengineLink.stores();\nconst e = agentEngineLink?.client ?? null;\nif (e) e.onLink(a, b);\n// e.flows()\nvoid e?.mcpStatus();"))
+            .toEqual(['mcpStatus', 'onLink', 'stores']);
+        // A client handed to another module is every member at once: it is named, so no list can leave it unseen.
+        expect(engineUses("const e = agentEngineLink.client;\nconst r = e ? withHostTools(all, e, resolve) : all;\nif (e) {}\nf({ run: (c) => e.runHostTool(c) });"))
+            .toEqual(['runHostTool', 'whole:e']);
+        // CONTROL: `.client` read for something else is no alias.
+        expect(engineUses("const c = this.client.other;\nc.thing();")).toEqual(['other']);
+        // CONTROL: an import path that ends in the alias's name is no use of it.
+        expect(engineUses("import { x } from './window-tunnel-link.js';\nconst link = agentEngineLink.client;\nlink.filesWatch(v);")).toEqual(['filesWatch']);
     });
 });

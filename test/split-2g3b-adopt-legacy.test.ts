@@ -540,7 +540,7 @@ describe('the summary says whether genie-host’s keychain can keep secrets, and
         expect(hostSummaryOf([], [], [], { workstationRole: 'pilot', tynnAccountKey: null, keychainReady: true, githubBlocked: true })).toMatchObject({ keychainReady: true, githubBlocked: true });
         expect(hostSummaryOf([], [], [])).toMatchObject({ keychainReady: false, githubBlocked: false });
         expect(EMPTY_HOST_SUMMARY).toMatchObject({ keychainReady: false, githubBlocked: false });
-        const base = { terminals: [], armedFlows: [], scheduledTasks: [] };
+        const base = { terminals: [], armedFlows: [], scheduledTasks: [], processes: [], services: [], sites: [] };
         expect(readHostSummary({ ...base, keychainReady: true, githubBlocked: true })).toMatchObject({ keychainReady: true, githubBlocked: true });
         expect(readHostSummary({ ...base, keychainReady: 'yes', githubBlocked: 1 })).toMatchObject({ keychainReady: false, githubBlocked: false });
         expect(readHostSummary(base)).toMatchObject({ keychainReady: false, githubBlocked: false });
@@ -568,7 +568,7 @@ describe('wired: genie-host adopts and recovers by itself; main only unseals', (
     });
 
     it('genie-host’s summary reads its keychain and its GitHub account, and is poked on their changes', () => {
-        expect(host).toMatch(/keychainReady: keychainNow\?\.state\(\) === 'ready', githubBlocked: \(githubAccountNow\?\.view\(\)\.signal \?\? null\) !== null \}\)/);
+        expect(host).toMatch(/keychainReady: keychainNow\?\.state\(\) === 'ready', githubBlocked: \(githubAccountNow\?\.view\(\)\.signal \?\? null\) !== null \},\s*\{ processes: processSupervisor\.list\(\)/);
         expect(host).toMatch(/opened\.keychain\.onAnswerChange\(pokeSummary\); opened\.keyring\?\.onChange\(pokeSummary\);/);
         expect(host).toMatch(/githubOpening\.then\(\(account\) => \{ account\.onChange\(pokeSummary\); pokeSummary\(\); \}/);
         // Every client's Deck strip reads GitHub's block from here too.

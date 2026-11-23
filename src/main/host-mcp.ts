@@ -24,8 +24,9 @@ import type { PluginToolsDeps } from './mcp-tools-plugins.js';
  * caller key) is built here. The host answers its own tools from the stores and the sessions it owns; every other tool
  * goes to the window (mcp-host-tools.ts).
  *
- * The window tells the host what only it knows: the workspaces' names, whether the person is at the computer, the callers
- * of terminals it runs (Take Over windows, flow runs). The server does NOT wait for it (ADF A3, Tynn #447): it starts
+ * The view: the workspaces' names, which genie-host finds itself, and whether the person is at the computer, which main's
+ * own client says (`window.view`, Tynn #1044). Callers are all the host's own (sessions, flows, Take Overs). The server
+ * does NOT wait for it (ADF A3, Tynn #447): it starts
  * when the host does, with the PLUGINS' tools the host's own (main/plugins-host.ts) — offered and run here, so an agent
  * keeps them with no window.
  */
@@ -33,15 +34,10 @@ import type { PluginToolsDeps } from './mcp-tools-plugins.js';
 type SettingValue = boolean | string;
 
 export interface WindowView {
-    /** The workspaces' names as the window reads them (project.json): their address slugs. The rest is the host's own registry. */
+    /** The workspaces' names, as genie-host reads them from each workspace's project.json (workspace-names.ts): their address slugs. */
     readonly workspaceNames: Readonly<Record<string, string>>;
-    /** The person is at the computer (the window's own measure). No window = nobody is. */
+    /** The person is at the computer, as main's own client last said it (window.view). No window = nobody is. */
     readonly userActive: boolean;
-    /**
-     * Terminals the window runs whose agents call Genie: terminal id → caller. Absent = it runs none: a Take Over TUI is
-     * genie-host's (ports.takeOverCaller, Tynn #896).
-     */
-    readonly callers?: Readonly<Record<string, Caller>>;
 }
 
 export interface HostMcpPorts {
@@ -152,7 +148,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
         const vouched = injected.get(id);
         if (vouched) return vouched;
         const session = sessionCallerOf(book, id, { find: (agentId) => records.find((r) => r.id === agentId) ?? null, workspace }, ports.osaDir);
-        return session ?? ports.flowCallers?.callerFor(id) ?? ports.takeOverCaller?.(id) ?? view?.callers?.[id] ?? null;
+        return session ?? ports.flowCallers?.callerFor(id) ?? ports.takeOverCaller?.(id) ?? null;
     };
     const settings = ports.settings;
 

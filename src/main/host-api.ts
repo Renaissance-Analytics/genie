@@ -40,6 +40,8 @@ import { isGappMethod, type GAppsApi } from '../core/gapps.js';
 import { isPromptAction } from '../core/prompt-delivery.js';
 import { answerAccounts, isAccountsMethod, type AccountsPort } from './accounts-protocol.js';
 import { readGateRequest } from './approvals-gate-protocol.js';
+import { readWindowView } from './host-window-view.js';
+import { answerRegistryWrite } from './registry-protocol.js';
 
 /** Business ports for the own window's keys, device memory and Tynn session. No outgoing channel or window port. */
 export interface LocalOwnerDeps {
@@ -173,7 +175,11 @@ export interface HostApiDeps {
     /** What an older Genie sealed, adopted into this host's keychain (host-legacy-adopt.ts; Tynn #959, 2g-3b). Absent = refused. */
     legacySecrets?: { adopt(request: unknown): Promise<unknown> };
     /** A window-run tool's approval, from this host's one queue, tied to the agent's call by its forwarded id (Tynn #1006). */
+    /** What this machine's window says of the person: whether they are at the computer (host-window-view.ts; Tynn #1044). */
+    windowView?: { userActive(active: boolean): void };
     approvalsGate?: (caller: import('./mcp-tools.js').Caller, action: string, detail: string, forwardedCallId: string | null) => Promise<'allowed' | 'denied' | 'expired'>;
+    /** genie-host's registry, read and written by main's window registry (registry-protocol.ts; Tynn #1007). Absent = refused. */
+    registryFiles?: import('./registry-protocol.js').RegistryFiles;
     /** Ask Tynn again whether this host is signed in (Tynn #959, 2g-3b). Absent = refused. */
     tynnRecheck?: () => Promise<void>;
     takeOver?: {
@@ -788,6 +794,15 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.legacySecrets.adopt(args[0]);
             // A WINDOW-RUN TOOL'S APPROVAL (Tynn #1006, 2g-4b2): `local` keeps every other machine out (RemoteHost's), and of this
             // machine's connections only main's own client asks; the request is read strictly (approvals-gate-protocol.ts).
+            // WHETHER THE PERSON IS AT THIS MACHINE (Tynn #1044, 2g-4d B): only Electron knows, so main's own client says it.
+            case 'window.view': {
+                if (!deps.windowView) return { ok: false, reason: 'this host keeps no window view' };
+                if (context.own !== true) return { ok: false, reason: 'whether the person is here is said by Genie itself, never by a window' };
+                const view = readWindowView(args);
+                if ('ok' in view) return view;
+                deps.windowView.userActive(view.userActive);
+                return null;
+            }
             case 'approvals.gate': {
                 if (!deps.approvalsGate) return { ok: false, reason: 'this host keeps no approval queue' };
                 if (context.own !== true) return { ok: false, reason: 'an approval is asked by Genie itself for the tools it runs, never by a window' };
@@ -795,6 +810,11 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 if ('ok' in request) return request;
                 return deps.approvalsGate(request.caller, request.action, request.detail, request.forwardedCallId);
             }
+            // A WRITE TO GENIE-HOST'S REGISTRY (Tynn #1007, 2g-4e): `local` keeps every other machine out, and of this machine's
+            // connections only main's own client writes; the write is read strictly. genie-host answers it from the start, as
+            // hostRemoteApi's own method (registry-protocol.ts hostRegistryAnswers); this is the same answer on this path.
+            case 'registry.write':
+                return answerRegistryWrite(deps.registryFiles, args, context);
             // The machine woke, or an agent found IssueWatch signed out: this host asks Tynn again (Tynn #959, 2g-3b).
             case 'tynn.recheck':
                 if (!deps.tynnRecheck) return { ok: false, reason: 'this host has no Tynn account to ask' };

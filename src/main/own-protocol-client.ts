@@ -3,6 +3,7 @@ import type { DeckItem } from '../core/deck.js';
 import { readHostSummary, type HostSummary } from '../core/host-summary.js';
 import { readRemoteWatch, type RemoteWatchView } from '../core/remote-watch.js';
 import { readSettingsWatch, type SettingsWatchView } from './settings-watch.js';
+import { readRegistryWatch, type RegistryWatchView } from './registry-protocol.js';
 import { LOCAL_EVENTS, inMemoryPair, parseMessage, type PreAuth, type RemoteMethod, type ServerConnection, type ServerTransport } from '../core/remote-protocol.js';
 
 /**
@@ -19,11 +20,14 @@ export const OWN_CLIENT_LABEL = 'Genie’s tray';
 
 export type OwnCallAnswer = { ok: true; value: unknown } | { ok: false; reason: string };
 
+/** The controls main's own client asks once, as a call (Tynn #1007, 2g-4e): genie-host's registry, read. */
+export type OwnCallControl = 'registry.read';
+
 export interface OwnProtocolClient {
     /** Tunnelled by main over its engine link; never a listener. */
     readonly door: ServerTransport;
     /** `timeoutMs`: this call's own deadline, for an answer that waits on the person (approvals.gate); else the client's. */
-    call(method: RemoteMethod, args: unknown[], options?: { timeoutMs?: number }): Promise<OwnCallAnswer>;
+    call(method: RemoteMethod | OwnCallControl, args: unknown[], options?: { timeoutMs?: number }): Promise<OwnCallAnswer>;
     /**
      * THE HOST'S DECK, KEPT (Tynn #941, 2f-2): one connection held open on the door, which says `deck.watch` and hears
      * `local-deck` when the Deck changes, and nothing else of the estate. It is opened again whenever it drops (genie-host
@@ -45,6 +49,11 @@ export interface OwnProtocolClient {
      * `local-settings`: genie-host's settings data, then each change, which this window's reads follow.
      */
     watchSettings(onView: (view: SettingsWatchView) => void): () => void;
+    /**
+     * GENIE-HOST'S REGISTRY, KEPT (Tynn #1007, 2g-4e): the same kind of connection, which says `registry.watch` and hears
+     * `local-registry` each time the registry's files are written: this window's registry reads them again.
+     */
+    watchRegistry(onView: (view: RegistryWatchView) => void): () => void;
 }
 
 /**
@@ -76,7 +85,7 @@ export function ownProtocolClient(options: { timeoutMs?: number } = {}): OwnProt
             schema: offer.schema, minSchema: offer.minSchema, capabilities: offer.capabilities,
         }));
     };
-    const call = (method: RemoteMethod, args: unknown[], callOptions: { timeoutMs?: number } = {}): Promise<OwnCallAnswer> => {
+    const call = (method: RemoteMethod | OwnCallControl, args: unknown[], callOptions: { timeoutMs?: number } = {}): Promise<OwnCallAnswer> => {
         if (listeners.size === 0) return Promise.resolve({ ok: false, reason: NOT_READY });
         const pair = inMemoryPair();
         const client = pair.client;
@@ -113,7 +122,7 @@ export function ownProtocolClient(options: { timeoutMs?: number } = {}): OwnProt
      * ONE CONNECTION HELD OPEN that says `control` once welcomed and hears `channel` (Tynn #941, #953): what it answered and
      * each event's payload reach `onValue`. Opened again whenever it drops, until the returned stop.
      */
-    const persistent = (control: 'deck.watch' | 'summary.watch' | 'remote.watch' | 'settings.watch', channel: string, onAnswer: (value: unknown) => void, onEvent: (payload: unknown) => void): (() => void) => {
+    const persistent = (control: 'deck.watch' | 'summary.watch' | 'remote.watch' | 'settings.watch' | 'registry.watch', channel: string, onAnswer: (value: unknown) => void, onEvent: (payload: unknown) => void): (() => void) => {
         let stopped = false;
         let current: ReturnType<typeof inMemoryPair>['client'] | null = null;
         let attempt = 0;
@@ -164,7 +173,9 @@ export function ownProtocolClient(options: { timeoutMs?: number } = {}): OwnProt
         persistent('remote.watch', LOCAL_EVENTS.remote, (value) => onView(readRemoteWatch(value)), (payload) => onView(readRemoteWatch(payload)));
     const watchSettings = (onView: (view: SettingsWatchView) => void): (() => void) =>
         persistent('settings.watch', LOCAL_EVENTS.settings, (value) => onView(readSettingsWatch(value)), (payload) => onView(readSettingsWatch(payload)));
-    return { door, call, watchDeck, watchSummary, watchRemote, watchSettings };
+    const watchRegistry = (onView: (view: RegistryWatchView) => void): (() => void) =>
+        persistent('registry.watch', LOCAL_EVENTS.registry, (value) => onView(readRegistryWatch(value)), (payload) => onView(readRegistryWatch(payload)));
+    return { door, call, watchDeck, watchSummary, watchRemote, watchSettings, watchRegistry };
 }
 
 /** How long the Deck's connection waits before it is opened again; the last repeats. */

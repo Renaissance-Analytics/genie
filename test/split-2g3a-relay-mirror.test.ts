@@ -24,7 +24,7 @@ describe('the summary carries the role and the Tynn account', () => {
     });
 
     it('read from the wire: Tynn’s role or none; anything else, or a host that says nothing, is a drone', () => {
-        const base = { terminals: [], armedFlows: [], scheduledTasks: [] };
+        const base = { terminals: [], armedFlows: [], scheduledTasks: [], processes: [], services: [], sites: [] };
         expect(readHostSummary({ ...base, workstationRole: 'pilot', tynnAccountKey: 'k' })).toMatchObject({ workstationRole: 'pilot', tynnAccountKey: 'k' });
         expect(readHostSummary({ ...base, workstationRole: null, tynnAccountKey: null })).toMatchObject({ workstationRole: null, tynnAccountKey: null });
         expect(readHostSummary({ ...base, workstationRole: 'admin', tynnAccountKey: 7 })).toMatchObject({ workstationRole: 'drone', tynnAccountKey: null });

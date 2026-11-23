@@ -42,7 +42,7 @@ import { setProviderChoiceFile } from './provider-choice.js';
 import { readMailSignal } from '../core/mail-actions.js';
 import { windowSettings } from './window-settings.js';
 import { windowApprovals } from './approvals-gate-protocol.js';
-import { ThingSounds, flowRunSound } from '../core/thing-sounds.js';
+import { readThingSignal } from '../core/thing-sounds.js';
 import { quitAnswer, quitPlan, quitSequence, runQuit, type QuitPorts } from '../core/quit.js';
 import { windowLaunchFlags } from '../core/launch-flags.js';
 import { hostDownAnswer, hostDownPlan } from '../core/host-down.js';
@@ -154,10 +154,9 @@ import { hostOnly, windowToolRunner, withHostTools } from './window-tools.js';
 import type { TerminalsPort } from './mcp-tools-more.js';
 import { EMPTY_HOST_SUMMARY, type HostSummary } from '../core/host-summary.js';
 import { workspaceNameFor } from './workspace-names.js';
-import { HostRegistryStore } from './agent-stores-replica.js';
+import { openWindowRegistryStore, registryChanges } from './window-registry-store.js';
 import { watchRegistryRefresh } from './registry-refresh.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
-import type { WindowView } from './host-mcp.js';
 import type { McpToolResult } from '@particle-academy/prism-mcp';
 import type { InboxStore } from './inbox-store.js';
 import type { AttentionStore } from './attention-store.js';
@@ -378,9 +377,8 @@ let trayMenuNow: TrayItem[] = [];
 /** What genie-host runs now, as the tray says it and the tray-only rule counts it (core/tray-only.ts). */
 function hostActivityNow(): HostActivity {
     const agents = registry && host ? registry.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).length : 0;
-    const processes = (services?.supervisor.list() ?? []).filter((p) => p.state === 'running' || p.state === 'restarting').length;
-    const servicesUp = (services?.engines.list() ?? []).filter((e) => e.active).length;
-    return { agents, terminals: hostSummaryNow.terminals.length, processes, services: servicesUp, ...onTheClockNow(), browser: browserLinked ? 1 : 0 };
+    // The processes and the services are genie-host's, in its summary (Tynn #1045, 2g-4d-C).
+    return { agents, terminals: hostSummaryNow.terminals.length, processes: hostSummaryNow.processes.length, services: hostSummaryNow.services.length, ...onTheClockNow(), browser: browserLinked ? 1 : 0 };
 }
 
 /** What waits on the host's clock, from genie-host's summary (core/tray-only.ts's rule). With no host, nothing outlives the window. */
@@ -422,12 +420,10 @@ function stoppingNow(table: Parameters<typeof terminalBusy>[1]): Stopping {
         // A terminal whose pid has not come in yet runs no command it could be busy with.
         return { name: `${ws ? basename(ws.path) : t.workspaceId} · terminal ${n}`, busy: t.pid !== null && terminalBusy(t.pid, table) };
     });
-    const processes = (services?.supervisor.list() ?? []).filter((p) => p.state === 'running' || p.state === 'restarting').map((p) => p.name);
-    const servicesUp = (services?.engines.list() ?? []).filter((e) => e.active).map((e) => `${e.engine} ${e.version}`);
-    const sites = (services?.routes() ?? []).map((r) => r.host);
     const clockFlows = agentEngineLink?.live === true ? [...hostSummaryNow.armedFlows] : [];
     const clockTasks = agentEngineLink?.live === true ? [...hostSummaryNow.scheduledTasks] : [];
-    return { agents, terminals: terminalsOpen, processes, services: servicesUp, sites, flows: clockFlows, scheduled: clockTasks };
+    // The kept processes, the active services and the sites, as genie-host's summary names them (Tynn #1045, 2g-4d-C).
+    return { agents, terminals: terminalsOpen, processes: [...hostSummaryNow.processes], services: [...hostSummaryNow.services], sites: [...hostSummaryNow.sites], flows: clockFlows, scheduled: clockTasks };
 }
 
 /** How long the tray's question waits for the busy marks' process table (read off main) before it is asked without them. */
@@ -1039,7 +1035,7 @@ function attractMainWindow(reason: string): void {
  * as THIS launch's argv when Genie was not running. A URL that arrives before the account is open waits for it.
  */
 /** The Tynn and GitHub accounts, the keyring card and this machine's registration are genie-host's (Tynn #959, 2g-3b): main holds none. */
-/** Late-bound: main's own protocol client is tunnelled to genie-host. genie:// links wait for it (it reaches genie-host's account). */
+/** Late-bound: main's boot has reached its own client's watches; genie:// links wait for it (they reach genie-host's account). */
 let ownProtocolTunnelled = false;
 /** What Tynn says this machine is (genie#1278 W5) is genie-host's, in its summary (hostSummaryNow, Tynn #954): a drone until said. */
 /** A secret's move, said where it can be read afterwards: names and states, never a value. */
@@ -1134,7 +1130,6 @@ let mcpVerified: Verification | null = null;
 let hostMcpEndpoint: { url: string; token: string } | null = null;
 const mcpEndpointNow = (): { url: string; token: string } | null => hostMcpEndpoint;
 /** Tell genie-host what its MCP server needs of this window (P3.1), coalesced; a no-op until the tools are built. */
-let pushHostView: () => void = () => {};
 /** A window tool's call, forwarded by genie-host's MCP server; refused until the tools are built. */
 let windowToolRun: ((call: ForwardedToolCall) => Promise<McpToolResult>) | null = null;
 /** openFileForUser calls that arrived before the tools were built: shown as soon as they are. */
@@ -1304,7 +1299,6 @@ async function boot(): Promise<void> {
         // main — one comparison, nothing pushed; one that clears it is pushed once, to every window.
         onHeadroom: (provider: string, room: Headroom, stamp?: ReadingStamp) => headroomFeed.offer(provider, room, stamp),
         // Each agent starts with its workspace's managed-service variables, by allow-list (the owner, 2026-10-16).
-        serviceEnvFor: (workspaceId: string) => services?.engines.envFor(workspaceId) ?? {},
         /**
          * THE LINE THAT MAKES RESUME REAL.
          *
@@ -1345,6 +1339,8 @@ async function boot(): Promise<void> {
             else if (signal.kind === 'glow' && typeof signal.terminalId === 'string') broadcast('genie:glow', signal.terminalId);
             // Mail between agents (genie#1209, Tynn #766 C2a; Tynn #998): genie-host keeps the inbox and says each; only what reads goes on.
             else if (signal.kind === 'mail') { const mail = readMailSignal((raw as { mail?: unknown }).mail); if (mail) broadcast('genie:action', mail); }
+            // What genie-host runs, each change with its sound (Tynn #766 C2b; genie-host says them since Tynn #1045): only what reads goes on.
+            else if (signal.kind === 'thing') { const thing = readThingSignal((raw as { thing?: unknown }).thing); if (thing) broadcast('genie:action', thing); }
             else if (signal.kind === 'action' && typeof signal.agentId === 'string') broadcast('genie:action', { agentId: signal.agentId, kind: signal.action, ...(signal.tool ? { tool: signal.tool } : {}), ...(signal.reason ? { reason: signal.reason } : {}) });
         },
         onThreadId: (agentId: AgentId, threadId: string) => {
@@ -1469,10 +1465,18 @@ async function boot(): Promise<void> {
      */
     {
         const engineLink = agentEngineLink.client;
-        // THE REGISTRY'S FILES ARE GENIE-HOST'S (P3.2): this window's model reads and writes them through the host, and
-        // re-reads them when another window (or the host) wrote — two windows, one registry. Before its load, below.
-        theRegistry.useStore(new HostRegistryStore(engineLink.stores()));
-        watchRegistryRefresh(engineLink.stores(), theRegistry, (error) => console.error('[registry] Background refresh failed; waiting for the next host update.', error));
+        // MAIN'S OWN CLIENT, ON THE SAME LINK (Tynn #896, 2b-2b): the tray's calls are admitted by genie-host as this machine's
+        // window, labelled Genie's tray. A protocol door on the link, never a listener (core/ipc-inventory.ts).
+        // `own`: genie-host admits this door's connections as main's own client, the only caller keychain.adoptLegacy takes.
+        // Tunnelled here, before the registry loads (Tynn #1007, 2g-4e): the registry is read and written over it.
+        tunnelDoor(ownProtocol.door, tunnelLinkOf(agentEngineLink.client), { own: true });
+        // The settings this window reads, from genie-host, as soon as its own client can ask (Tynn #998, 2g-4b1).
+        settingsNow.start();
+        // THE REGISTRY'S FILES ARE GENIE-HOST'S (P3.2): this window's model reads and writes them over the one protocol (Tynn
+        // #1007, 2g-4e: registry.read, registry.write), and re-reads them when registry.watch says another window (or the host)
+        // wrote: two windows, one registry. Before its load and the Genie 1 import, below, which write through genie-host.
+        theRegistry.useStore(await openWindowRegistryStore(ownProtocol));
+        watchRegistryRefresh(registryChanges(ownProtocol), theRegistry, (error) => console.error('[registry] Background refresh failed; waiting for the next host update.', error));
         // This window reaches the `processes` child (exec and streams). Supervised processes and terminals are the host's
         // own (P3.3b, P3.3e): their state comes by replica, so nothing here is taken back after a loss.
         const processes = new SpawnHostClient({ entry: '', link: engineLink.spawnLink('processes'), log: lifecycleLog });
@@ -1860,12 +1864,7 @@ async function boot(): Promise<void> {
             return contents && contents.id === window?.webContents.id ? rendererNotice : null;
         },
     });
-    // MAIN'S OWN CLIENT, ON THE SAME LINK (Tynn #896, 2b-2b): the tray's calls are admitted by genie-host as this machine's
-    // window, labelled Genie's tray. A protocol door on the link, never a listener (core/ipc-inventory.ts).
-    // `own`: genie-host admits this door's connections as main's own client, the only caller keychain.adoptLegacy takes.
-    tunnelDoor(ownProtocol.door, tunnelLinkOf(agentEngineLink.client), { own: true });
-    // The settings this window reads, from genie-host, as soon as its own client can ask (Tynn #998, 2g-4b1).
-    settingsNow.start();
+    // main's own client was tunnelled before the registry loaded, and its settings watch started there (Tynn #1007, 2g-4e).
     // What genie-host runs, as the tray and the quit read it, kept as it changes (Tynn #953, 2g-2).
     // ...and this machine's role and its Tynn account (Tynn #954, 2g-3a): another account (or none) closes the relay windows
     // opened under the last one, which hold its grants (M0 finding 2).
@@ -1944,15 +1943,8 @@ async function boot(): Promise<void> {
     // rechecks them itself when its keychain comes back (keyring-service.ts onReady) and registers with Genie 1's record
     // when the unsealer hands it over. What only Electron knows is said here once, for the log.
     if (process.platform === 'linux') console.log(`[genie] this window's password store: backend ${safeStorage.getSelectedStorageBackend()}, encryption ${safeStorage.isEncryptionAvailable() ? 'available' : 'unavailable'}`);
-    // What agents run, each change with its own sound row (Tynn #766 C2b, core/thing-sounds.ts): a process exiting (a
-    // site's own server is the site's), a site up or down, a service started, a flow run finished.
-    const things = new ThingSounds();
-    const siteProcess = (id: string) => composed.sites.list().some((s) => s.processIds.includes(id));
-    things.sites(composed.sites.list());
-    composed.supervisor.onChange((status) => { const kind = things.process(status, siteProcess(status.id)); if (kind) broadcast('genie:action', { agentId: null, kind }); });
-    composed.sites.onChange(() => { for (const kind of things.sites(composed.sites.list())) broadcast('genie:action', { agentId: null, kind }); });
-    composed.engines.onStarted(() => { broadcast('genie:action', { agentId: null, kind: 'serviceup' }); });
-    composed.flows.onRun((_id, run) => { const kind = flowRunSound(run); if (kind) broadcast('genie:action', { agentId: null, kind }); });
+    // WHAT AGENTS RUN, EACH CHANGE WITH ITS OWN SOUND ROW (Tynn #766 C2b) is said by genie-host, which runs them (Tynn #1045,
+    // 2g-4d-C): a `thing` tool signal, handed on above (onToolSignal).
     // GENIE'S BROWSER FOR A SITE'S OPEN — the Hosting row's and an agent's `sites open` alike (hosting-actions.ts
     // `openSite` checks the site is served first): the Genie browser WINDOW comes up with the site in a new tab (beta.35
     // item 36 — Genie 1's own window). The person sees what the agent opened; nothing opens outside Genie.
@@ -2045,7 +2037,8 @@ async function boot(): Promise<void> {
         })), resolveCaller, (agentId, kind, tool) => broadcast('genie:action', { agentId, kind, tool }));
         // With genie-host the host's own tools are asked of it, with the caller resolved here (a flow's step); the rest run here.
         const engineLink = agentEngineLink?.client ?? null;
-        const registrations = engineLink ? withHostTools(signalled, engineLink, resolveCaller) : signalled;
+        // By the one member it uses, so the engine-use list sees it (Tynn #1007): never the whole engine client.
+        const registrations = engineLink ? withHostTools(signalled, { runHostTool: (call) => engineLink.runHostTool(call) }, resolveCaller) : signalled;
         mcpToolList = registrations.map((r) => describeMcpTool(r.definition.name, r.definition.description ?? '', r.visible !== undefined));
         // Flows' tool steps call these very registrations, as the flow (genie#1204).
         composed.setFlowToolCaller(createFlowToolCaller({ registrations, callers: flowCallers }));
@@ -2057,25 +2050,11 @@ async function boot(): Promise<void> {
              */
             windowToolRun = windowToolRunner(() => registrations, vouchedCallers);
             for (const call of openFilesLater.splice(0)) void windowToolRun(call);
-            const view = (): WindowView => {
-                return {
-                    workspaceNames: Object.fromEntries((registry?.snapshot().workspaces ?? []).map((w) => [w.id, w.name ?? w.id])),
-                    userActive: powerMonitor.getSystemIdleTime() < 120,
-                };
-            };
-            let pushTimer: ReturnType<typeof setTimeout> | null = null;
-            pushHostView = () => {
-                if (pushTimer) return;
-                pushTimer = setTimeout(() => { pushTimer = null; void engineLink.pushWindowView(view()); }, 250);
-            };
-            registry?.subscribe(() => pushHostView());
-            // Whether the person is at the computer, for ForceTheQuestion's "they are away": re-said every half minute.
-            setInterval(() => pushHostView(), 30_000).unref?.();
-            // A reconnect (the host restarted): it learns all of it again.
-            engineLink.onLink(() => { void engineLink.pushWindowView(view()); }, () => {});
-            await engineLink.pushWindowView(view());
-            // Genie 1's memories and AgentInbox history, once — the host owns the stores; only this window knows where v1 lives.
-            void engineLink.v1Import(v1DatabaseFile());
+            // Whether the person is at the computer, for ForceTheQuestion's "they are away": said every half minute over main's
+            // own client (Tynn #1044). genie-host names its workspaces and finds Genie 1's database itself.
+            const sayPresence = (): void => { void ownProtocol.call('window.view', [{ userActive: powerMonitor.getSystemIdleTime() < 120 }]); };
+            sayPresence();
+            setInterval(sayPresence, 30_000).unref?.();
             const status = await engineLink.mcpStatus();
             hostMcpEndpoint = status?.endpoint ?? null;
             mcpVerified = status?.verified ?? { ok: false, reason: 'genie-host did not start its MCP server' };
@@ -2550,8 +2529,8 @@ app.on('before-quit', (event) => {
             const running = registry!.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).map((a) => a.name);
             // QUIT KEEPS THE HOST (P1b): while genie-host runs them, the agents, terminals and kept processes can outlive this
             // window — the question then has two answers. After an upgrade's drain the host is gone: nothing is kept, as before.
-            const kept = (services?.supervisor.list() ?? []).filter((p) => p.state === 'running' || p.state === 'restarting').length;
-            return quitPlan({ runningAgents: running, liveTerminals: hostSummaryNow.terminals.length, host: agentEngineLink?.live === true ? { keptProcesses: kept, ...onTheClockNow() } : null });
+            // The kept processes are counted from genie-host's summary (Tynn #1045, 2g-4d-C).
+            return quitPlan({ runningAgents: running, liveTerminals: hostSummaryNow.terminals.length, host: agentEngineLink?.live === true ? { keptProcesses: hostSummaryNow.processes.length, ...onTheClockNow() } : null });
         },
         ask: (plan) => quitAnswer(plan, dialog.showMessageBoxSync({ type: 'question', title: plan.title, message: plan.message, buttons: [...plan.buttons], defaultId: 0, cancelId: 0 })),
     });
