@@ -11,6 +11,8 @@ import { agentRecord, mintAgentId } from '../src/core/identity.js';
 import { TYNN_HOST } from '../src/core/tynn.js';
 import { connectSocket } from '../src/main/engine-launch.js';
 import { openSecretKeychain } from '../src/main/file-secrets.js';
+import { restrictPrivateFile } from '../src/main/private-credentials.js';
+import { flowFormDefaults } from '../src/core/forms.js';
 import { ownProtocolClient, type OwnCallAnswer, type OwnProtocolClient } from '../src/main/own-protocol-client.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { tunnelDoor, tunnelLinkOf } from '../src/main/window-tunnel.js';
@@ -137,6 +139,8 @@ const agents = [
 beforeAll(async () => {
     keyFile = join(temp('genie-p7-rebuild-key-'), 'secret.key');
     writeFileSync(keyFile, randomBytes(32), { mode: 0o600 });
+    // Owner-only, as the host demands of its key file: an ACL on Windows, the mode above on POSIX.
+    await restrictPrivateFile(keyFile);
     origin = temp('genie-p7-rebuild-origin-');
     workspace = temp('genie-p7-rebuild-ws-');
 
@@ -164,7 +168,8 @@ beforeAll(async () => {
     expect(await ask(w.own, 'registry.write', ['writeWorkspaces', [[{ id: 'ws', path: workspace }]]])).toMatchObject({ ok: true });
     expect(await ask(w.own, 'registry.write', ['writeAgents', [agents]])).toMatchObject({ ok: true });
     expect(await ask(w.own, 'features.act', [{ kind: 'inbox.send', to: 'first', text: 'mail that waited through the rebuild' }])).toMatchObject({ ok: true });
-    expect(await ask(w.own, 'features.act', [{ kind: 'flows.saveGraph', workspaceId: 'ws', name: 'the flow that came back', document: { nodes: [], edges: [] } }])).toMatchObject({ ok: true });
+    // The form's own default flow (hourly, one log step), not armed: an empty graph is refused by the flow door (the RED run said so).
+    expect(await ask(w.own, 'features.act', [{ kind: 'flows.create', form: { ...flowFormDefaults({ workspaceId: 'ws' }), name: 'the flow that came back' } }])).toMatchObject({ ok: true });
     before = await workOf(w.own);
     w.close();
     const manifest = JSON.parse(readFileSync(join(origin, 'data-root.json'), 'utf8')) as { state: Array<{ path: string; travels: boolean }>; machine: string[] };
