@@ -1398,14 +1398,17 @@ function DesktopApp({ bridge }: AppProps) {
     const [workspaceFaults, setWorkspaceFaults] = useState<Record<string, WorkspaceFault | null>>({});
     // Bumped after a repo is relocated, so the faults are read again without waiting for the workspace list to change.
     const [faultsTick, setFaultsTick] = useState(0);
-    const faultKey = (snapshot.workspaces ?? []).map((w) => `${w.id}\u0000${w.name ?? ''}`).join('\n');
+    // A workspace's own folder gone or back, or located elsewhere (host split P7), reads the faults again too.
+    const faultKey = (snapshot.workspaces ?? []).map((w) => `${w.id}\u0000${w.name ?? ''}\u0000${w.path}\u0000${w.missing === true ? 'missing' : ''}`).join('\n');
     useEffect(() => {
         if (!resolvedBridge || !snapshot.workspaces) return;
         let live = true;
         const list = snapshot.workspaces;
         void Promise.all(list.map(async (w) => {
-            const r = await resolvedBridge.workspaces.listRepos(w.id);
             const name = w.name ?? w.path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? w.id;
+            // Its folder is not there: its repos cannot be read, and the folder fault is the one to show.
+            if (w.missing === true) return [w.id, workspaceFault(null, name, w)] as const;
+            const r = await resolvedBridge.workspaces.listRepos(w.id);
             return [w.id, workspaceFault(r.ok ? r.repos : null, name)] as const;
         })).then((entries) => { if (live) setWorkspaceFaults(Object.fromEntries(entries)); });
         return () => { live = false; };
@@ -1415,6 +1418,19 @@ function DesktopApp({ bridge }: AppProps) {
         const envelope = snapshot.workspaces?.find((w) => w.id === workspaceId)?.path;
         void pickFolder(`Where is ${slug} now? Pick its folder inside the envelope`, envelope).then((path) => {
             if (path) void resolvedBridge?.workspaces.locateRepo(workspaceId, slug, path).then((r) => { if (r.ok) setFaultsTick((t) => t + 1); });
+        });
+    };
+    // "Locate folder" on a workspace whose own folder is not there (host split P7): the host's picker, then its registry is
+    // told where the folder is. A refusal is said in the host's words.
+    const locateFolder = (workspaceId: string) => {
+        const workspace = snapshot.workspaces?.find((w) => w.id === workspaceId);
+        const name = workspace?.name ?? workspaceId;
+        const failed = (reason: string) => showAlert({ title: 'Could not locate folder', body: reason });
+        void pickFolder(`Where is ${name} now? Pick its folder`).then((path) => {
+            if (!path || !resolvedBridge) return;
+            const asked = resolvedBridge.workspaces.relocate?.(workspaceId, path);
+            if (!asked) { failed('this host cannot locate a workspace’s folder'); return; }
+            void asked.then((r) => { if (r.ok) setFaultsTick((t) => t + 1); else failed(r.reason); }, (error: unknown) => failed(error instanceof Error ? error.message : String(error)));
         });
     };
     // The workspace-scoped settings (§6.1) of the workspace on screen: its effective values and which it overrides.
@@ -2194,6 +2210,7 @@ function DesktopApp({ bridge }: AppProps) {
             peerTyping={typing.peer}
             workspaceFaults={workspaceFaults}
             onLocateRepo={locateRepo}
+            onLocateFolder={locateFolder}
             servable={SERVABLE}
             onShareWorkstation={shares ? () => { setShare({ workspaceId: null, name: remote.state?.host ?? snapshot.workstation?.name ?? 'this workstation', links: null, minted: null, problem: null, busy: false }); readShares(null); } : undefined}
             remote={remote.state?.connected && remote.state.host ? {

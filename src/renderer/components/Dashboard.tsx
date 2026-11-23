@@ -278,13 +278,14 @@ function useTerminalOpener(onTerminal: (() => void | Promise<WindowOpened>) | un
     return { failed, open };
 }
 
-function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, workspacePulsed = false, onLocateRepo, onOpenWorkspace, onOpen, onFix, focused = false, reveal = null, onReveal, onArc, emoji, windows, waiting, switchOffer }: {
+function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, workspacePulsed = false, onLocateRepo, onLocateFolder, onOpenWorkspace, onOpen, onFix, focused = false, reveal = null, onReveal, onArc, emoji, windows, waiting, switchOffer }: {
     row: AgentRow;
     workspaceName: string;
     workspaceColor?: string | undefined;
     workspaceFault?: WorkspaceFault | null | undefined;
     workspacePulsed?: boolean | undefined;
     onLocateRepo?: ((workspaceId: string, repo: string) => void) | undefined;
+    onLocateFolder?: ((workspaceId: string) => void) | undefined;
     onOpenWorkspace?: ((workspaceId: string) => void) | undefined;    /** What the agent just did with Genie (genie#1209), shown beside its name for a moment. */
     emoji?: string | undefined;
     onOpen: (id: string) => void;
@@ -345,7 +346,9 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
                 {onOpenWorkspace ? (
                     <Button type="button" variant="ghost" size="xs" data-open-workspace={row.workspaceId} className="min-w-0 px-0 text-xs font-normal text-[var(--fg-2)]" labelClassName="truncate" onClick={(event) => { event.stopPropagation(); onOpenWorkspace(row.workspaceId); }} title={workspaceName}>{workspaceName}</Button>
                 ) : <span className="truncate text-xs text-[var(--fg-3)]">{workspaceName}</span>}
-                {workspaceFault ? <Button type="button" variant="ghost" size="xs" icon="triangle-alert" data-workspace-fault={workspaceFault.repo} data-action="locate-repo" aria-label="Locate repo" title={workspaceFault.text} className="shrink-0 px-1 text-[var(--warning)]" onClick={(event) => { event.stopPropagation(); onLocateRepo?.(row.workspaceId, workspaceFault.repo); }} /> : null}
+                {workspaceFault?.kind === 'folder'
+                    ? <Button type="button" variant="ghost" size="xs" icon="triangle-alert" data-workspace-missing={row.workspaceId} data-action="locate-folder" aria-label="Locate folder" title={`Locate folder (${workspaceFault.text})`} className="shrink-0 px-1 text-[var(--warning)]" onClick={(event) => { event.stopPropagation(); onLocateFolder?.(row.workspaceId); }} />
+                    : workspaceFault ? <Button type="button" variant="ghost" size="xs" icon="triangle-alert" data-workspace-fault={workspaceFault.repo} data-action="locate-repo" aria-label="Locate repo" title={workspaceFault.text} className="shrink-0 px-1 text-[var(--warning)]" onClick={(event) => { event.stopPropagation(); onLocateRepo?.(row.workspaceId, workspaceFault.repo); }} /> : null}
             </div>
             <div className="flex min-w-0 items-center gap-1.5">
                 <span className={`shrink-0 font-medium ${STATUS_TONE[status.tone]}`}>{status.word}</span>
@@ -499,6 +502,8 @@ export interface DashboardProps {
     faults?: Readonly<Record<string, WorkspaceFault | null | undefined>> | undefined;
     /** The fault's fix: the workspace's registry, where the path is edited. */
     onLocateRepo?: ((workspaceId: string, repo: string) => void) | undefined;
+    /** The fix for a workspace whose own folder is not there (host split P7): the host's picker, then its registry is told. */
+    onLocateFolder?: ((workspaceId: string) => void) | undefined;
     /** A broken row's fix button (`core/dashboard-view.ts` `fixRoute`); absent = the button opens the agent. */
     onFix?: ((route: FixRoute) => void) | undefined;
     /** Genie's own agent's row; `null` = none. Alphabetical alongside workspace agents. */
@@ -670,7 +675,7 @@ export const GENIE_ROW = 'genie:';
 
 const HEADER_BUTTON = 'rounded-md border border-[var(--border-1)] px-2 py-1 text-xs text-[var(--fg-2)] hover:bg-[var(--bg-2)]';
 
-export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, hasHibernatedWorkspaces = false, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji, accounts, onSwitchAccount, mailSignals, pulsing, onOpenTerminalWindow, onOpenFilesWindow, scopeWorkspaceId, waiting }: DashboardProps) {
+export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, hasHibernatedWorkspaces = false, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, onOpenWorkspace, faults, onLocateRepo, onLocateFolder, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji, accounts, onSwitchAccount, mailSignals, pulsing, onOpenTerminalWindow, onOpenFilesWindow, scopeWorkspaceId, waiting }: DashboardProps) {
     const workspaces = knownWorkspaces?.filter((workspace) => workspace.asleep !== true) ?? null;
     const hibernatedIds = new Set((knownWorkspaces ?? []).filter((workspace) => workspace.asleep === true).map((workspace) => workspace.id));
     const rows = reportedRows.filter((row) => !hibernatedIds.has(row.workspaceId));
@@ -860,7 +865,7 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
             </div>
             <div data-dashboard-list="">
                 {shown.map((row) => <Fragment key={row.id}>
-                    <AgentRowView waiting={groups.byAgent.has(row.id) ? { badges: waitingBadges(groups.byAgent.get(row.id)!), open: isOpen(row.id), onToggle: () => toggleOpen(row.id) } : undefined} row={row} workspaceName={nameOf(row)} workspaceColor={workspaceOf(row)?.color} workspaceFault={faults?.[row.workspaceId]} workspacePulsed={pulsing?.has(row.workspaceId)} onLocateRepo={onLocateRepo} onOpenWorkspace={row.id === genie?.id ? undefined : onOpenWorkspace} emoji={rowEmoji?.[row.id]} switchOffer={(() => { const offer = onSwitchAccount ? accounts?.offers.find((o) => o.provider === row.provider) : undefined; return offer && onSwitchAccount ? { offer, onSwitch: onSwitchAccount } : undefined; })()} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} onReveal={setOwnReveal} onArc={arcHandlers} windows={opensWindows(row) ? { onTerminal: terminalOpenerFor(row), onFiles: onOpenFilesWindow ? () => onOpenFilesWindow(row.workspaceId) : undefined } : undefined} />
+                    <AgentRowView waiting={groups.byAgent.has(row.id) ? { badges: waitingBadges(groups.byAgent.get(row.id)!), open: isOpen(row.id), onToggle: () => toggleOpen(row.id) } : undefined} row={row} workspaceName={nameOf(row)} workspaceColor={workspaceOf(row)?.color} workspaceFault={faults?.[row.workspaceId]} workspacePulsed={pulsing?.has(row.workspaceId)} onLocateRepo={onLocateRepo} onLocateFolder={onLocateFolder} onOpenWorkspace={row.id === genie?.id ? undefined : onOpenWorkspace} emoji={rowEmoji?.[row.id]} switchOffer={(() => { const offer = onSwitchAccount ? accounts?.offers.find((o) => o.provider === row.provider) : undefined; return offer && onSwitchAccount ? { offer, onSwitch: onSwitchAccount } : undefined; })()} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} onReveal={setOwnReveal} onArc={arcHandlers} windows={opensWindows(row) ? { onTerminal: terminalOpenerFor(row), onFiles: onOpenFilesWindow ? () => onOpenFilesWindow(row.workspaceId) : undefined } : undefined} />
                     {openTray === row.id ? <RowTrayView row={row} onNavigate={go} onTerminal={terminalOpenerFor(row)} /> : null}
                     {rowProps && groups.byAgent.has(row.id) && isOpen(row.id) ? <WaitingItems owner={row.id} items={groups.byAgent.get(row.id)!} row={rowProps} /> : null}
                 </Fragment>)}
@@ -883,7 +888,9 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
             {workspaces.filter((workspace) => !rows.some((row) => row.workspaceId === workspace.id)).map((workspace) => <div key={workspace.id} data-empty-workspace={workspace.id} data-workspace={workspace.id} {...(pulsing?.has(workspace.id) ? { 'data-workspace-pulse': 'true' } : {})} className={`flex items-center gap-3 border-b border-[var(--border-1)] px-7 py-3 text-xs text-[var(--fg-3)]${pulsing?.has(workspace.id) ? ` ${WORKSPACE_PULSE}` : ''}`}>
                 {workspace.color ? <WorkspaceSwatch color={workspace.color} /> : null}
                 <span>{workspace.name ?? workspace.id} has no agents yet.</span><Button type="button" size="xs" icon="plus" data-add-agent={workspace.id} onClick={() => onAddAgent(workspace.id)}>Add an agent</Button>
-                {faults?.[workspace.id] ? <><span data-workspace-fault={faults[workspace.id]!.repo} className="text-[var(--warning)]">{faults[workspace.id]!.text}</span><Button type="button" size="xs" variant="ghost" icon="triangle-alert" data-action="locate-repo" onClick={() => onLocateRepo?.(workspace.id, faults[workspace.id]!.repo)}>Locate repo</Button></> : null}
+                {faults?.[workspace.id]?.kind === 'folder'
+                    ? <><span data-workspace-missing={workspace.id} className="text-[var(--warning)]">{faults?.[workspace.id]?.text}</span><Button type="button" size="xs" variant="ghost" icon="triangle-alert" data-action="locate-folder" title="Locate folder" onClick={() => onLocateFolder?.(workspace.id)}>Locate folder</Button></>
+                    : faults?.[workspace.id] ? <><span data-workspace-fault={faults[workspace.id]!.repo} className="text-[var(--warning)]">{faults[workspace.id]!.text}</span><Button type="button" size="xs" variant="ghost" icon="triangle-alert" data-action="locate-repo" onClick={() => onLocateRepo?.(workspace.id, faults[workspace.id]!.repo)}>Locate repo</Button></> : null}
             </div>)}
             <MailSignalLayer signals={mailSignals ?? []} />
             {arcs.paths ? <FlightPaths arcs={arcs.paths.arcs} size={arcs.paths.size} pointer={arcs.paths.pointer} reducedMotion={arcs.paths.reducedMotion} /> : null}
