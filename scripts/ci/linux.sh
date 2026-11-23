@@ -61,7 +61,9 @@ declare -A TRACKED_RED=(
 # ENVIRONMENT BLOCKERS (Tynn #968): what a tracked row's check may be BLOCKED by that is outside Genie (the Arch Linux
 # Archive the toolchain row holds git back from). A check blocked by one keeps the row TRACKED and is named in its note;
 # it is never required to stay red (STRICT applies to TRACKED_RED only). RED or FAIL for one is judged as any other.
-TRACKED_ENV=" archive "
+# `control`: the harness could not set up its OWN control (the held-back git install, tried twice, pacman's words in the
+# row's log and in the check). Only that step gives it; every check that measures Genie is judged as before.
+TRACKED_ENV=" archive control "
 # ROWS THAT CHANGE THE MACHINE, run once even when they fail during a machine stall (Tynn #967): toolchain removes git
 # and docker and moves sudo, so its INFRA rerun met a machine it had already changed and measured nothing.
 ONE_SHOT_ROWS=" toolchain "

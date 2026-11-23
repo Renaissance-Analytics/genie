@@ -1241,6 +1241,8 @@ async function boot(): Promise<void> {
             else if (signal.kind === 'account-switch') broadcast('genie:action', { agentId: null, kind: 'account-switch', outcome: (raw as { outcome?: unknown }).outcome });
             // Something about the accounts changed in the host (Claude Design's authorization, Tynn #480): windows read them again.
             else if (signal.kind === 'accounts-changed') broadcast('genie:action', { agentId: null, kind: 'accounts-changed' });
+            // How a Claude sign-in or sign-out came out (Tynn #1011): every window says it, and reads the accounts again.
+            else if (signal.kind === 'account-notice' && typeof signal.title === 'string' && typeof signal.body === 'string') broadcast('genie:action', { agentId: null, kind: 'account-notice', title: signal.title, body: signal.body });
             else if (signal.kind === 'glow' && typeof signal.terminalId === 'string') broadcast('genie:glow', signal.terminalId);
             // Mail between agents (genie#1209, Tynn #766 C2a; Tynn #998): genie-host keeps the inbox and says each; only what reads goes on.
             else if (signal.kind === 'mail') { const mail = readMailSignal((raw as { mail?: unknown }).mail); if (mail) broadcast('genie:action', mail); }

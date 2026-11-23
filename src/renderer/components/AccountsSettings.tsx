@@ -67,6 +67,13 @@ function AccountRow({ account, now, onSwitch, onAct }: { account: AccountView; n
         setSaid(null);
         void onAct?.(action).then((r) => { if (!r.ok) setSaid(r.reason); else setRenaming(null); }, (e: unknown) => setSaid(e instanceof Error ? e.message : String(e)));
     };
+    // SWITCH BY ID (the review of #2139): a Claude account is switched to by the host, which makes it active when Claude Code
+    // says it is signed in and signs it in only when it is not. Never a login by its email: two accounts may share one.
+    // Another provider's switch is still its own login, naming the account (Tynn #753).
+    const switchTo = () => {
+        if (account.provider === 'claude' && onAct) act({ kind: 'switch', id: account.id });
+        else onSwitch?.(account.provider, chooseWords(account));
+    };
     const forget = () => {
         const refused = forgetRefusal(account);
         if (refused) { setSaid(refused); return; }
@@ -85,7 +92,7 @@ function AccountRow({ account, now, onSwitch, onAct }: { account: AccountView; n
                 <Badge size="sm" variant="soft" color={account.plan ? 'violet' : 'zinc'} data-account-plan="">{account.plan ?? 'unknown'}</Badge>
                 {account.active ? <Badge size="sm" variant="outline" color="green" dot data-account-active="">Signed in</Badge> : null}
                 <span className="ml-auto flex items-center gap-1.5">
-                    {!account.active ? <Button type="button" size="xs" icon="arrow-right-left" data-action="account-switch" aria-label={`Switch to ${account.label}`} onClick={() => onSwitch?.(account.provider, chooseWords(account))}>Switch</Button> : null}
+                    {!account.active ? <Button type="button" size="xs" icon="arrow-right-left" data-action="account-switch" aria-label={`Switch to ${account.label}`} onClick={switchTo}>Switch</Button> : null}
                     {renaming === null
                         ? <Button type="button" size="xs" variant="ghost" data-action="account-rename" onClick={() => { setSaid(null); setRenaming(account.label); }}>Rename</Button>
                         : <>
@@ -93,6 +100,11 @@ function AccountRow({ account, now, onSwitch, onAct }: { account: AccountView; n
                             <Button type="button" size="xs" variant="ghost" data-action="account-rename-cancel" onClick={() => setRenaming(null)}>Cancel</Button>
                         </>}
                     <Button type="button" size="xs" variant="ghost" data-action="account-forget" onClick={forget}>Forget</Button>
+                    {/* SIGN OUT AND REMOVE (Tynn #1011): prism-acp's logout() for an account with a folder of its own, not the
+                        one every agent uses; then the account and its folder go. No window, no terminal. */}
+                    {account.ownDirectory === true && !account.active
+                        ? <Button type="button" size="xs" variant="ghost" icon="log-out" data-action="account-sign-out" onClick={() => act({ kind: 'sign-out', id: account.id })}>Sign out and remove</Button>
+                        : null}
                 </span>
             </div>
             <div className="flex flex-wrap gap-3 pl-7 text-xs text-[var(--fg-3)]">
