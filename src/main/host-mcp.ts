@@ -75,6 +75,8 @@ export interface HostMcpPorts {
     readonly hosting?: import('./hosting-actions.js').HostingServices;
     /** A workspace's trust verdict as last read (Tynn #753): `sites` and `services` act only in a trusted one. Absent = none is. */
     readonly workspaceTrusted?: (workspaceId: string) => boolean;
+    /** This host's own browser, for an agent's `sites open` (Tynn #1046 D2): in the background, the workspace pulsed. Absent = none. */
+    readonly openInBrowser?: import('./hosting-actions.js').OpenInBrowser;
     /** Host-owned command execution, with the existing approval, confinement and cancellation contract. */
     readonly serviceExec?: import('./mcp-tools-hosting.js').ServiceExec;
     /** The terminals `manageTerminals` acts on (P3.3e): the host's own. Absent = the tool is the window's. */
@@ -189,6 +191,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             ...(ports.playwright ? { playwright: ports.playwright } : {}),
             ...(ports.hosting ? { hosting: ports.hosting } : {}),
             ...(ports.workspaceTrusted ? { workspaceTrusted: ports.workspaceTrusted } : {}),
+            ...(ports.openInBrowser ? { openInBrowser: ports.openInBrowser } : {}),
             ...(ports.serviceExec ? { serviceExec: ports.serviceExec } : {}),
             // createAgent runs HERE (Tynn #1015): the person approves in the host's queue, the host's Add agent makes it.
             agents: { defaultAgentOf: (ws) => ports.registry.defaultAgentOf(ws), create: ports.createAgent ?? noCreate },

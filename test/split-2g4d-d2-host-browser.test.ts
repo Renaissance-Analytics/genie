@@ -48,6 +48,9 @@ describe('1. genie-host says the browser’s facts itself; the window says only 
         service.door({ ...DOOR, hosts: ['shop.gen', 'blog.gen'], workspaceOf: { ...DOOR.workspaceOf, 'blog.gen': 'ws_b' } });
         expect(events.filter((e) => e.kind === 'facts')).toHaveLength(1);
         expect(events.filter((e) => e.kind === 'door')).toEqual([]); // already up
+        // The same door again (a registry write that changed no label): nothing is said.
+        service.door({ ...DOOR, hosts: ['shop.gen', 'blog.gen'], workspaceOf: { ...DOOR.workspaceOf, 'blog.gen': 'ws_b' } });
+        expect(events.filter((e) => e.kind === 'facts')).toHaveLength(1);
     });
 
     it('the window says only how to start the browser: a publish with front-door facts in it is refused', async () => {

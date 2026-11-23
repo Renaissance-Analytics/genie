@@ -226,7 +226,8 @@ describe('wired: main reads the front door from the watch; genie-host feeds it, 
     it('main reads none of compose’s front door, routes or sites', () => {
         expect(main).not.toMatch(/composed\.(frontDoorPort|browserTrust|onFrontDoorChange|routes\(\)|sites\.)/);
         // CONTROL: the same scan sees what main still reads of compose's hosting.
-        expect(main).toMatch(/composed\.untrustedNow/);
+        // (composed.untrustedNow left main in 2g-4d D2, Tynn #1046: `sites open` and its trust gate are genie-host's.)
+        expect(main).toMatch(/services = composed;/);
     });
 
     it('main watches the front door over its own client from boot, and waits for it before it builds the browser sessions and the site panels', () => {
