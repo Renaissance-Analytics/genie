@@ -77,11 +77,14 @@ describe('a Features write', () => {
 
 // P4 family 12 (Tynn #561): following Features is the local door's `tynn.watch`, by subscription (p4-family12-tynn.test.ts).
 describe('the window follows Features live through the host, like Issues', () => {
-    it('its signals go to the door\'s watch port, never broadcast; the host door is unchanged; no IPC is left', () => {
+    it('its signals go to genie-host\'s own watch port, never broadcast and never through main (Tynn #934 task #1474); no IPC is left', () => {
         expect(IPC_INVENTORY.map(([c]) => c)).not.toContain('genie:workspace-tynn-features-watch');
         const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
-        expect(main).toMatch(/engineClient\.onTynnFeaturesEvent\(\(event\) => \{ emitTynn\('features', event\.workspaceId, event\.signal\); \}\);/);
-        expect(main).toMatch(/tynnFeaturesDoor = \{ watch: \(viewId, workspaceId\) => engineClient\.tynnFeaturesWatch\(viewId, workspaceId\)/);
+        expect(main).not.toMatch(/onTynnFeaturesEvent|tynnFeaturesDoor|tynnFeaturesWatch|emitTynn/);
+        const host = readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8');
+        expect(host).toContain("send: (owner, event) => { if (owner === HOST_LOCAL_OWNER) hostTynnWatches.deliver('features', event); },");
+        expect(host).toMatch(/const hostTynnWatches = hostTynnWatch\(\{ hubs: \{ board: tynnBoard, issues: tynnIssues, features: tynnFeatures \} \}\);/);
+        expect(host).toMatch(/tynnWatch: hostTynnWatches\.port,/);
         const preload = readFileSync(new URL('../src/main/preload.ts', import.meta.url), 'utf8');
         expect(preload).not.toContain('genie:workspace-tynn-features');
     });

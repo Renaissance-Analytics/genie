@@ -215,8 +215,11 @@ describe('wired: genie-host says the watch and prunes; main reads the watch and 
         // 2g-4e (#1007): the scanner follows main's aliases of the engine client, and the uses it found joined the list
         // (tasks on #955 and G-1 #934); the rows are exactly these.
         // 2g-4d-A (#1043): runHostTool and the Files watch left, and the exec route (spawnLink, onSpawnFrame) is `link`.
-        // flows, hosting, stores and supervisor left in 2g-4d E (#955). The Tynn watches go in G-1 (#934).
-        expect(rows).toEqual(['issueWatch', 'onTynnBoardEvent', 'onTynnFeaturesEvent', 'onTynnIssuesEvent', 'tynnBoardUnwatch', 'tynnBoardWatch', 'tynnFeaturesUnwatch', 'tynnFeaturesWatch', 'tynnIssuesUnwatch', 'tynnIssuesWatch']);
+        // flows, hosting, stores and supervisor left in 2g-4d E (#955). IssueWatch and the Tynn watches left in #934 task
+        // #1474: nothing is left on move:2g.
+        expect(rows).toEqual([]);
+        // CONTROL: the inventory is read (its link rows are there).
+        expect(WINDOW_ENGINE_INVENTORY.filter(([, d]) => d === 'link').length).toBeGreaterThan(0);
         expect(rows).not.toContain('remoteAccess');
     });
 });
