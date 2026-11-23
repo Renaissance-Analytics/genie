@@ -2,6 +2,7 @@ import { mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { DESIGN_LOGIN } from '../src/core/design-login.js';
 import { LoginHost } from '../src/main/login-host.js';
 
 const scratch = mkdtempSync(join(tmpdir(), 'genie-shell-line-login-'));
@@ -21,6 +22,7 @@ function host(binary: string | null) {
     return { logins, opened };
 }
 
+// Codex: Claude signs in in the browser now (Tynn #1011), so a refused 'claude' would pass for that, not for the quoting.
 describe('a provider sign-in: the resolved path goes inside double quotes, so nothing in it may leave them', () => {
     it.each([
         ['a quote that closes them', 'C:\\tools" & calc & "'],
@@ -32,19 +34,53 @@ describe('a provider sign-in: the resolved path goes inside double quotes, so no
         ['a backslash at the end, which eats the closing quote', '/opt/claude\\'],
     ])('%s: refused, and no terminal opens', (_, binary) => {
         const { logins, opened } = host(binary);
-        const started = logins.start('claude');
+        const started = logins.start('codex');
         expect(started.ok).toBe(false);
         expect(opened).toEqual([]);
     });
 
     it.each([
-        ['a Windows path with spaces', 'C:\\Program Files\\Claude\\claude.exe', '"C:\\Program Files\\Claude\\claude.exe" auth login'],
-        ['a POSIX path', '/usr/local/bin/claude', '"/usr/local/bin/claude" auth login'],
-        ['no override: the CLI on PATH, and no quote at all', null, 'claude auth login'],
+        ['a Windows path with spaces', 'C:\\Program Files\\Codex\\codex.exe', '"C:\\Program Files\\Codex\\codex.exe" login'],
+        ['a POSIX path', '/usr/local/bin/codex', '"/usr/local/bin/codex" login'],
+        ['no override: the CLI on PATH, and no quote at all', null, 'codex login'],
     ])('CONTROL: %s runs', (_, binary, line) => {
         const { logins, opened } = host(binary);
-        expect(logins.start('claude').ok).toBe(true);
+        expect(logins.start('codex').ok).toBe(true);
         expect(opened).toEqual([line]);
+    });
+});
+
+// CLAUDE DESIGN'S LOGIN is the one Claude line still put into a shell (the browser sign-in, Tynn #1011, runs no shell): the
+// configured `claude` path goes inside the same double quotes, so it is held to the same rule (the review of #2139, finding 6).
+describe('Claude Design\'s login: the configured claude path goes inside double quotes, so nothing in it may leave them', () => {
+    it.each([
+        ['a quote that closes them', 'C:\\tools" & calc & "'],
+        ['a line break', 'C:\\tools\nclaude'],
+        ['a carriage return', 'C:\\tools\rclaude'],
+        ['a variable cmd expands inside quotes', 'C:\\%COMSPEC%\\claude.exe'],
+        ['a substitution a POSIX shell runs inside quotes', '/opt/$(touch /tmp/x)/claude'],
+        ['the older substitution', '/opt/`touch /tmp/x`/claude'],
+        ['a backslash at the end, which eats the closing quote', '/opt/claude\\'],
+    ])('%s: refused, and no terminal opens', (_, binary) => {
+        const { logins, opened } = host(binary);
+        expect(logins.start(DESIGN_LOGIN).ok).toBe(false);
+        expect(opened).toEqual([]);
+    });
+
+    it.each([
+        ['a Windows path with spaces', 'C:\\Program Files\\Claude\\claude.exe', '"C:\\Program Files\\Claude\\claude.exe"'],
+        ['a POSIX path', '/usr/local/bin/claude', '"/usr/local/bin/claude"'],
+        ['no override: the CLI on PATH, and no quote at all', null, 'claude'],
+    ])('CONTROL: %s runs, the interactive CLI and nothing after it', (_, binary, line) => {
+        const { logins, opened } = host(binary);
+        expect(logins.start(DESIGN_LOGIN).ok).toBe(true);
+        expect(opened).toEqual([line]);
+    });
+
+    it('a Claude ACCOUNT sign-in never reaches a shell at all, whatever the path', () => {
+        const { logins, opened } = host('C:\\Program Files\\Claude\\claude.exe');
+        expect(logins.start('claude').ok).toBe(false);
+        expect(opened).toEqual([]);
     });
 });
 

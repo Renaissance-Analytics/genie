@@ -26,3 +26,67 @@ export async function readListing(fetchFn, url, options = {}) {
     }
     return null;
 }
+
+// THE HELD-BACK INSTALL ITSELF (Tynn #968; gates 1123-141448-86241a and 1123-145302-8818fd). Reading the listing is one
+// read of the archive; `pacman -U <url>` is a second, and it runs pacman's own hooks on a machine the row has just changed.
+// It is the harness setting up its OWN control: it says nothing about Genie. So it is tried once more after a wait, every
+// try's output and exit status go into the row's log (the two gates above kept none, and so could not be explained), and
+// when it still cannot be set up the check is BLOCKED by `control` (linux.sh TRACKED_ENV), never a FAIL.
+
+/**
+ * Run the held-back install, and once more after a wait when it fails. `install` is the row's own synchronous run
+ * (spawnSync's result: status, signal, stdout, stderr, error). Every try is kept, whatever it did.
+ */
+export async function holdGitBack(install, options = {}) {
+    const tries = options.tries ?? 2;
+    const waitMs = options.waitMs ?? 30_000;
+    const sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    const attempts = [];
+    for (let i = 0; i < tries; i += 1) {
+        if (i > 0) await sleep(waitMs);
+        let r;
+        try { r = install(); } catch (error) { r = { status: null, signal: null, stdout: '', stderr: '', error }; }
+        const attempt = {
+            status: typeof r?.status === 'number' ? r.status : null,
+            signal: r?.signal ?? null,
+            error: r?.error ? String(r.error instanceof Error ? r.error.message : r.error) : null,
+            stdout: String(r?.stdout ?? ''),
+            stderr: String(r?.stderr ?? ''),
+        };
+        attempts.push(attempt);
+        if (attempt.status === 0) return { ok: true, tries, attempts };
+    }
+    return { ok: false, tries, attempts };
+}
+
+const exitWords = (a) => [`exit ${a.status ?? 'none'}`, a.signal ? `signal ${a.signal}` : null, a.error].filter(Boolean).join(', ');
+const linesOf = (text) => String(text).split(/\r?\n|\r/).map((l) => l.trimEnd()).filter((l) => l.trim() !== '');
+
+/**
+ * What the row's log gets: the command, then each try's exit status and every line pacman wrote. Every line starts with
+ * `--- ` (a note), so nothing pacman prints can be read as a verdict (linux.sh reads lines that START with TRACK or ROW).
+ */
+export function holdBackLog(url, result) {
+    const lines = [`--- hold git back: pacman -U --noconfirm ${url}`];
+    result.attempts.forEach((a, i) => {
+        lines.push(`--- hold git back, try ${i + 1} of ${result.tries}: ${exitWords(a)}`);
+        for (const l of linesOf(a.stdout)) lines.push(`---   out| ${l}`);
+        for (const l of linesOf(a.stderr)) lines.push(`---   err| ${l}`);
+    });
+    return lines;
+}
+
+/** The check when the control could not be set up: BLOCKED by `control`, with the last try's status and pacman's own words. */
+export function holdBackCheck(url, result) {
+    const last = result.attempts[result.attempts.length - 1] ?? { status: null, signal: null, error: null, stdout: '', stderr: '' };
+    const all = [...linesOf(last.stderr), ...linesOf(last.stdout)].map((l) => l.trim());
+    // pacman's errors when it gave any; else the last it said.
+    const errors = all.filter((l) => /^error:/i.test(l));
+    const said = (errors.length > 0 ? errors : all.slice(-2)).join(' / ').replace(/\s+/g, ' ').slice(0, 220);
+    const file = url.slice(url.lastIndexOf('/') + 1);
+    return {
+        verdict: 'BLOCKED',
+        reason: 'control',
+        detail: `CONTROL not set up: the harness could not hold git back in ${result.attempts.length} tries (pacman -U ${file}: ${exitWords(last)}); ${said ? `pacman said: ${said}` : 'pacman said nothing'}`,
+    };
+}
