@@ -49,7 +49,10 @@ export interface RelayMemberPorts {
     readonly signedIn: () => boolean;
     readonly keypair: () => PopKeypair;
     readonly mint: (workstationId: string, jwk: PopJwk) => Promise<ConnectGrant>;
-    readonly open: (input: { relayUrl: string; workstationId: string; grant: string; pop: PopKeypair; renew: () => Promise<ConnectGrant> }) => Promise<RelayMemberResult>;
+    /** `hostPublicKey`: the key Tynn named for the workstation with this grant, which the member checks the host against (audit M-a). */
+    readonly open: (input: { relayUrl: string; workstationId: string; grant: string; hostPublicKey: string | null; name: string | null; pop: PopKeypair; renew: () => Promise<ConnectGrant> }) => Promise<RelayMemberResult>;
+    /** The workstation's name, for the words a refusal is said in; absent or failing = no name. */
+    readonly name?: (workstationId: string) => Promise<string | null>;
 }
 
 /** What a window is told when its relay connection could not open: where, and Tynn's own refusal for it to word. */
@@ -148,12 +151,15 @@ export class DeviceLinkService {
         if (!relay.signedIn()) return { ok: false, reason: 'sign in to Tynn to connect to a Tynn workstation' };
         const pop = relay.keypair();
         // Each step is said where it fails (core/relay-connect.ts): Tynn's way in, then the relay to the machine.
+        const naming = relay.name ? relay.name(workstationId).catch(() => null) : Promise.resolve(null);
         const grant = await relay.mint(workstationId, pop.publicJwk);
         if (!grant.ok) return { ok: false, stage: 'tynn', refusal: grant };
+        const name = await naming;
         this.#options.send(owner, { type: 'step', workstationId, step: 'relay' });
         // A fresh grant for the SAME key before each one expires (genie#1401): the session lasts while the window stays.
         const renew = (): Promise<ConnectGrant> => (relay.signedIn() ? relay.mint(workstationId, pop.publicJwk) : Promise.resolve({ ok: false, reason: 'signed out of Tynn' }));
-        const opened = await relay.open({ relayUrl: grant.relayEndpoint, workstationId, grant: grant.token, pop, renew });
+        // The host key is the one Tynn named with THIS grant, for the life of the session: a renewal's answer never changes it.
+        const opened = await relay.open({ relayUrl: grant.relayEndpoint, workstationId, grant: grant.token, hostPublicKey: grant.hostPublicKey, name: typeof name === 'string' && name.trim() !== '' ? name : null, pop, renew });
         if (!opened.ok) return { ok: false, stage: 'relay', reason: opened.reason };
         const id = `relay_${++this.#nextRelay}`;
         const channel: RelayChannel = { id, owner, workstationId, transport: opened.transport, via: null, closed: false };

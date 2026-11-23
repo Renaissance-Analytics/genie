@@ -212,7 +212,7 @@ import { setWin32ProcessReader } from '../core/process-tree.js';
 import { restrictPrivateDirectories, sharedWindowsHelper } from './private-credentials.js';
 import { writeTextPrivate } from './store.js';
 import { openRelayMember, PopKeypair } from './relay-member.js';
-import { mintConnectGrant, relayHostPorts, startRelayHost } from './tynn-network.js';
+import { connectableWorkstations, mintConnectGrant, relayHostPorts, startRelayHost } from './tynn-network.js';
 import { AgentToolCalls } from './mcp-interrupt.js';
 import { testReadyDelayMs } from './host-wait-window.js';
 import { RemoteBrowsers } from './remote-browsers.js';
@@ -1460,6 +1460,12 @@ async function main(): Promise<void> {
                 : Promise.resolve({ ok: false as const, reason: 'sign in to Tynn to connect to a Tynn workstation' })),
             // Through the one socket this host dials with (device-socket.ts): the machine's roots, no redirects.
             open: (input) => openRelayMember({ socket: (url) => deviceSocket(url), ...input }),
+            // The machine's name as Tynn lists it, for the words a refusal is said in (relay-e2e.ts `e2eWords`).
+            name: async (workstationId) => {
+                if (!tynnAccountNow) return null;
+                const listed = await connectableWorkstations((path, init) => tynnAccountNow!.request(path, init), new Set());
+                return listed.ok ? listed.workstations.find((w) => w.id === workstationId)?.name ?? null : null;
+            },
         },
         browsers: new RemoteBrowsers(siteDoor),
     });

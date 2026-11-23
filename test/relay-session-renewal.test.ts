@@ -26,6 +26,7 @@ const SESSION_GRACE_MS = 120_000;
 const tynnKey = generateKeyPairSync('ed25519');
 const tynnJwk = { ...(tynnKey.publicKey.export({ format: 'jwk' }) as { kty: string; crv: string; x: string }), kid: 'tynn-1', alg: 'EdDSA' } as TynnJwk;
 const hostKey = generateKeyPairSync('ed25519');
+const HOST_PUBLIC_KEY = (hostKey.publicKey.export({ type: 'spki', format: 'der' }) as Buffer).toString('base64');
 const hostFingerprint = createHash('sha256').update(hostKey.publicKey.export({ type: 'spki', format: 'der' })).digest('hex');
 const thumbprint = (jwk: { crv: string; kty: string; x: string }) =>
     createHash('sha256').update(`{"crv":"${jwk.crv}","kty":"${jwk.kty}","x":"${jwk.x}"}`, 'utf8').digest('base64url');
@@ -68,7 +69,7 @@ function fakeTynn() {
         const jti = `g${++next}`;
         grants.set(jti, { mintedAt: Date.now(), lastSeen: 0, revoked: false });
         const token = signGrant({ jti, ...claims((init.body as { pop_jwk: PopJwk }).pop_jwk) });
-        return { ok: true, status: 201, json: async () => ({ token, relay_endpoint: RELAY }) };
+        return { ok: true, status: 201, json: async () => ({ token, relay_endpoint: RELAY, host_public_key: HOST_PUBLIC_KEY }) };
     };
     const introspect = (token: string): boolean => {
         const jti = (JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString('utf8')) as { jti: string }).jti;
@@ -108,6 +109,7 @@ beforeEach(async () => {
         relayUrl: RELAY,
         workstationId: WS_ID,
         hello: async () => buildTicketHostHello({ ticket: 'ticket-1', workstationId: WS_ID, fingerprint: hostFingerprint, sign: (d) => sign(null, d, hostKey.privateKey) }),
+        fingerprint: hostFingerprint, sign: (d) => sign(null, d, hostKey.privateKey),
         signedInHere: () => 'user_1',
         validateGrant: async (token) => {
             const check = verifyMemberGrant(token, { keys: [tynnJwk], workstationId: WS_ID });
@@ -135,7 +137,7 @@ async function guest(opts: { renew?: boolean } = {}): Promise<{ transport: Relay
     const grant = await mintConnectGrant(tynn.request, WS_ID, pop.publicJwk);
     if (!grant.ok) throw new Error(grant.reason);
     const opening = openRelayMember({
-        socket: relay.socket, relayUrl: grant.relayEndpoint, workstationId: WS_ID, grant: grant.token, pop,
+        socket: relay.socket, relayUrl: grant.relayEndpoint, workstationId: WS_ID, grant: grant.token, hostPublicKey: grant.hostPublicKey, pop,
         ...(opts.renew === false ? {} : { renew: () => mintConnectGrant(tynn.request, WS_ID, pop.publicJwk) }),
     });
     await settle();
