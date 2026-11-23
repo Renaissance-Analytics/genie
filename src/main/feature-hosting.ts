@@ -12,7 +12,7 @@ import {
     updateService, updateSite, useService, type HostingServices,
 } from './hosting-actions.js';
 
-/** The same hosting business surface for the canonical host and the window's replica. */
+/** The hosting business surface genie-host's features read and act on (HostFeatures, over its own hosting stack). */
 export interface HostingFeatureServices extends HostingServices, Pick<HostingApi,
     'externalFrontDoor' | 'hostingProblems' | 'trustCertificate' | 'syncHosts' | 'retryFrontDoor'> {
     trustSteps(): NonNullable<FeatureData['trust']>;

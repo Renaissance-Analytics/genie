@@ -38,10 +38,8 @@ import type { AccountsSnapshot } from '../core/accounts-view.js';
 import type { AccountsAction, AccountsActResult } from '../core/account-settings.js';
 import { commsFields, type EngineLiveness } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
-import { HostingReplica, type HostingDump, type HostingEvent } from './hosting-host.js';
 import { AppInboxReplica, type AppInboxDump, type AppInboxEvent } from './app-inbox-host.js';
 import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
-import type { PhpCgiResolution } from './site-manager.js';
 import type { CloneApplyReply, CloneOffersReply } from './clone-offers-service.js';
 import { ProcessBookReplica, type ProcessesDump } from './processes-host.js';
 import type { MarketplaceApi } from '../core/marketplace.js';
@@ -101,8 +99,6 @@ export interface EngineClientOptions {
     readonly onToolSignal?: (signal: unknown) => void;
     /** An elevation genie-host's hosting needs (P5a): run it here, as the window always has, and answer the outcome. Absent = refused. */
     readonly elevate?: (steps: readonly PrivilegedStep[]) => Promise<ElevationOutcome>;
-    /** Which php-cgi a site's pin runs, for the hosting replica's synchronous check (P5a). */
-    readonly phpCgiFor?: (pin: string | undefined) => PhpCgiResolution;
     /**
      * The window's environment NOW, sent with every start (default: `process.env`). Check and repair changes PATH and the
      * toolchain variables in the window's process at run time; the host takes them before it starts a provider, so a
@@ -156,7 +152,6 @@ export class SessionEngineClient {
     /** genie-host's frames for this window's tunnelled protocol connections (Tynn #898 step 2d-4b). */
     readonly #protocolListeners = new Set<(event: import('./protocol-tunnels.js').TunnelEvent) => void>();
     readonly #linkListeners = new Set<{ up: () => void; down: (reason: string) => void }>();
-    #hosting: HostingReplica | null = null;
     #appInbox: AppInboxReplica | null = null;
     #processBook: ProcessBookReplica | null = null;
     #cloneOffers: { list(workspaceId: string): Promise<CloneOffersReply>; apply(workspaceId: string, offerId: string): Promise<CloneApplyReply> } | null = null;
@@ -254,8 +249,6 @@ export class SessionEngineClient {
                 this.#welcome = null;
                 for (const p of this.#pending.values()) p({ ok: false, reason: NOT_CONNECTED });
                 this.#pending.clear();
-                // Trust first (genie#1519): from here the window believes no verdict until the next dump.
-                this.#hosting?.linkDown();
                 for (const l of [...this.#linkListeners]) l.down('the host closed the connection');
                 this.#options.onDisconnected?.('the host closed the connection');
             }));
@@ -364,9 +357,6 @@ export class SessionEngineClient {
             case 'appInbox.event':
                 this.appInbox().apply(payload as AppInboxEvent);
                 return;
-            case 'hosting.dump':
-                this.hosting().rebase(payload as HostingDump);
-                return;
             // genie-host's updater (P5b): its whole state, on this window's local link only.
             case 'safeMode.event':
                 this.#setSafeMode(payload as SafeModeView);
@@ -381,9 +371,6 @@ export class SessionEngineClient {
                 return;
             case 'updates.failed':
                 this.updates().failedInstall(payload as UpdateFailedRecord);
-                return;
-            case 'hosting.event':
-                this.hosting().apply(payload as HostingEvent);
                 return;
             case 'takeOver.event':
                 this.takeOvers().deliver(payload as TakeOverView);
@@ -559,16 +546,6 @@ export class SessionEngineClient {
             return reply.value;
         }, process.pid);
         return this.#updates;
-    }
-
-    /** genie-host's app door and its keys (P5a.2), as this window reads and changes them. */
-    hosting(): HostingReplica {
-        this.#hosting ??= new HostingReplica(async (method, args) => {
-            const reply = await this.call('engine.hosting', [method, [...args]]);
-            if (!reply.ok) throw new Error(reply.reason);
-            return reply.value;
-        }, this.#options.phpCgiFor ? { phpCgiFor: this.#options.phpCgiFor } : {});
-        return this.#hosting;
     }
 
     /** genie-host's terminals, as this window opens, types into and shows them (P3.3e). */

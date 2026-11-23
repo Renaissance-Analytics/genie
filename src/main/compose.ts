@@ -85,8 +85,8 @@ export interface ComposeInput extends HostingOptions {
     /** genie-host's process supervisor, through this window's replica (P3.3b). Absent = this window runs its own. */
     readonly supervisor?: SupervisorApi;
     /**
-     * genie-host's front door, service engines and site routes, through this window's replica (the host split, P5a): the
-     * window builds none of its own (Tynn #584).
+     * A hosting handed in (the host split, P5a): a test's stand-in of genie-host's. The app composes none (Tynn #584), and no
+     * window reads genie-host's through the engine link any more (2g-4d E2b, Tynn #955).
      */
     readonly hosting?: HostingApi;
     /** Tests that compose alone hand in a real hosting stack (test/helpers/compose-alone.ts). Nothing in the app does. */
@@ -283,16 +283,16 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
     const pluginsDir = join(input.userData, 'plugins');
     // genie-host's plugins and catalog are read in genie-host (feature-machine.ts runs there): the window keeps an empty stand-in (Tynn #961).
     const plugins: PluginsApi = new PluginsReplica(async () => false);
-    // THE FRONT DOOR, THE SERVICE ENGINES AND THE SITE ROUTES (the host split, P5a): genie-host's when it runs, through this
-    // window's replica — this window then starts no Caddy, opens no engine registry and makes no CA.
+    // THE FRONT DOOR, THE SERVICE ENGINES AND THE SITE ROUTES (the host split, P5a): the one handed in — then this composition
+    // starts no Caddy, opens no engine registry and makes no CA — or a test's own.
     stage?.begin('hosting');
     if (!input.hosting && !input.buildOwnHosting) throw new Error("compose was given no hosting: it is genie-host's");
     const ownHosting = input.hosting ? null : await input.buildOwnHosting!({ ...input, supervisor, settings, appEnv: appEnvOf });
     stage?.end();
     const hosting: HostingApi = input.hosting ?? ownHosting!;
     const workspacesNow = (): readonly WorkspaceRef[] => input.workspaces?.() ?? [];
-    // THE WORKSPACES' TRUST (genie#1519) is the hosting's. With genie-host's, this window's own git reads follow the host's
-    // verdicts through the replica, which fails closed.
+    // THE WORKSPACES' TRUST (genie#1519) is the hosting's. With one handed in, this composition's git reads follow its
+    // verdicts.
     if (!ownHosting) {
         setGitReadPolicy(trustAwarePolicy((path) => hosting.trust.isTrustedPath(path)));
         hosting.trust.onVerdict((id) => input.onTrustVerdict?.(id));
