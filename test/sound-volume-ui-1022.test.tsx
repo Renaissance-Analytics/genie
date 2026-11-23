@@ -198,6 +198,53 @@ describe('Advanced: a level per event', () => {
         }
     });
 
+    // LEAVING-AT-ONCE-1022: the write waits for the hand to settle (250 ms). Leaving Settings inside that wait used to
+    // drop it: the level the person had just set was never kept.
+    it('a level moved and then left at once (the section unmounts inside the wait) is kept', () => {
+        vi.useFakeTimers();
+        render();
+        slide(range('[data-sound-master]'), 35);
+        expect(kept().alert_volume).toBeUndefined();
+        act(() => root.unmount());
+        expect(kept()).toEqual({ alert_volume: '35' });
+        // And it is written once: the timer it replaced does not write again later.
+        const writes: string[] = [];
+        const stop = subscribeClientSound(() => writes.push(String(clientSoundValues().alert_volume)));
+        act(() => { vi.advanceTimersByTime(1_000); });
+        stop();
+        expect(writes).toEqual([]);
+        root = createRoot(host);
+    });
+
+    it('a kind’s level moved and then left at once is kept too, the other kinds kept', () => {
+        vi.useFakeTimers();
+        render({ alert_levels: '{"mail":20}' });
+        click(q('[data-action="sound-levels-toggle"]')!);
+        slide(range('[data-sound-level="finished"]'), 75);
+        act(() => root.unmount());
+        expect(JSON.parse(String(kept().alert_levels))).toEqual({ mail: 20, finished: 75 });
+        root = createRoot(host);
+    });
+
+    it('the page going away inside the wait (pagehide: the window closes or reloads) keeps the level', () => {
+        vi.useFakeTimers();
+        render();
+        slide(range('[data-sound-master]'), 42);
+        expect(kept().alert_volume).toBeUndefined();
+        act(() => { window.dispatchEvent(new Event('pagehide')); });
+        expect(kept()).toEqual({ alert_volume: '42' });
+    });
+
+    it('CONTROL: leaving with nothing moved writes nothing', () => {
+        vi.useFakeTimers();
+        render({ alert_volume: '70' });
+        const before = JSON.stringify(kept());
+        act(() => { window.dispatchEvent(new Event('pagehide')); });
+        act(() => root.unmount());
+        expect(JSON.stringify(kept())).toBe(before);
+        root = createRoot(host);
+    });
+
     it('a kind shows this client’s level; moving it keeps alert_levels on this client with that kind, the others kept', () => {
         vi.useFakeTimers();
         render({ alert_levels: '{"mail":20,"finished":40}' });
