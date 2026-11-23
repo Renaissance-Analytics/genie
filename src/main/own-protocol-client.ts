@@ -4,6 +4,7 @@ import { readHostSummary, type HostSummary } from '../core/host-summary.js';
 import { readRemoteWatch, type RemoteWatchView } from '../core/remote-watch.js';
 import { readSettingsWatch, type SettingsWatchView } from './settings-watch.js';
 import { readRegistryWatch, type RegistryWatchView } from './registry-protocol.js';
+import { readFrontDoorWatch, type FrontDoorWatchView } from '../core/front-door-watch.js';
 import { LOCAL_EVENTS, inMemoryPair, parseMessage, type PreAuth, type RemoteMethod, type ServerConnection, type ServerTransport } from '../core/remote-protocol.js';
 
 /**
@@ -54,6 +55,11 @@ export interface OwnProtocolClient {
      * `local-registry` each time the registry's files are written: this window's registry reads them again.
      */
     watchRegistry(onView: (view: RegistryWatchView) => void): () => void;
+    /**
+     * GENIE-HOST'S FRONT DOOR, KEPT (Tynn #1046, 2g-4d-D1): the same kind of connection, which says `frontdoor.watch` and
+     * hears `local-frontdoor`: the port, Genie's CA, the routes and each site's workspace, which this window's browser reads.
+     */
+    watchFrontDoor(onView: (view: FrontDoorWatchView) => void): () => void;
 }
 
 /**
@@ -122,7 +128,7 @@ export function ownProtocolClient(options: { timeoutMs?: number } = {}): OwnProt
      * ONE CONNECTION HELD OPEN that says `control` once welcomed and hears `channel` (Tynn #941, #953): what it answered and
      * each event's payload reach `onValue`. Opened again whenever it drops, until the returned stop.
      */
-    const persistent = (control: 'deck.watch' | 'summary.watch' | 'remote.watch' | 'settings.watch' | 'registry.watch', channel: string, onAnswer: (value: unknown) => void, onEvent: (payload: unknown) => void): (() => void) => {
+    const persistent = (control: 'deck.watch' | 'summary.watch' | 'remote.watch' | 'settings.watch' | 'registry.watch' | 'frontdoor.watch', channel: string, onAnswer: (value: unknown) => void, onEvent: (payload: unknown) => void): (() => void) => {
         let stopped = false;
         let current: ReturnType<typeof inMemoryPair>['client'] | null = null;
         let attempt = 0;
@@ -175,7 +181,9 @@ export function ownProtocolClient(options: { timeoutMs?: number } = {}): OwnProt
         persistent('settings.watch', LOCAL_EVENTS.settings, (value) => onView(readSettingsWatch(value)), (payload) => onView(readSettingsWatch(payload)));
     const watchRegistry = (onView: (view: RegistryWatchView) => void): (() => void) =>
         persistent('registry.watch', LOCAL_EVENTS.registry, (value) => onView(readRegistryWatch(value)), (payload) => onView(readRegistryWatch(payload)));
-    return { door, call, watchDeck, watchSummary, watchRemote, watchSettings, watchRegistry };
+    const watchFrontDoor = (onView: (view: FrontDoorWatchView) => void): (() => void) =>
+        persistent('frontdoor.watch', LOCAL_EVENTS.frontdoor, (value) => onView(readFrontDoorWatch(value)), (payload) => onView(readFrontDoorWatch(payload)));
+    return { door, call, watchDeck, watchSummary, watchRemote, watchSettings, watchRegistry, watchFrontDoor };
 }
 
 /** How long the Deck's connection waits before it is opened again; the last repeats. */

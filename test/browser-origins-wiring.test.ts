@@ -50,17 +50,20 @@ describe('main and compose', () => {
         // Through mountMainWindow (P1b: the main window can be built again), from boot's front door and CA.
         expect(count(main, /electronBrowserView\(window, \{ frontDoorPort: deps\.frontDoorPort, caPem: deps\.caPem \}\)/g)).toBe(1);
         expect(count(main, /mainWindowDeps = \{ frontDoorPort: \(\) => frontDoorNow\.port, caPem: \(\) => frontDoorNow\.caPem,/g)).toBe(1);
-        // The front door as it is now, from boot's composition, and every browser session told when it moves (P5a.2).
-        expect(count(main, /frontDoorNow = \{ port: composed\.frontDoorPort, caPem: browserTrust\.caPem \};/g)).toBe(1);
+        // The front door as it is now, as genie-host's frontdoor.watch says it (Tynn #1046), and every browser session told
+        // when it moves (P5a.2).
+        expect(count(main, /frontDoorNow = frontDoorWatch\.now\(\);/g)).toBe(1);
         // With P2b: the panes, every session and workspace store in this process (rerouteGenieBrowserSession), and the Genie
         // browser's own process (its facts) all follow.
-        expect(main).toMatch(/composed\.onFrontDoorChange\(\(\) => \{[\s\S]{0,700}?followFrontDoorInPanes\(\);\s*rerouteGenieBrowserSession\(\{ frontDoorPort: frontDoorNow\.port, caPem: frontDoorNow\.caPem \}\);\s*publishBrowserFacts\?\.\(\);/);
+        expect(main).toMatch(/frontDoorWatch\.onChange\(\(view, moved\) => \{[\s\S]{0,700}?followFrontDoorInPanes\(\);\s*rerouteGenieBrowserSession\(\{ frontDoorPort: view\.port, caPem: view\.caPem \}\);[\s\S]{0,120}?publishBrowserFacts\?\.\(\);/);
         // A store or session made after the door moved uses the door it moved to, not its creator's port.
         const gbe = readFileSync(new URL('../src/main/genie-browser-electron.ts', import.meta.url), 'utf8');
         expect(gbe).toMatch(/export function rerouteGenieBrowserSession\(options: \{[^}]*\}\): void \{\s*currentPort = options\.frontDoorPort;/);
         expect(count(gbe, /routeSession\(ses, currentPort \?\? options\.frontDoorPort, /g)).toBe(2);
         // The browser's facts and the cookie bridge's stores carry the CA as it is now.
-        expect(count(main, /caPem: browserTrust\.caPem/g)).toBe(2); // frontDoorNow's first read, and the site panels' first read
+        // The site panels are made with the front door genie-host said at boot (frontDoorNow, after the watch is ready).
+        expect(count(main, /frontDoorPort: frontDoorNow\.port, caPem: frontDoorNow\.caPem, enabledHosts:/g)).toBe(1);
+        expect(main).not.toMatch(/browserTrust/);
     });
 
     it('the admitted caller applies back / forward / reload to its own pane, and pushes what the pane reports', () => {

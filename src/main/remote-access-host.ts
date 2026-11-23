@@ -48,6 +48,11 @@ export interface HostRemoteApiPorts {
      * registry loads before they are). Absent = refused.
      */
     readonly registry?: { read(method: import('./registry-protocol.js').RegistryRead): Promise<unknown>; readonly watch: import('./registry-protocol.js').RegistryFeed };
+    /**
+     * GENIE-HOST'S FRONT DOOR, FROM THE START (Tynn #1046, 2g-4d-D1; core/front-door-watch.ts): what main's own client says
+     * frontdoor.watch for, and the local-frontdoor event, ahead of the built answers. Absent = nothing.
+     */
+    readonly frontdoor?: { now(): import('../core/front-door-watch.js').FrontDoorWatchView; subscribe(listener: (view: import('../core/front-door-watch.js').FrontDoorWatchView) => void): () => void };
 }
 
 export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
@@ -80,10 +85,13 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
             const offReady = ports.onAloneReady?.(bind); bind();
             // genie-host's registry is said from the start, not once its answers are built (Tynn #1007).
             const offRegistry = ports.registry?.watch.subscribe((view) => listener(LOCAL_EVENTS.registry, view));
-            return () => { offReady?.(); offAlone?.(); offRegistry?.(); };
+            // genie-host's front door too, from the start (Tynn #1046).
+            const offFrontDoor = ports.frontdoor?.subscribe((view) => listener(LOCAL_EVENTS.frontdoor, view));
+            return () => { offReady?.(); offAlone?.(); offRegistry?.(); offFrontDoor?.(); };
         },
         workspaceOfAgent: (agentId) => ports.workspaceOfAgent?.(agentId) ?? null,
         ...(ports.registry ? { registryRead: (method: string) => ports.registry!.read(method as import('./registry-protocol.js').RegistryRead), registryWatch: () => ports.registry!.watch.now() } : {}),
+        ...(ports.frontdoor ? { frontDoorWatch: () => ports.frontdoor!.now() } : {}),
         ...(ports.workspaceOfTerminal ? { workspaceOfTerminal: ports.workspaceOfTerminal } : {}),
         ...(ports.workspacePaths ? { workspacePaths: ports.workspacePaths } : {}),
         ...(ports.takeOverEnded ? { takeOverEnded: ports.takeOverEnded } : {}),
