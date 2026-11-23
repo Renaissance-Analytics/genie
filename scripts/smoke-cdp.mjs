@@ -1096,6 +1096,13 @@ if (!approvalEnabled) {
 
     // Let the shell print its prompt, then focus xterm's textarea and type.
     await new Promise((r) => setTimeout(r, 1200));
+    // 36a. FRAMES FROM THE COMPOSITOR (Tynn #1032). xterm draws its rows on animation frames. On 7 Linux test VMs, every one
+    // a slow provision (SSH after 488-1361 s; 63 passing VMs: 100-127 s), no window got frames: not Genie's, and not a plain
+    // Electron window with none of Genie's code. There 37 and 38 failed with the keys delivered, echoed and in xterm's
+    // buffer, and nothing drawn: it read as "the terminal drops input". This says what it is before anything is typed.
+    await waitFor(cdp, `window.__smokeTerminal?.framesAtMount !== null && window.__smokeTerminal?.framesAtMount !== undefined`, 'the frame count at mount');
+    const framesAtMount = await cdp.evaluate(`window.__smokeTerminal?.framesAtMount ?? null`).catch(() => null);
+    check(typeof framesAtMount === 'number' && framesAtMount > 0, '36a. the window gets frames from the compositor (none = the machine draws nothing: 37 and 38 cannot draw what is typed)', `${framesAtMount} frame(s) in the first second after the pane mounted`);
     await cdp.evaluate(`document.querySelector('[data-terminal-pane] textarea')?.focus(); true`);
     await cdp.send('Input.insertText', { text: `echo ${token}` });
     // The rows JOINED, without the line breaks between them: a narrow pane WRAPS the typed command ("echo g" / "enie-…"),

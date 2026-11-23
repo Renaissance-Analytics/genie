@@ -293,6 +293,9 @@ out('PROBE_1032_SUMMARY', {
     drawnWithoutFocus: rows.filter((r) => verdict(r) === 'DRAWN' && !r.mainTookFocus).length,
 });
 // The control must reproduce the signature, or nothing above can be read: in the buffer, not drawn, no frames.
-const controlOk = verdict(control) === 'IN-BUFFER-NOT-DRAWN' && control.beforeTyping?.rafPerS === 0;
-out('PROBE_1032_CONTROL_VERDICT', { reproduced: controlOk, recoveredWhenShown: control.afterRestore?.inRows ?? null, rafAfterRestore: control.afterRestore?.rafPerS ?? null });
+// A control whose move failed (Hyprland 0.56's Lua config refuses the classic dispatch syntax) measured nothing: it is
+// NOT MEASURED, never "reproduced" (a dead-frames VM gives 0 frames with no move at all).
+const moved = typeof control.forceMove === 'string' && !control.forceMove.startsWith('error');
+const controlOk = moved && verdict(control) === 'IN-BUFFER-NOT-DRAWN' && control.beforeTyping?.rafPerS === 0;
+out('PROBE_1032_CONTROL_VERDICT', { moved, reproduced: controlOk, recoveredWhenShown: control.afterRestore?.inRows ?? null, rafAfterRestore: control.afterRestore?.rafPerS ?? null });
 process.exit(controlOk ? 0 : 1);
