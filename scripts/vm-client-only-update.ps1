@@ -89,7 +89,7 @@ try {
     Run 'npm run build' 'build-current.log'
     $baseHostHash = (Get-FileHash -Algorithm SHA256 'dist\main\host.js').Hash.ToLower().Substring(0, 12)
     Write-Output ("the base build's genie-host: " + $baseHostHash)
-    Run 'npx electron-builder --publish never' 'package-current.log'
+    Run 'npx electron-builder --publish never --config.win.signExecutable=false' 'package-current.log'
     $setup = @(Get-ChildItem "release\Genie-$current-setup.exe")[0]
     if (-not $setup) { throw "no release\Genie-$current-setup.exe" }
     Uninstall-AnyGenie
@@ -116,7 +116,7 @@ try {
     try {
         Run "npm version $Next --no-git-tag-version" 'bump.log'
         Run 'npm run build' 'build-next.log'
-        Run 'npx electron-builder --publish never' 'package-next.log'
+        Run 'npx electron-builder --publish never --config.win.signExecutable=false' 'package-next.log'
     } finally {
         Move-Item package.json.orig package.json -Force
         Move-Item package-lock.json.orig package-lock.json -Force
