@@ -67,8 +67,9 @@ describe('scripts/question-maximize-cdp.mjs runs on both platforms', () => {
         expect(script).toMatch(/Maximize/);
     });
 
-    it('ends the app it started on Windows by pid with its tree (taskkill /T)', () => {
-        expect(script).toMatch(/taskkill', \['\/PID', String\([a-zA-Z.]+\), '\/T', '\/F'\]/);
+    it("ends the app it started on Windows through the rows' one cleanup (Tynn #1031), and fails when something of the run is left", () => {
+        expect(script).toMatch(/const ended = await endOwnRun\(\{ app, hostPid: host, since: RUN_BEGAN \}\);/);
+        expect(script).toMatch(/check\(ended\.ok, 'nothing of this run is left running by its own cleanup'/);
     });
 
     it('passes --no-sandbox on Linux only, and gives the app a profile folder of its own on Windows', () => {

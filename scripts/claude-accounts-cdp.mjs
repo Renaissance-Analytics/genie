@@ -18,7 +18,8 @@
  */
 import { mainWindow } from './cdp-main-window.mjs';
 import { closeWhatsNew, seedWhatsNewSeen } from './cdp-whats-new.mjs';
-import { execFileSync, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
+import { endOwnRun } from './end-own-tree.mjs';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -28,6 +29,8 @@ process.env.GENIE_PAGE_PROBE ??= '1';
 const PORT = Number(process.env.CLAUDE_ACCOUNTS_CDP_PORT ?? 9353);
 const OUT = process.env.CLAUDE_ACCOUNTS_CDP_OUT ?? 'ci-out';
 const failures = [];
+/** When this row began: nothing older is ever taken for one of its own processes (end-own-tree.mjs). */
+const RUN_BEGAN = Date.now();
 function check(ok, label, detail = '') {
     console.log(`${ok ? '  PASS' : '  FAIL'}  ${label}${detail ? `  — ${detail}` : ''}`);
     if (!ok) failures.push(label);
@@ -118,7 +121,12 @@ async function stopHost(pid) {
 async function stop(app) {
     const host = hostPid();
     const gone = new Promise((r) => { if (app.exitCode !== null) r(); else app.once('exit', r); });
-    if (process.platform === 'win32') { try { execFileSync('taskkill', ['/PID', String(app.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* gone */ } }
+    if (process.platform === 'win32') {
+        // Tynn #1031: the app's tree, this run's genie-host and what they started (its updater helper is under neither the
+        // app nor a tree kill of the host's pid), ended, waited for and said by one helper (end-own-tree.mjs).
+        const ended = await endOwnRun({ app, hostPid: host, since: RUN_BEGAN });
+        check(ended.ok, 'nothing of this run is left running by its own cleanup', ended.ok ? '' : `LEFT RUNNING by this row's own cleanup: ${ended.words}`);
+    }
     else { try { process.kill(-app.pid, 'SIGTERM'); } catch { /* gone */ } }
     await Promise.race([gone, sleep(20_000)]);
     if (app.exitCode === null && process.platform !== 'win32') { try { process.kill(-app.pid, 'SIGKILL'); } catch { /* gone */ } }
