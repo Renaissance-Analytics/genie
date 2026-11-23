@@ -27,7 +27,7 @@ export function readWindowView(args: unknown[]): { userActive: boolean } | { ok:
 }
 
 /** The view genie-host gives its MCP server: its own workspaces' names, and what the window last said of the person. */
-export function hostWindowView(_ports: {
+export function hostWindowView(ports: {
     readonly workspaces: () => readonly { readonly id: string; readonly path: string }[];
     readonly nameOf: (path: string) => string;
     readonly setView: (view: HostWindowView) => void | Promise<void>;
