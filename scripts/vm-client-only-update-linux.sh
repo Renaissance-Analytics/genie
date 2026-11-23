@@ -59,12 +59,14 @@ fi
 [ -n "${WAYLAND_DISPLAY:-}" ] && [ -S "${XDG_RUNTIME_DIR:-/nonexistent}/$WAYLAND_DISPLAY" ] || fail "no Hyprland session: WAYLAND_DISPLAY='${WAYLAND_DISPLAY:-}'"
 echo "display: XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-} WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
 # An AppImage mounts itself with FUSE: /dev/fuse and a fusermount. Installed when missing (pacman, as the rows' need_cmd).
-if ! command -v fusermount3 >/dev/null 2>&1 && ! command -v fusermount >/dev/null 2>&1; then
-    echo "no fusermount: installing fuse3 and fuse2"
+# electron-builder's AppImage runtime loads libfuse.so.2 (measured, 1123-201245-948f6a: "dlopen(): error loading
+# libfuse.so.2" with fusermount3 present): fuse2 is what a person installs for any AppImage on Arch.
+if { ! command -v fusermount3 >/dev/null 2>&1 && ! command -v fusermount >/dev/null 2>&1; } || ! ldconfig -p 2>/dev/null | grep -q 'libfuse[.]so[.]2'; then
+    echo "no fusermount or no libfuse.so.2: installing fuse3 and fuse2"
     sudo -n pacman -S --needed --noconfirm fuse3 fuse2 >fuse-install.log 2>&1 || { tail -20 fuse-install.log; fail 'FUSE could not be installed'; }
 fi
 [ -e /dev/fuse ] || fail 'no /dev/fuse: an AppImage cannot mount itself here'
-echo "fuse: $(command -v fusermount3 || command -v fusermount)"
+echo "fuse: $(command -v fusermount3 || command -v fusermount); $(ldconfig -p 2>/dev/null | grep -m1 'libfuse[.]so[.]2' | sed 's/^[[:space:]]*//')"
 
 started_at() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//'; }
 host_pid() { node -e 'try { const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); console.log(r.pid ?? "") } catch { console.log("") }' "$HOST_RECORD"; }
