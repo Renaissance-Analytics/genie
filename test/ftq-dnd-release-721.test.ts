@@ -97,6 +97,6 @@ describe('Do Not Disturb off opens what waited', () => {
 describe('Genie wires it', () => {
     it('main re-checks the window when the Do Not Disturb setting changes (by hand or on its schedule)', () => {
         const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
-        expect(main).toMatch(/composed\.settings\.onChange\(\(key\)\s*=>\s*\{\s*if \(key === 'do_not_disturb'\) questionWindow\?\.changed\(\);\s*\}\)/);
+        expect(main).toMatch(/settingsNow\.onChange\(\(key\)\s*=>\s*\{\s*if \(key === 'do_not_disturb'\) questionWindow\?\.changed\(\);\s*\}\)/);
     });
 });

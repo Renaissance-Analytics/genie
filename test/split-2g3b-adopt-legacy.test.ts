@@ -540,7 +540,7 @@ describe('the summary says whether genie-host’s keychain can keep secrets, and
         expect(hostSummaryOf([], [], [], { workstationRole: 'pilot', tynnAccountKey: null, keychainReady: true, githubBlocked: true })).toMatchObject({ keychainReady: true, githubBlocked: true });
         expect(hostSummaryOf([], [], [])).toMatchObject({ keychainReady: false, githubBlocked: false });
         expect(EMPTY_HOST_SUMMARY).toMatchObject({ keychainReady: false, githubBlocked: false });
-        const base = { terminals: [], armedFlows: [], scheduledTasks: [] };
+        const base = { terminals: [], armedFlows: [], scheduledTasks: [], processes: [], services: [], sites: [] };
         expect(readHostSummary({ ...base, keychainReady: true, githubBlocked: true })).toMatchObject({ keychainReady: true, githubBlocked: true });
         expect(readHostSummary({ ...base, keychainReady: 'yes', githubBlocked: 1 })).toMatchObject({ keychainReady: false, githubBlocked: false });
         expect(readHostSummary(base)).toMatchObject({ keychainReady: false, githubBlocked: false });
@@ -568,7 +568,7 @@ describe('wired: genie-host adopts and recovers by itself; main only unseals', (
     });
 
     it('genie-host’s summary reads its keychain and its GitHub account, and is poked on their changes', () => {
-        expect(host).toMatch(/keychainReady: keychainNow\?\.state\(\) === 'ready', githubBlocked: \(githubAccountNow\?\.view\(\)\.signal \?\? null\) !== null \}\)/);
+        expect(host).toMatch(/keychainReady: keychainNow\?\.state\(\) === 'ready', githubBlocked: \(githubAccountNow\?\.view\(\)\.signal \?\? null\) !== null \},\s*\{ processes: processSupervisor\.list\(\)/);
         expect(host).toMatch(/opened\.keychain\.onAnswerChange\(pokeSummary\); opened\.keyring\?\.onChange\(pokeSummary\);/);
         expect(host).toMatch(/githubOpening\.then\(\(account\) => \{ account\.onChange\(pokeSummary\); pokeSummary\(\); \}/);
         // Every client's Deck strip reads GitHub's block from here too.
@@ -612,11 +612,12 @@ describe('wired: genie-host adopts and recovers by itself; main only unseals', (
         expect(src('src/main/feature-machine.ts')).toMatch(/case 'integrations\.tynnCode': \{\s*const r = await tynnAccountOf\(ports\)\.signIn\(action\.code\);/);
     });
 
-    it('a wake and IssueWatch’s signed-out ask genie-host’s account again; the Deck strip reads GitHub’s block from the summary', () => {
+    it('a wake and IssueWatch’s signed-out ask genie-host’s account again; GitHub’s block is the host’s, on its own Deck strip', () => {
         expect(main).toMatch(/powerMonitor\.on\('resume', \(\) => \{ void handProxyAnswers\?\.\(\); if \(ownProtocolTunnelled\) void ownProtocol\.call\('tynn\.recheck', \[\]\); \}\);/);
         expect(main).toMatch(/recheckSignIn: \(\) => \{ void ownProtocol\.call\('tynn\.recheck', \[\]\); \} \}/);
-        expect(main).toMatch(/githubBlocked: hostSummaryNow\.githubBlocked \}\)\);/);
-        expect(main).toMatch(/if \(summary\.githubBlocked !== before\.githubBlocked\) registry\?\.touch\(\);/);
+        // The window registry's signal strip went in Tynn #998 (2g-4b1): nothing read it. The summary still carries the block.
+        expect(main).not.toMatch(/registry\.setSignals\(/);
+        expect(src('src/core/host-summary.ts')).toMatch(/githubBlocked/);
     });
 
     it('no token goes over the engine link either way: since Tynn #961 (2g-3c) it has no keychain door at all', () => {

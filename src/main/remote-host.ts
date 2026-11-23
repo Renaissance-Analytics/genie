@@ -1,4 +1,5 @@
 import { LatestPush } from '../core/latest-push.js';
+import { readRegistryRead } from './registry-protocol.js';
 import { randomBytes } from 'node:crypto';
 import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
 import { REMOTE_FRAME_MAX_BYTES, fitRemoteFrame } from '../core/remote-frame.js';
@@ -100,6 +101,14 @@ export interface HostApi {
     hostSummary?(): unknown;
     /** Who is at this machine, for main's own client saying remote.watch (core/remote-watch.ts; Tynn #997). Absent = nothing. */
     remoteWatch?(): unknown;
+    /** genie-host's settings, for main's own client saying settings.watch (settings-watch.ts; Tynn #998). Absent = nothing. */
+    settingsWatch?(): unknown;
+    /** genie-host's registry, for main's own client saying registry.watch (registry-protocol.ts; Tynn #1007). Absent = nothing. */
+    registryWatch?(): unknown;
+    /** One read of genie-host's registry, for main's own client saying registry.read (Tynn #1007). Absent = refused. */
+    registryRead?(method: string): Promise<unknown>;
+    /** genie-host's front door, for main's own client saying frontdoor.watch (core/front-door-watch.ts; Tynn #1046). Absent = nothing. */
+    frontDoorWatch?(): unknown;
     /** Release transient view state for this admitted connection; never an invocation from the wire. */
     releaseCaller?(context: CallContext): void;
     readonly marketplace?: () => MarketplaceApi | null;
@@ -220,6 +229,21 @@ interface Connection {
      * who is at this machine (`local-remote`) when it changes, and nothing else; no other connection hears it.
      */
     remoteOnly: boolean;
+    /**
+     * A SETTINGS-ONLY CONNECTION (`settings.watch`, Tynn #998 2g-4b1): main's own client, for the settings it reads. It hears
+     * genie-host's settings (`local-settings`) when they change, and nothing else; no other connection hears them.
+     */
+    settingsOnly: boolean;
+    /**
+     * A REGISTRY-ONLY CONNECTION (`registry.watch`, Tynn #1007 2g-4e): main's own client, for its window registry. It hears
+     * that genie-host's registry was written (`local-registry`), and nothing else; no other connection hears it.
+     */
+    registryOnly: boolean;
+    /**
+     * A FRONT-DOOR-ONLY CONNECTION (`frontdoor.watch`, Tynn #1046 2g-4d-D1): main's own client, for its browser. It hears
+     * genie-host's front door (`local-frontdoor`) when it changes, and nothing else; no other connection hears it.
+     */
+    frontdoorOnly: boolean;
     /**
      * A TAKE OVER WINDOW (Tynn #529 part A): the window it was opened from, its one terminal, whether its click started the
      * TUI, and, once its window lost the baton or left, why it may type no more.
@@ -635,7 +659,7 @@ export class RemoteHost {
     }
 
     #accept(socket: ServerConnection): void {
-        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, agentPush: null, watching: new Map(), activityViews: new Set(), tynnWatches: new Map(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null, batonWatch: false, deckOnly: false, deckSent: null, summaryOnly: false, remoteOnly: false, companion: null, negotiated: null, outside: null };
+        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, agentPush: null, watching: new Map(), activityViews: new Set(), tynnWatches: new Map(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null, batonWatch: false, deckOnly: false, deckSent: null, summaryOnly: false, remoteOnly: false, settingsOnly: false, registryOnly: false, frontdoorOnly: false, companion: null, negotiated: null, outside: null };
         this.#connections.set(connection.id, connection);
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
@@ -963,7 +987,8 @@ export class RemoteHost {
                 return ok({ watching: true });
             // The host's Deck, and nothing else of the estate (Tynn #941, 2f-2): main's question window and tray, this machine's.
             case 'deck.watch': {
-                if (!connection.local) return refuse(`the Deck is watched from ${this.#hostName}'s own Genie only`);
+                // main's own client only (the coordinator, Tynn #998: security), as remote.watch: never a page in a window.
+                if (!connection.local || connection.socket.preAuth?.own !== true) return refuse(`the Deck is watched from ${this.#hostName}'s own Genie only`);
                 const items = deckItemsOf(await this.#api.invoke('snapshot', [], this.#callContext(connection)));
                 connection.deckOnly = true;
                 connection.deckSent = JSON.stringify(items);
@@ -971,7 +996,7 @@ export class RemoteHost {
             }
             // What genie-host runs, and nothing else (Tynn #953, 2g-2): main's tray and quit, this machine's.
             case 'summary.watch':
-                if (!connection.local) return refuse(`what ${this.#hostName} runs is watched from its own Genie only`);
+                if (!connection.local || connection.socket.preAuth?.own !== true) return refuse(`what ${this.#hostName} runs is watched from its own Genie only`);
                 connection.summaryOnly = true;
                 return ok(this.#api.hostSummary?.() ?? null);
             // Who is at this machine, and nothing else (Tynn #997, 2g-4a): main's own client only, as keychain.adoptLegacy. A
@@ -980,6 +1005,29 @@ export class RemoteHost {
                 if (!connection.local || connection.socket.preAuth?.own !== true) return refuse(`who is at ${this.#hostName} is watched by its own Genie only`);
                 connection.remoteOnly = true;
                 return ok(this.#api.remoteWatch?.() ?? null);
+            // genie-host's settings, and nothing else (Tynn #998, 2g-4b1): main's own client only.
+            case 'settings.watch':
+                if (!connection.local || connection.socket.preAuth?.own !== true) return refuse(`${this.#hostName}'s settings are watched by its own Genie only`);
+                connection.settingsOnly = true;
+                return ok(this.#api.settingsWatch?.() ?? null);
+            // That genie-host's registry was written, and nothing else (Tynn #1007, 2g-4e): main's own client only.
+            case 'registry.watch':
+                if (!connection.local || connection.socket.preAuth?.own !== true) return refuse(`${this.#hostName}'s registry is watched by its own Genie only`);
+                connection.registryOnly = true;
+                return ok(this.#api.registryWatch?.() ?? null);
+            // genie-host's front door, and nothing else (Tynn #1046, 2g-4d-D1): main's own client only.
+            case 'frontdoor.watch':
+                if (!connection.local || connection.socket.preAuth?.own !== true) return refuse(`${this.#hostName}'s front door is watched by its own Genie only`);
+                connection.frontdoorOnly = true;
+                return ok(this.#api.frontDoorWatch?.() ?? null);
+            // One read of genie-host's registry (Tynn #1007, 2g-4e): main's own client only, the read named strictly.
+            case 'registry.read': {
+                if (!connection.local || connection.socket.preAuth?.own !== true) return refuse(`${this.#hostName}'s registry is read by its own Genie only`);
+                const read = readRegistryRead(args);
+                if (typeof read !== 'string') return refuse(read.reason);
+                if (!this.#api.registryRead) return refuse(`${this.#hostName} keeps no registry`);
+                return ok(await this.#api.registryRead(read));
+            }
             case 'baton.status': {
                 const holder = this.#baton.holder();
                 return ok({ driver: holder?.label ?? null, mine: holder?.connectionId === connection.id, locked: this.#locked });
@@ -1363,7 +1411,7 @@ export class RemoteHost {
         // Read once for every deck-only connection: the Deck, said only when it changed (Tynn #941, 2f-2).
         let deck: { items: readonly unknown[]; key: string } | null = null;
         for (const c of windows) {
-            if (c.summaryOnly || c.remoteOnly) continue;
+            if (c.summaryOnly || c.remoteOnly || c.settingsOnly || c.registryOnly || c.frontdoorOnly) continue;
             if (c.deckOnly) {
                 deck ??= (() => { const items = deckItemsOf(snapshot); return { items, key: JSON.stringify(items) }; })();
                 if (deck.key !== c.deckSent) { c.deckSent = deck.key; this.#send(c, { kind: 'event', channel: LOCAL_EVENT_CHANNELS.deck, payload: { items: deck.items } }); }
@@ -1388,6 +1436,18 @@ export class RemoteHost {
             if (c.auth === null) continue;
             // A deck-only connection hears the Deck and nothing else (Tynn #941, 2f-2); a summary-only one, the summary (#953).
             if (c.deckOnly) continue;
+            if (c.frontdoorOnly || channel === LOCAL_EVENT_CHANNELS.frontdoor) {
+                if (c.frontdoorOnly && channel === LOCAL_EVENT_CHANNELS.frontdoor) this.#send(c, { kind: 'event', channel, payload });
+                continue;
+            }
+            if (c.registryOnly || channel === LOCAL_EVENT_CHANNELS.registry) {
+                if (c.registryOnly && channel === LOCAL_EVENT_CHANNELS.registry) this.#send(c, { kind: 'event', channel, payload });
+                continue;
+            }
+            if (c.settingsOnly || channel === LOCAL_EVENT_CHANNELS.settings) {
+                if (c.settingsOnly && channel === LOCAL_EVENT_CHANNELS.settings) this.#send(c, { kind: 'event', channel, payload });
+                continue;
+            }
             if (c.remoteOnly || channel === LOCAL_EVENT_CHANNELS.remote) {
                 if (c.remoteOnly && channel === LOCAL_EVENT_CHANNELS.remote) this.#send(c, { kind: 'event', channel, payload });
                 continue;

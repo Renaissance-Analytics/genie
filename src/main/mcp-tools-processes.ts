@@ -8,6 +8,7 @@ import type { HostedProcess, ProcessBook } from './process-book.js';
 import type { ProcessBookApi } from './processes-host.js';
 import type { RunNowResult } from './process-scheduler.js';
 import type { RestartPolicy } from './process-supervisor.js';
+import { refusalWords } from '../core/approval-words.js';
 
 /**
  * THE AGENTS' BACKGROUND PROCESSES (the hosting ship line P3; Genie 1's `manageProcess`). A queue worker, a watcher, a
@@ -48,7 +49,7 @@ export interface ProcessesPort {
 
 export interface ProcessToolsDeps {
     readonly resolveCaller: (terminalId: string) => Caller | null;
-    readonly approve: (caller: Caller, action: ProcessApproval, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
+    readonly approve: (caller: Caller, action: ProcessApproval, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied' | 'expired'>;
     /** `null` where this Genie keeps no processes (doctor mode), and every action says so. */
     readonly processes: ProcessesPort | null;
 }
@@ -162,7 +163,7 @@ export function processTools(deps: ProcessToolsDeps): Registration[] {
                             const ready = await port.book.prepare(input);
                             const what = kind === 'agent-nudge' ? `nudges ${str(args.agent)} with “${str(args.prompt)}”` : `runs \`${ready.command}\` in ${ready.cwd}`;
                             const verdict = await deps.approve(caller, 'processes.add', `${ready.name}: ${describeSchedule(cron)} (${cron}) it ${what}. It will keep running on this schedule, without asking again, until you pause it.`, context);
-                            if (verdict !== 'allowed') return err(`scheduling ${ready.name} was denied by the person; nothing was kept`);
+                            if (verdict !== 'allowed') return err(refusalWords(verdict, `scheduling ${ready.name}`, 'nothing was kept'));
                             const status = await port.book.create({ ...input, enabled: true });
                             const row = after(status.id);
                             return ok({ ok: true, process: row ? view(row) : { id: status.id, name: status.name } });
@@ -184,7 +185,7 @@ export function processTools(deps: ProcessToolsDeps): Registration[] {
                             ? 'keeps it stopped after Genie restarts; use Start to run it again'
                             : 'brings it back on every launch until it is stopped';
                         const verdict = await deps.approve(caller, 'processes.add', `${ready.name}: \`${ready.command}\` in ${ready.cwd}, restart ${ready.restart} — Genie starts it now and ${afterRestart}`, context);
-                        if (verdict !== 'allowed') return err(`adding ${ready.name} was denied by the person; nothing was started or kept`);
+                        if (verdict !== 'allowed') return err(refusalWords(verdict, `adding ${ready.name}`, 'nothing was started or kept'));
                         const status = await port.book.create(input);
                         const row = after(status.id);
                         return ok({ ok: true, process: row ? view(row) : { id: status.id, name: status.name, state: status.state } });
@@ -221,7 +222,7 @@ export function processTools(deps: ProcessToolsDeps): Registration[] {
                         const p = kept(str(args.process));
                         if (typeof p === 'string') return err(p);
                         const verdict = await deps.approve(caller, 'processes.remove', `${p.name}${p.command ? ` (\`${p.command}\`)` : ''} — stopped, and no longer brought back on launch`, context);
-                        if (verdict !== 'allowed') return err(`removing ${p.name} was denied by the person; nothing was done`);
+                        if (verdict !== 'allowed') return err(refusalWords(verdict, `removing ${p.name}`, 'nothing was done'));
                         await port.book.remove(p.id);
                         return ok({ ok: true, removed: p.id });
                     }

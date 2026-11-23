@@ -15,6 +15,7 @@
  *   to the earliest reset; a spent one last) → an account with no plan has no "unknown" chip → Use another account is there.
  */
 import { mainWindow } from './cdp-main-window.mjs';
+import { closeWhatsNew, seedWhatsNewSeen } from './cdp-whats-new.mjs';
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -34,6 +35,8 @@ const root = mkdtempSync(join(tmpdir(), 'accounts-popover-'));
 const home = join(root, 'home');
 mkdirSync(join(home, 'AppData', 'Roaming'), { recursive: true });
 mkdirSync(join(home, 'AppData', 'Local'), { recursive: true });
+// What's new for this version already seen: a fresh home would open it late, over the chip (Tynn #1009).
+seedWhatsNewSeen(join(home, '.genie'));
 const log = join(root, 'electron.log');
 const env = {
     ...process.env,
@@ -169,6 +172,7 @@ async function waitFor(cdp, expression, ms = 30_000) {
 }
 /** A real click, as a person's: the mouse pressed and released at the middle of what the selector finds. */
 async function click(cdp, selector) {
+    await closeWhatsNew((expression) => cdp.evaluate(expression));
     const at = await cdp.evaluate(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
     if (!at) return false;
     for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {

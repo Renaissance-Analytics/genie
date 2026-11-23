@@ -17,6 +17,7 @@
  *   the host, mute inverted, Advanced listing every kind, and a preview played at master x level (the Audio's own volume).
  */
 import { mainWindow } from './cdp-main-window.mjs';
+import { closeWhatsNew, forceWhatsNewOpenForProbe, seedWhatsNewSeen } from './cdp-whats-new.mjs';
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -36,6 +37,8 @@ const root = mkdtempSync(join(tmpdir(), 'sound-picker-'));
 const home = join(root, 'home');
 mkdirSync(join(home, 'AppData', 'Roaming'), { recursive: true });
 mkdirSync(join(home, 'AppData', 'Local'), { recursive: true });
+// What's new for this version already seen: a fresh home would open it late, over Settings (Tynn #1009).
+seedWhatsNewSeen(join(home, '.genie'));
 const log = join(root, 'electron.log');
 const env = {
     ...process.env,
@@ -137,6 +140,7 @@ async function waitFor(cdp, expression, ms = 30_000) {
  * one covered the Settings nav after the start-up Escape): a person closes it with Escape and clicks again; so does this.
  */
 async function click(cdp, selector) {
+    await closeWhatsNew((expression) => cdp.evaluate(expression));
     let at = null;
     for (let attempt = 0; attempt < 4; attempt++) {
         at = await cdp.evaluate(`(() => {
@@ -363,6 +367,23 @@ async function volumeProof(cdp) {
 
 console.log('\nTHE SOUND PICKER — what a person sees, in the real app\n');
 const TRIGGER = '[data-surface="settings"] [data-sound-picker]';
+/**
+ * In the page: whether the address is this workstation's own (`genie://<workstation>/<path>...`), the form the window
+ * rewrites every route to once it has its snapshot; with `path`, whether it is at that page (or within it). The name is
+ * the window's own snapshot's, so the test holds only once the rewrite has really happened.
+ */
+const ON_THIS_WORKSTATION = `async (path) => {
+    let s = null;
+    try { s = await (window.genieTest ?? window.genie).snapshot(); } catch { return false; }
+    const w = String(s?.workstation?.name ?? '').toLowerCase();
+    if (!w) return false;
+    const h = decodeURIComponent(window.location.hash).toLowerCase();
+    const at = '#genie://' + w + '/';
+    if (!h.startsWith(at)) return false;
+    const here = h.slice(at.length).split(/[?#]/)[0];
+    return path === null || here === path || here.startsWith(path + '/');
+}`;
+const onThisWorkstation = (path) => `(${ON_THIS_WORKSTATION})(${JSON.stringify(path)})`;
 let app = launch();
 let cdp = null;
 try {
@@ -374,9 +395,14 @@ try {
         await sleep(500);
     }
     await cdp.evaluate(`window.location.hash = '#genie://settings'; true`);
+    await forceWhatsNewOpenForProbe((expression) => cdp.evaluate(expression));
     check(await waitFor(cdp, `Boolean(document.querySelector('[data-settings-nav="notifications"]'))`, 30_000), '1. Settings is open, with its Notifications section');
     check(await click(cdp, '[data-settings-nav="notifications"]'), '2. Notifications takes a mouse click');
     check(await waitFor(cdp, `Boolean(document.querySelector(${JSON.stringify(TRIGGER)}))`, 15_000), '3. the page has a sound button');
+    // PINNED (Tynn #1023): this row navigates and clicks as early as a person can, before the window has its snapshot. A
+    // late address rewrite used to undo both (gate 1122-020342-554d85: back to the Dashboard; rerun 1122-013356-260f53:
+    // back to General). Neither is undone: the window ends at this workstation's own Settings → Notifications.
+    check(await waitFor(cdp, onThisWorkstation('settings/notifications'), 30_000), '3b. the address is this workstation’s own Settings → Notifications: no late rewrite undid a navigation', await cdp.evaluate('window.location.hash'));
     const before = await cdp.evaluate(`document.querySelector(${JSON.stringify(TRIGGER)})?.textContent ?? ''`);
     check(await click(cdp, TRIGGER), '4. the sound button takes a mouse click');
     check(await waitFor(cdp, `Boolean(document.querySelector('[data-sound-popover] [data-sound-row]'))`, 5_000), '5. the popover opens, with its rows');
@@ -400,13 +426,16 @@ try {
     await sleep(300);
     const wasDark = await cdp.evaluate(`document.documentElement.classList.contains('dark')`);
     for (const theme of ['light', 'dark']) {
-        await cdp.evaluate(`document.documentElement.classList.toggle('dark', ${theme === 'dark'}); document.documentElement.setAttribute('data-theme', '${theme}'); true`);
+        await cdp.evaluate(`document.documentElement.classList.toggle('dark', ${theme === 'dark'}); document.documentElement.setAttribute('data-theme', '${theme}'); document.getAnimations().forEach((a) => { try { a.finish(); } catch { /* an endless one */ } }); true`);
+        // ^ The switch's own transitions finished at once (Tynn #1009): gate 1122-000850-5f70c8 read 13c/14c mid-way (light
+        //   read the dark colour) although two readings 300 ms apart agreed: a software-rendered window can hold one still.
         // Button's own transition-all (200 ms; slower on the VM's software renderer) and the mouse left on the row it
         // clicked can be read mid-change (measured: a light reading of 58,122,240 at 1.69:1 while the screenshot taken
         // just after showed the settled colours). The mouse rests on the group heading, and the reading is taken once two
         // in a row agree.
         const heading = await cdp.evaluate(`(() => { const h = document.querySelector('[data-sound-popover] [data-sound-group] > div'); if (!h) return null; const r = h.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
         if (heading) await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: heading.x, y: heading.y, button: 'none', clickCount: 0 });
+        await cdp.evaluate(`document.getAnimations().forEach((a) => { try { a.finish(); } catch { /* an endless one */ } }); true`);
         let raw = await cdp.evaluate(MEASURE);
         for (let i = 0, prev = null; i < 15 && raw !== prev; i++) { prev = raw; await sleep(300); raw = await cdp.evaluate(MEASURE); }
         const seen = JSON.parse(raw);

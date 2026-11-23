@@ -52,6 +52,8 @@ export const ICON_NAMES: readonly string[] = [
     'flame', 'chevrons-right',
     // Its claims (row B3): Claim + Start and Assign to.
     'hand', 'user-plus',
+    // A Claude account's Sign in, and Sign out and remove (Tynn #1011).
+    'log-in', 'log-out',
     'settings', 'folder', 'x', 'square-terminal', 'pin',
     // The rail's Hosting / AgentInbox rows (Toolchain uses 'wrench'), and a hibernated workspace's row.
     'server', 'mail', 'moon',

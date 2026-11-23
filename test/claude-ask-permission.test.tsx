@@ -40,11 +40,13 @@ describe('the options Claude starts with', () => {
         }
     });
 
-    it('is a ClaudeDriver option prism-acp accepts, and its argv carries --settings only when the driver supplies the file', () => {
+    it('is a ClaudeDriver option prism-acp accepts; its argv carries ONE --settings: Remote Control off, else the driver\'s file', () => {
         // A typed assignment: if 0.10.0's ClaudeDriverOptions did not take permissionPrompts, this would not compile.
         const typed: ClaudeDriverOptions = claudeOptionsFor(record('ask'), '/w/tynn', null);
         const without = claudeArgs(typed);
-        expect(without).not.toContain('--settings');
+        // prism-acp 0.46.0 (Tynn #1014): every launch forces Remote Control off with an inline --settings, and nothing else rides in it.
+        expect(without.filter((a) => a === '--settings')).toHaveLength(1);
+        expect(JSON.parse(without[without.indexOf('--settings') + 1]!)).toEqual({ disableRemoteControl: true });
         expect(without[without.indexOf('--permission-mode') + 1]).toBe('bypassPermissions');
         const withFile = claudeArgs(typed, undefined, '/tmp/s.json');
         expect(withFile.filter((a) => a === '--settings')).toHaveLength(1);
