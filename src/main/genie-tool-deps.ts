@@ -34,7 +34,7 @@ export interface GenieToolParts {
     readonly knowledge: KnowledgeStore;
     readonly settings: Pick<SettingsStore, 'snapshot' | 'snapshotFor'>;
     /** The person's approval of a gated action (a terminal created or written, a gated plugin tool, a service added or removed, a site removed, a background process added or removed). */
-    readonly approve: (caller: Caller, action: 'create' | 'write' | 'plugin' | HostingApproval | ProcessApproval | typeof CREATE_AGENT_ACTION | typeof WORKSPACE_TABS_ACTION | PageAction | typeof PLAYWRIGHT_INSTALL_ACTION, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
+    readonly approve: (caller: Caller, action: 'create' | 'write' | 'plugin' | HostingApproval | ProcessApproval | typeof CREATE_AGENT_ACTION | typeof WORKSPACE_TABS_ACTION | PageAction | typeof PLAYWRIGHT_INSTALL_ACTION, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied' | 'expired'>;
     /** Every agent Genie knows, now. */
     readonly roster: () => readonly AgentRecord[];
     /** Each workspace's address slug (registry.workspaceSlugs): an agent is `name@slug`. */
@@ -59,7 +59,7 @@ export interface GenieToolParts {
     /** The `plan` tool's read: the caller's kept plan (the record's `plan`); `null` = none. */
     readonly readPlan?: (agentId: string) => readonly { content: string; status: string }[] | null;
     readonly terminals: TerminalsPort;
-    /** The env a terminal in a workspace gets — the Terminals tab's own (hosting-actions.ts `terminalEnvFor`). Absent = none. */
+    /** The env a terminal in a workspace gets — the Terminals tab's own (genie-host.ts `shellEnv`). Absent = none. */
     readonly terminalEnv?: (workspaceId: string) => Readonly<Record<string, string>>;
     /** Puts a terminal that needs the person in front of them (Tynn #722); answers whether a window got it. Absent = nothing can be shown. */
     readonly surfaceTerminal?: (request: { workspaceId: string; terminalId: string; agentName: string; reason: string }) => boolean;

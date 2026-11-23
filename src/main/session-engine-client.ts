@@ -8,8 +8,6 @@ import { RemoteAccessReplica } from './remote-access-replica.js';
 import { TakeOverReplica } from './take-over-replica.js';
 import type { TakeOverView } from './take-over-service.js';
 import type { RemoteAccessEvent } from './remote-access-host.js';
-import type { SyncResult } from '../core/integrations.js';
-import type { WorkspaceConfigRequest } from './workspace-config-sync.js';
 import type { McpServer, SessionModelState } from '@particle-academy/prism-acp';
 import type { RowsPatch } from '../core/agent-push-wire.js';
 import type { AgentActionKind } from '../core/agent-actions.js';
@@ -40,7 +38,6 @@ import type { AccountsSnapshot } from '../core/accounts-view.js';
 import type { AccountsAction, AccountsActResult } from '../core/account-settings.js';
 import { commsFields, type EngineLiveness } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
-import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
 import type { StoreName, StoresDump, StoresEvent } from './agent-stores-host.js';
 import { storeReplicas, type StoreReplicas } from './agent-stores-replica.js';
 import { SupervisorReplica, type SupervisorDump, type SupervisorEvent } from './supervisor-host.js';
@@ -112,7 +109,6 @@ export interface EngineClientOptions {
     readonly elevate?: (steps: readonly PrivilegedStep[]) => Promise<ElevationOutcome>;
     /** Which php-cgi a site's pin runs, for the hosting replica's synchronous check (P5a). */
     readonly phpCgiFor?: (pin: string | undefined) => PhpCgiResolution;
-    readonly serviceEnvFor?: (workspaceId: string) => Readonly<Record<string, string>>;
     /**
      * The window's environment NOW, sent with every start (default: `process.env`). Check and repair changes PATH and the
      * toolchain variables in the window's process at run time; the host takes them before it starts a provider, so a
@@ -166,9 +162,6 @@ export class SessionEngineClient {
     /** genie-host's frames for this window's tunnelled protocol connections (Tynn #898 step 2d-4b). */
     readonly #protocolListeners = new Set<(event: import('./protocol-tunnels.js').TunnelEvent) => void>();
     readonly #linkListeners = new Set<{ up: () => void; down: (reason: string) => void }>();
-    /** The file-watch views this window holds (P2.2), sent again after a reconnect: the host dropped them with the link. */
-    readonly #filesViews = new Map<string, { workspace: { id: string; path: string }; want: FilesWant }>();
-    readonly #filesListeners = new Set<(event: FilesHubEvent) => void>();
     /** The board views this window follows in the host (P5c), sent again after a reconnect: the host dropped them with the link. */
     readonly #boardViews = new Map<string, string>();
     readonly #boardListeners = new Set<(event: TynnBoardHubEvent) => void>();
@@ -339,7 +332,6 @@ export class SessionEngineClient {
             this.#emit(id as AgentId);
         }
         for (const id of this.#watched) void this.call('engine.watchLedger', [id]);
-        for (const [viewId, v] of this.#filesViews) void this.call('engine.filesWatch', [viewId, v.workspace, v.want]);
         for (const [viewId, workspaceId] of this.#boardViews) void this.call('engine.tynnBoardWatch', [viewId, workspaceId]);
         for (const [viewId, workspaceId] of this.#issuesViews) void this.call('engine.tynnIssuesWatch', [viewId, workspaceId]);
         for (const [viewId, workspaceId] of this.#featuresViews) void this.call('engine.tynnFeaturesWatch', [viewId, workspaceId]);
@@ -432,9 +424,6 @@ export class SessionEngineClient {
                 return;
             case 'remoteAccess.event':
                 this.remoteAccess().deliver(payload as RemoteAccessEvent);
-                return;
-            case 'files.event':
-                for (const l of [...this.#filesListeners]) l(payload as FilesHubEvent);
                 return;
             case 'issueWatch.dump':
                 this.issueWatch().apply({ kind: 'dump', dump: payload as IssueWatchDump });
@@ -566,20 +555,6 @@ export class SessionEngineClient {
     }
 
     /**
-     * A view wants a workspace's disk changes (the host split, P2.2): genie-host's watcher runs while any view holds one.
-     * Kept here too, so a reconnect subscribes it again.
-     */
-    filesWatch(viewId: string, workspace: { id: string; path: string }, want: FilesWant): Promise<boolean> {
-        this.#filesViews.set(viewId, { workspace: { id: workspace.id, path: workspace.path }, want });
-        return this.#value('engine.filesWatch', [viewId, workspace, want], false).then((v) => v === true);
-    }
-
-    filesUnwatch(viewId: string): Promise<boolean> {
-        this.#filesViews.delete(viewId);
-        return this.#value('engine.filesUnwatch', [viewId], false).then((v) => v === true);
-    }
-
-    /**
      * The window's replicas of genie-host's stores (the host split, P3.1): the inbox, attention, approvals (read here,
      * synchronously, re-based at every connect) and the knowledge graph (read by call). Writes answer in the host's words.
      */
@@ -590,22 +565,6 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#replicas;
-    }
-
-    /** What Genie's MCP server in the host needs of this window until P3.2 (host-mcp.ts `WindowView`); the first starts it. */
-    pushWindowView(view: WindowView): Promise<boolean> {
-        return this.#value('engine.windowView', [view], false).then((v) => v === true);
-    }
-
-    /** One of the host's own tools, for a caller this window resolved (a flow's step). Refused in words with no host. */
-    async runHostTool(call: ForwardedToolCall): Promise<McpToolResult> {
-        const reply = await this.call('engine.runTool', [call]);
-        return reply.ok ? (reply.value as McpToolResult) : { text: `${call.name}: genie-host did not answer (${reply.reason}); nothing was done`, isError: true };
-    }
-
-    /** Genie 1's database: the host takes its memories and AgentInbox history once. */
-    v1Import(databasePath: string): Promise<boolean> {
-        return this.#value('engine.v1Import', [databasePath], false).then((v) => v === true);
     }
 
     /** The host MCP server's endpoint, verification and tools; null when it has not started. */
@@ -695,13 +654,6 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#terminals;
-    }
-
-    /** A workspace's agent config: the host writes it. Anything but its answer rejects, so nothing reads as synced. */
-    async configSync(request: WorkspaceConfigRequest): Promise<SyncResult[]> {
-        const reply = await this.call('engine.configSync', [request]);
-        if (!reply.ok) throw new Error(reply.reason);
-        return reply.value as SyncResult[];
     }
 
     /** Remote access (Tynn #409, P5d.1): genie-host listens, pairs and holds the baton; this window reads and drives it. */
@@ -905,12 +857,6 @@ export class SessionEngineClient {
         return () => { this.#boardListeners.delete(listener); };
     }
 
-    /** The batches and git results for this window's views. */
-    onFilesEvent(listener: (event: FilesHubEvent) => void): () => void {
-        this.#filesListeners.add(listener);
-        return () => { this.#filesListeners.delete(listener); };
-    }
-
     /** One op on a tunnel of this window's protocol connections to genie-host's RemoteHost; false while not linked. */
     protocolSend(op: import('./protocol-tunnels.js').TunnelOp, tunnel: string, payload: unknown): boolean {
         const t = this.#transport;
@@ -1098,7 +1044,8 @@ export class SessionEngineClient {
 
     start(record: AgentRecord, cwd: string): Promise<{ ok: true } | { ok: false; reason: string }> {
         const env = Object.fromEntries(Object.entries((this.#options.env ?? (() => process.env))()).filter((e): e is [string, string] => typeof e[1] === 'string'));
-        return this.#value('engine.start', [record, cwd, this.#options.serviceEnvFor?.(record.workspaceId) ?? {}, env], { ok: false, reason: NOT_CONNECTED });
+        // The third place was the window's service env: genie-host computes its own since Tynn #1044, so an empty one goes.
+        return this.#value('engine.start', [record, cwd, {}, env], { ok: false, reason: NOT_CONNECTED });
     }
 
     stop(agentId: AgentId, options: { graceful?: boolean } = {}): Promise<boolean> {

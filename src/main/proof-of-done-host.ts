@@ -43,7 +43,10 @@ export function noteFile(file: string): PodPorts['retry'] {
  * listing the claim (Tynn #858) the approval leaves the Deck, recorded as cancelled with that reason, and is never signed.
  */
 export function podApproval(approvals: Pick<ApprovalQueue, 'gate'>, caller: Caller): PodPorts['approve'] {
-    return async (request) => ((await approvals.gate(caller, 'pod.sign', request.detail, { signal: request.signal })) === 'allowed' ? 'allowed' : 'denied');
+    return async (request) => {
+        const verdict = await approvals.gate(caller, 'pod.sign', request.detail, { signal: request.signal });
+        return verdict === 'allowed' || verdict === 'expired' ? verdict : 'denied';
+    };
 }
 
 export interface ProofOfDoneHostOptions extends Omit<PodPorts, 'git' | 'retry'> {

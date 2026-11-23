@@ -205,6 +205,12 @@ export const REMOTE_METHODS = [
     // WHAT AN OLDER GENIE SEALED (Tynn #959, 2g-3b): main's one-time unsealer hands each old copy to genie-host, which keeps
     // it in its own keychain (`phase: 'adopt'`), and is told which old copies main then deleted (`phase: 'removed'`).
     'keychain.adoptLegacy',
+    // A window-run tool's approval, asked of genie-host's one queue (Tynn #1006, 2g-4b2): main's own client only.
+    'approvals.gate',
+    // Whether the person is at this machine, said by main's own client (Tynn #1044, 2g-4d B): all genie-host cannot find itself.
+    'window.view',
+    // A write to genie-host's registry, by main's window registry (Tynn #1007, 2g-4e): main's own client only.
+    'registry.write',
     // genie-host asks Tynn again whether it is signed in: the machine woke, or an agent found IssueWatch signed out (Tynn #959).
     'tynn.recheck',
     ...LOCAL_FILES_METHODS,
@@ -228,7 +234,7 @@ export type RemoteMethod = (typeof REMOTE_METHODS)[number];
  * `host.version` and `host.update` (Tynn #894): the host's version and window, read at any time, and the client's request
  * that the host update. The two calls a connection outside the support window may still make; neither takes the baton.
  */
-export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'deck.watch', 'summary.watch', 'remote.watch', 'settings.watch', 'host.lock', 'host.unlock', 'host.version', 'host.update', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS, ...TYNN_WATCH_METHODS] as const;
+export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'deck.watch', 'summary.watch', 'remote.watch', 'settings.watch', 'registry.watch', 'registry.read', 'frontdoor.watch', 'host.lock', 'host.unlock', 'host.version', 'host.update', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS, ...TYNN_WATCH_METHODS] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
 /** Moved native pushes have separate local channels; existing remote subscriptions keep their channels. */
@@ -256,7 +262,13 @@ export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activit
     remote: 'local-remote',
     // genie-host's settings (main/settings-watch.ts), to a connection that said settings.watch: main's own client, for the
     // settings it reads (Tynn #998, 2g-4b1).
-    settings: 'local-settings' } as const;
+    settings: 'local-settings',
+    // That genie-host's registry was written (main/registry-protocol.ts), to a connection that said registry.watch: main's
+    // own client, whose window registry reads it again (Tynn #1007, 2g-4e).
+    registry: 'local-registry',
+    // genie-host's front door (core/front-door-watch.ts), to a connection that said frontdoor.watch: main's own client, for
+    // its browser sessions, site panels, cookie bridge and GApp windows (Tynn #1046, 2g-4d-D1).
+    frontdoor: 'local-frontdoor' } as const;
 
 /** What another window on an agent is typing (Tynn #730), to a remote connection; this machine's windows hear LOCAL_EVENTS.typing. */
 export const TYPING_EVENT = 'agent-typing';
@@ -426,6 +438,9 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'deviceLink.close': 'local',
     'deviceLink.openBrowser': 'local',
     'keychain.adoptLegacy': 'local',
+    'approvals.gate': 'local',
+    'window.view': 'local',
+    'registry.write': 'local',
     'tynn.recheck': 'local',
     ...Object.fromEntries(LOCAL_FILES_METHODS.map(method => [method, 'local'])) as Record<LocalFilesMethod, 'local'>,
     ...Object.fromEntries(LOCAL_DRAFT_METHODS.map(method => [method, 'local'])) as Record<LocalDraftMethod, 'local'>,
