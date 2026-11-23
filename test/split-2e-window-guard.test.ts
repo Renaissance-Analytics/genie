@@ -158,7 +158,7 @@ describe('the window\'s engine link carries only the link, window capabilities, 
         // github, keyring, relayHost and tynn left in 2g-3b (#959): the accounts, the keyring card and the registration are
         // genie-host's; main unseals an older Genie's secrets once and hands them over (keychain.adoptLegacy).
         // catalog and plugins left in 2g-3c (#961): compose read nothing from them in the window.
-        flows: '2g', hosting: '2g',
+        // flows, hosting, stores and supervisor left in 2g-4d E (#955): the window composes nothing.
         // Seen in 2g-4e (#1007) once the scanner followed main's `engineLink` alias; each is a task on 2g-4d (#955).
         // pushWindowView and v1Import left in 2g-4d B (#1044).
         // spawnLink and onSpawnFrame are the link's own since 2g-4d-A (#1043: the processes child's exec route is live);
@@ -168,7 +168,6 @@ describe('the window\'s engine link carries only the link, window capabilities, 
         onTynnIssuesEvent: '2g', tynnFeaturesWatch: '2g', tynnFeaturesUnwatch: '2g', onTynnFeaturesEvent: '2g',
         // recordsChanged left in 2g-3 (#954): genie-host reads its own registry.
         // remoteAccess left in 2g-4a (#997): main's notifications read genie-host's remote.watch.
-        stores: '2g', supervisor: '2g',
     };
     const ratchet = (rows: readonly (readonly [string, string])[], usedNow: readonly string[]) => ({
         joined: rows.filter(([u, d]) => d.startsWith('move:') && STILL_TO_MOVE[u] !== d.slice('move:'.length)).map(([u]) => u).sort(),

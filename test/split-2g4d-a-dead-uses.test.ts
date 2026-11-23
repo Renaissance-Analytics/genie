@@ -86,11 +86,11 @@ describe('PROOF: no host tool’s call leaves the window for genie-host, and no 
         expect(runsInWindow('pages', {})).toBe(true);
     });
 
-    it('the window runs no flow engine of its own: compose starts one only with no `flowsEngine`, and main always hands genie-host’s', () => {
+    it('the window runs no flow engine of its own: compose starts one only with no `flowsEngine`, and main composes nothing (2g-4d E)', () => {
         expect(compose).toMatch(/if \(!input\.flowsEngine\) \{\s*ownFlows = await input\.alone!\.openFlows\(\);/);
         expect(compose).toMatch(/const ownEngine = ownFlows \? input\.alone!\.startFlows\(\{/);
         expect(compose).toMatch(/setFlowToolCaller: \(call\) => \{ ownEngine\?\.setToolCaller\(call\); \},/);
-        expect(main).toMatch(/^ {8}flowsEngine: \{ flows: agentEngineLink\.client\.flows\(\), scheduler: agentEngineLink\.client\.flows\(\) \},$/m);
+        expect(main).not.toMatch(/flowsEngine:|composeWindowServices/);
         expect(main).not.toMatch(/\balone:/);
     });
 

@@ -1,16 +1,12 @@
 import { sameFlowWindow } from '../core/route.js';
-import { describeMcpTool } from '../core/mcp-tool-summaries.js';
 import { terminalsWindowRoute } from '../core/workspace-window.js';
 import { ConnectWatch, connectNotice } from '../core/connected-here.js';
 import { guestAskNotice, newGuestAsks } from '../core/pair-confirm.js';
 import type { TynnWatchEvent, TynnWatchKind, TynnWatchPort } from '../core/local-tynn-watch.js';
 import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
 import type { Headroom, ReadingStamp } from '../core/headroom.js';
-import { systemRootsPem } from './php-trust-host.js';
-import { runServiceExec } from './service-exec.js';
 import { MainErrorBook, installMainErrorPolicy, retryHostCopy } from '../core/main-errors.js';
 import { forwardRendererConsole } from '../core/render-error.js';
-import { siteAnswers } from './port-probe.js';
 import { relayWorkstationOf, remoteFromSearch, remoteWindowSearch } from '../core/remote-window.js';
 import { takeOverRouteOf } from '../core/take-over-route.js';
 import { browserConnectionFor } from '../core/browser-connection.js';
@@ -92,14 +88,12 @@ import { callRefusal, ownProtocolClient } from './own-protocol-client.js';
 import { ActivityFeeds } from './activity-feeds.js';
 import { PauseAlerts } from '../core/account-pause.js';
 import { Store } from './store.js';
-import { composeWindowServices, type ComposeInput, type WindowServices } from './compose.js';
 import { featureWindow } from './feature-window.js';
 import { QuestionWindow } from './question-window.js';
 import { RemoteQuestions } from './remote-questions.js';
 import { electronQuestionWindow } from './question-window-electron.js';
 import { readV1Settings } from './v1-settings.js';
-import { readV1Catalog, readV1Knowledge } from './v1-import.js';
-import { readV1Inbox } from './v1-inbox.js';
+import { readV1Catalog } from './v1-import.js';
 import { planV1Import, v1DefaultAgents } from '../core/v1-import.js';
 import { v1Leftovers } from '../core/v1-reap.js';
 import { TITLE_BAR_HEIGHT, mainWindowOptions, overlayColorsOk } from '../core/window.js';
@@ -114,15 +108,13 @@ import { panelRestart } from '../core/panel-restart.js';
 import { LeftRunningMark } from './left-running.js';
 import { wireCloseToTray, wireLoginItem, type LoginItemPort } from './tray-residence.js';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
 import { execFileRunner } from './toolchain-runner.js';
 import { latestIndex, type CommandRunner } from './toolchain-prober.js';
 import { type Platform } from '../core/toolchain.js';
-import { ensurePhpCaBundle, nodeToolchainFs, phpCaBundleNow, phpWorkerEnv, processEnv, restoreToolchainEnv, toolchainPaths } from './toolchain-ops.js';
+import { ensurePhpCaBundle, nodeToolchainFs, phpCaBundleNow, processEnv, restoreToolchainEnv } from './toolchain-ops.js';
 import { nodeLinkFs, restoreDefaultsEnv } from './toolchain-defaults.js';
 import { runElevatedBatch, type PrivilegedStep } from './elevate.js';
-import { nodePhpVersionsFs, phpVersionsRoot, refreshAllManagedInis, refreshManagedIni, resolvePhpCgi, type PhpCaPort, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
-import { osPidAlive } from './process-supervisor.js';
+import { nodePhpVersionsFs, phpVersionsRoot, refreshAllManagedInis, resolvePhpCgi, type PhpCaPort, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
 import { BrowserPane } from './browser-pane.js';
 import { electronBrowserView, followFrontDoorInPanes } from './electron-browser-view.js';
 import { BrowserCookieBridge } from './browser-cookie-bridge.js';
@@ -146,7 +138,6 @@ import { removeSavedScrollback } from './saved-scrollback.js';
 import { fileEventsOf } from '../core/files-panel.js';
 import { gitFileStatus, gitShowHead, gitTreeStatus } from './git-ports.js';
 import { withActionSignal } from './mcp-signal.js';
-import type { Verification } from './mcp-server.js';
 import { hostOnly, windowToolRunner } from './window-tools.js';
 import type { TerminalsPort } from './mcp-tools-more.js';
 import { EMPTY_HOST_SUMMARY, type HostSummary } from '../core/host-summary.js';
@@ -1110,9 +1101,6 @@ function cwdFor(record: AgentRecord): string {
     return workspace?.path ?? app.getPath('userData');
 }
 
-let services: WindowServices | null = null;
-// What the boot probe of genie-host's MCP server said (§6.4 "native transport verified at boot").
-let mcpVerified: Verification | null = null;
 /** Genie's MCP endpoint: genie-host serves it (P3.1). */
 let hostMcpEndpoint: { url: string; token: string } | null = null;
 const mcpEndpointNow = (): { url: string; token: string } | null => hostMcpEndpoint;
@@ -1122,8 +1110,6 @@ let windowToolRun: ((call: ForwardedToolCall) => Promise<McpToolResult>) | null 
 /** openFileForUser calls that arrived before the tools were built: shown as soon as they are. */
 const openFilesLater: ForwardedToolCall[] = [];
 /** The two variables every terminal gets once the server listens; GENIE_TERMINAL_ID is minted by the pty port itself. */
-/** Every tool Genie's MCP serves (name and description), set once the registrations exist. */
-let mcpToolList: readonly { name: string; description: string }[] = [];
 /** The agents' MCP caller keys (one per agent, for the run). */
 const sessionCallers = new CallerBook();
 /** An agent session calling Genie's MCP, by its caller key: the agent and its workspace, now. */
@@ -1683,11 +1669,6 @@ async function boot(): Promise<void> {
 
     // A provider's program (Tynn #577) is genie-host's since 2c-3 (#897): providers.chooseProgram, picked on its disk.
 
-    /*
-     * THE FEATURE SERVICES — every store, the Flow scheduler, the supervisor, the site manager and
-     * the .gen front door, composed once (compose.ts). The v1 settings carry-over runs here on first
-     * run, from v1's own database under the same ~/.genie.
-     */
     // THE BACKGROUND PROCESSES THE PERSON KEEPS (§6.6, process-book.ts): opened once the services are composed;
     // until then every snapshot is the supervisor's alone. Late-bound so no closure below can meet it uninitialised.
     // genie-host's when it runs (P3.3c): the book and its scheduler there, this window's replica here.
@@ -1705,11 +1686,7 @@ async function boot(): Promise<void> {
      * and holds the baton and the lock; this window starts no listener, opens no device store, and keeps no replica of it
      * (Tynn #997, 2g-4a): Settings draws it from genie-host's features, and the notifications below read remote.watch.
      */
-    // Genie's Caddy RUNS from a per-user copy under ~/.genie, refreshed when the bundled binary's hash changes — never
-    // from the install dir, which an NSIS update replaces under a running front door (Genie 1's genie#265).
-    const bundledCaddy = caddyBinPath(process.resourcesPath, process.platform);
-    const caddyCopy = bundledCaddy === null ? null : await userCaddyCopy(bundledCaddy, join(runtimeDir(genieRoot()), 'caddy-bin'));
-    if (caddyCopy?.error) console.error(`[caddy] ${caddyCopy.error}`);
+    // Genie's Caddy, its per-user copy under ~/.genie, is genie-host's (hosting-inputs.ts): the window copies none (Tynn #955).
     /*
      * APPS AND SCRIPTS REPORT TO AGENTS (genie#1345; the owner, FTQ q_eb705239): a loopback door a Genie-hosted site, a
      * kept process or a script key posts into an agent's AgentInbox through (main/app-inbox-service.ts). It listens BEFORE
@@ -1717,88 +1694,10 @@ async function boot(): Promise<void> {
      * remembered (a script outside Genie keeps one address); the keys are app-inbox-keys.ts's.
      */
     // THE APP INBOX's door and keys are genie-host's (P5a.2 ruling 3; Tynn #584): every window reaches them over the protocol.
-    // THE STORES AGENTS WRITE TO are genie-host's when it runs (the host split, P3.1): this window composes against its
-    // replicas of them.
     // SAFE MODE, genie-host's (Tynn #386).
     windowSafe = WindowSafeMode.open({ link: agentEngineLink.client });
-    const engineForStores = agentEngineLink;
-    const composeWith = (input: ComposeInput) => composeWindowServices({ ...input, agentStores: engineForStores.client.stores() });
-    const composed: WindowServices = await composeWith({
-        // A workspace's trust verdict moved (genie#1519): the trust step is pushed. genie-host's TrustVerdicts compare its agents.
-        onTrustVerdict: () => { requestFeaturePush(); },
-        // AgentInbox's automatic reply to a paused recipient reads the live sessions (genie#1515): the emergency stores only.
-        inboxSession: (id) => host?.probe(id) ?? null,
-        userData: genieRoot(),
-        // No host: this window's own flows, sites and engines start nothing by themselves in safe mode (Tynn #386).
-        safeMode: windowSafeNow,
-        safeModeLeft: (listener) => { windowSafe?.onChange((view) => { if (!view.active) listener(); }); },
-        // Said in the remote welcome (P10.1e): the same build the host's engine welcome says.
-        build: hostBuild(app.getVersion(), join(here, 'host.js')),
-        // THE PROCESS SUPERVISOR IS GENIE-HOST'S (P3.3b): sites, workers and the front door run — and restart — there, with
-        // or without this window; a window restart neither starts them twice nor stops them.
-        supervisor: agentEngineLink.client.supervisor(),
-        // GENIE'S HOSTING IS GENIE-HOST'S (P5a): the front door, the engines and the site routes are built there and kept with
-        // the UI closed; this window reads them (the front door's port and CA arrived before the link was ready) and drives
-        // them through the replica.
-        hosting: agentEngineLink.client.hosting(),
-        // FLOWS ARE GENIE-HOST'S (P3.3d): an armed flow fires on its clock with no window; this window edits, arms and runs
-        // them through the replica.
-        flowsEngine: { flows: agentEngineLink.client.flows(), scheduler: agentEngineLink.client.flows() },
-        // The supervisor's liveness check asks the OS too (P2): a pty the engine still holds for a dead process is a crash.
-        pidAlive: osPidAlive,
-        v1Settings: () => readV1Settings(v1DatabaseFile()),
-        // Genie 1's knowledge graph, from the same database, read-only; the store decides whether it still needs it.
-        v1Knowledge: () => readV1Knowledge(v1DatabaseFile()),
-        // Genie 1's AgentInbox history and its attachment bytes, read-only; the inbox decides whether it still needs them.
-        v1Inbox: () => readV1Inbox(v1DatabaseFile()),
-        // Genie 1's service engines, TAKEN OVER in place (same containers, volumes, credentials, ports) and its sandbox/site
-        // containers stopped — beside importFromV1/reapV1Runtime in spirit, but here because the engine registry is born in
-        // composition and must hold them before sites and kept processes read a workspace's env (main/v1-services.ts).
-        v1Services: { database: v1DatabaseFile() },
-        // Genie 1's FLOWS (its `flows` table), brought over ONCE as DISARMED canvas flows (main/v1-flows.ts, genie#1204).
-        v1Flows: { database: v1DatabaseFile() },
-        // Genie's own Caddy — the per-user copy above (caddy-runtime.ts); null in a dev tree without one.
-        caddyBin: caddyCopy?.path ?? null,
-        // A started site is `starting` until its port answers, then running and routed (parity audit #9; Genie 1's
-        // readiness wait, main/port-probe.ts).
-        siteProbe: (port, options) => siteAnswers(port, options),
-        // Each site's php-cgi gets Genie's CA ini directory once Check and repair has written one — read at each start.
-        phpWorkerEnv: () => phpWorkerEnv(processEnv),
-        // The system roots for PHP's trust bundle, beside Genie's own CA (main/php-trust-host.ts).
-        phpSystemRoots: () => systemRootsPem(process.platform, (p) => { try { return readFileSync(p, 'utf8'); } catch { return null; } }, toolchainPaths(toolchainDataDir()).bundle),
-        // A php site's pin (T4): unpinned runs PATH php-cgi (Genie's toolchain PHP with opcache on, genie#1043); pinned
-        // runs that Genie-managed version or is refused.
-        resolvePhpCgi: (pin) => resolvePhpCgi(pin, phpCgiBase()),
-        // Right before a php site's php-cgi starts: a pinned version's ini brought current, the opcache cache's directory.
-        preparePhpCgi: (pin) => refreshManagedIni(pin, phpCgiBase()),
-        // Genie 1's `.gen` CA, already in this machine's trust store: ADOPTED (copied) when Genie 2 has no CA of its own, so
-        // an upgrade serves https://<name>.gen trusted with no prompt (main/gen-ca.ts). Genie 1's userData, and its mirror.
-        v1CaDirs: [...new Set([join(app.getPath('userData'), 'host-gen'), join(app.getPath('appData'), 'Genie', 'host-gen')])],
-        frontDoorPort: 0,
-        mcpEndpoint: () => mcpEndpointNow(),
-        mcpVerification: () => mcpVerified,
-        mcpTools: () => mcpToolList,
-        // The live roster, late-bound: the human's inbox resolves, names and counts from the same agents the MCP tools do.
-        // A plain list, never `registry.snapshot()`: the snapshot builds the Deck's items, which ask this roster for
-        // names — reading the snapshot here recursed until the stack overflowed (CI's real window, #161).
-        roster: () => registry?.listAgents() ?? [],
-        workspaceSlugs: () => registry?.workspaceSlugs() ?? new Map(),
-        refusalForRecipient: (text) => registry?.mailRefusal(text) ?? null,
-        inboxParticipantVisible: (id) => registry?.mailParticipantVisible(id) ?? true,
-        inboxVisibilityVersion: () => registry?.mailVisibilityVersion(),
-        // Each site's own app credential (genie#1345), under its workspace's switch — compose never puts it in the service env.
-        // The registered workspaces, whose envelopes declare the sites Hosting lists and serves (§6.6); a plain
-        // list for the same reason as the roster. Their changes (added, removed, hibernated, woken) re-sync the sites.
-        workspaces: () => registry?.workspaceStates() ?? [],
-        onWorkspacesChange: (listener) => registry?.subscribe(() => listener()) ?? (() => {}),
-        // The rail's namer, so a question in the Deck and its window names the workspace the way the rail does.
-        workspaceName: workspaceNameFor,
-        // ...and its colour (genie#1300), so the question window and the approval toasts show it beside the name.
-        workspaceColor: (path) => workspaceColors?.colorOf(path) ?? null,
-        // Is the agent that asked still waiting: its live session (session host) or its Take Over terminal. A question
-        // whose agent has neither, or whose running session started after it was asked, is STALE on the Deck.
-    });
-    services = composed;
+    // THE WINDOW COMPOSES NOTHING (Tynn #955, 2g-4d E): every store, the flows, the supervisor, the sites and the front door
+    // are genie-host's, read over the protocol; nothing here builds them, or hands them a host input.
     /*
      * THIS WINDOW IS SERVED BY GENIE-HOST (Tynn #898 step 2d-4b): each connection the door admits rides the engine link
      * to genie-host's RemoteHost, admitted there as this machine's window. main serves none of it; the window's browser
@@ -1967,14 +1866,11 @@ async function boot(): Promise<void> {
             terminals: hostOnly<TerminalsPort>('the terminals'),
             // The agents' `services` and `sites` are genie-host's tools, `sites open` too (Tynn #1046 D2): no hosting, trust
             // verdict or browser of this window's is theirs.
-            // `services exec`: a one-off command with the workspace's service variables (main/service-exec.ts).
-            serviceExec: runServiceExec,
             // The plugins' tools are GENIE-HOST'S (ADF A3, Tynn #447): its MCP server offers and runs them with no window.
             plugins: { tools: () => [], guard: () => null, run: async () => ({ ok: false, reason: "a plugin's tool runs in Genie's host, not this window" }) },
         })), resolveCaller, (agentId, kind, tool) => broadcast('genie:action', { agentId, kind, tool }));
         // The host's own tools run in genie-host, a flow's steps among them, `sites open` too since Tynn #1046 D2: none runs here.
         const engineLink = agentEngineLink?.client ?? null;
-        mcpToolList = registrations.map((r) => describeMcpTool(r.definition.name, r.definition.description ?? '', r.visible !== undefined));
         if (engineLink) {
             /*
              * GENIE'S MCP SERVER IS GENIE-HOST'S (the host split, P3.1; plan §11d): agents keep its tools when this window
@@ -1990,8 +1886,6 @@ async function boot(): Promise<void> {
             setInterval(sayPresence, 30_000).unref?.();
             const status = await engineLink.mcpStatus();
             hostMcpEndpoint = status?.endpoint ?? null;
-            mcpVerified = status?.verified ?? { ok: false, reason: 'genie-host did not start its MCP server' };
-            if (status) mcpToolList = status.tools;
         }
         // THE WORKSPACE AGENT FILES are genie-host's to keep, window or no window (Tynn #898 step 2e-2: host-workspace-files.ts).
         pushFeatures();
@@ -2509,8 +2403,6 @@ const quitPorts: QuitPorts = {
         // Main's own sampler ends first: on a slow machine its restarts held main for seconds, in a loop with the watchdog
         // (genie-test-windows, job Q0), and a quit needs main for its own steps.
         stallProfiler?.stop();
-        // Every supervised process, the front door, an in-flight flow run, the knowledge database.
-        void services?.shutdown();
         // The spawn host ends whatever is still running in it (the supervisor's stops above went first, in order), then
         // itself. Over the host's link it is the host's: nothing to end from here.
         void spawnHostNow?.stop();

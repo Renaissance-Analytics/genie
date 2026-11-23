@@ -41,16 +41,17 @@ describe('1. the window composes nothing', () => {
     });
 });
 
-describe('2. no engine replica of the supervisor, hosting or flows is read in the window', () => {
-    it('their rows are gone; only `stores` is still to move (2g-4e)', () => {
+describe('2. no engine replica of the stores, supervisor, hosting or flows is read in the window', () => {
+    it('their rows are gone: only the Tynn watches are still to move (G-1, #934)', () => {
         const rows = WINDOW_ENGINE_INVENTORY.filter(([, verdict]) => verdict === 'move:2g').map(([use]) => use);
-        expect(rows).not.toContain('flows');
-        expect(rows).not.toContain('hosting');
-        expect(rows).not.toContain('supervisor');
+        for (const gone of ['flows', 'hosting', 'stores', 'supervisor']) expect(rows, gone).not.toContain(gone);
+        // CONTROL: the same read sees the rows that are still there.
+        expect(rows).toContain('issueWatch');
+        expect(rows.every((use) => use === 'issueWatch' || /^(on)?[Tt]ynn/.test(use))).toBe(true);
     });
 
-    it('main reads no supervisor(), hosting() or flows() off any engine client', () => {
-        expect(code(src('src/main/main.ts'))).not.toMatch(/\.(supervisor|hosting|flows)\(\)/);
+    it('main reads no stores(), supervisor(), hosting() or flows() off any engine client', () => {
+        expect(code(src('src/main/main.ts'))).not.toMatch(/\.(stores|supervisor|hosting|flows)\(\)/);
     });
 });
 
@@ -100,7 +101,9 @@ describe('3. genie-host sweeps old local staging itself', () => {
 
     it('wired: genie-host schedules it over LocalStagingArea.sweepOld for its home, and stops it at shutdown', () => {
         const host = code(src('src/main/genie-host.ts'));
-        expect(host).toMatch(/const stopStagingSweep = scheduleStagingSweep\(home, \{ sweep: \(h, d\) => LocalStagingArea\.sweepOld\(h, d\)/);
+        expect(host).toMatch(/\n\s*stopStagingSweep = scheduleStagingSweep\(home, \{ sweep: \(h, d\) => LocalStagingArea\.sweepOld\(h, d\)/);
+        // Declared before anything can shut down, so an early shutdown finds the no-op, never an unmade const.
+        expect(host.indexOf('let stopStagingSweep = (): void => {};')).toBeLessThan(host.indexOf('async function shutdown(why: string)'));
         const shutdown = host.slice(host.indexOf('async function shutdown(why: string)'));
         expect(shutdown).toMatch(/stopStagingSweep\(\);/);
         // CONTROL: compose no longer sweeps; one sweeper, genie-host's.
