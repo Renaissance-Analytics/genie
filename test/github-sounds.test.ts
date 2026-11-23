@@ -32,9 +32,12 @@ describe('which sound an IssueWatch batch plays', () => {
         expect(issueWatchSoundKinds([ev('issue.updated'), ev('closed'), ev('comment'), ev('ci.passed'), ev('review'), ev('push')])).toEqual([]);
     });
 
-    it('genie-host says them for every batch Tynn sends (P5c), and main plays each as a genie:action the window plays by its row', () => {
+    it('genie-host says them for every batch Tynn sends (P5c) as a tool signal (Tynn #934 task #1474), and main plays each as a genie:action the window plays by its row', () => {
         const code = (file: string) => readFileSync(file, 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
         expect(code('src/main/issue-watch-host.ts')).toMatch(/for \(const sound of issueWatchSoundKinds\(events\)\) this\.#emit\(\{ kind: 'sound', sound \}\);/);
-        expect(code('src/main/main.ts')).toMatch(/issueWatchNow\?\.onSound\(\(kind\) => \{ broadcast\('genie:action', \{ agentId: null, kind \}\); \}\);/);
+        expect(code('src/main/genie-host.ts')).toMatch(/sayIssueWatchSounds\(issueWatch, \(signal\) => \{ engine\.callback\(\{ name: 'toolSignal', signal \}\); \}\);/);
+        expect(code('src/main/main.ts')).toMatch(/else if \(signal\.kind === 'issuewatch'\) \{ const sound = readIssueWatchSound\(raw\); if \(sound\) broadcast\('genie:action', \{ agentId: null, kind: sound \}\); \}/);
+        // The rows the signal may name are the rows IssueWatch plays: no other kind reaches a window this way.
+        expect(code('src/core/issue-watch-signal.ts')).toMatch(/ISSUE_WATCH_SOUNDS = \['ghissue', 'ghpr', 'ghsecurity', 'ghci'\] as const;/);
     });
 });
