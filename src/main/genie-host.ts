@@ -1898,7 +1898,9 @@ async function main(): Promise<void> {
     hostingStack?.onFrontDoorChange(() => { phoneTouch(); });
     // An elevation that starts or stops waiting for a window: the Deck says it (2g-4d E2b).
     hostingElevation.onChange(() => { phoneTouch(); });
-    stores.onEvent((event) => { if (event.store === 'registry') { void phoneRegistry.refresh(); void missingWorkspaces.check(); } else phoneTouch(); });
+    stores.onEvent((event) => { if (event.store === 'registry') void phoneRegistry.refresh(); else phoneTouch(); });
+    // The registry was written (P7): a workspace added, or pointed at another folder, is looked at now.
+    stores.onEvent((event) => { if (event.store === 'registry') { void missingWorkspaces.check(); } });
     host.subscribe(() => phoneTouch());
     approvals.onChange(phoneTouch);
     takeOverHost.onChange(phoneTouch);
