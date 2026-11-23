@@ -35,6 +35,7 @@ import { mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, statSync, 
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { mainWindow } from './cdp-main-window.mjs';
+import { archiveBase, heldBackOf, readListing } from './toolchain-hold-back.mjs';
 import { closeWhatsNew } from './cdp-whats-new.mjs';
 
 if (process.env.GENIE_TEST_MACHINE !== '1' && userInfo().username !== 'genie') {
@@ -428,15 +429,19 @@ try {
 
     // 8. AN UPDATE: git held one version back by the harness (from the Arch archive), then Update on its card.
     {
-        const listing = await fetch('https://archive.archlinux.org/packages/g/git/').then((r) => (r.ok ? r.text() : ''), () => '');
-        const versions = [...new Set([...listing.matchAll(/href="git-(\d[^"]*?)-x86_64\.pkg\.tar\.zst"/g)].map((m) => m[1]))]
-            .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-        const held = versions.length >= 2 ? versions[versions.length - 2] : null;
-        const newest = versions.at(-1) ?? null;
-        const url = held ? `https://archive.archlinux.org/packages/g/git/git-${held}-x86_64.pkg.tar.zst` : null;
+        // The archive is outside Genie (Tynn #968): read with a deadline and once more, and when it cannot be read the control is
+        // not set up, so the check is BLOCKED by `archive` (linux.sh TRACKED_ENV), never a failure of Genie's.
+        const base = archiveBase(process.env);
+        const listing = await readListing(fetch, `${archiveBase(process.env)}/packages/g/git/`);
+        const plan = listing === null ? null : heldBackOf(listing);
+        const held = plan?.held ?? null;
+        const newest = plan?.newest ?? null;
+        const url = held ? `${base}/packages/g/git/git-${held}-x86_64.pkg.tar.zst` : null;
         const heldOk = url ? sudoP('pacman', '-U', '--noconfirm', url).status === 0 : false;
-        if (!heldOk) {
-            track('git-update', 'FAIL', 'none', `CONTROL: the harness could not hold git back (${held ? `pacman -U ${url} failed` : 'the Arch archive listing could not be read'})`);
+        if (!plan) {
+            track('git-update', 'BLOCKED', 'archive', `CONTROL not set up: ${listing === null ? `the Arch archive (${base}) could not be read` : 'the Arch archive lists fewer than two versions of git'}`);
+        } else if (!heldOk) {
+            track('git-update', 'FAIL', 'none', `CONTROL: the harness could not hold git back (pacman -U ${url} failed)`);
         } else {
             await recheck();
             const before = await until(120_000, async () => { const c = await card('git'); return c?.version && held.startsWith(c.version.split(/[-+]/)[0]) ? c : null; }) ?? await card('git');
