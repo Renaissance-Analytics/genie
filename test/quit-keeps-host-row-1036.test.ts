@@ -103,10 +103,22 @@ describe('scripts/quit-keeps-host-cdp.mjs runs as a CI row', () => {
 
     it('on QUIT_CDP_OWN_HOME=1 seeds a NEW home with smoke-seed.mjs before any Genie path is read from it', () => {
         expect(script).toMatch(/process\.env\.QUIT_CDP_OWN_HOME === '1'/);
-        expect(script).toMatch(/spawnSync\(process\.execPath, \['scripts\/smoke-seed\.mjs'\]/);
+        expect(script).toMatch(/spawnSync\(process\.execPath, \[resolve\('scripts', 'smoke-seed\.mjs'\)\], \{ cwd: workspace,/);
+        // The seeded workspace is a fresh directory in that home, never the checkout (whose project.json a Genie writes).
+        expect(script).toMatch(/const workspace = join\(root, 'workspace'\);/);
         // The Genie paths are read AFTER the home is moved.
         expect(script.indexOf('ownHome()')).toBeGreaterThan(-1);
         expect(script.indexOf('ownHome()')).toBeLessThan(script.indexOf('const GENIE_HOME ='));
+    });
+
+    it('waits for the window process through the agents\' shutdown drain, the product\'s own figure, plus 60 s', () => {
+        // The ticker agents are mid-turn for ever: "Shut down everything" waits the drain out before it stops them (the first
+        // Azure run: a 60 s bound failed 26-28 while the lifecycle log said "(120-second wait expired)" and then shut down).
+        const product = Number((/export const AGENT_DRAIN_WAIT_MS = ([\d_]+);/.exec(read('src/core/agent-shutdown-drain.ts'))?.[1] ?? 'NaN').replace(/_/g, ''));
+        const mirrored = Number((/^const AGENT_DRAIN_WAIT_MS = ([\d_]+);/m.exec(script)?.[1] ?? 'NaN').replace(/_/g, ''));
+        expect(product).toBeGreaterThan(0);
+        expect(mirrored).toBe(product);
+        expect(script).toMatch(/const exit = await exitWithin\(a\.app, AGENT_DRAIN_WAIT_MS \+ 60_000\);/);
     });
 
     it('attaches to Genie\'s MAIN window (never the host-wait window that opens first), through the shared picker', () => {
