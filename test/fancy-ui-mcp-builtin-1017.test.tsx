@@ -106,15 +106,15 @@ describe('the session host hands it to the provider', () => {
     const tree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
     const GENIE: McpServer = { type: 'http', name: 'genie', url: 'http://127.0.0.1:1/mcp', headers: [] };
 
-    const launch = async (workspaceOff: readonly string[], deferred: boolean) => {
+    const launch = async (workspaceOff: readonly string[], deferred: boolean, own: Record<string, unknown> = {}, others: readonly McpServer[] = [GENIE]) => {
         const handed: Array<readonly McpServer[]> = [];
         const driverFor: DriverFor = (_r, _c, _s, extras) => { handed.push(extras?.mcpServers ?? []); return () => ({ start: () => {}, prompt: () => {}, kill: () => {}, cliSessionId: null }); };
         const host = new SessionHost({
-            userData: dir, driverFor, processTree: tree, stopGraceMs: 0, mcpServersFor: () => [GENIE],
+            userData: dir, driverFor, processTree: tree, stopGraceMs: 0, mcpServersFor: () => [...others],
             builtInMcpServers: BUILT_IN_MCP_SERVERS, workspaceMcpOffFor: () => workspaceOff,
-            ...(deferred ? { prepareMcpServers: async () => [GENIE] } : {}),
+            ...(deferred ? { prepareMcpServers: async () => [...others] } : {}),
         });
-        const record = agentRecord({ id: mintAgentId(), workspaceId: 'ws', provider: 'codex', name: 'atlas' });
+        const record = { ...agentRecord({ id: mintAgentId(), workspaceId: 'ws', provider: 'codex', name: 'atlas' }), ...own };
         expect(host.start(record, dir)).toEqual({ ok: true });
         await vi.waitFor(() => expect(handed).toHaveLength(1));
         const probe = host.probe(record.id)?.mcpServers;
@@ -135,6 +135,26 @@ describe('the session host hands it to the provider', () => {
             expect(off.probe).toEqual(['genie']);
         });
     }
+
+    // SAME-LIST-1017: a session started directly and one whose servers are prepared first (private credentials) are handed
+    // the SAME list, whatever the switches say. Each case runs down both paths and the two lists are compared, then
+    // checked against what the case expects, so neither path can drift from the other unseen.
+    const OTHER_FANCY: McpServer = { type: 'http', name: 'fancy-ui', url: 'http://127.0.0.1:2/mcp', headers: [] };
+    const cases: ReadonlyArray<readonly [title: string, workspaceOff: readonly string[], own: Record<string, unknown>, others: readonly McpServer[], expected: readonly McpServer[]]> = [
+        ['on by default', [], {}, [GENIE], [GENIE, FANCY_UI_MCP]],
+        ['off for the workspace', ['fancy-ui'], {}, [GENIE], [GENIE]],
+        ['off for the agent alone', [], { mcpOff: ['fancy-ui'] }, [GENIE], [GENIE]],
+        ['off for the workspace, on for the agent: the agent’s own choice wins', ['fancy-ui'], { mcpOn: ['fancy-ui'] }, [GENIE], [GENIE, FANCY_UI_MCP]],
+        ['a server of the same name already there: handed once, the one already there', [], {}, [GENIE, OTHER_FANCY], [GENIE, OTHER_FANCY]],
+    ];
+    it.each(cases)('direct and prepared starts are handed the same servers: %s', async (_title, workspaceOff, own, others, expected) => {
+        const direct = await launch(workspaceOff, false, own, others);
+        const prepared = await launch(workspaceOff, true, own, others);
+        expect(prepared.servers).toEqual(direct.servers);
+        expect(prepared.probe).toEqual(direct.probe);
+        expect(direct.servers).toEqual(expected);
+        expect(direct.probe).toEqual(expected.map((s) => s.name));
+    });
 
     it('the host process gives its session host the built-in servers', () => {
         expect(src('src/main/genie-host.ts')).toMatch(/new SessionHost\(\{[\s\S]*?builtInMcpServers:\s*BUILT_IN_MCP_SERVERS/);
