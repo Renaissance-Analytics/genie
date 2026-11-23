@@ -90,8 +90,8 @@ export function genieOf(roster: readonly ChatRosterAgent[]): string {
 export type ChatScope =
     /** The chat's agent is in the workspace on screen, or nothing on screen belongs to a workspace. */
     | { kind: 'here' }
-    /** The chat's agent is in ANOTHER workspace than the one on screen: the composer names it. */
-    | { kind: 'elsewhere'; workspace: string }
+    /** The chat's agent is in ANOTHER workspace than the one on screen: the composer and the header name it; `workspaceId` opens it. */
+    | { kind: 'elsewhere'; workspace: string; workspaceId: string }
     /** The workspace on screen has no agent to message: the composer is replaced by why. */
     | { kind: 'blocked'; reason: string };
 
@@ -107,7 +107,7 @@ export function chatScope(route: Route, roster: readonly ChatRosterAgent[], work
     const known = workspaces?.find((w) => w.id === screen)?.agentsKnown !== false;
     if (!known) return { kind: 'blocked', reason: `${here}'s agents are not read yet. ${agent.name} is in ${theirs}.` };
     if (!roster.some((r) => r.workspaceId === screen)) return { kind: 'blocked', reason: `${here} has no agent to message. ${agent.name} is in ${theirs}.` };
-    return { kind: 'elsewhere', workspace: theirs };
+    return { kind: 'elsewhere', workspace: theirs, workspaceId: agent.workspaceId };
 }
 
 /**

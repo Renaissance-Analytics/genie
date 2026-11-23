@@ -53,14 +53,16 @@ async function open(reenter = false) {
 }
 
 describe('the published folded outcome settles its joined turn only (Tynn #692)', () => {
-    it('pins exactly 0.44.0 and its registry integrity in both manifests', () => {
+    it('pins exactly 0.46.0 and its registry integrity in both manifests', () => {
         const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
         const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
-        expect(pkg.dependencies['@particle-academy/prism-acp']).toBe('0.44.0');
-        expect(lock.packages[''].dependencies['@particle-academy/prism-acp']).toBe('0.44.0');
-        // 0.44.0 (Tynn #926): G-313's unsolicited turn end and G-314's ping / lastFrameAt / Codex running.
-        expect(lock.packages['node_modules/@particle-academy/prism-acp']).toMatchObject({ version: '0.44.0',
-            integrity: 'sha512-PBKfo3LlBBhKw1TwPdIF6y4n0sZS+992kJkYjN6ErPzua1wMg4BZYIqLj/WoT4uKXj5Nu9OEi4W7Efb+nUhm0A==' });
+        expect(pkg.dependencies['@particle-academy/prism-acp']).toBe('0.46.0');
+        expect(lock.packages[''].dependencies['@particle-academy/prism-acp']).toBe('0.46.0');
+        // 0.44.0 (Tynn #926): G-313's unsolicited turn end and G-314's ping / lastFrameAt / Codex running; kept through 0.46.0
+        // (Tynn #1011: claudeAccounts, prepare's shared session store, Remote Control forced off). The integrity is npm's own
+        // for the 0.46.0 tarball (npm view @particle-academy/prism-acp@0.46.0 dist.integrity).
+        expect(lock.packages['node_modules/@particle-academy/prism-acp']).toMatchObject({ version: '0.46.0',
+            integrity: 'sha512-O5T4JEmuEgVtMHTyNzw48E0ACp3pkX3vUGNNgV5uEHub5670lt+pb5I21lWevHauTuiWUGpjTbtVFfpPXfneog==' });
     });
     it('has no usage-result fallback or owed-end counting after adopting typed outcomes', () => {
         const source = readFileSync('src/core/session.ts', 'utf8');

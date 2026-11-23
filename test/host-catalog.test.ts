@@ -47,6 +47,7 @@ function ports(plugins: NonNullable<HostMcpPorts['plugins']>, windowConnected: (
         osaDir: join(dir, 'osa'),
         log: () => {},
         plugins,
+        takeOverCaller: (id) => (id === 'take-over-1' ? ({ agentId: 'a1', agentName: 'atlas', workspaceId: 'w', workspacePath: join(dir, 'ws') } as never) : null),
     };
 }
 const until = async (ok: () => boolean, ms = 10_000) => {
@@ -61,7 +62,9 @@ describe('genie-host serves the plugin tools with no window', () => {
         await until(() => mcp!.endpoint() !== null);
         expect(mcp.status().tools.map((t) => t.name)).toContain(SHEET);
         const workspace = join(dir, 'ws');
-        const answer = await mcp.runNative({ name: SHEET, args: { title: 'Q3', rows: [['a', 1]], headers: ['k', 'v'] }, headers: {}, caller: { agentId: 'a1', agentName: 'atlas', workspaceId: 'w', workspacePath: workspace } as never });
+        // Called as an agent's session calls it: the tool as this server serves it, the caller a Take Over genie-host knows.
+        const tool = mcp.registrations().find((r) => r.definition.name === SHEET)!;
+        const answer = await tool.handler({ title: 'Q3', rows: [['a', 1]], headers: ['k', 'v'] } as never, { server: 'genie', tool: SHEET, headers: { 'genie-session': 'take-over-1' } } as never);
         expect(answer.isError, answer.text).toBe(false);
         expect(await readdir(workspace)).toContain('q3.xlsx');
     });

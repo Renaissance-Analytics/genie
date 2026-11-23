@@ -10,7 +10,7 @@ import { genieToolDeps } from './genie-tool-deps.js';
 import { CallerBook, genieMcpServers, sessionCallerOf } from './mcp-callers.js';
 import { allGenieTools } from './mcp-registrations.js';
 import { genieMcpServer, type GenieMcpServer, type Verification } from './mcp-server.js';
-import { HOST_NATIVE_TOOLS, hostRegistrations, type ForwardedToolCall } from './mcp-host-tools.js';
+import { hostRegistrations, type ForwardedToolCall } from './mcp-host-tools.js';
 import { withActionSignal } from './mcp-signal.js';
 import type { McpToolResult } from '@particle-academy/prism-mcp';
 import type { Caller } from './mcp-tools.js';
@@ -24,8 +24,9 @@ import type { PluginToolsDeps } from './mcp-tools-plugins.js';
  * caller key) is built here. The host answers its own tools from the stores and the sessions it owns; every other tool
  * goes to the window (mcp-host-tools.ts).
  *
- * The window tells the host what only it knows: the workspaces' names, whether the person is at the computer, the callers
- * of terminals it runs (Take Over windows, flow runs). The server does NOT wait for it (ADF A3, Tynn #447): it starts
+ * The view: the workspaces' names, which genie-host finds itself, and whether the person is at the computer, which main's
+ * own client says (`window.view`, Tynn #1044). Callers are all the host's own (sessions, flows, Take Overs). The server
+ * does NOT wait for it (ADF A3, Tynn #447): it starts
  * when the host does, with the PLUGINS' tools the host's own (main/plugins-host.ts) — offered and run here, so an agent
  * keeps them with no window.
  */
@@ -33,15 +34,10 @@ import type { PluginToolsDeps } from './mcp-tools-plugins.js';
 type SettingValue = boolean | string;
 
 export interface WindowView {
-    /** The workspaces' names as the window reads them (project.json): their address slugs. The rest is the host's own registry. */
+    /** The workspaces' names, as genie-host reads them from each workspace's project.json (workspace-names.ts): their address slugs. */
     readonly workspaceNames: Readonly<Record<string, string>>;
-    /** The person is at the computer (the window's own measure). No window = nobody is. */
+    /** The person is at the computer, as main's own client last said it (window.view). No window = nobody is. */
     readonly userActive: boolean;
-    /**
-     * Terminals the window runs whose agents call Genie: terminal id → caller. Absent = it runs none: a Take Over TUI is
-     * genie-host's (ports.takeOverCaller, Tynn #896).
-     */
-    readonly callers?: Readonly<Record<string, Caller>>;
 }
 
 export interface HostMcpPorts {
@@ -49,6 +45,11 @@ export interface HostMcpPorts {
     /** The settings: the host's own since P3.2 (dnd, inbox access, workspace tabs are read here, live). */
     readonly settings: Pick<import('./settings-store.js').SettingsStore, 'snapshot' | 'snapshotFor'>;
     readonly records: () => readonly AgentRecord[];
+    /**
+     * createAgent's create, after the person approved (Tynn #1015): genie-host's own Add agent (`addAgent`: project.json,
+     * AGENT.md, its registry — genie-host.ts wires createThroughAddAgent). Absent = this host cannot, and the tool says so.
+     */
+    readonly createAgent?: import('./mcp-tools-agents.js').AgentToolsDeps['create'];
     /** The host's own registry (P3.2): a workspace's path, its default agent, the address slugs. */
     readonly registry: Pick<import('./host-registry.js').HostRegistry, 'workspace' | 'workspaceSlugs' | 'defaultAgentOf' | 'setNames'> & Partial<Pick<import('./host-registry.js').HostRegistry, 'mailRefusal'>>;
     readonly probe: (agentId: AgentId) => Parameters<typeof livenessOf>[0];
@@ -74,6 +75,8 @@ export interface HostMcpPorts {
     readonly hosting?: import('./hosting-actions.js').HostingServices;
     /** A workspace's trust verdict as last read (Tynn #753): `sites` and `services` act only in a trusted one. Absent = none is. */
     readonly workspaceTrusted?: (workspaceId: string) => boolean;
+    /** This host's own browser, for an agent's `sites open` (Tynn #1046 D2): in the background, the workspace pulsed. Absent = none. */
+    readonly openInBrowser?: import('./hosting-actions.js').OpenInBrowser;
     /** Host-owned command execution, with the existing approval, confinement and cancellation contract. */
     readonly serviceExec?: import('./mcp-tools-hosting.js').ServiceExec;
     /** The terminals `manageTerminals` acts on (P3.3e): the host's own. Absent = the tool is the window's. */
@@ -113,17 +116,13 @@ export interface HostMcp {
     /** Settled once the server has started, or failed to (said in `status`): what writing a workspace's config waits for. */
     ready(): Promise<void>;
     status(): { endpoint: { url: string; token: string } | null; verified: Verification | null; tools: McpToolRow[] };
-    /**
-     * One of the host's own tools, asked by the WINDOW for a caller it knows (a flow's step, P3.1): run here with that
-     * caller, answered as the tool answers. Only the host's own tools; the window has the rest.
-     */
-    runNative(call: ForwardedToolCall): Promise<McpToolResult>;
     /** Every tool as this server serves it (the host's own, and the window's forwarded): what a flow's tool steps call. */
     registrations(): readonly import('./mcp-tools.js').Registration[];
     stop(): Promise<void>;
 }
 
 const unavailable = (what: string) => (): never => { throw new Error(`${what} runs in Genie's window; this call was forwarded there`); };
+const noCreate = async (): Promise<{ ok: false; reason: string }> => ({ ok: false, reason: 'this Genie host cannot create agents' });
 
 export function startHostMcp(ports: HostMcpPorts): HostMcp {
     const book = new CallerBook();
@@ -134,19 +133,13 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
     let starting: Promise<void> | null = null;
     /** The endpoint file's private write, while it is landing. It never rejects: a failure is logged. */
     let endpointWrite: Promise<void> = Promise.resolve();
-    let native = new Map<string, import('./mcp-tools.js').Registration>();
     let servedNow: readonly import('./mcp-tools.js').Registration[] = [];
-    /** Callers the window vouched for, for the length of one call (runNative). */
-    const injected = new Map<string, Caller>();
-    let injectSeq = 0;
 
     const workspace = (id: string) => ports.registry.workspace(id);
     const resolveCaller = (id: string): Caller | null => {
         const records = ports.records();
-        const vouched = injected.get(id);
-        if (vouched) return vouched;
         const session = sessionCallerOf(book, id, { find: (agentId) => records.find((r) => r.id === agentId) ?? null, workspace }, ports.osaDir);
-        return session ?? ports.flowCallers?.callerFor(id) ?? ports.takeOverCaller?.(id) ?? view?.callers?.[id] ?? null;
+        return session ?? ports.flowCallers?.callerFor(id) ?? ports.takeOverCaller?.(id) ?? null;
     };
     const settings = ports.settings;
 
@@ -187,23 +180,23 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             ...(ports.playwright ? { playwright: ports.playwright } : {}),
             ...(ports.hosting ? { hosting: ports.hosting } : {}),
             ...(ports.workspaceTrusted ? { workspaceTrusted: ports.workspaceTrusted } : {}),
+            ...(ports.openInBrowser ? { openInBrowser: ports.openInBrowser } : {}),
             ...(ports.serviceExec ? { serviceExec: ports.serviceExec } : {}),
-            agents: { defaultAgentOf: (ws) => ports.registry.defaultAgentOf(ws), register: unavailable('createAgent') },
+            // createAgent runs HERE (Tynn #1015): the person approves in the host's queue, the host's Add agent makes it.
+            agents: { defaultAgentOf: (ws) => ports.registry.defaultAgentOf(ws), create: ports.createAgent ?? noCreate },
             workspaceTabs: { write: unavailable('workspaceTabs'), sites: unavailable('workspaceTabs') },
             pages: { open: unavailable('pages') },
         }));
         // The action signal (the Dashboard row's "what it just did") for what runs HERE only: a forwarded call runs in the
         // window, which signals it there — signalled here too, it would show twice. hostRegistrations replaces a window
-        // tool's handler and calls a host tool's own only for what runs here (a `sites open` is forwarded, unsignalled).
+        // tool's handler and calls a host tool's own for what runs here (every host tool's action, `sites open` too since Tynn #1046 D2).
         const all = withActionSignal(tools0, resolveCaller, (agentId, kind, tool) => ports.signal({ kind: 'action', agentId, action: kind, tool }));
         // The plugins' tools run HERE (ADF A3): the host has their plugins, so nothing of theirs is forwarded to a window.
         const pluginNames = new Set((ports.plugins?.tools() ?? []).map((ref) => `${ref.pluginId}.${ref.tool.name}`));
-        const isNative = (name: string) => HOST_NATIVE_TOOLS.has(name) || pluginNames.has(name);
         const servedAll = hostRegistrations(all, { native: (name) => pluginNames.has(name), resolveCaller, window: ports.window, openFileLater: ports.openFileLater, ...(ports.capabilities ? { capabilities: ports.capabilities } : {}), ...(ports.forwardedCalls ? { forwardedCalls: ports.forwardedCalls } : {}) });
         // Every call this server answers is the calling agent's to have ended by its Interrupt (Tynn #702), forwarded ones too.
         const served = ports.toolCalls ? withInterruptibleCalls(servedAll, resolveCaller, ports.toolCalls) : servedAll;
-        tools = served.map((r) => describeMcpTool(r.definition.name, r.definition.description ?? ''));
-        native = new Map(served.filter((r) => isNative(r.definition.name)).map((r) => [r.definition.name, r]));
+        tools = served.map((r) => describeMcpTool(r.definition.name, r.definition.description ?? '', r.visible !== undefined));
         servedNow = served;
         return served;
     };
@@ -256,19 +249,5 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             }
         },
         registrations: () => servedNow,
-        runNative: async (call) => {
-            const r = native.get(call.name);
-            if (!r) return { text: `${call.name} is not one of genie-host's own tools`, isError: true };
-            if (!call.caller) return { text: 'Genie could not tell who is calling; nothing was done', isError: true };
-            const key = `vouched-${++injectSeq}`;
-            injected.set(key, call.caller);
-            try {
-                const { terminalId: _t, ...args } = call.args as Record<string, unknown>;
-                void _t;
-                return await r.handler(args as never, { server: 'genie', tool: call.name, headers: { 'genie-session': key } });
-            } finally {
-                injected.delete(key);
-            }
-        },
     };
 }

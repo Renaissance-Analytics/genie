@@ -142,7 +142,7 @@ describe('flows in Save to repo', () => {
         const other = { ...record, id: 'flow_2', workspaceId: 'ws_other', name: 'Not mine' };
         const ports = {
             services: { list: () => [] }, settings: { workspaceValues: () => ({}) },
-            registry: { defaultAgentOf: () => null, workspaceMcpOff: () => [], listAgents: () => [], listWorkspaces: () => [] },
+            registry: { chosenDefaultAgentOf: () => null, workspaceMcpOff: () => [], listAgents: () => [], listWorkspaces: () => [] },
             flows: { list: () => [record, other] },
         } as unknown as SourcePorts;
         const s = elementSourcesFor(ports, WS);

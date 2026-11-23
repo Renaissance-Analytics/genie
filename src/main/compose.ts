@@ -35,7 +35,6 @@ import { attentionLimitsFrom } from './attention-store.js';
 import { runtimeDir } from './paths.js';
 import { LocalStagingArea } from './local-staging-area.js';
 import { ProcessSupervisor, type SupervisorApi } from './process-supervisor.js';
-import type { ListedPty } from './spawn-host-protocol.js';
 import { RemoteAccessReplica, type PairingView, type RemoteAccessView } from './remote-access-replica.js';
 import { hostname } from 'node:os';
 import { setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
@@ -44,7 +43,6 @@ import type { WorkTracking } from '../core/genie-protocol.js';
 import { trustSteps, type TrustApi } from './hosting-trust.js';
 import { SettingsStore } from './settings-store.js';
 import type { WorkspaceRef } from './envelope-sites-host.js';
-import type { PtyPort } from './terminal-host.js';
 import type { HostingComposeInput, HostingOptions, HostingStack } from './hosting-compose.js';
 import { composeStageDiagnostics, type ComposeStageSample } from './compose-stage-diagnostics.js';
 import type { EnginesApi, EnvelopeSitesApi, HostingApi, SitesApi } from './hosting-host.js';
@@ -83,18 +81,6 @@ export interface ComposeInput extends HostingOptions {
     readonly userData: string;
     /** Read-only live pause state for AgentInbox's automatic replies; no session is started by this probe. */
     readonly inboxSession?: InboxSessionProbe;
-    readonly pty: PtyPort;
-    /**
-     * The supervisor's pty engine (sites, queue workers, the front door), when it is not `pty`: in Electron, the spawn
-     * host's (main/spawn-host-client.ts, genie#1397), so no supervised process is created on main's thread. Absent = `pty`.
-     */
-    readonly processPty?: PtyPort;
-    /**
-     * Live supervised ptys a previous window started, still running under genie-host (the host split, P2.1): adopted
-     * as the supervisor is built — BEFORE any site or kept process starts — so each one's first start claims its
-     * running process instead of starting it a second time on the same port.
-     */
-    readonly adoptPtys?: readonly ListedPty[];
     /** Reads v1's settings table, or `null` when there is no v1 database. Called once, on first run only. */
     readonly v1Settings: () => Readonly<Record<string, string>> | null;
     /**
@@ -153,8 +139,6 @@ export interface ComposeInput extends HostingOptions {
     readonly appInboxEnv?: (source: AppEnvSource) => Readonly<Record<string, string>>;
     /** Genie's own MCP endpoint for agents, once the server listens; `null` until then (config sync refuses). */
     readonly mcpEndpoint?: () => { url: string; token: string } | null;
-    /** With a host, a workspace's agent config is the host's to write. */
-    readonly hostConfigSync?: () => { configSync(request: WorkspaceConfigRequest): Promise<readonly SyncResult[]> } | null;
     /** Whether a real server/discover through the server's own door answered at boot (§6.4 "native transport verified at boot"). */
     readonly mcpVerification?: () => Verification | null;
     /** Every tool Genie's MCP serves, with what it does — what every agent gets (Settings lists it). */
@@ -383,11 +367,7 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
     // UI closed, and this window drives it through a replica. This window's own only on the emergency path.
     let supervisor: SupervisorApi;
     if (input.supervisor) supervisor = input.supervisor;
-    else {
-        const own = input.alone!.supervisor();
-        for (const pty of input.adoptPtys ?? []) own.adopt(pty);
-        supervisor = own;
-    }
+    else supervisor = input.alone!.supervisor();
     /** A source's app credential, while its workspace allows apps (the setting's default is on). */
     const appEnvOf = (source: AppEnvSource): Readonly<Record<string, string>> =>
         input.appInboxEnv && settings.snapshotFor(source.workspaceId).app_inbox !== false ? input.appInboxEnv(source) : {};
@@ -566,7 +546,7 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
         }),
         integrations: () => {
             return {
-                mcp: { url: input.mcpEndpoint?.()?.url ?? null, verified: input.mcpVerification?.() ?? null, tools: (input.mcpTools?.() ?? []).map((t) => describeMcpTool(t.name, t.description)) },
+                mcp: { url: input.mcpEndpoint?.()?.url ?? null, verified: input.mcpVerification?.() ?? null, tools: (input.mcpTools?.() ?? []).map((t) => describeMcpTool(t.name, t.description, (t as { someAgents?: boolean }).someAgents === true)) },
                 agentFiles: agentFiles.list(),
             };
         },
@@ -586,9 +566,9 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
             const values = settings.snapshot();
             const flag = (k: string) => values[k] !== false;
             const request: WorkspaceConfigRequest = { workspacePath, endpoint, flags: { mcp_sync_claude: flag('mcp_sync_claude'), mcp_sync_cursor: flag('mcp_sync_cursor'), mcp_sync_codex: flag('mcp_sync_codex'), mcp_sync_hooks: flag('mcp_sync_hooks') } };
-            // One writer (workspace-config-sync.ts): the host's when there is one, and a failure there is not a reason to write here.
-            const host = input.hostConfigSync?.() ?? null;
-            const results = [...await (host ? host.configSync(request) : withConfig(workspacePath, () => writeWorkspaceConfig(request)))];
+            // One writer (workspace-config-sync.ts). In the app that is genie-host's own (genie-host.ts `featureConfig`): the
+            // window never asks this (Tynn #1043), so the write here is a composition's that runs alone.
+            const results = [...await withConfig(workspacePath, () => writeWorkspaceConfig(request))];
             agentFiles.config(workspacePath, results, Date.now(), source);
             return results;
         },

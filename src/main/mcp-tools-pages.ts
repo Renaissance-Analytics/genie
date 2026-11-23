@@ -52,7 +52,7 @@ export interface PagesToolDeps {
     readonly sites: (workspaceId: string) => readonly string[];
     /** Every page Genie has open now. */
     readonly pages: () => readonly DrivablePage[];
-    readonly approve: (caller: Caller, action: PageAction, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
+    readonly approve: (caller: Caller, action: PageAction, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied' | 'expired'>;
 }
 
 const ok = (payload: Record<string, unknown>): McpToolResult => ({ text: JSON.stringify({ ok: true, ...payload }), isError: false });

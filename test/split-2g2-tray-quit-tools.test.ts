@@ -38,6 +38,10 @@ describe('the host summary: what genie-host runs, as the tray and the quit read 
             terminals: [{ workspaceId: 'ws_a', pid: 101 }, { workspaceId: 'ws_b', pid: 202 }],
             armedFlows: ['nightly'],
             scheduledTasks: ['backup'],
+            // No supervisor or hosting list handed in: no processes, services or sites (Tynn #1045, 2g-4d-C).
+            processes: [],
+            services: [],
+            sites: [],
             // Not said here: a drone signed out, fail closed (the role and the account, Tynn #954 2g-3a), with a keychain that
             // cannot keep secrets and no GitHub block (Tynn #959, 2g-3b).
             workstationRole: 'drone',
@@ -53,7 +57,7 @@ describe('the host summary: what genie-host runs, as the tray and the quit read 
     });
 
     it('read from the wire: a malformed summary is the empty one, never a throw', () => {
-        expect(readHostSummary({ terminals: [{ workspaceId: 'ws_a', pid: 1 }], armedFlows: ['x'], scheduledTasks: [] })).toEqual({ terminals: [{ workspaceId: 'ws_a', pid: 1 }], armedFlows: ['x'], scheduledTasks: [], workstationRole: 'drone', tynnAccountKey: null, keychainReady: false, githubBlocked: false });
+        expect(readHostSummary({ terminals: [{ workspaceId: 'ws_a', pid: 1 }], armedFlows: ['x'], scheduledTasks: [], processes: ['vite'], services: [], sites: ['shop.gen'] })).toEqual({ terminals: [{ workspaceId: 'ws_a', pid: 1 }], armedFlows: ['x'], scheduledTasks: [], processes: ['vite'], services: [], sites: ['shop.gen'], workstationRole: 'drone', tynnAccountKey: null, keychainReady: false, githubBlocked: false });
         expect(readHostSummary(null)).toEqual(EMPTY_HOST_SUMMARY);
         expect(readHostSummary({ terminals: 'no', armedFlows: [1], scheduledTasks: null })).toEqual(EMPTY_HOST_SUMMARY);
     });
@@ -169,7 +173,7 @@ describe('main reads the summary; no terminals or process-book replica, no host-
 
     it('the tray’s count, its Restart/Shut-down list and the quit plan read the summary', () => {
         // After the tray: the keychain turning ready runs the unsealer, GitHub's block redraws the strip (Tynn #959, 2g-3b).
-        expect(main).toMatch(/ownProtocol\.watchSummary\(\(summary\) => \{[\s\S]{0,240}?hostSummaryNow = summary;\s*refreshTray\(\);\s*unsealer\.summary\(before, summary\);\s*if \(summary\.githubBlocked !== before\.githubBlocked\) registry\?\.touch\(\);\s*\}\)/);
+        expect(main).toMatch(/ownProtocol\.watchSummary\(\(summary\) => \{[\s\S]{0,240}?hostSummaryNow = summary;\s*refreshTray\(\);\s*unsealer\.summary\(before, summary\);\s*\}\)/);
         expect(main).toMatch(/terminals: hostSummaryNow\.terminals\.length/);
         expect(main).toMatch(/const terminalsOpen = hostSummaryNow\.terminals\.map\(/);
         expect(main).toMatch(/liveTerminals: hostSummaryNow\.terminals\.length/);

@@ -28,8 +28,9 @@ import type { Caller, Registration } from './mcp-tools.js';
  * Offered: the tools of Genie 1's catalogue that Genie 2 has (Genie 1 name → Genie 2 tool): manageTerminals, manageProcess →
  * processes, manageSite → sites, manageService → services, knowledge, checkIssues, openFileForUser, imDone, agentinbox,
  * ForceTheQuestion. Not offered: Genie 1's runAgent, setEnv/checkEnv, manageWorkspaces/provisionWorkspaces (Genie 2 has no
- * such tool); Genie 2's thumbsUp and plan (an agent's own session), createAgent, workspaceTabs and pages (the workspace's
- * default agent only), flows and lists (an agent's own records) — a flow cannot act as any of those callers.
+ * such tool); Genie 2's thumbsUp and plan (an agent's own session), createAgent (an agent asks the person for a peer),
+ * workspaceTabs and pages (the workspace's default agent, or one whose switch is on), flows and lists (an agent's own
+ * records) — a flow cannot act as any of those callers.
  * Ports, as Genie 1's (kinds.ts ROUTING_PORTS, outputsFor): checkIssues routes `found` / `none`; imDone ends a chain.
  */
 

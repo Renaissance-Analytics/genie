@@ -101,10 +101,11 @@ export function locateProviderProgram(provider: string, ports: ProviderHealthPor
     return null;
 }
 
-async function answer(ports: ProviderHealthPorts, binary: string, args: readonly string[], timeoutMs: number): Promise<CommandAnswer> {
+async function answer(ports: ProviderHealthPorts, binary: string, args: readonly string[], timeoutMs: number, env?: Readonly<Record<string, string>>): Promise<CommandAnswer> {
     try {
-        // No environment of Genie's making: the provider is asked in its normal home (Tynn #753).
-        const r = await ports.run(binary, args, { timeoutMs });
+        // No environment of Genie's making: the provider is asked in its normal home (Tynn #753) -- or, for a Claude account
+        // with a directory of its own (Tynn #1011), in that directory, as its launches are.
+        const r = await ports.run(binary, args, { timeoutMs, ...(env ? { env } : {}) });
         const output = r.streams ? [r.streams.stdout, r.streams.stderr].filter(Boolean).join('\n') : r.stdout;
         return { exitCode: r.exitCode, output };
     } catch (error) {
@@ -131,7 +132,8 @@ export async function checkProviderHealth(provider: string, ports: ProviderHealt
     const ran = judgeProviderHealth({ ...base, program, version, status: null });
     if (!ran.installed) return ran;
     const statusArgs = providerLogin(provider)?.status.split(/\s+/).slice(1) ?? null;
-    const status = statusArgs === null ? null : await answer(ports, ...argvFor(provider, program, statusArgs, ports), STATUS_TIMEOUT_MS);
+    const own = provider === 'claude' && account?.configDir !== undefined ? { CLAUDE_CONFIG_DIR: account.configDir } : undefined;
+    const status = statusArgs === null ? null : await answer(ports, ...argvFor(provider, program, statusArgs, ports), STATUS_TIMEOUT_MS, own);
     return judgeProviderHealth({ ...base, program, version, status });
 }
 

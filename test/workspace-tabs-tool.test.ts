@@ -131,7 +131,7 @@ describe('refused before anyone is asked, nothing written', () => {
         const h = harness({ verdict: 'denied' });
         const out = await h.call('k-atlas', { action: 'add', name: 'Ops' });
         expect(out.ok).toBe(false);
-        expect(out.error).toMatch(/declined/);
+        expect(out.error).toMatch(/changing the tabs was denied by the person; the tabs are as they were/);
         expect(h.writes).toEqual([]);
     });
 

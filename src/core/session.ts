@@ -698,6 +698,8 @@ export class AgentSession {
     /** Per-agent provider reading; a turn end arms delivery with the next accepted input. */
     #latestHeadroom: Headroom | null = null;
     #rateWarningPending = false;
+    /** The account switch the next turn opens with (Tynn #1011): one line, once; `null` = none. */
+    #accountNote: string | null = null;
     /** The prompt just sent, while its echo may still arrive, and how much of the echo has arrived. */
     #echo: string | null = null;
     #echoSeen = '';
@@ -1786,6 +1788,20 @@ export class AgentSession {
         return null;
     }
 
+    /**
+     * THE ACCOUNT CHANGED UNDER THIS AGENT (Tynn #1011; the owner: agents "keep getting stuck in holding patterns because they
+     * think the rate limit is about to hit"). Its headroom is the NEW account's from now on, so a warning armed from the old
+     * account's reading is never delivered; its next turn opens with `note` (the account and its room), once; and a hold on the
+     * limit goes, as when the limit resets.
+     */
+    accountSwitched(note: string, headroom: Headroom | null): void {
+        this.#latestHeadroom = headroom;
+        this.#rateWarningPending = false;
+        this.#accountNote = note;
+        if (this.#held) this.resumeAfterLimit();
+        this.#changed();
+    }
+
     /** A word from Genie held for the next turn this session opens (`holdForNextWork`); `null` = none. */
     #heldForNextWork: string | null = null;
     #heldSent: (() => void) | null = null;
@@ -1839,7 +1855,9 @@ export class AgentSession {
         const rateWarning = this.#rateWarningPending && !command ? rateLimitWarning(this.#latestHeadroom, this.#now()) : null;
         // The provider's last stop, named, goes FIRST (Tynn #859): one line, only on the next turn that opens.
         const stopNote = this.#inTurn || command ? null : this.#stopNote;
-        const above = `${stopNote ? `${stopNote}\n\n---\n\n` : ''}${rateWarning ? `${rateWarning}\n\n---\n\n` : ''}${carry ? `${carry.text}\n\n---\n\n` : ''}${redock ? `${redock}\n\n---\n\n` : ''}`;
+        // The account switch goes FIRST of all (Tynn #1011): the room the agent has now, before anything it might weigh it by.
+        const accountNote = this.#inTurn || command ? null : this.#accountNote;
+        const above = `${accountNote ? `${accountNote}\n\n---\n\n` : ''}${stopNote ? `${stopNote}\n\n---\n\n` : ''}${rateWarning ? `${rateWarning}\n\n---\n\n` : ''}${carry ? `${carry.text}\n\n---\n\n` : ''}${redock ? `${redock}\n\n---\n\n` : ''}`;
         // Not into a running turn: a prompt folded there is not the next work, and the turn is not told mid-way.
         // What Genie held for the next work goes between the carry-over and the person's words.
         const held = this.#inTurn || command ? null : this.#heldForNextWork;
@@ -1853,6 +1871,7 @@ export class AgentSession {
         }
         if (!command) this.#rateWarningPending = false; // A refused prompt leaves it pending for the next accepted input.
         if (stopNote !== null) this.#stopNote = null;
+        if (accountNote !== null) this.#accountNote = null;
         if (carry) { this.#carryOver = null; this.#carryInFlight = carry; }
         if (held !== null) {
             const sentNow = this.#heldSent;

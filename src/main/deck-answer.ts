@@ -24,7 +24,7 @@ export interface DeckAnswerPorts {
     deckItems(): readonly DeckItem[];
     readonly attention: Pick<AttentionStore, 'answer' | 'pending'> & { readonly lists: Pick<AttentionStore['lists'], 'done'> };
     /** As the window's approvals API types it (a replica may answer later); read exactly as the feature action always did. */
-    readonly approvals: { resolve(id: string, choice: 'allow' | 'deny'): boolean | Promise<boolean> };
+    readonly approvals: { resolve(id: string, choice: 'allow' | 'deny'): boolean | Promise<boolean>; dismissExpired?(id: string): boolean | Promise<boolean> };
     readonly inbox: Pick<InboxStore, 'unread' | 'receive'>;
     readonly deliverToAgent?: ((agentId: string, text: string) => boolean | Promise<boolean>) | undefined;
     readonly trustCertificate?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
@@ -95,6 +95,11 @@ export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPort
             if (text !== null && !ports.deliverToAgent) throw new Error('your note cannot reach the agent from here; answer without it, or from its own window');
             if (!ports.approvals.resolve(command.approvalId, command.choice)) throw new Error(`no pending approval ${command.approvalId}`);
             if (text !== null && !(await ports.deliverToAgent!(item.agentId!, text))) throw new Error(`answered — but ${item.agentName ?? 'the agent'} is not running, so your note was not delivered`);
+            break;
+        }
+        // An approval nobody answered in time (Tynn #1006): its notice goes; there is no verdict to give any more.
+        case 'dismiss-expired-approval': {
+            if (!ports.approvals.dismissExpired || !(await ports.approvals.dismissExpired(command.approvalId))) throw new Error(DECK_ITEM_GONE);
             break;
         }
         case 'list-done':
