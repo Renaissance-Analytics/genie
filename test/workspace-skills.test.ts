@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { GENIE_SKILLS, writeAgentSkills, type SkillFs } from '../src/main/agent-skills.js';
+import { BUILTIN_TOOLS } from '../src/main/genie-catalog.js';
 
 /**
  * GENIE 2'S SKILLS, AND GENIE 1'S RETIRED (the owner: Genie 2 manages all the workspace agent files). Genie 1 wrote
  * `genie-*` skills into `.claude/skills/` (Claude) and `.agents/skills/` (Codex) that send an agent to tools Genie 2
- * does not have — `connectToGenie`, `genieGuide`, `checkIssues`, `manageProcess`, `manageWorkspaces`, `manageGappDev`,
+ * does not have — `connectToGenie`, `genieGuide`, `manageProcess`, `manageWorkspaces`, `manageGappDev`,
  * `registerSession` — and a handoff skill for an upgrade that no longer asks for one. Genie 2 writes its own skills,
  * naming only the tools its MCP serves; Genie 1's skills that have no Genie 2 meaning are backed up and removed; every
  * other skill (a person's, a plugin's) is left exactly as it is.
@@ -24,9 +25,11 @@ function memFs(files: Record<string, string>) {
 const W = '/w/moic';
 const run = (fs: SkillFs) => writeAgentSkills({ workspacePath: W, fs, stamp: '20261012' });
 
-// The twelve tools Genie 2's MCP registers (pinned by test/mcp-registrations.test.ts); checkIssues is Genie 2's too now (Tynn #806).
+// The tools Genie 2's MCP registers (pinned by test/mcp-registrations.test.ts); checkIssues is Genie 2's too (Tynn #806).
 // No runAgent: the sidecar is gone (the owner, 2026-10-19).
-const SERVED = ['imDone', 'ForceTheQuestion', 'agentinbox', 'lists', 'thumbsUp', 'checkIssues', 'knowledge', 'manageTerminals', 'openFileForUser', 'services', 'sites', 'processes', 'flows'];
+// This list was kept by hand and had fallen to 13 of 19 (Tynn #1040): it is the catalog's own now, with the official plugins' tools.
+// Every OTHER backticked name in a skill (an action, a parameter, a setting) is checked by test/agent-guide-names.test.ts.
+const SERVED = [...BUILTIN_TOOLS.map((t) => t.name), 'ai.genie.artboard.post', 'ai.genie.presentation.createDeck', 'ai.genie.spreadsheet.createWorkbook'];
 const V1_ONLY = ['connectToGenie', 'genieGuide', 'manageProcess', 'manageWorkspaces', 'manageGappDev', 'registerSession', 'provisionWorkspaces'];
 
 describe('Genie 2\'s skills', () => {
@@ -34,7 +37,8 @@ describe('Genie 2\'s skills', () => {
         const { fs, store } = memFs({});
         await run(fs);
         for (const s of GENIE_SKILLS) {
-            const named = [...s.body.matchAll(/`([A-Za-z]+)`/g)].map((m) => m[1]!).filter((n) => /^(?:[a-z]+[A-Z]|ForceTheQuestion|agentinbox|lists|knowledge|services|sites|processes|flows)/.test(n));
+            // A tool is named at the head of a line of the guide ("- `tool` …") or before "with action": each is one Genie serves.
+            const named = [...s.body.matchAll(/^(?:- |Use )`([A-Za-z.]+)`|`([A-Za-z.]+)` with action/gm)].map((m) => (m[1] ?? m[2])!).filter((n) => /^(?:[a-z]+[A-Z]|ForceTheQuestion|agentinbox|lists|knowledge|services|sites|processes|flows|mail|plan|pages|playwright|ai[.])/.test(n));
             for (const n of named) expect(SERVED, `${s.name} names ${n}`).toContain(n);
             for (const v1 of V1_ONLY) expect(s.body, `${s.name}`).not.toContain(v1);
             for (const dir of ['.claude/skills', '.agents/skills']) {
