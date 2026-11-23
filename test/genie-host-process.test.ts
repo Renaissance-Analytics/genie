@@ -14,7 +14,8 @@ import { SpawnHostClient } from '../src/main/spawn-host-client.js';
 import type { FilesHubEvent } from '../src/main/files-watch-hub.js';
 import { ownProtocolClient, type OwnCallAnswer, type OwnProtocolClient } from '../src/main/own-protocol-client.js';
 import { tunnelDoor, tunnelLinkOf } from '../src/main/window-tunnel.js';
-import type { FeatureData, HostedProcess } from '../src/renderer/features.js';
+import type { HostedProcess } from '../src/main/process-book.js';
+import type { FeatureData } from '../src/renderer/features.js';
 
 // By its whole address: on Windows a process entry moves to the home folder first (process-start.ts), where a bare 'tsx' does not resolve for what the host starts.
 const TSX = import.meta.resolve('tsx');
