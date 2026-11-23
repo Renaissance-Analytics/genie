@@ -302,7 +302,15 @@ describe('probing — what the Dashboard reads', () => {
         });
         expect(host.probe(r.id)?.plan).toEqual({ step: 1, of: 2, doing: 'Map the update' });
 
+        const rowsBefore = host.rowsFor(r.id).length;
         events.onUpdate?.({ sessionUpdate: 'plan_update', delta: 'Next: open the PR' });
+        events.onUpdate?.({ sessionUpdate: 'plan_update', delta: ', then the notes' });
+        // It adds no row to the stream (it was one "(unmapped: plan_update)" row per fragment)...
+        expect(host.rowsFor(r.id)).toHaveLength(rowsBefore);
+        expect(host.rowsFor(r.id).filter((row) => row.event.kind === 'unknown')).toEqual([]);
+        // ...CONTROL: and an update nothing recognises still does.
+        events.onUpdate?.({ sessionUpdate: 'something_new_2132' });
+        expect(host.rowsFor(r.id).filter((row) => row.event.kind === 'unknown')).toHaveLength(1);
 
         const live = host.probe(r.id);
         expect(live?.plan).toEqual({ step: 1, of: 2, doing: 'Map the update' });
