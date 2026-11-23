@@ -140,7 +140,11 @@ function ephemeralOf(value: unknown): { key: KeyObject; raw: Buffer } {
     }
 }
 
-/** The X25519 shared secret; all zero (a low-order point from the peer) is refused, as RFC 7748 §6.1 asks. */
+/**
+ * The X25519 shared secret; all zero (a low-order point from the peer) is refused, as RFC 7748 §6.1 asks. Node's own
+ * `diffieHellman` already throws for it (measured on Node 24 / OpenSSL 3: with the zero test below taken out, the
+ * all-zero rows still refuse), so that throw is what the rows prove; the test here stays for an engine that does not.
+ */
 function sharedOf(privateKey: KeyObject, publicKey: KeyObject): Buffer {
     let shared: Buffer;
     try {
