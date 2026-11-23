@@ -255,6 +255,72 @@ describe('probing — what the Dashboard reads', () => {
         expect(host.probe(r.id)?.plan).toEqual({ step: 1, of: 2, doing: 'Enrolment endpoint' });
     });
 
+    it('reports a Codex agent’s plan, sent as ACP `plan` (genie#2132), on its Dashboard row', () => {
+        /**
+         * prism-acp's CodexDriver maps Codex's `turn/plan/updated` to `{ sessionUpdate: 'plan', entries }`
+         * (`#emitPlan(object.plan, 'plan')`, entries `{ content, status }`). `plan` is ACP's own name for a
+         * plan update; only `plan_update` was mapped, so a Codex plan fell through to `unknown` and the
+         * Dashboard's plan column and its hover stayed empty.
+         */
+        const r = record();
+        host.start(r, dir);
+        expect(host.probe(r.id)?.plan).toBeNull();
+
+        events.onUpdate?.({
+            sessionUpdate: 'plan',
+            entries: [
+                { content: 'Read the driver', status: 'completed' },
+                { content: 'Map the update', status: 'in_progress' },
+                { content: 'Open the PR', status: 'pending' },
+            ],
+        });
+
+        const live = host.probe(r.id);
+        expect(live?.plan).toEqual({ step: 1, of: 3, doing: 'Map the update' });
+        expect(live?.planSteps).toEqual([
+            { content: 'Read the driver', status: 'completed' },
+            { content: 'Map the update', status: 'in_progress' },
+            { content: 'Open the PR', status: 'pending' },
+        ]);
+        expect(agentRowFor(r, live, () => now)).toMatchObject({ step: '1/3', target: 'Map the update' });
+    });
+
+    it('keeps the plan when a delta-only `plan_update` follows it, and never blanks it (genie#2132)', () => {
+        /**
+         * The same driver sends Codex's `turn/plan/delta` as `{ sessionUpdate: 'plan_update', delta }`: no
+         * `entries`, no `plan`. Read as a plan, that is a plan of NO steps, and the Dashboard's plan went blank
+         * the moment Codex streamed one.
+         */
+        const r = record();
+        host.start(r, dir);
+        events.onUpdate?.({
+            sessionUpdate: 'plan',
+            entries: [
+                { content: 'Read the driver', status: 'completed' },
+                { content: 'Map the update', status: 'in_progress' },
+            ],
+        });
+        expect(host.probe(r.id)?.plan).toEqual({ step: 1, of: 2, doing: 'Map the update' });
+
+        const rowsBefore = host.rowsFor(r.id).length;
+        events.onUpdate?.({ sessionUpdate: 'plan_update', delta: 'Next: open the PR' });
+        events.onUpdate?.({ sessionUpdate: 'plan_update', delta: ', then the notes' });
+        // It adds no row to the stream (it was one "(unmapped: plan_update)" row per fragment)...
+        expect(host.rowsFor(r.id)).toHaveLength(rowsBefore);
+        expect(host.rowsFor(r.id).filter((row) => row.event.kind === 'unknown')).toEqual([]);
+        // ...CONTROL: and an update nothing recognises still does.
+        events.onUpdate?.({ sessionUpdate: 'something_new_2132' });
+        expect(host.rowsFor(r.id).filter((row) => row.event.kind === 'unknown')).toHaveLength(1);
+
+        const live = host.probe(r.id);
+        expect(live?.plan).toEqual({ step: 1, of: 2, doing: 'Map the update' });
+        expect(live?.planSteps).toEqual([
+            { content: 'Read the driver', status: 'completed' },
+            { content: 'Map the update', status: 'in_progress' },
+        ]);
+        expect(agentRowFor(r, live, () => now)).toMatchObject({ step: '1/2', target: 'Map the update' });
+    });
+
     it('surfaces a FAILED turn as a broken row with a route out', () => {
         const r = record();
         host.start(r, dir);
