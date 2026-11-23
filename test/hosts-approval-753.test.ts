@@ -106,15 +106,18 @@ describe('an agent’s site never raises the OS prompt: Genie asks in the Deck, 
 
     it('the person’s Open in browser is the ONE elevation, carrying the hosts step; the ask is then gone', async () => {
         rig = await trustedRig();
-        const w = await rig.window();
+        // A window is open: the elevation is asked of it.
+        await rig.window();
         const { tools } = agentTools(rig);
         await call(tools, 'sites', { action: 'add', name: 'shop', repoPath: rig.ws, mode: 'proxy', hostPort: 5175 });
         await settled(rig);
         const item = hostsAsk(rig);
         expect(item).toBeDefined();
         expect(rig.elevationsAsked).toHaveLength(0);
-        // The host's own Deck (Tynn #861): the answer is resolved against the items Genie's hosting stack holds.
-        const ports = { deckItems: () => rig!.stack.trustDeckItems(), attention: {} as never, approvals: {} as never, inbox: {} as never, trustCertificate: () => w.replica.trustCertificate(), syncHosts: () => w.replica.syncHosts(), deferHosts: () => w.replica.deferHosts() } as DeckAnswerPorts;
+        // The host's own Deck (Tynn #861): the answer is resolved against the items Genie's hosting stack holds, and answered
+        // by that stack, as genie-host's own Deck ports are (genie-host.ts: `syncHosts: () => hostingStack.syncHosts()`).
+        const stack = rig.stack;
+        const ports = { deckItems: () => stack.trustDeckItems(), attention: {} as never, approvals: {} as never, inbox: {} as never, trustCertificate: () => stack.trustCertificate(), syncHosts: () => stack.syncHosts(), deferHosts: () => stack.deferHosts() } as DeckAnswerPorts;
         await answerDeck({ kind: 'deck.answer', item: item!, optionId: 'open' }, ports);
         await settled(rig);
         expect(rig.elevationsAsked.map((b) => b.map((s) => s.id))).toEqual([[HOSTS_STEP_ID]]);

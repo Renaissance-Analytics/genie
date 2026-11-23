@@ -23,7 +23,6 @@ import type { ClientTransport } from '../core/remote-protocol.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import type { SessionHost } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
-import type { HostingService } from './hosting-host.js';
 import type { AppInboxHost } from './app-inbox-host.js';
 import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
 import type { CloneOffersService } from './clone-offers-service.js';
@@ -123,9 +122,7 @@ export interface EngineServerOptions {
     readonly heartbeat?: { beat(connId: string, beat: unknown): void; dropped(connId: string): void };
     /** The latest crash record and the reopened-window notice (crash-state-host.ts): told to LOCAL windows before ready and on change; `engine.crash` dismisses. */
     readonly crash?: { view(): CrashStateView; dismiss(): CrashStateView; onChange(listener: (view: CrashStateView) => void): () => void };
-    /** The host's hosting: the front door, the engines, the sites (P5a: hosting-host.ts). Absent = `engine.hosting` is refused. */
-    readonly hosting?: HostingService;
-    /** The host's app door and its keys (P5a.2). Absent = `engine.appInbox` is refused. Local windows only, like the hosting. */
+    /** The host's app door and its keys (P5a.2). Absent = `engine.appInbox` is refused. Local windows only. */
     readonly appInbox?: AppInboxHost;
     /** Takes the window's environment into this host's (`engine.windowEnv`, and with each start); `adoptWindowEnv` on `process.env` by default. */
     /** An agent's service variables (DB_URL and the rest), from genie-host's own engines (Tynn #1044). Absent = none. */
@@ -176,8 +173,8 @@ interface Connection {
     nextCall: number;
     readonly pending: Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>;
     /**
-     * A window on this host's OWN endpoint (its local socket or pipe, token-checked). Only such a link is sent the hosting
-     * — whose dump carries each workspace's service variables — may drive it, or is asked to elevate (P5a.2).
+     * A window on this host's OWN endpoint (its local socket or pipe, token-checked). Only such a link is sent the local
+     * state (the app door's keys, the updater), may drive it, or is asked to elevate for the host's hosting (P5a.2).
      * P5d NOTE: a remote or phone path that ever reaches this server must accept as NOT local.
      */
     readonly local: boolean;
@@ -206,9 +203,6 @@ export class SessionEngineServer {
     constructor(options: EngineServerOptions) {
         this.#options = options;
         this.#schedule = options.schedule ?? ((ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); });
-        options.hosting?.onEvent((event) => {
-            for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'hosting.event', event);
-        });
         options.appInbox?.onEvent((event) => {
             for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'appInbox.event', event);
         });
@@ -230,7 +224,7 @@ export class SessionEngineServer {
         options.safeMode?.onChange((view) => { for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'safeMode.event', view); });
         // The crash state (Tynn #386) travels on LOCAL window links only: a record is this machine's.
         options.crash?.onChange((view) => { for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'crash.event', view); });
-        // The updater's state (P5b) travels on LOCAL window links only, as the hosting's does (P4 rules).
+        // The updater's state (P5b) travels on LOCAL window links only, as the app door's does (P4 rules).
         options.updates?.onEvent((state) => {
             for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'updates.event', state);
         });
@@ -410,8 +404,6 @@ export class SessionEngineServer {
         const host = this.#host;
         if (host) for (const id of host.startedIds()) for (const u of this.#updatesFor(conn, id)) this.#event(conn, 'engine.agent', u);
         this.#sendGlobal(conn);
-        // The hosting BEFORE ready: a window mounts its browsers on the front door's port and CA as soon as it connects (P5a).
-        if (this.#options.hosting && conn.local) this.#event(conn, 'hosting.dump', this.#options.hosting.dump());
         if (this.#options.appInbox && conn.local) this.#event(conn, 'appInbox.dump', this.#options.appInbox.dump());
         if (this.#options.updates && conn.local) {
             this.#event(conn, 'updates.dump', this.#options.updates.dump());
@@ -654,10 +646,6 @@ export class SessionEngineServer {
                 if (!this.#options.updates) throw new Error('This host runs no updater.');
                 if (!conn.local) throw new Error('Genie’s updates are driven from a local window only.');
                 return this.#options.updates.call(str(0), Array.isArray(args[1]) ? args[1] : [], { window: true, connection: conn.id });
-            case 'engine.hosting':
-                if (!this.#options.hosting) throw new Error('This host runs no hosting.');
-                if (!conn.local) throw new Error('Genie’s hosting is driven from a local window only.');
-                return this.#options.hosting.call(str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.tynnPage':
                 if (!conn.local) throw new Error('The Tynn pages are read from a local window only.');
                 if (!this.#options.tynnPages) throw new Error('This host reads no Tynn pages.');
