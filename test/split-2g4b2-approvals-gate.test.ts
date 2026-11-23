@@ -188,7 +188,9 @@ describe('wired: main asks over the protocol, and reads none of the agent stores
         expect(main).not.toMatch(/(composed|services!?\??)\.(inbox|attention|knowledge|approvals|settings)\b/);
         expect(main).not.toMatch(/dashboardComms|CommsCache|comms: \(agentId/);
         // CONTROL: the same scan finds what main still reads of the composition.
-        expect(main).toMatch(/composed\.routes\(\)/);
+        // (composed.routes() left main in 2g-4d-D1, Tynn #1046: the front door is genie-host's frontdoor.watch.)
+        // (composed.untrustedNow left main in 2g-4d D2, Tynn #1046: `sites open` and its trust gate are genie-host's.)
+        expect(main).toMatch(/services = composed;/);
     });
     it('genie-host answers approvals.gate from its one queue, tied to the agent’s real call', () => {
         expect(code(src('src/main/genie-host.ts'))).toMatch(/approvalsGate: \(caller, action, detail, forwardedCallId\) => approvals\.gate\(caller, action, detail, forwardedCallId \? forwardedCalls\.get\(forwardedCallId\) : undefined\),/);

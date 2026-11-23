@@ -1,5 +1,4 @@
 import { sameFlowWindow } from '../core/route.js';
-import { browserSiteLabels } from '../core/browser-sites.js';
 import { describeMcpTool } from '../core/mcp-tool-summaries.js';
 import { terminalsWindowRoute } from '../core/workspace-window.js';
 import { ConnectWatch, connectNotice } from '../core/connected-here.js';
@@ -40,6 +39,8 @@ import { readFile } from 'node:fs/promises';
 import { setProviderChoiceFile } from './provider-choice.js';
 import { readMailSignal } from '../core/mail-actions.js';
 import { windowSettings } from './window-settings.js';
+import { windowFrontDoor } from './window-front-door.js';
+import { EMPTY_FRONT_DOOR_WATCH, type FrontDoorWatchView } from '../core/front-door-watch.js';
 import { windowApprovals } from './approvals-gate-protocol.js';
 import { readThingSignal } from '../core/thing-sounds.js';
 import { quitAnswer, quitPlan, quitSequence, runQuit, type QuitPorts } from '../core/quit.js';
@@ -570,6 +571,10 @@ const ownProtocol = ownProtocolClient();
  * tracking. Its writes go to genie-host over the protocol.
  */
 const settingsNow = windowSettings(ownProtocol);
+/** genie-host's front door, as its frontdoor.watch says it (Tynn #1046, 2g-4d-D1): what this window's browser reads. */
+const frontDoorWatch = windowFrontDoor(ownProtocol);
+/** How long boot waits for genie-host's front door before it builds the browser sessions with none (they follow it later). */
+const FRONT_DOOR_BOOT_DEADLINE_MS = 10_000;
 /** A window-run tool's approval: genie-host's one queue, over main's own client, with the approval's own deadline (Tynn #1006). */
 const approvalsNow = windowApprovals(ownProtocol);
 /** How long the boot waits for genie-host's settings before reading start minimized and the login item at their defaults. */
@@ -1322,6 +1327,8 @@ async function boot(): Promise<void> {
             else if (signal.kind === 'mail') { const mail = readMailSignal((raw as { mail?: unknown }).mail); if (mail) broadcast('genie:action', mail); }
             // What genie-host runs, each change with its sound (Tynn #766 C2b; genie-host says them since Tynn #1045): only what reads goes on.
             else if (signal.kind === 'thing') { const thing = readThingSignal((raw as { thing?: unknown }).thing); if (thing) broadcast('genie:action', thing); }
+            // An agent's `sites open` in genie-host's browser (Tynn #1046 D2): the site's workspace pulses for the person (genie#1265).
+            else if (signal.kind === 'site-opened' && typeof signal.workspaceId === 'string') showToPerson({ activation: 'background', workspaceId: signal.workspaceId, reason: 'sites open' });
             else if (signal.kind === 'action' && typeof signal.agentId === 'string') broadcast('genie:action', { agentId: signal.agentId, kind: signal.action, ...(signal.tool ? { tool: signal.tool } : {}), ...(signal.reason ? { reason: signal.reason } : {}) });
         },
         onThreadId: (agentId: AgentId, threadId: string) => {
@@ -1453,6 +1460,7 @@ async function boot(): Promise<void> {
         tunnelDoor(ownProtocol.door, tunnelLinkOf(agentEngineLink.client), { own: true });
         // The settings this window reads, from genie-host, as soon as its own client can ask (Tynn #998, 2g-4b1).
         settingsNow.start();
+        frontDoorWatch.start();
         // THE REGISTRY'S FILES ARE GENIE-HOST'S (P3.2): this window's model reads and writes them over the one protocol (Tynn
         // #1007, 2g-4e: registry.read, registry.write), and re-reads them when registry.watch says another window (or the host)
         // wrote: two windows, one registry. Before its load and the Genie 1 import, below, which write through genie-host.
@@ -1899,14 +1907,8 @@ async function boot(): Promise<void> {
         const opened = await openLocalBrowser(url, activation, anchor);
         return opened.ok ? { ok: true } : { ok: false, reason: opened.error };
     };
-    // AN AGENT'S `sites open` (genie#1265): in the background, and the workspace the site belongs to pulses for the person.
-    const agentOpensSite: OpenInBrowser = async (url) => {
-        const r = await openInBrowserFor('background')(url);
-        const host = ((): string | null => { try { return new URL(url).host.toLowerCase(); } catch { return null; } })();
-        const site = r.ok && host ? composed.sites.list().find((s) => s.host.toLowerCase() === host) : undefined;
-        if (site) showToPerson({ activation: 'background', workspaceId: site.workspaceId, reason: 'sites open' });
-        return r;
-    };
+    // AN AGENT'S `sites open` is genie-host's (Tynn #1046 D2): it opens the site in its browser, in the background, and the
+    // workspace the site belongs to pulses here on its `site-opened` signal (onToolSignal, genie#1265).
     // THE PROCESS BOOK AND ITS SCHEDULER ARE GENIE-HOST'S (P3.3c): what the person keeps running is restored there, and a
     // scheduled task fires on its clock, with or without this window. Every window manages them over the protocol; this
     // process reads only what its tray says (hostSummaryNow, Tynn #953).
@@ -1945,7 +1947,7 @@ async function boot(): Promise<void> {
             // workspaceTabs (beta.35 item 36): the workspace's tabs setting (every window reloads it), and its sites' hosts.
             workspaceTabs: {
                 write: (workspaceId, raw) => { void settingsNow.setFor(workspaceId, 'workspace_tabs', raw).catch((error: unknown) => console.error(`[genie] workspace tabs could not be saved: ${error instanceof Error ? error.message : String(error)}`)); showToPerson({ activation: 'background', workspaceId, reason: 'workspaceTabs' }); },
-                sites: (workspaceId) => composed.sites.list().filter((s) => s.workspaceId === workspaceId).map((s) => s.host),
+                sites: (workspaceId) => frontDoorNow.sites.filter((s) => s.workspaceId === workspaceId).map((s) => s.host),
             },
             // pages (browser rebuild step 7): the Genie browser's tabs and the live site panels, each drivable.
             pages: { open: () => [...drivablePages(), ...browserPages.list()] },
@@ -1963,19 +1965,14 @@ async function boot(): Promise<void> {
             // manageTerminals, processes and flows are genie-host's own tools, never run here (mcp-host-tools.ts HOST_NATIVE_TOOLS;
             // Tynn #953): their stores are the host's, said so if anything here ever asks.
             terminals: hostOnly<TerminalsPort>('the terminals'),
-            // The agents' `services` / `sites` tools act on the same composition the Services and Hosting tabs do.
-            hosting: composed,
-            // `sites open` shows the site in the same browser the Hosting row's Open does — without taking focus (genie#1235)
-            // or the tab on screen, and the site's workspace pulses (genie#1265).
-            openInBrowser: agentOpensSite,
-            // …and `sites` / `services` act only in a trusted workspace (Tynn #753): the verdict as last read, as a shell call reads it.
-            workspaceTrusted: (workspaceId) => !composed.untrustedNow({ workspaceId }),
+            // The agents' `services` and `sites` are genie-host's tools, `sites open` too (Tynn #1046 D2): no hosting, trust
+            // verdict or browser of this window's is theirs.
             // `services exec`: a one-off command with the workspace's service variables (main/service-exec.ts).
             serviceExec: runServiceExec,
             // The plugins' tools are GENIE-HOST'S (ADF A3, Tynn #447): its MCP server offers and runs them with no window.
             plugins: { tools: () => [], guard: () => null, run: async () => ({ ok: false, reason: "a plugin's tool runs in Genie's host, not this window" }) },
         })), resolveCaller, (agentId, kind, tool) => broadcast('genie:action', { agentId, kind, tool }));
-        // The host's own tools run in genie-host, a flow's steps among them: of those only `sites open` runs here (Tynn #1043).
+        // The host's own tools run in genie-host, a flow's steps among them, `sites open` too since Tynn #1046 D2: none runs here.
         const engineLink = agentEngineLink?.client ?? null;
         mcpToolList = registrations.map((r) => describeMcpTool(r.definition.name, r.definition.description ?? '', r.visible !== undefined));
         if (engineLink) {
@@ -2203,26 +2200,28 @@ async function boot(): Promise<void> {
     // (Windows, Linux) and Genie keeps running — the agents, the terminals, the services. A quit is asked for.
     // S7: each .gen site at its own https origin — the pane's session routes *.gen to the in-app front door and trusts
     // Genie's CA for .gen hosts only (electron-browser-view.ts). Without a CA, .gen pages are refused and the reason logged.
-    const browserTrust = composed.browserTrust();
-    if (browserTrust.caPem === null) console.error(`[genie] browser: .gen sites cannot open in the Genie Browser: ${browserTrust.reason}`);
     // THE FRONT DOOR AS IT IS NOW (P5a.2): genie-host's, so it can come back on another port or with another CA. Every
-    // browser session reads these, and is routed again when they change.
-    frontDoorNow = { port: composed.frontDoorPort, caPem: browserTrust.caPem };
+    // browser session reads these, and is routed again when they change. Said by genie-host on frontdoor.watch (Tynn #1046),
+    // and waited for here, so the sessions and the site panels are made with the real front door.
+    await frontDoorWatch.ready(FRONT_DOOR_BOOT_DEADLINE_MS);
+    frontDoorNow = frontDoorWatch.now();
+    if (frontDoorNow.caPem === null) console.error(`[genie] browser: .gen sites cannot open in the Genie Browser: ${frontDoorNow.caReason ?? 'genie-host said no CA'}`);
     gappWindowsNow = gappWindowsElectron({ sessions: () => agentEngineLink?.client.gappSessions() ?? null, frontDoor: () => frontDoorNow, preload: join(here, 'gapp-preload.cjs'), ledger: activationLedger });
-    composed.onFrontDoorChange(() => {
-        const trust = composed.browserTrust();
-        if (frontDoorNow.port === composed.frontDoorPort && frontDoorNow.caPem === trust.caPem) return;
-        frontDoorNow = { port: composed.frontDoorPort, caPem: trust.caPem };
-        console.log(`[genie] browser: the front door is on :${frontDoorNow.port} now${trust.caPem === null ? ` with no CA (${trust.reason})` : ''}`);
-        followFrontDoorInPanes();
-        rerouteGenieBrowserSession({ frontDoorPort: frontDoorNow.port, caPem: frontDoorNow.caPem });
-        publishBrowserFacts?.();
-        gappWindowsNow?.reroute();
+    // A change of the port or the CA routes every session again; a change of the routes or the sites only is said to the
+    // browser again (its hosts, their workspaces and labels): routes too now, which compose's sites change missed.
+    frontDoorWatch.onChange((view, moved) => {
+        frontDoorNow = view;
+        if (moved) {
+            console.log(`[genie] browser: the front door is on :${view.port} now${view.caPem === null ? ` with no CA (${view.caReason ?? 'none said'})` : ''}`);
+            followFrontDoorInPanes();
+            rerouteGenieBrowserSession({ frontDoorPort: view.port, caPem: view.caPem });
+            gappWindowsNow?.reroute();
+        }
     });
     // LIVE SITE PANELS: a <webview> in the MAIN window, whichever window that is now (P1b: it can be closed and built again),
     // in the store of the site's own workspace.
-    livePanels = sitePanels({ window: () => window, genieHome: genieRoot(), frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host), workspaceOfHost: (host) => composed.sites.list().find((s) => s.host.toLowerCase() === host.toLowerCase())?.workspaceId ?? '_shared', openInWindow: (url, activation) => { void openLocalBrowser(url, activation); }, browserCall: (method, args) => (agentEngineLink?.live === true ? agentEngineLink.client.browserCall(method, args) : null), restart: panelRestart(confirmTray, restartGenie) });
-    mainWindowDeps = { frontDoorPort: () => frontDoorNow.port, caPem: () => frontDoorNow.caPem, routes: () => composed.routes(), settings: settingsNow, pushFeatures: () => { pushFeatures(); } };
+    livePanels = sitePanels({ window: () => window, genieHome: genieRoot(), frontDoorPort: frontDoorNow.port, caPem: frontDoorNow.caPem, enabledHosts: () => frontDoorNow.routes.map((r) => r.host), workspaceOfHost: (host) => frontDoorNow.sites.find((s) => s.host.toLowerCase() === host.toLowerCase())?.workspaceId ?? '_shared', openInWindow: (url, activation) => { void openLocalBrowser(url, activation); }, browserCall: (method, args) => (agentEngineLink?.live === true ? agentEngineLink.client.browserCall(method, args) : null), restart: panelRestart(confirmTray, restartGenie) });
+    mainWindowDeps = { frontDoorPort: () => frontDoorNow.port, caPem: () => frontDoorNow.caPem, routes: () => frontDoorNow.routes, settings: settingsNow, pushFeatures: () => { pushFeatures(); } };
     // Start minimized and the login item are read as genie-host says them, not as defaults: its settings first (a host that
     // does not answer is waited for no longer than the deadline, and then the defaults stand).
     await settingsNow.ready(SETTINGS_BOOT_DEADLINE_MS);
@@ -2302,22 +2301,16 @@ async function boot(): Promise<void> {
     cookieBridge = new BrowserCookieBridge({
         call: (method, args) => (agentEngineLink?.live === true ? agentEngineLink.client.browserCall(method, args) : Promise.resolve(null)),
         me: () => browserConnection,
-        openStore: (workspaceId) => workspaceBrowserSession({ genieHome: genieRoot(), workspaceId, side: 'window', frontDoorPort: composed.frontDoorPort, caPem: frontDoorNow.caPem }).ses,
+        openStore: (workspaceId) => workspaceBrowserSession({ genieHome: genieRoot(), workspaceId, side: 'window', frontDoorPort: frontDoorNow.port, caPem: frontDoorNow.caPem }).ses,
     });
     watchWorkspaceStores(cookieBridge);
+    // HOW TO START THE GENIE BROWSER, and only that: this executable, in a dev run this app's path, and the switches an
+    // Electron needs here. What it needs of the front door genie-host says itself, from its own hosting (Tynn #1046 D2).
     publishBrowserFacts = () => {
         if (agentEngineLink?.live !== true) return;
-        const facts = {
-            frontDoorPort: composed.frontDoorPort,
-            caPem: frontDoorNow.caPem,
-            hosts: composed.routes().map((r) => r.host),
-            workspaceOf: Object.fromEntries(composed.sites.list().map((s) => [s.host.toLowerCase(), s.workspaceId])),
-            siteLabels: browserSiteLabels(composed.routes().map((r) => r.host), composed.sites.list(), Object.fromEntries((registry?.snapshot().workspaces ?? []).map((w) => [w.id, w.name ?? basename(w.path)]))),
-            launch: { file: process.execPath, args: [...(app.isPackaged ? [] : [app.getAppPath()]), '--genie-browser', ...process.argv.filter((a) => /^--(no-sandbox|ozone-platform=|password-store=|genie-browser-debug-port=)/.test(a))] },
-        };
-        void agentEngineLink.client.browserCall('publish', [facts]).catch((error: unknown) => { rendererErrorLog?.(`the browser's facts could not be published: ${error instanceof Error ? error.message : String(error)}`); });
+        const launch = { file: process.execPath, args: [...(app.isPackaged ? [] : [app.getAppPath()]), '--genie-browser', ...process.argv.filter((a) => /^--(no-sandbox|ozone-platform=|password-store=|genie-browser-debug-port=)/.test(a))] };
+        void agentEngineLink.client.browserCall('publish', [{ launch }]).catch((error: unknown) => { rendererErrorLog?.(`how to start the browser could not be said: ${error instanceof Error ? error.message : String(error)}`); });
     };
-    composed.sites.onChange(() => { publishBrowserFacts(); });
     publishBrowserFacts();
     // TRAY-ONLY (P1b): while genie-host runs, one look every few seconds — what the tray says, and whether a tray-only
     // Genie with nothing left running ends (core/tray-only.ts).
@@ -2326,7 +2319,7 @@ async function boot(): Promise<void> {
 
 /** What a (re)built main window needs from boot: set once the services are composed. */
 /** The front door's port and Genie's CA as the browser sessions use them now (P5a.2); set once the services are composed. */
-let frontDoorNow: { port: number; caPem: string | null } = { port: 0, caPem: null };
+let frontDoorNow: FrontDoorWatchView = EMPTY_FRONT_DOOR_WATCH;
 let mainWindowDeps: { readonly frontDoorPort: () => number; readonly caPem: () => string | null; readonly routes: ConstructorParameters<typeof BrowserPane>[1]; readonly settings: Parameters<typeof wireCloseToTray>[1]['settings']; readonly pushFeatures: () => void } | null = null;
 /** The live site panels (once per process); each main window attached as it is built. */
 let livePanels: LiveSitePanels | null = null;

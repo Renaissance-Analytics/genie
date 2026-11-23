@@ -44,12 +44,11 @@ describe('main: one door to the window’s view, and it asks who', () => {
         expect(port).toMatch(/showToPerson\(\{ activation: 'background', workspaceId, reason: 'workspaceTabs' \}\)/);
     });
 
-    it('sites open: Genie’s browser in the background, and the site’s workspace pulses', () => {
-        expect(main).toMatch(/hosting: composed,\s*openInBrowser: agentOpensSite,/);
-        const at = main.indexOf('const agentOpensSite');
-        const body = main.slice(at, main.indexOf('\n    };', at));
-        expect(body).toMatch(/openInBrowserFor\('background'\)\(url\)/);
-        expect(body).toMatch(/showToPerson\(\{ activation: 'background', workspaceId: site\.workspaceId, reason: 'sites open' \}\)/);
+    it('sites open: Genie’s browser in the background, in genie-host, and the site’s workspace pulses here on its signal (Tynn #1046 D2)', () => {
+        // genie-host opens it (host-browser.ts hostOpensSite, pinned in split-2g4d-d2); this window only pulses.
+        expect(main).toMatch(/signal\.kind === 'site-opened' && typeof signal\.workspaceId === 'string'\) showToPerson\(\{ activation: 'background', workspaceId: signal\.workspaceId, reason: 'sites open' \}\)/);
+        const host = strip(readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8'));
+        expect(host).toMatch(/open: \(url\) => browserService\.call\('open', \[url, 'background'\], 'genie-host'\),/);
         // ...and the browser window keeps the person's tab in front (genie-browser-window.ts `showSite(…, activation)`).
         const browser = strip(readFileSync(new URL('../src/main/genie-browser-electron.ts', import.meta.url), 'utf8'));
         expect(browser).toMatch(/return entry!\.browser\.showSite\(target, activation\);/);
