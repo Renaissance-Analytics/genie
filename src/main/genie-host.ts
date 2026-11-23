@@ -31,6 +31,7 @@ import { makeServiceExec } from './service-exec.js';
 import { doctorHoldNow } from './genie-running-file.js';
 import { openLifecycleLog } from './lifecycle-log.js';
 import { genieRoot, legacyProviderHomes, osaHomeDir, runtimeDir, sessionsDir, userHome } from './paths.js';
+import { writeDataRootManifest } from './data-root.js';
 import { WorkspaceStorage, type ChatFile } from './workspace-storage-host.js';
 import { storageFeaturePort } from './storage-feature-port.js';
 import type { InUseFolder } from '../core/workspace-storage.js';
@@ -367,6 +368,8 @@ async function main(): Promise<void> {
     const pipeAcl = await restrictHostPipe(server, endpoint);
     if (pipeAcl?.ok === true) lifecycleLog(`host pipe: its user and SYSTEM only (${pipeAcl.sddl})`);
     else if (pipeAcl) { say(`the host pipe keeps Windows' default access: ${pipeAcl.reason}`); lifecycleLog(`host pipe: NOT restricted: ${pipeAcl.reason}`); }
+    // THE DATA ROOT'S MANIFEST (P7.2; data-root.ts): what in this root is state and what is this machine's, written by the host that holds the endpoint.
+    await writeDataRootManifest(home, build).catch((error: unknown) => { const line = `data root: the manifest was not written: ${error instanceof Error ? error.message : String(error)}`; say(line); lifecycleLog(line); });
     /*
      * SAFE MODE (Tynn #386; safe-mode-host.ts), opened here: only the host that holds the endpoint reads and removes the
      * clean-exit marker (a second host exited above, touching nothing). With no marker the last run did not end cleanly,
