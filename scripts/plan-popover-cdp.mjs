@@ -22,6 +22,7 @@ import { mainWindow } from './cdp-main-window.mjs';
 import { closeWhatsNew } from './cdp-whats-new.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { spawn, spawnSync } from 'node:child_process';
+import { endOwnRun } from './end-own-tree.mjs';
 import { chmodSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
@@ -31,6 +32,8 @@ import { fileURLToPath } from 'node:url';
 process.env.GENIE_PAGE_PROBE ??= '1';
 if (process.env.CI !== 'true' && process.env.GENIE_TEST_MACHINE !== '1') { console.error('refused: this launches Electron, and runs only on CI or a test machine'); process.exit(2); }
 const WIN = process.platform === 'win32';
+/** When this row began: nothing older is ever taken for one of its own processes (end-own-tree.mjs). */
+const RUN_BEGAN = Date.now();
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = resolve(process.argv[2] ?? join(ROOT, 'ci-out', 'plan-popover'));
@@ -121,23 +124,26 @@ const electron = createRequire(import.meta.url)('electron');
 const logFd = openSync(join(OUT, 'electron.log'), 'a');
 const app = spawn(electron, ['.', ...(WIN ? [] : ['--no-sandbox', '--password-store=basic']), `--remote-debugging-port=${PORT}`, `--user-data-dir=${data}`], { cwd: ROOT, env, stdio: ['ignore', logFd, logFd], detached: !WIN, windowsHide: false });
 
-// Windows has no `ps`: there, what this run started is ended by pid with its tree (the window's, then the host's own record).
+// Windows has no `ps`: there, what this run started is ended by pid, waited for and said by one helper (end-own-tree.mjs,
+// Tynn #1031): the window's tree, the host in the run's own record, and what they started. True when something is left.
 const processes = () => (WIN ? '' : spawnSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' }).stdout ?? '').split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const i = l.indexOf(' '); return { pid: Number(l.slice(0, i)), args: l.slice(i + 1) }; });
-function endEverything() {
+async function endEverything() {
+    let left = false;
     rmSync(PLAN_MARKER, { force: true });
     let hostPid = null;
     try { hostPid = JSON.parse(readFileSync(join(runtime, 'host.json'), 'utf8')).pid; } catch { /* none */ }
     for (const p of processes()) if (p.args.includes(data) || p.args.includes(genieHome) || p.pid === hostPid) { try { process.kill(p.pid, 'SIGKILL'); } catch { /* gone */ } }
     if (WIN) {
-        // The host is detached and outlives the window; its tree holds the stub agent. Each by pid, with its tree.
-        try { spawnSync('taskkill', ['/PID', String(app.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* gone */ }
-        if (hostPid !== null) { try { spawnSync('taskkill', ['/PID', String(hostPid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* gone */ } }
+        // The host is detached and outlives the window; its tree holds the stub agent.
+        const ended = await endOwnRun({ app, hostPid, since: RUN_BEGAN, log: say });
+        if (!ended.ok) { left = true; say(`FAIL LEFT RUNNING by this row's own cleanup: ${ended.words}`); }
     } else {
         try { process.kill(-app.pid, 'SIGKILL'); } catch { /* gone */ }
     }
     try { rmSync(root, { recursive: true, force: true }); } catch { /* the VM is deleted anyway */ }
+    return left;
 }
-const finish = (code) => { endEverything(); process.exit(code); };
+const finish = async (code) => { const left = await endEverything(); process.exit(left ? 1 : code); };
 setTimeout(() => { say('FAIL the run\'s own deadline, 12 minutes'); finish(1); }, 12 * 60_000).unref?.();
 
 const proof = { checks: [], notes: [], seen: {} };
@@ -312,4 +318,4 @@ try {
 proof.ok = !failed && proof.checks.every((c) => c.ok);
 writeFileSync(join(OUT, 'proof.json'), `${JSON.stringify(proof, null, 2)}\n`);
 say(proof.ok ? 'ALL PROVEN' : `NOT PROVEN: ${proof.checks.filter((c) => !c.ok).map((c) => c.name).join('; ') || proof.error}`);
-finish(proof.ok ? 0 : 1);
+await finish(proof.ok ? 0 : 1);

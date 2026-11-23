@@ -424,6 +424,8 @@ function Row-packaged-launcher {
         $otherArch = "release\win-unpacked\resources\app.asar.unpacked\node_modules\@particle-academy\prism-acp\native\win32-arm64\prism-acp-supervisor.exe"
         if (-not (Test-Path $otherArch)) { throw "the other architecture's supervisor is not in win-unpacked ($otherArch): this check no longer matches an install" }
         Remove-Item -Force $otherArch
+        # When the row's own Genie began: nothing older is ever taken for one of its processes (scripts/end-own-tree.mjs).
+        $began = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         $packaged = Start-Process -FilePath (Resolve-Path "release\win-unpacked\Genie.exe") -PassThru
         $log = "$h\.genie\runtime\lifecycle.log"
         $line = $null
@@ -442,8 +444,15 @@ function Row-packaged-launcher {
         $ready = $null
         for ($i = 0; $i -lt 60 -and $up -and -not $ready; $i++) { $ready = Select-String -Path $log -SimpleMatch "containment ready supervisor=" | Select-Object -Last 1; if (-not $ready) { Start-Sleep -Seconds 1 } }
         $unready = if (Test-Path $log) { Select-String -Path $log -SimpleMatch "containment unready" | Select-Object -Last 1 } else { $null }
-        if (Test-Path $hostJson) { $hp = (Get-Content $hostJson | ConvertFrom-Json).pid; if ($hp) { Stop-Process -Id $hp -Force -ErrorAction SilentlyContinue } }
-        if (-not $packaged.HasExited) { taskkill /PID $packaged.Id /T /F *> $null }
+        # THE WHOLE RUN, ENDED AND WAITED FOR (Tynn #1031): the app's tree, the host in the run's own record and what they
+        # started, by the helper every row script uses. It reads the process table before it ends anything, keeps what the
+        # tree kill answered, waits until nothing of this run is in the table, and exits 1 naming what is left.
+        $hp = $null
+        if (Test-Path $hostJson) { $hp = (Get-Content $hostJson | ConvertFrom-Json).pid }
+        $endArgs = @('--since', "$began", '--tree', "$($packaged.Id)")
+        if ($hp) { $endArgs += @('--root', "$hp") }
+        node scripts/end-own-tree.mjs @endArgs
+        $leftByCleanup = ($LASTEXITCODE -ne 0)
         if (-not $line) { throw "the packaged app logged no host spawn within 90 s" }
         Write-Output "the packaged app: $($line.Line)"
         if ($line.Line -notmatch "via=genie-launch") { throw "the packaged app started genie-host WITHOUT genie-launch.exe" }
@@ -456,8 +465,9 @@ function Row-packaged-launcher {
         if (-not $ready) { throw "genie-host did not say its supervisor is ready within 60 s" }
         Write-Output "the packaged app: $($ready.Line)"
         if ($ready.Line -notmatch [regex]::Escape("$h\.genie\host\")) { throw "genie-host's supervisor is not in its copy: $($ready.Line)" }
-        # taskkill above sets $LASTEXITCODE (part of the tree already gone), and the step's result is the last exit code:
-        # 3 of ~20 runs failed after both checks printed. Every failure above has thrown, so reaching here is a pass.
+        if ($leftByCleanup) { throw "the packaged app or its genie-host was left running by the row's own cleanup (the shutdown lines above name it)" }
+        # Every failure above has thrown, so reaching here is a pass: the row's result is never an exit code left behind
+        # by a command above (a tree kill's, once: 3 of ~20 runs failed after both checks printed).
     } finally {
         foreach ($k in $saved.Keys) { Set-Item -Path "env:$k" -Value $saved[$k] }
     }

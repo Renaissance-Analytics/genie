@@ -121,8 +121,12 @@ describe('CI: what was packaged really comes up (Tynn #597; scripts/ci/windows.p
         expect(run).toContain('agent host (started|replaced|adopted) pid=');
         expect(run).toContain('did not come up');
         expect(run).toContain('genie-host.log');
-        // Read before anything is killed: the kill is what makes a host's own log stop.
-        expect(run.indexOf('agent host (started')).toBeLessThan(run.indexOf('Stop-Process'));
+        // Read before anything is killed: the kill is what makes a host's own log stop. The kill is the rows' one cleanup
+        // (Tynn #1031, scripts/end-own-tree.mjs), which ends the app's tree and the host; nothing else in the step ends them.
+        const kill = run.indexOf('node scripts/end-own-tree.mjs');
+        expect(kill, 'the step ends what it started').toBeGreaterThan(-1);
+        expect(run).not.toMatch(/Stop-Process|taskkill/);
+        expect(run.indexOf('agent host (started')).toBeLessThan(kill);
     });
 });
 

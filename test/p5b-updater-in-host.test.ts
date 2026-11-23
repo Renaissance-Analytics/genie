@@ -162,6 +162,18 @@ describe('the contract, over the protocol, with the helper doing the library cal
         expect(w.replica.state()).toEqual(r.service.dump());
     });
 
+    it('THE LOG NAMES THE LAUNCH THE HELPER GETS (Tynn #1031): a window started with a debugger port publishes it; the helper is started without it, and "updater: starting" says exactly that launch', async () => {
+        // Diagnosing a leftover helper, the lifecycle log read "updater: starting … --updater --remote-debugging-port=9334
+        // --inspect=9335" while the process itself had neither switch: the line printed the published launch, not the one used.
+        const r = rig();
+        const w = await r.window();
+        await w.replica.publishLaunch({ file: exe, args: ['/app', '--updater', '--no-sandbox', '--remote-debugging-port=9334', '--inspect=9335'] });
+        await w.replica.check();
+        await tick();
+        expect(r.launches).toEqual([{ file: exe, args: ['/app', '--updater', '--no-sandbox'] }]);
+        expect(r.logs.filter((l) => l.startsWith('updater: starting'))).toEqual([`updater: starting ${exe} /app --updater --no-sandbox`]);
+    });
+
     it('download: the progress and the end reach the window; still ONE helper, and the replica equals the host', async () => {
         const r = rig();
         const w = await r.window();

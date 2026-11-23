@@ -1,6 +1,6 @@
 import { accountsActionOf, type AccountsAction, type AccountsActResult } from '../core/account-settings.js';
 import type { AccountsSnapshot } from '../core/accounts-view.js';
-import { ACCOUNTS_METHODS, type AccountsMethod, type RemoteMethod } from '../core/remote-protocol.js';
+import { ACCOUNTS_METHODS, type AccountsMethod, type CallContext, type RemoteMethod } from '../core/remote-protocol.js';
 
 export { ACCOUNTS_METHODS, type AccountsMethod };
 
@@ -20,7 +20,7 @@ export { ACCOUNTS_METHODS, type AccountsMethod };
 export interface AccountsPort {
     /** Every known account and the standing offers; `null` while the host cannot say. */
     list(): Promise<AccountsSnapshot | null> | AccountsSnapshot | null;
-    act(action: AccountsAction): Promise<AccountsActResult> | AccountsActResult;
+    act(action: AccountsAction, context?: CallContext): Promise<AccountsActResult> | AccountsActResult;
     /** Not now on one offer: `true` when it was standing and has gone. */
     dismissOffer(id: string): Promise<boolean> | boolean;
 }
@@ -33,7 +33,7 @@ export function isAccountsMethod(method: string): method is AccountsMethod {
 }
 
 /** One accounts call, checked. A host without accounts answers `null`, a refusal in words, and `false`. */
-export async function answerAccounts(port: AccountsPort | undefined, method: AccountsMethod, args: readonly unknown[]): Promise<unknown> {
+export async function answerAccounts(port: AccountsPort | undefined, method: AccountsMethod, args: readonly unknown[], context?: CallContext): Promise<unknown> {
     switch (method) {
         case 'accounts.list':
             return port ? (await port.list()) ?? null : null;
@@ -41,7 +41,7 @@ export async function answerAccounts(port: AccountsPort | undefined, method: Acc
             const action = accountsActionOf(args[0]);
             if (!action) return { ok: false, reason: NOT_AN_ACCOUNT_ACTION } satisfies AccountsActResult;
             if (!port) return { ok: false, reason: ACCOUNTS_NOT_READY } satisfies AccountsActResult;
-            return port.act(action);
+            return port.act(action, context);
         }
         case 'accounts.dismissOffer':
             return typeof args[0] === 'string' && args[0] !== '' && port ? (await port.dismissOffer(args[0])) === true : false;
@@ -52,7 +52,7 @@ export async function answerAccounts(port: AccountsPort | undefined, method: Acc
  * genie-host's own answers for the family: it performs them itself, whether or not a window is connected. A getter while
  * the book is still being composed: until then the answers are those of a host with no accounts, never a throw.
  */
-export function accountsOwnAnswers(port: AccountsPort | (() => AccountsPort | null)): Partial<Record<RemoteMethod, (args: unknown[]) => Promise<unknown>>> {
+export function accountsOwnAnswers(port: AccountsPort | (() => AccountsPort | null)): Partial<Record<RemoteMethod, (args: unknown[], context?: CallContext) => Promise<unknown>>> {
     const now = (): AccountsPort | undefined => (typeof port === 'function' ? port() ?? undefined : port);
-    return Object.fromEntries(ACCOUNTS_METHODS.map((method) => [method, (args: unknown[]) => answerAccounts(now(), method, args)]));
+    return Object.fromEntries(ACCOUNTS_METHODS.map((method) => [method, (args: unknown[], context?: CallContext) => answerAccounts(now(), method, args, context)]));
 }
