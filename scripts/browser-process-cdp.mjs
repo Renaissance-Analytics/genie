@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * THE GENIE BROWSER AS ITS OWN PROCESS, IN THE BUILT APP (the host split, P2b; decision 5). A site opened from the window comes
- * up in a second Electron started by the host; killing the window leaves it up and saying so; the host ending ends it.
+ * up in a second Electron started by the host; killing the window leaves it up, its sites still behind genie-host's own front
+ * door (Tynn #1046 D2), so it says nothing is wrong; the host ending ends it.
  *
  * What it can't show: a page loading, because CI's unpackaged app has no Caddy. That is the VM's.
  *
@@ -135,8 +136,15 @@ try {
     check(mains('--genie-browser').some((p) => p.pid === up.pid), 'the window killed: the browser process stays');
     if (window) {
         check(await window.evaluate(`typeof window.genieBrowser === 'object'`) === true, 'and still answers');
-        const notice = await until('the notice', 20_000, () => window.evaluate(`document.querySelector('[data-browser-notice]')?.textContent ?? ''`));
-        check(/can.t load/.test(notice ?? ''), 'and says in words that Genie sites can\'t load', String(notice));
+        // The front door is genie-host's (Tynn #1046 D2): the window going takes nothing of it down, so no "can't load" notice
+        // comes, however long it is given, and the site's tab is still there.
+        await sleep(6000);
+        const read = (selector) => window.evaluate(`document.querySelector(${JSON.stringify(selector)})?.textContent ?? ''`);
+        // CONTROL: the same reader reads the text of an element that is there (the site's tab), so an empty notice is no blind read.
+        check(((await read('[data-browser-tab]')) ?? '').trim() !== '', 'CONTROL the reader reads a tab\'s text');
+        const notice = (await read('[data-browser-notice]')) ?? '';
+        check(!/can.t load/.test(notice), 'and says nothing is wrong: genie-host\'s door stayed up', JSON.stringify(notice));
+        check(await window.evaluate(`document.querySelectorAll('[data-browser-tab]').length`) === 1, 'and the site\'s tab is still there');
     }
 
     process.kill(hostPid, 'SIGTERM');

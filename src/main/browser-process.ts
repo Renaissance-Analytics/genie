@@ -19,10 +19,11 @@ import { configureWindowPages } from './window-pages.js';
  * open a site. A client of the host like the window, with its own hello; the two never talk directly.
  *
  * Its own user data folder: two processes cannot share a Chromium profile (measured on Electron 45.2.2).
- * The front door is the window's until P5, so with no window its pages stay up but `.gen` loads fail, and it says so.
+ * The front door is genie-host's (Tynn #1046 D2): with no window its pages stay up and `.gen` loads go on. It is down only
+ * when that host has no front door, and then it says so.
  */
 
-export const DOOR_DOWN = 'Genie sites can’t load until Genie’s window is open again. Pages already here stay as they are.';
+export const DOOR_DOWN = 'Genie sites can’t load: Genie’s host has no front door running. Pages already here stay as they are.';
 
 // The host's root (P7): started by genie-host with its environment, GENIE_HOME included.
 const home = genieRoot();
