@@ -174,8 +174,16 @@ const ITEM = {
 };
 
 /** The question window's size and the display's work area, as the page sees them. */
-const SIZE = `JSON.stringify({ w: window.outerWidth, h: window.outerHeight, aw: screen.availWidth, ah: screen.availHeight, max: document.querySelector('[data-question-window]')?.getAttribute('data-question-maximized') ?? null, form: document.querySelector('[data-deck-form]')?.getBoundingClientRect().width ?? null, formClass: document.querySelector('[data-deck-form]')?.className ?? '' })`;
+// VISIBLE-1019: what a person sees of the window is its INNER size. On Windows a resizable window carries an invisible
+// resize border outside its visible edge (measured on a test VM: 8 px left, right and bottom, none on top; outer
+// 576x528 around inner 560x520, and outer 1040x728 at x -8 around a visible 1024x720 that is exactly the work area). So
+// "fills the work area" is asked of the visible rectangle, on all four sides: left (vl) and top (vt) from the window's
+// position and that border, with its inner width and height. Where there is no such border they are the outer ones.
+const SIZE = `JSON.stringify({ w: window.outerWidth, h: window.outerHeight, aw: screen.availWidth, ah: screen.availHeight, ax: screen.availLeft ?? 0, ay: screen.availTop ?? 0, x: window.screenX, y: window.screenY, iw: window.innerWidth, ih: window.innerHeight, vl: window.screenX + (window.outerWidth - window.innerWidth) / 2, vt: window.screenY + (window.outerHeight - window.innerHeight) - (window.outerWidth - window.innerWidth) / 2, max: document.querySelector('[data-question-window]')?.getAttribute('data-question-maximized') ?? null, form: document.querySelector('[data-deck-form]')?.getBoundingClientRect().width ?? null, formClass: document.querySelector('[data-deck-form]')?.className ?? '' })`;
 const near = (a, b) => Math.abs(a - b) <= 4;
+/** The visible window is the work area: each of its four sides within 4 px of the work area's. */
+const fills = (s) => near(s.vl, s.ax) && near(s.vt, s.ay) && near(s.iw, s.aw) && near(s.ih, s.ah);
+const FILLS = `((s) => s.max === 'on' && Math.abs(s.vl - s.ax) <= 4 && Math.abs(s.vt - s.ay) <= 4 && Math.abs(s.iw - s.aw) <= 4 && Math.abs(s.ih - s.ah) <= 4)`;
 
 console.log('\nTHE WHOLE QUESTION MAXIMIZED — what a person sees, in the real app\n');
 const MAX = '[data-question-drag] [data-action="question-maximize"]';
@@ -211,11 +219,12 @@ try {
     await shot(ask, 'question-maximize-1019-normal.png');
 
     check(await click(ask, MAX), '5. Maximize takes a mouse click');
-    check(await waitFor(ask, `(() => { const s = ${SIZE.replace(/^JSON\.stringify/, '')}; return s.max === 'on' && Math.abs(s.w - s.aw) <= 4 && Math.abs(s.h - s.ah) <= 4; })()`, 10_000), '6. the WINDOW grows to the display’s work area');
+    check(await waitFor(ask, `${FILLS}(${SIZE.replace(/^JSON\.stringify/, '')})`, 10_000), '6. the WINDOW grows to the display’s work area');
     await sleep(500);
     const big = JSON.parse(await ask.evaluate(SIZE));
     console.log(`  maximized: ${JSON.stringify(big)}`);
-    check(near(big.w, big.aw) && near(big.h, big.ah), '6b. measured: the window fills the work area', `${big.w}x${big.h} of ${big.aw}x${big.ah}`);
+    check(fills(big), '6b. measured: the visible window is the work area, on all four sides', `${big.iw}x${big.ih} at ${big.vl},${big.vt} of ${big.aw}x${big.ah} at ${big.ax},${big.ay}`);
+    check(big.w >= big.aw - 4 && big.h >= big.ah - 4, '6c. and its outer size is not short of it', `${big.w}x${big.h}`);
     check(!big.formClass.includes('max-w-[72ch]') && big.form > before.form, '7. the question uses the room: the form is wider than in the normal window', `${before.form} → ${big.form}`);
     check(await ask.evaluate(`document.querySelector(${JSON.stringify(MAX)})?.getAttribute('title') ?? ''`) === 'Restore (Esc)', '7b. the button now says Restore (Esc)');
     await shot(ask, 'question-maximize-1019-maximized.png');
