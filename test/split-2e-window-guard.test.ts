@@ -160,7 +160,8 @@ describe('the window\'s engine link carries only the link, window capabilities, 
         // catalog and plugins left in 2g-3c (#961): compose read nothing from them in the window.
         flows: '2g', hosting: '2g',
         // Seen in 2g-4e (#1007) once the scanner followed main's `engineLink` alias; each is a task on 2g-4d (#955).
-        onSpawnFrame: '2g', pushWindowView: '2g', runHostTool: '2g', spawnLink: '2g', v1Import: '2g',
+        // pushWindowView and v1Import left in 2g-4d B (#1044).
+        onSpawnFrame: '2g', runHostTool: '2g', spawnLink: '2g',
         // The Files watch (#955 task #1472); IssueWatch and the Tynn panels' watches (G-1, #934 task #1474).
         onFilesEvent: '2g', filesWatch: '2g', filesUnwatch: '2g',
         issueWatch: '2g', tynnBoardWatch: '2g', tynnBoardUnwatch: '2g', onTynnBoardEvent: '2g', tynnIssuesWatch: '2g', tynnIssuesUnwatch: '2g',

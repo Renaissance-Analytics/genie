@@ -73,7 +73,7 @@ describe('the engine link carries no account, keyring, registration, secret, plu
         // remoteAccess left in 2g-4a (#997).
         // 2g-4e (#1007): the scanner follows main's aliases of the engine client, and the uses it found joined the list
         // (tasks on #955 and G-1 #934); the rows are exactly these.
-        expect(rows).toEqual(['filesUnwatch', 'filesWatch', 'flows', 'hosting', 'issueWatch', 'onFilesEvent', 'onSpawnFrame', 'onTynnBoardEvent', 'onTynnFeaturesEvent', 'onTynnIssuesEvent', 'pushWindowView', 'runHostTool', 'spawnLink', 'stores', 'supervisor', 'tynnBoardUnwatch', 'tynnBoardWatch', 'tynnFeaturesUnwatch', 'tynnFeaturesWatch', 'tynnIssuesUnwatch', 'tynnIssuesWatch', 'v1Import']);
+        expect(rows).toEqual(['filesUnwatch', 'filesWatch', 'flows', 'hosting', 'issueWatch', 'onFilesEvent', 'onSpawnFrame', 'onTynnBoardEvent', 'onTynnFeaturesEvent', 'onTynnIssuesEvent', 'runHostTool', 'spawnLink', 'stores', 'supervisor', 'tynnBoardUnwatch', 'tynnBoardWatch', 'tynnFeaturesUnwatch', 'tynnFeaturesWatch', 'tynnIssuesUnwatch', 'tynnIssuesWatch']);
         expect(rows).not.toContain('catalog');
         expect(rows).not.toContain('plugins');
     });

@@ -169,10 +169,7 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     // the processes child's exec and streams (Tynn task #1468),
     ['spawnLink', 'move:2g'],
     ['onSpawnFrame', 'move:2g'],
-    // the window's view, its workspace names and whether the person is at the computer (#1469),
-    ['pushWindowView', 'move:2g'],
-    // Genie 1's memories and AgentInbox history, imported once at boot (#1470),
-    ['v1Import', 'move:2g'],
+    // (pushWindowView and v1Import left in 2g-4d B, #1044: window.view over the protocol, and genie-host imports Genie 1 itself.)
     // and a window-registered host tool's call, a flow step's, once handed the whole client in withHostTools (#1471).
     ['runHostTool', 'move:2g'],
     // The Files panel's per-view watch and its disk changes, through main's `link` alias (Tynn #1007 saw it; task #1472 on #955).
