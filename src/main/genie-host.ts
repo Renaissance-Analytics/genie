@@ -2300,7 +2300,9 @@ async function main(): Promise<void> {
     void githubOpening.then((account) => { account.onChange(() => { void attachHost.refresh(); }); void attachHost.refresh(); }, () => {});
     void keychainOpening.then((opened) => { opened.keychain.onAnswerChange(() => { void attachHost.refresh(); }); }, () => {});
     void tynnOpening.then((account) => {
-        account.onChange(() => { void tynnRecovery?.recover(); void attachHost.refresh(); });
+        account.onChange(() => { void tynnRecovery?.recover(); });
+        // A sign-in landed, or a sign-out: what is missing is looked at again (P7.3).
+        account.onChange(() => { void attachHost.refresh(); });
         void attachHost.refresh();
         // Agents may have started while it opened.
         void tynnRecovery?.recover();
