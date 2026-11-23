@@ -42,7 +42,8 @@ describe('main.ts', () => {
         expect(ports).toMatch(/stopAgents: \(\) => \{ host\?\.stopAll\(\); \}/);
         // genie-host ends its own terminals when it shuts down (Tynn #953, 2g-2): the quit has no terminal step.
         expect(ports).not.toMatch(/closeTerminals/);
-        expect(ports).toMatch(/void services\?\.shutdown\(\);/);
+        // The window composes nothing (Tynn #955): no composition to shut down; genie-host ends its own on shutDownHost.
+        expect(ports).not.toMatch(/services\?\.shutdown/);
         expect(ports).toMatch(/shutDownHost: \(\) => agentEngineLink\?\.shutdown\(QUIT_WRITES_MS\)/);
     });
 

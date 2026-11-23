@@ -161,14 +161,15 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     // The tray, its Restart/Shut-down list and the quit read genie-host's summary (summary.watch, Tynn #953 2g-2); genie-host
     // ends its own terminals at shutdown, and main's tool server keeps no host-native deps: no terminals or book replica.
     // A window's channels to another machine are its own session's (Tynn #941, 2f-2): main holds no device link.
-    // 2g (#913): what the window still composes (composeWindowServices) or reads over genie-host's replicas.
+    // 2g (#913): what the window still reads over genie-host's replicas.
     // appInbox, tynnPage and workstation left in 2g-1 (#952): main held them and nothing read them.
     // github, keyring, relayHost and tynn left in 2g-3b (#959): the accounts, the keyring card and the registration are
     // genie-host's; main unseals an older Genie's secrets once and hands them over (keychain.adoptLegacy, legacy-unsealer.ts).
     // remoteAccess left in 2g-4a (#997): main's notifications read genie-host's remote.watch, and Settings its features.
     // catalog and plugins left in 2g-3c (#961): compose read nothing from them in the window (the feature machine that
     // reads them runs in genie-host), and the engine link's replicas of them went with the accounts'.
-    ['flows', 'move:2g'],
+    // flows, hosting, stores and supervisor left in 2g-4d E (#955): the window composes nothing (no composeWindowServices),
+    // so it reads none of the engine link's replicas of them; genie-host's own run, and the tabs read them over the protocol.
     // Seen in 2g-4e (#1007) once the scanner followed main's `engineLink` alias; each is a task on 2g-4d (#955):
     // (pushWindowView and v1Import left in 2g-4d B, #1044: window.view over the protocol, and genie-host imports Genie 1 itself.)
     // runHostTool (#1471) and the Files watch (onFilesEvent, filesWatch, filesUnwatch: #1472) left in 2g-4d-A (#1043): nothing
@@ -185,8 +186,4 @@ export const WINDOW_ENGINE_INVENTORY: readonly (readonly [use: string, destinati
     ['tynnFeaturesWatch', 'move:2g'],
     ['tynnFeaturesUnwatch', 'move:2g'],
     ['onTynnFeaturesEvent', 'move:2g'],
-    ['hosting', 'move:2g'],
-    // compose's agentStores input (2g-4d, #955); main's registry left it in 2g-4e (#1007): registry.read/write/watch.
-    ['stores', 'move:2g'],
-    ['supervisor', 'move:2g'],
 ];

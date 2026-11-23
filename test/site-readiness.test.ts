@@ -113,11 +113,12 @@ describe('a started site waits for its port', () => {
         expect(siteTone([{ workspaceId: 'acme', state: 'starting' }], 'acme')).toBe('starting');
     });
 
-    it('Genie wires the real probe into its site manager (main.ts -> compose.ts -> hosting-compose.ts -> SiteManager)', () => {
-        const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
+    it('Genie wires the real probe into its site manager (genie-host: hosting-inputs.ts -> hosting-compose.ts -> SiteManager)', () => {
+        const inputs = readFileSync(new URL('../src/main/hosting-inputs.ts', import.meta.url), 'utf8');
         const hosting = readFileSync(new URL('../src/main/hosting-compose.ts', import.meta.url), 'utf8');
-        // composeWith: composeServices, or composeWindowServices against genie-host's stores (the host split, P3.1).
-        expect(main).toMatch(/composeWith\(\{[\s\S]{0,6000}?siteProbe: \(port, options\) => siteAnswers\(port, options\)/);
+        // The sites are genie-host's; the window composes nothing (Tynn #955).
+        expect(inputs).toMatch(/siteProbe: \(port, options\) => siteAnswers\(port, options\)/);
+        expect(readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8')).not.toMatch(/siteProbe:/);
         expect(hosting).toMatch(/new SiteManager\(\{[\s\S]{0,4000}?\.\.\.\(input\.siteProbe \? \{ probeReady: input\.siteProbe \} : \{\}\)/);
     });
 });

@@ -177,16 +177,17 @@ describe('main.ts reads genie-host’s safe mode', () => {
     const main = readFileSync(resolve('src/main/main.ts'), 'utf8');
     const code = main.split('\n').filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*')).join('\n');
 
-    it('opens it from the link, after the link is known and before anything is composed', () => {
+    it('opens it from the link, after the link is known and before the tools are built', () => {
         const opened = code.indexOf('WindowSafeMode.open({ link: agentEngineLink.client })');
         expect(opened).toBeGreaterThan(code.indexOf('agentEngineLink = await connectAgentEngine('));
-        expect(opened).toBeLessThan(code.indexOf('composeWindowServices('));
+        // The window composes nothing (Tynn #955): the first thing after it is the tools.
+        expect(opened).toBeLessThan(code.indexOf('withActionSignal(allGenieTools(genieToolDeps({'));
     });
 
-    it('the boot restore and compose read it; the window wakes no agent (the mail wake is genie-host’s, Tynn #896 2b-3)', () => {
+    it('the boot restore reads it; the window wakes no agent (the mail wake is genie-host’s, Tynn #896 2b-3) and composes nothing (Tynn #955)', () => {
         expect(code).toMatch(/restoreAfterRelaunch\(\{\s*safeMode: windowSafeNow,/);
         expect(code).not.toMatch(/windowWake\(/);
-        expect(code).toMatch(/composeWindowServices\(\{[\s\S]{0,4000}safeMode: windowSafeNow,/);
+        expect(code).not.toMatch(/composeWindowServices\(/);
     });
 
     it('the window never writes the marker: it is the host’s', () => {
