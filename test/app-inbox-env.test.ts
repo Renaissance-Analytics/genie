@@ -7,7 +7,6 @@ import { appInboxEnvFor, type AppEnvSource } from '../src/main/app-inbox-service
 import { composeServices } from './helpers/compose-alone.js';
 import { type ComposedServices } from '../src/main/compose.js';
 import { handleFeatureAction, type FeatureState } from '../src/main/feature-ipc.js';
-import { terminalEnvFor } from '../src/main/hosting-actions.js';
 import { ProcessBook } from '../src/main/process-book.js';
 import { ProcessScheduler } from '../src/main/process-scheduler.js';
 import type { ProcessSpec, ProcessStatus } from '../src/main/process-supervisor.js';
@@ -19,7 +18,7 @@ import type { PtyOpened, PtyPort, PtySpawnOptions } from '../src/main/terminal-h
  * WHERE AN APP'S CREDENTIAL GOES, AND WHERE IT NEVER GOES (genie#1345). Each site and each kept process gets its OWN
  * `GENIE_INBOX_TOKEN` (and the URL) in its OWN start-up env — handed to it by Genie, so nobody copies a token into a
  * file. It must never ride the workspace's SERVICE env: that env reaches every agent session (session-host.ts
- * `serviceEnvDriverOptions`), every terminal (`terminalEnvFor`) and every site repo's `.env` (`DotEnvSync`), so a token
+ * `serviceEnvDriverOptions`), every terminal (genie-host's `shellEnv`) and every site repo's `.env` (`DotEnvSync`), so a token
  * there would be every agent's to post as an app, and written to disk. Every absence below sits beside the presence it
  * would contradict, measured the same way.
  */
@@ -172,7 +171,6 @@ describe('the workspace’s SERVICE env never carries it (composed for real)', (
         expect(devServer?.env?.GENIE_INBOX_TOKEN).toBe('gik_site_site_flabs'); // presence, measured on the spawn
         // The service env: what agent sessions (session-host serviceEnvFor), processes' base and DotEnvSync read.
         expect(Object.keys(services.engines.envFor('fancy'))).not.toContain('GENIE_INBOX_TOKEN');
-        expect(Object.keys(terminalEnvFor(services, 'fancy', { GENIE_MCP_URL: 'x', GENIE_MCP_TOKEN: 'y' }))).not.toContain('GENIE_INBOX_TOKEN');
     });
 
     it('switched off for the workspace: a new site gets no token', async () => {
@@ -193,8 +191,14 @@ describe('main wires it where the plan says, and nowhere else', () => {
         expect((readFileSync(join(__dirname, '..', 'src', 'main', 'genie-host.ts'), 'utf8').match(/appEnv:\s*\(/g) ?? []).length).toBeGreaterThanOrEqual(2);
     });
     it('the token is never put into a terminal’s env or the MCP env', () => {
-        const mcpEnvLine = main.split('\n').find((l) => l.includes('const mcpEnv ='))!;
-        expect(mcpEnvLine).toBeDefined();
-        expect(mcpEnvLine).not.toMatch(/INBOX/);
+        // The window assembles no terminal env (Tynn #1043): every shell's is genie-host's `shellEnv`.
+        expect(main).not.toMatch(/const mcpEnv =|terminalEnv/);
+        const host = readFileSync(join(__dirname, '..', 'src', 'main', 'genie-host.ts'), 'utf8').split('\r\n').join('\n');
+        const at = host.indexOf('const shellEnv = ');
+        expect(at).toBeGreaterThan(-1);
+        const shellEnv = host.slice(at, host.indexOf('\n    };', at));
+        // CONTROL: this is the env a shell gets, Genie's endpoint in it.
+        expect(shellEnv).toMatch(/GENIE_MCP_URL: endpoint\.url, GENIE_MCP_TOKEN: endpoint\.token/);
+        expect(shellEnv).not.toMatch(/INBOX/);
     });
 });

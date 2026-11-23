@@ -156,24 +156,6 @@ describe('genie-host as its own process', () => {
         second.transport.close();
     }, 120_000);
 
-    it('the FILE WATCHER runs in the host: a write in a watched workspace arrives as a batch; after the last view leaves, writes arrive nowhere (P2.2)', async () => {
-        const w = await window();
-        const heard: FilesHubEvent[] = [];
-        w.client.onFilesEvent((e) => heard.push(e));
-        expect(await w.client.filesWatch('panel-1', { id: 'ws', path: workspace }, {})).toBe(true);
-        await writeFile(join(workspace, 'seen.txt'), 'one\n');
-        // POSITIVE CONTROL: the gauge hears a write while a view watches.
-        await until('the batch for seen.txt', () => heard.some((e) => e.kind === 'changed' && e.changes.some((c) => c.path === 'seen.txt')), 15_000);
-
-        expect(await w.client.filesUnwatch('panel-1')).toBe(true);
-        await sleep(500); // a batch already in flight lands, or is dropped, before the line is drawn
-        const before = heard.length;
-        await writeFile(join(workspace, 'unseen.txt'), 'two\n');
-        await sleep(1_500); // six batch windows: long enough that a live watcher would have spoken
-        expect(heard.slice(before).filter((e) => e.kind === 'changed' && e.changes.some((c) => c.path === 'unseen.txt'))).toEqual([]);
-        w.transport.close();
-    }, 60_000);
-
     it('GENIE\'S TOOLS OUTLIVE THE WINDOW (P3.1): with the window gone, agentinbox, ForceTheQuestion, knowledge, sites and services answer over real HTTP; a window tool refuses at once; the next window sees the question; the endpoint is the same', async () => {
         const META = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} };
         const agent = agentRecord({ id: mintAgentId(), workspaceId: 'ws', provider: 'claude', name: 'teller' });

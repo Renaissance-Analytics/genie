@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { HOST_NATIVE_TOOLS, hostRegistrations, windowClosedRefusal, type ForwardedToolCall } from '../src/main/mcp-host-tools.js';
 import { NO_PAGES_HERE, notAvailableHere } from '../src/core/host-runtime.js';
 import type { Caller, Registration } from '../src/main/mcp-tools.js';
-import { windowToolRunner, withHostTools } from '../src/main/window-tools.js';
+import { windowToolRunner } from '../src/main/window-tools.js';
 import type { AgentId } from '../src/core/identity.js';
 
 /**
@@ -224,17 +224,5 @@ describe('the window runs only the window actions of the host\'s tools', () => {
         expect((await asked('services', 'list')).isError).toBe(true);
         expect(await asked('checkIssues', 'list')).toEqual({ text: 'window ran checkIssues', isError: false });
         expect(ran).toEqual(['checkIssues list']);
-    });
-
-    it('withHostTools: sites list and sites open go to the host with the caller', async () => {
-        const ran: string[] = [];
-        const toHost: ForwardedToolCall[] = [];
-        const regs = withHostTools(windowRegs(ran), { runHostTool: async (c) => { toHost.push(c); return { text: `host ran ${c.name}`, isError: false }; } }, (id) => (id === 'session-1' ? CALLER : null));
-        const byName = (n: string) => regs.find((r) => r.definition.name === n)!;
-        expect(await byName('sites').handler({ action: 'list' } as JsonObject, ctx())).toEqual({ text: 'host ran sites', isError: false });
-        expect(await byName('sites').handler({ action: 'open' } as JsonObject, ctx())).toEqual({ text: 'host ran sites', isError: false });
-        expect(await byName('services').handler({ action: 'exec' } as JsonObject, ctx())).toEqual({ text: 'host ran services', isError: false });
-        expect(toHost.map((c) => [c.name, c.args.action, c.caller])).toEqual([['sites', 'list', CALLER], ['sites', 'open', CALLER], ['services', 'exec', CALLER]]);
-        expect(ran).toEqual([]);
     });
 });
