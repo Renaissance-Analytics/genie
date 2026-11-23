@@ -23,8 +23,9 @@ describe('the window', () => {
         expect(main).toMatch(/knowledge: hostOnly</);
     });
 
-    it('composes against genie-host\'s stores (replicas) when it runs', () => {
-        expect(main).toContain('composeWindowServices({ ...input, agentStores: engineForStores.client.stores() })');
+    it('composes nothing: the stores, flows, supervisor and sites are genie-host\'s, read over the protocol (Tynn #955)', () => {
+        expect(main).not.toContain('composeWindowServices');
+        expect(main).not.toMatch(/engineForStores|agentStores:/);
         // The workspace agent files are genie-host's to keep (Tynn #898 step 2e-2): main sends it nothing for them.
         expect(main).not.toContain("'engine.features'");
     });
@@ -70,7 +71,8 @@ describe('the process supervisor is genie-host\'s (P3.3b)', () => {
         expect(host).toMatch(/new ProcessSupervisor\(\s*supervisedClient\.ptyPort\(\)/);
         // No window sends into the host's own children: a window's engine.spawn reaches `processes` only (since P3.3e).
         expect(host).toMatch(/if \(profile === 'processes'\) relay\?\.send\('processes', frame\);/);
-        expect(code('src/main/main.ts')).toMatch(/supervisor: agentEngineLink\.client\.supervisor\(\)/);
+        // A window drives it over the protocol (features.act); main hands compose no supervisor, and composes nothing (Tynn #955).
+        expect(code('src/main/main.ts')).not.toMatch(/supervisor: agentEngineLink|\.supervisor\(\)/);
         // It adopts no pty a window listed (Tynn #1043): a composition that runs alone builds its own, and that is all.
         expect(code('src/main/compose.ts')).toMatch(/if \(input\.supervisor\) supervisor = input\.supervisor;\s*else supervisor = input\.alone!\.supervisor\(\);/);
     });
@@ -90,7 +92,8 @@ describe('flows are genie-host\'s (P3.3d)', () => {
         const host = code('src/main/genie-host.ts');
         expect(host).toMatch(/await FlowStore\.open\(home\)/);
         expect(host).toMatch(/startFlowsEngine\(\{/);
-        expect(code('src/main/main.ts')).toMatch(/flowsEngine: \{ flows: agentEngineLink\.client\.flows\(\), scheduler: agentEngineLink\.client\.flows\(\) \}/);
+        // The window has no flows of its own to hand, and composes nothing (Tynn #955).
+        expect(code('src/main/main.ts')).not.toMatch(/flowsEngine:/);
         expect(code('src/main/compose.ts')).toMatch(/const ownEngine = ownFlows \? input\.alone!\.startFlows\(\{/);
     });
 });
