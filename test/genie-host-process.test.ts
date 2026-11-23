@@ -85,7 +85,9 @@ beforeAll(async () => {
     await writeFile(join(home, 'runtime', 'workspaces.json'), JSON.stringify([{ id: 'ws', path: workspace }]));
     hostProcess = spawn(process.execPath, ['--import', TSX, 'src/main/genie-host.ts'], {
         // The spawn host's real entry, as TypeScript (the host forks it with its own --import tsx).
-        env: { ...process.env, GENIE_HOME: home, GENIE_HOST_BUILD: 'test-build', GENIE2_CODEX_BINARY: STUB, GENIE_HOST_IDLE_MS: '600000', GENIE_SPAWN_HOST_ENTRY: resolve('src/main/spawn-host.ts') },
+        env: { ...process.env, GENIE_HOME: home, GENIE_HOST_BUILD: 'test-build', GENIE2_CODEX_BINARY: STUB,
+            // A Take Over's TUI (the tools test): a plain node in the pty, quoted for a path with spaces.
+            GENIE2_CLAUDE_BINARY: `"${process.execPath}"`, GENIE_HOST_IDLE_MS: '600000', GENIE_SPAWN_HOST_ENTRY: resolve('src/main/spawn-host.ts') },
         stdio: ['ignore', 'pipe', 'pipe'],
     });
     hostProcess.stdout?.on('data', (d) => { hostLog += String(d); });
@@ -174,17 +176,22 @@ describe('genie-host as its own process', () => {
 
     it('GENIE\'S TOOLS OUTLIVE THE WINDOW (P3.1): with the window gone, agentinbox, ForceTheQuestion, knowledge, sites and services answer over real HTTP; a window tool refuses at once; the next window sees the question; the endpoint is the same', async () => {
         const META = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} };
-        const agent = agentRecord({ id: mintAgentId(), workspaceId: 'ws', provider: 'codex', name: 'teller' });
-        const caller = { agentId: agent.id, agentName: agent.name, workspaceId: 'ws', workspacePath: workspace };
+        const agent = agentRecord({ id: mintAgentId(), workspaceId: 'ws', provider: 'claude', name: 'teller' });
         const first = await window();
         // genie-host reads its own registry for records (Tynn #954, 2g-3): the window pushes none.
-        // A Take Over terminal's agent: the window says whose terminal it is; it calls Genie's tools over HTTP by its id.
-        expect(await first.client.pushWindowView({ workspaceNames: { ws: 'ws' }, userActive: true, callers: { 'term-teller': caller } })).toBe(true);
+        expect(await first.client.call('engine.stores', ['registry', 'writeAgents', [[agent]]])).toMatchObject({ ok: true });
+        // A Take Over terminal's agent: genie-host starts its TUI and mints the id it calls Genie's tools by over HTTP. No
+        // window says whose terminal it is (Tynn #1044: the window view carries no callers).
+        expect(await first.client.takeOvers().start(agent.id)).toMatchObject({ ok: true });
+        const terminalId = await until('the Take Over caller genie-host minted', async () => {
+            await first.client.takeOvers().refresh();
+            return Object.entries(first.client.takeOvers().callers()).find(([, c]) => c.agentId === agent.id)?.[0] ?? null;
+        }, 30_000);
         const status = await first.client.mcpStatus();
         expect(status?.endpoint).not.toBeNull();
         const endpoint = status!.endpoint!;
         const call = async (name: string, args: Record<string, unknown>) => {
-            const res = await fetch(endpoint.url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${endpoint.token}` }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: { ...args, terminalId: 'term-teller' }, _meta: META } }) });
+            const res = await fetch(endpoint.url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${endpoint.token}` }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: { ...args, terminalId }, _meta: META } }) });
             const body = (await res.json()) as { result?: { content: Array<{ text: string }>; isError?: boolean }; error?: unknown };
             return { isError: body.result?.isError ?? true, text: body.result?.content[0]?.text ?? JSON.stringify(body.error) };
         };

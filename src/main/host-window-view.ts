@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+
 /**
  * WHAT GENIE-HOST KNOWS OF THIS MACHINE'S WINDOW, AND WHAT IT FINDS FOR ITSELF (Tynn #1044, client/host split step 2g-4d B).
  * Its MCP server reads two facts for its tools: each workspace's name (its project.json, for address slugs) and whether the
@@ -12,10 +14,17 @@ export interface HostWindowView {
 }
 
 /** Genie 1's database, from the userData the window launched genie-host with; null when none was given (genie-cloud). */
-export function v1DatabaseFrom(_env: Readonly<Record<string, string | undefined>>): string | null { throw new Error('2g-4d B: not built yet'); }
+export function v1DatabaseFrom(env: Readonly<Record<string, string | undefined>>): string | null {
+    const userData = env.GENIE_V1_USERDATA;
+    return typeof userData === 'string' && userData !== '' ? join(userData, 'genie.db') : null;
+}
 
 /** window.view's argument, or why it is refused: only whether the person is active. */
-export function readWindowView(_args: unknown[]): { userActive: boolean } | { ok: false; reason: string } { throw new Error('2g-4d B: not built yet'); }
+export function readWindowView(args: unknown[]): { userActive: boolean } | { ok: false; reason: string } {
+    const v = args[0] as { userActive?: unknown } | null;
+    if (!v || typeof v !== 'object' || typeof v.userActive !== 'boolean') return { ok: false, reason: 'window.view says whether the person is active, and nothing else' };
+    return { userActive: v.userActive };
+}
 
 /** The view genie-host gives its MCP server: its own workspaces' names, and what the window last said of the person. */
 export function hostWindowView(_ports: {
@@ -24,5 +33,16 @@ export function hostWindowView(_ports: {
     readonly setView: (view: HostWindowView) => void | Promise<void>;
     readonly onRegistryWritten: (listener: () => void) => () => void;
 }): { userActive(active: boolean): void; refresh(): void } {
-    throw new Error('2g-4d B: not built yet');
+    // Away until the window says otherwise: a host with no window has nobody at the computer.
+    let active = false;
+    const say = (): void => {
+        const workspaceNames = Object.fromEntries(ports.workspaces().map((w) => [w.id, ports.nameOf(w.path)]));
+        void ports.setView({ workspaceNames, userActive: active });
+    };
+    ports.onRegistryWritten(say);
+    say();
+    return {
+        userActive: (next) => { active = next; say(); },
+        refresh: say,
+    };
 }

@@ -61,8 +61,16 @@ describe('2. Genie 1’s import is genie-host’s, at its own boot', () => {
         expect(code(src('src/main/main.ts'))).toMatch(/GENIE_V1_USERDATA: app\.getPath\('userData'\)/);
     });
 
-    it('wired: genie-host imports at boot, and the engine link no longer carries it', () => {
-        expect(code(src('src/main/genie-host.ts'))).toMatch(/const v1Database = v1DatabaseFrom\(process\.env\);\s*if \(v1Database\) void importFromV1\(v1Database\);/);
+    it('wired: genie-host opens its kept processes and flows at its own boot, with Genie 1’s data when found, and the engine link no longer carries it', () => {
+        const host = code(src('src/main/genie-host.ts'));
+        expect(host).toMatch(/void importFromV1\(v1DatabaseFrom\(process\.env\)\);/);
+        // After both are defined: called before, a const not yet made throws at boot.
+        const call = host.indexOf('void importFromV1(v1DatabaseFrom(process.env));');
+        expect(call).toBeGreaterThan(host.indexOf('const openFlows = (databasePath: string | null)'));
+        expect(call).toBeGreaterThan(host.indexOf('const openProcessBook = (databasePath: string | null)'));
+        // A host with no Genie 1 to find (genie-cloud) still opens its process book and flows, without it.
+        expect(host).toMatch(/await openProcessBook\(databasePath\);\s*await openFlows\(databasePath\);/);
+        expect(host).toMatch(/if \(databasePath\) await runV1FlowImport\(/);
         expect(ENGINE_METHODS as readonly string[]).not.toContain('engine.v1Import');
         expect(code(src('src/main/main.ts'))).not.toMatch(/\.v1Import\(/);
     });

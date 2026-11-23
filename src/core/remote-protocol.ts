@@ -207,6 +207,8 @@ export const REMOTE_METHODS = [
     'keychain.adoptLegacy',
     // A window-run tool's approval, asked of genie-host's one queue (Tynn #1006, 2g-4b2): main's own client only.
     'approvals.gate',
+    // Whether the person is at this machine, said by main's own client (Tynn #1044, 2g-4d B): all genie-host cannot find itself.
+    'window.view',
     // genie-host asks Tynn again whether it is signed in: the machine woke, or an agent found IssueWatch signed out (Tynn #959).
     'tynn.recheck',
     ...LOCAL_FILES_METHODS,
@@ -429,6 +431,7 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'deviceLink.openBrowser': 'local',
     'keychain.adoptLegacy': 'local',
     'approvals.gate': 'local',
+    'window.view': 'local',
     'tynn.recheck': 'local',
     ...Object.fromEntries(LOCAL_FILES_METHODS.map(method => [method, 'local'])) as Record<LocalFilesMethod, 'local'>,
     ...Object.fromEntries(LOCAL_DRAFT_METHODS.map(method => [method, 'local'])) as Record<LocalDraftMethod, 'local'>,

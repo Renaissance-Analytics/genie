@@ -157,7 +157,6 @@ import { workspaceNameFor } from './workspace-names.js';
 import { HostRegistryStore } from './agent-stores-replica.js';
 import { watchRegistryRefresh } from './registry-refresh.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
-import type { WindowView } from './host-mcp.js';
 import type { McpToolResult } from '@particle-academy/prism-mcp';
 import type { InboxStore } from './inbox-store.js';
 import type { AttentionStore } from './attention-store.js';
@@ -1131,7 +1130,6 @@ let mcpVerified: Verification | null = null;
 let hostMcpEndpoint: { url: string; token: string } | null = null;
 const mcpEndpointNow = (): { url: string; token: string } | null => hostMcpEndpoint;
 /** Tell genie-host what its MCP server needs of this window (P3.1), coalesced; a no-op until the tools are built. */
-let pushHostView: () => void = () => {};
 /** A window tool's call, forwarded by genie-host's MCP server; refused until the tools are built. */
 let windowToolRun: ((call: ForwardedToolCall) => Promise<McpToolResult>) | null = null;
 /** openFileForUser calls that arrived before the tools were built: shown as soon as they are. */
@@ -1301,7 +1299,6 @@ async function boot(): Promise<void> {
         // main — one comparison, nothing pushed; one that clears it is pushed once, to every window.
         onHeadroom: (provider: string, room: Headroom, stamp?: ReadingStamp) => headroomFeed.offer(provider, room, stamp),
         // Each agent starts with its workspace's managed-service variables, by allow-list (the owner, 2026-10-16).
-        serviceEnvFor: (workspaceId: string) => services?.engines.envFor(workspaceId) ?? {},
         /**
          * THE LINE THAT MAKES RESUME REAL.
          *
@@ -2054,25 +2051,11 @@ async function boot(): Promise<void> {
              */
             windowToolRun = windowToolRunner(() => registrations, vouchedCallers);
             for (const call of openFilesLater.splice(0)) void windowToolRun(call);
-            const view = (): WindowView => {
-                return {
-                    workspaceNames: Object.fromEntries((registry?.snapshot().workspaces ?? []).map((w) => [w.id, w.name ?? w.id])),
-                    userActive: powerMonitor.getSystemIdleTime() < 120,
-                };
-            };
-            let pushTimer: ReturnType<typeof setTimeout> | null = null;
-            pushHostView = () => {
-                if (pushTimer) return;
-                pushTimer = setTimeout(() => { pushTimer = null; void engineLink.pushWindowView(view()); }, 250);
-            };
-            registry?.subscribe(() => pushHostView());
-            // Whether the person is at the computer, for ForceTheQuestion's "they are away": re-said every half minute.
-            setInterval(() => pushHostView(), 30_000).unref?.();
-            // A reconnect (the host restarted): it learns all of it again.
-            engineLink.onLink(() => { void engineLink.pushWindowView(view()); }, () => {});
-            await engineLink.pushWindowView(view());
-            // Genie 1's memories and AgentInbox history, once — the host owns the stores; only this window knows where v1 lives.
-            void engineLink.v1Import(v1DatabaseFile());
+            // Whether the person is at the computer, for ForceTheQuestion's "they are away": said every half minute over main's
+            // own client (Tynn #1044). genie-host names its workspaces and finds Genie 1's database itself.
+            const sayPresence = (): void => { void ownProtocol.call('window.view', [{ userActive: powerMonitor.getSystemIdleTime() < 120 }]); };
+            sayPresence();
+            setInterval(sayPresence, 30_000).unref?.();
             const status = await engineLink.mcpStatus();
             hostMcpEndpoint = status?.endpoint ?? null;
             mcpVerified = status?.verified ?? { ok: false, reason: 'genie-host did not start its MCP server' };

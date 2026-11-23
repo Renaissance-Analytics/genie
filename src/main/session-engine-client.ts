@@ -112,7 +112,6 @@ export interface EngineClientOptions {
     readonly elevate?: (steps: readonly PrivilegedStep[]) => Promise<ElevationOutcome>;
     /** Which php-cgi a site's pin runs, for the hosting replica's synchronous check (P5a). */
     readonly phpCgiFor?: (pin: string | undefined) => PhpCgiResolution;
-    readonly serviceEnvFor?: (workspaceId: string) => Readonly<Record<string, string>>;
     /**
      * The window's environment NOW, sent with every start (default: `process.env`). Check and repair changes PATH and the
      * toolchain variables in the window's process at run time; the host takes them before it starts a provider, so a
@@ -592,10 +591,6 @@ export class SessionEngineClient {
         return this.#replicas;
     }
 
-    /** What Genie's MCP server in the host needs of this window until P3.2 (host-mcp.ts `WindowView`); the first starts it. */
-    pushWindowView(view: WindowView): Promise<boolean> {
-        return this.#value('engine.windowView', [view], false).then((v) => v === true);
-    }
 
     /** One of the host's own tools, for a caller this window resolved (a flow's step). Refused in words with no host. */
     async runHostTool(call: ForwardedToolCall): Promise<McpToolResult> {
@@ -603,10 +598,6 @@ export class SessionEngineClient {
         return reply.ok ? (reply.value as McpToolResult) : { text: `${call.name}: genie-host did not answer (${reply.reason}); nothing was done`, isError: true };
     }
 
-    /** Genie 1's database: the host takes its memories and AgentInbox history once. */
-    v1Import(databasePath: string): Promise<boolean> {
-        return this.#value('engine.v1Import', [databasePath], false).then((v) => v === true);
-    }
 
     /** The host MCP server's endpoint, verification and tools; null when it has not started. */
     mcpStatus(): Promise<ReturnType<HostMcp['status']> | null> {
@@ -1098,7 +1089,8 @@ export class SessionEngineClient {
 
     start(record: AgentRecord, cwd: string): Promise<{ ok: true } | { ok: false; reason: string }> {
         const env = Object.fromEntries(Object.entries((this.#options.env ?? (() => process.env))()).filter((e): e is [string, string] => typeof e[1] === 'string'));
-        return this.#value('engine.start', [record, cwd, this.#options.serviceEnvFor?.(record.workspaceId) ?? {}, env], { ok: false, reason: NOT_CONNECTED });
+        // The third place was the window's service env: genie-host computes its own since Tynn #1044, so an empty one goes.
+        return this.#value('engine.start', [record, cwd, {}, env], { ok: false, reason: NOT_CONNECTED });
     }
 
     stop(agentId: AgentId, options: { graceful?: boolean } = {}): Promise<boolean> {
