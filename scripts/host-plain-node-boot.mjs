@@ -16,8 +16,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { join } from 'node:path';
 
 const BUILD = 'ci-plain-node';
 const home = mkdtempSync(join(tmpdir(), 'genie-plain-node-'));
@@ -127,19 +126,30 @@ ok('updates', `refused: ${checked.reason}`);
 
 // 3c. genie-host's own Hosting says why there is no front door. The engine link carries no hosting (2g-4d E2b, Tynn #955):
 // a window reads it over the protocol, on a connection tunnelled through its engine link (engine.protocol), as here.
-const { remoteOffer } = await import(pathToFileURL(resolve('dist/core/protocol-version.js')).href);
-const offer = remoteOffer('client');
-const tunnel = (op, payload) => win.send({ kind: 'call', id: 0, method: 'engine.protocol', args: [op, 'boot', payload] });
+// The bundle has no protocol module to import: the client offers what the host's own welcome says it speaks (its schema,
+// floor and capabilities), learned from a first hello, on the connection opened again.
+// One tunnel per hello, each with its own name: a frame of the first never answers the second.
+let name = 'boot';
+const tunnel = (op, payload) => win.send({ kind: 'call', id: 0, method: 'engine.protocol', args: [op, name, payload] });
 const tunnelled = (match) => (f) => {
-    if (f.kind !== 'event' || f.channel !== 'protocol.frame' || f.payload?.tunnel !== 'boot') return false;
+    if (f.kind !== 'event' || f.channel !== 'protocol.frame' || f.payload?.tunnel !== name) return false;
     if (f.payload.kind === 'closed') return true;
     try { return match(JSON.parse(f.payload.text)); } catch { return false; }
 };
 const said = (f) => (f.payload.kind === 'closed' ? fail('caddy', `the protocol tunnel was closed: ${f.payload.reason}`) : JSON.parse(f.payload.text));
-tunnel('open', { window: 'main', label: 'plain-node boot check' });
-tunnel('frame', JSON.stringify({ kind: 'hello', auth: { kind: 'local' }, label: 'plain-node boot check', schema: offer.schema, minSchema: offer.minSchema, capabilities: offer.capabilities }));
-const greeted = said(await win.until(tunnelled((m) => m.kind === 'welcome' || m.kind === 'refused'), 'a protocol welcome on the tunnel').catch((e) => fail('caddy', e.message)));
-if (greeted.kind !== 'welcome' || greeted.compatible === false) fail('caddy', `the tunnelled protocol connection was answered ${JSON.stringify(greeted)}`);
+const hello = async (offer, as) => {
+    name = as;
+    tunnel('open', { window: 'main', label: 'plain-node boot check' });
+    tunnel('frame', JSON.stringify({ kind: 'hello', auth: { kind: 'local' }, label: 'plain-node boot check', ...offer }));
+    const answer = said(await win.until(tunnelled((m) => m.kind === 'welcome' || m.kind === 'refused'), 'a protocol welcome on the tunnel').catch((e) => fail('caddy', e.message)));
+    if (answer.kind !== 'welcome') fail('caddy', `the tunnelled protocol connection was answered ${JSON.stringify(answer)}`);
+    return answer;
+};
+const first = await hello({ schema: 0, minSchema: 0, capabilities: [] }, 'boot-offer');
+tunnel('close', 'the offer was read');
+if (!Number.isInteger(first.schema) || !Array.isArray(first.capabilities)) fail('caddy', `the host's welcome says no protocol offer: ${JSON.stringify(first)}`);
+const greeted = await hello({ schema: first.schema, minSchema: first.minSchema, capabilities: first.capabilities }, 'boot');
+if (greeted.compatible === false) fail('caddy', `the tunnelled protocol connection was answered ${JSON.stringify(greeted)}`);
 // genie-host answers features once its own services are built: "still starting" until then, asked again.
 let door = null;
 for (let id = 1, deadline = Date.now() + 60_000; door === null; id += 1) {

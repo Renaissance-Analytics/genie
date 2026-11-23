@@ -62,7 +62,7 @@ describe('the plain-Node host boot script waits for genie-host’s front door, n
         expect(script).not.toMatch(/'hosting\.dump'/);
         // What it waits for instead: genie-host's own features snapshot, on a protocol connection tunnelled through the engine
         // link (engine.protocol), and the front door it says there.
-        expect(script).toMatch(/method: 'engine\.protocol', args: \[op, 'boot', payload\]/);
+        expect(script).toMatch(/method: 'engine\.protocol', args: \[op, name, payload\]/);
         expect(script).toMatch(/method: 'features\.snapshot'/);
         expect(script).toMatch(/answer\.value\?\.hosting\?\.frontDoor/);
     });
