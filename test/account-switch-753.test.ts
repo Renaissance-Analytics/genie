@@ -76,13 +76,18 @@ describe('R2: the login window for a switch', () => {
         expect(route).toContain('switch=1');
         expect(loginTerminalOf(route)).toBe('t1');
     });
-    it('Claude Code opens its own CLI in a scratch folder, with no home variable, in a window that says it is a switch', () => {
+    it('Claude: no terminal any more (Tynn #1011, the owner: "I should not see any terminals"): its switch is the browser sign-in', () => {
         const f = fakes();
-        expect(f.host.startSwitch('claude')).toEqual({ ok: true, terminalId: 't1' });
-        expect(f.opened[0]).toMatchObject({ command: 'claude' });
+        expect(f.host.startSwitch('claude').ok).toBe(false);
+        expect(f.opened).toEqual([]);
+        expect(f.windows).toEqual([]);
+    });
+    it('Codex opens its own CLI in a scratch folder, with no home variable, in a window that says it is a switch', () => {
+        const f = fakes();
+        expect(f.host.startSwitch('codex')).toEqual({ ok: true, terminalId: 't1' });
         expect(f.opened[0]!.cwd.startsWith(f.scratch)).toBe(true);
         expect(f.opened[0]!.env).toBeUndefined();
-        expect(f.windows).toEqual([loginRoute('t1', 'claude', true)]);
+        expect(f.windows).toEqual([loginRoute('t1', 'codex', true)]);
     });
     it('Codex runs its own logout, then its own login', () => {
         const f = fakes();
@@ -91,21 +96,21 @@ describe('R2: the login window for a switch', () => {
     });
     it('a second click joins the open switch', () => {
         const f = fakes();
-        f.host.startSwitch('claude');
-        expect(f.host.startSwitch('claude')).toEqual({ ok: true, terminalId: 't1' });
+        f.host.startSwitch('codex');
+        expect(f.host.startSwitch('codex')).toEqual({ ok: true, terminalId: 't1' });
         expect(f.opened).toHaveLength(1);
     });
     it('when the terminal ends signed in, the provider is told; the terminal and folder are removed', async () => {
         const f = fakes(0);
-        expect(f.host.startSwitch('claude')).toMatchObject({ ok: true });
+        expect(f.host.startSwitch('codex')).toMatchObject({ ok: true });
         f.exit('t1');
         await vi.waitFor(() => expect(f.signedIn).toHaveLength(1));
-        expect(f.signedIn[0]![0]).toBe('claude');
+        expect(f.signedIn[0]![0]).toBe('codex');
         expect(f.closed).toEqual(['t1']);
     });
     it('when the terminal ends signed out, nobody is told', async () => {
         const f = fakes(1);
-        expect(f.host.startSwitch('claude')).toMatchObject({ ok: true });
+        expect(f.host.startSwitch('codex')).toMatchObject({ ok: true });
         f.exit('t1');
         await vi.waitFor(() => expect(f.closed).toEqual(['t1']));
         expect(f.signedIn).toEqual([]);

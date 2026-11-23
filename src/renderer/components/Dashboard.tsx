@@ -925,7 +925,7 @@ export function RateLimitPills({ limits, now: pinned, accounts, onSwitchAccount,
         <div data-rate-limits="" className="flex items-center gap-1.5">
             {providers.map((p) => {
                 const view = viewOf(p);
-                if (view) return <AccountsChip key={p} view={view} offer={accounts?.offers.find((o) => o.provider === p) ?? null} now={now} onSwitch={onSwitchAccount} onDismissOffer={onDismissSwitchOffer} design={accounts?.design} onDesignSignIn={onDesignSignIn} onAccountsAct={onAccountsAct} />;
+                if (view) return <AccountsChip key={p} view={view} offer={accounts?.offers.find((o) => o.provider === p) ?? null} now={now} onSwitch={onSwitchAccount} onDismissOffer={onDismissSwitchOffer} design={accounts?.design} onDesignSignIn={onDesignSignIn} onAccountsAct={onAccountsAct} signIns={accounts?.signIns} />;
                 return limits[p] ? <RateLimitPill key={p} provider={p} limit={limits[p]!} now={now} /> : null;
             })}
         </div>

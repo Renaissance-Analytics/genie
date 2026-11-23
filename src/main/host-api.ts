@@ -380,7 +380,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
         if (isLocalFilesMethod(method)) return invokeLocalFiles(deps.localFiles, method, args);
         if (isLocalDraftMethod(method)) return invokeLocalDrafts(deps.chatDrafts, deps.find, method, args);
         if (isLocalArtboardMethod(method)) return invokeLocalArtboard(deps.artboard, method, args);
-        if (isAccountsMethod(method)) return answerAccounts(deps.accounts, method, args);
+        if (isAccountsMethod(method)) return answerAccounts(deps.accounts, method, args, context);
         switch (method) {
             case 'appInbox.state':
                 return named(args[0]) ? { ok: true, state: owner().appInbox.state(args[0]) } : { ok: false, reason: 'name a workspace' };

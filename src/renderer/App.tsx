@@ -1220,7 +1220,7 @@ function DesktopApp({ bridge }: AppProps) {
     const [accountsSnapshot, setAccountsSnapshot] = useState<AccountsSnapshot | undefined>(undefined);
     const readAccounts = useCallback(() => { void resolvedBridge?.accounts?.().then((s) => { if (s) setAccountsSnapshot(s); }, () => {}); }, [resolvedBridge]);
     useEffect(() => { readAccounts(); }, [readAccounts, rateLimits]);
-    useEffect(() => resolvedBridge?.onAction?.((action) => { if (action.kind === 'account-switch' || action.kind === 'accounts-changed') readAccounts(); }), [resolvedBridge, readAccounts]);
+    useEffect(() => resolvedBridge?.onAction?.((action) => { if (action.kind === 'account-switch' || action.kind === 'accounts-changed' || action.kind === 'account-notice') readAccounts(); }), [resolvedBridge, readAccounts]);
     // DESIGN SIGN-IN for the machine (Tynn #480): one click from the Claude popover or Settings.
     /**
      * ANOTHER MACHINE'S TERMINAL, HERE (Tynn #529 part A; sign-ins, Tynn #896): its host started a Take Over TUI or a
@@ -1250,6 +1250,11 @@ function DesktopApp({ bridge }: AppProps) {
         if (action.kind === 'limit-alert' && action.title && action.body) {
             playAlertSound(limitAlertSound(action.sound ?? 'synth', soundSettings.current ?? {}), alertVolume(null, clientSoundValues()));
             showAlert({ title: action.title, body: action.body });
+            return;
+        }
+        // HOW A CLAUDE SIGN-IN OR SIGN-OUT CAME OUT (Tynn #1011).
+        if (action.kind === 'account-notice') {
+            showAlert({ title: action.title ?? 'Accounts', body: action.body ?? '' });
             return;
         }
         // HOW AN ACCOUNT SWITCH CAME OUT (Tynn #482): the account now active, or nothing changed with Retry (one click, again).
