@@ -5,6 +5,7 @@ import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import { restrictPrivateFile } from '../src/main/private-credentials.js';
 
 /**
  * P7.2 — THE DATA ROOT HAS A MANIFEST (`.ai/plans/genie-2-host-split-2026-10-31.md`, "P7 build spec: one data root", item 2;
@@ -349,6 +350,8 @@ describe('completeness 3: a real genie-host on an empty root', () => {
         const keys = temp('genie-p7-key-');
         const keyFile = join(keys, 'secret.key');
         writeFileSync(keyFile, randomBytes(32), { mode: 0o600 });
+        // Owner-only, as the host demands of its key file: on Windows that is an ACL (the first Windows run was refused on it), on POSIX the mode above.
+        await restrictPrivateFile(keyFile);
         let log = '';
         // The secrets in sealed files under the root (GENIE_SECRET_BACKEND=file): this test never touches a real keychain.
         const child = spawn(process.execPath, ['--import', TSX, 'src/main/genie-host.ts'], {

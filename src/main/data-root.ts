@@ -99,7 +99,7 @@ export const DATA_ROOT_RULES: readonly DataRootRule[] = [
     state('runtime/accounts.json', false, 'the provider accounts and which is active', { atStart: true }),
     state('accounts/', false, 'each provider account’s own folder: the provider keeps its login there'),
     state('browser/', false, 'the Genie browser’s profiles, one per workspace: the sites’ logins'),
-    state('secrets/', false, 'the sealed secrets of a host with no OS keychain (GENIE_SECRET_BACKEND=file)'),
+    state('secrets/', false, 'the sealed secrets of a host that keeps them in files, having no OS keychain'),
     state('v1-import.json', false, 'that Genie 1’s data was imported here, once'),
     state('v1-reap.json', false, 'what of Genie 1’s was ended here, once'),
     state('runtime/agent-inbox-access-migrated.json', false, 'that the agents’ inbox access was moved, once'),
