@@ -170,7 +170,9 @@ try {
         check(term && term.pid > 0, '11d. a Workspace terminal is open when install is asked', `pid ${term?.pid}`);
         await new Promise((r) => setTimeout(r, 1500));
         const { execFileSync } = await import('node:child_process');
-        const helpers = execFileSync('powershell', ['-NoProfile', '-Command',
+        // The helper count is Windows' (fancy-pty's helper under the install dir); on Linux (scripts/vm-client-only-update-linux.sh)
+        // the terminal stays open through the install and nothing is counted here.
+        const helpers = process.platform !== 'win32' ? '0' : execFileSync('powershell', ['-NoProfile', '-Command',
             // @(...) on purpose: in Windows PowerShell 5.1, (pipeline).Count on exactly ONE CimInstance
             // result is $null (the PSObject intrinsic-member bug) — the first run read "0 helper(s)"
             // while the dump showed the helper, pid 4700, right there. Zero and two counted fine.
@@ -179,7 +181,7 @@ try {
         const n = Number(helpers || 0);
         if (n === 0 && !process.env.EXPECT_HELPERS) console.log('  (no fancy-pty helper under the install dir — node-pty engine, or the helper is elsewhere; set EXPECT_HELPERS=1 to assert)');
         else check(n === 1, '11e. CONTROL: that terminal is exactly ONE fancy-pty-helper under the install dir — the §7.2 scan has something to find', `${n} helper(s)`);
-        if (process.env.EXPECT_HELPERS && n !== 1) {
+        if (process.env.EXPECT_HELPERS && n !== 1 && process.platform === 'win32') {
             // Say what IS there, so a failed control is a measurement and not a shrug: every
             // process that names fancy-pty anywhere, and everything running from the install dir
             // that is not Genie.exe itself (pid, parent, path, first 160 chars of the command line).
