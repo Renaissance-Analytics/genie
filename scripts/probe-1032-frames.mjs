@@ -186,12 +186,21 @@ async function stopApp(app, home) {
 }
 
 /** One launch, measured. `force` = move the window where the compositor shows nothing, before typing. */
-async function oneLaunch(n, force) {
+const envOf = (home) => ({ ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_DATA_HOME: join(home, '.local', 'share') });
+/**
+ * Every home seeded BEFORE the first launch: the app writes the seeded workspace's project.json (its colour), and the
+ * seed then refuses to overwrite a manifest it did not write. Seeded back to back, each write is the seed's own.
+ */
+function seedHome() {
     const root = mkdtempSync(join(tmpdir(), 'probe-1032-'));
     const home = join(root, 'home');
     mkdirSync(home, { recursive: true });
-    const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, '.config'), XDG_DATA_HOME: join(home, '.local', 'share') };
-    execFileSync(process.execPath, ['scripts/smoke-seed.mjs'], { env, stdio: 'ignore' });
+    execFileSync(process.execPath, ['scripts/smoke-seed.mjs'], { env: envOf(home), stdio: ['ignore', 'pipe', 'pipe'] });
+    return { root, home };
+}
+
+async function oneLaunch(n, force, { root, home }) {
+    const env = envOf(home);
     const log = join(root, 'electron.log');
     const fd = openSync(log, 'a');
     const startedAt = Date.now();
@@ -234,6 +243,9 @@ async function oneLaunch(n, force) {
             await sleep(2000);
             result.afterRestore = { rafPerS: await c.evaluate(RAF_PER_S), ...(await c.evaluate(tokenState(token))), compositor: compositor(app.pid) };
         }
+        // Past the first-show trace's 10 s wait, so electron.log says whether this window was ever focused.
+        const sinceStart = Date.now() - startedAt;
+        if (sinceStart < 12_000) await sleep(12_000 - sinceStart);
         result.endCompositor = compositor(app.pid);
     } catch (error) {
         result.error = String(error?.message ?? error).slice(0, 300);
@@ -255,13 +267,14 @@ const verdict = (r) => {
     return 'NOT-IN-BUFFER';
 };
 
+const homes = Array.from({ length: LAUNCHES + 1 }, () => seedHome());
 const rows = [];
 for (let i = 1; i <= LAUNCHES; i++) {
-    const r = await oneLaunch(i, false);
+    const r = await oneLaunch(i, false, homes[i - 1]);
     rows.push(r);
     out('PROBE_1032_LAUNCH', { verdict: verdict(r), ...r });
 }
-const control = await oneLaunch(LAUNCHES + 1, true);
+const control = await oneLaunch(LAUNCHES + 1, true, homes[LAUNCHES]);
 out('PROBE_1032_CONTROL', { verdict: verdict(control), ...control });
 
 const table = rows.map((r) => ({ n: r.launch, verdict: verdict(r), mainTookFocus: r.mainTookFocus, rafBoot: r.atBoot?.rafPerS ?? null, rafTyping: r.beforeTyping?.rafPerS ?? null, mapped: r.atBoot?.compositor?.mine?.[0]?.mapped ?? null, hidden: r.atBoot?.compositor?.mine?.[0]?.hidden ?? null, windows: r.atBoot?.compositor?.mine?.length ?? null, paused: r.typed?.renderer?.isPaused ?? null }));
