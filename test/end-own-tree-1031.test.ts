@@ -162,7 +162,7 @@ describe('the cleanup ends the run and waits for it, within a bound', () => {
         const r = await endOwnTree({ roots, treeRoot: 10, since: SINCE, boundMs: 15_000, ports });
         expect(r.ok).toBe(false);
         expect(r.left.map((p) => p.pid)).toEqual([22]);
-        expect(w.lines.at(-1)).toMatch(/^shutdown: STILL RUNNING after \d+ ms: electron\.exe 22 \(parent 21\) electron\.exe D:\\x --updater$/);
+        expect(w.lines.at(-1)).toMatch(/^shutdown: STILL RUNNING after \d+ ms: electron\.exe 22 \(parent 21\) electron\.exe D:\\genie\\work\\x --updater$/);
         // Bounded: it gave up near the bound, not at once and not never.
         expect(w.now - before).toBeGreaterThanOrEqual(15_000);
         expect(w.now - before).toBeLessThan(20_000);

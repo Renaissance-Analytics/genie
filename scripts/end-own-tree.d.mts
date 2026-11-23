@@ -8,7 +8,7 @@ export interface EndPorts {
     now(): number;
     log(line: string): void;
 }
-export interface EndResult { ok: boolean; left: ProcessRow[]; ended: number; ms: number }
+export interface EndResult { ok: boolean; left: ProcessRow[]; ended: number; ms: number; words: string }
 export function parseProcessTable(text: string): ProcessRow[];
 export function treeOf(rows: readonly ProcessRow[], roots: readonly number[], since: number): Map<number, ProcessRow>;
 export function endOwnTree(input: { roots: ReadonlyArray<{ pid: number | null | undefined; what: string }>; treeRoot?: number | null; since: number; boundMs?: number; ports: EndPorts }): Promise<EndResult>;

@@ -12,6 +12,7 @@
  */
 import { mainWindow } from './cdp-main-window.mjs';
 import { execFileSync, spawn } from 'node:child_process';
+import { endOwnRun } from './end-own-tree.mjs';
 import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -46,7 +47,14 @@ async function evaluate(url, expression) {
 }
 
 async function cleanup() {
-    if (app?.pid) { try { if (WIN) execFileSync('taskkill', ['/T', '/F', '/PID', String(app.pid)], { timeout: 15_000, stdio: 'ignore' }); else process.kill(-app.pid, 'SIGKILL'); } catch { /* gone */ } }
+    if (WIN) {
+        // Tynn #1031: the app's tree, this run's genie-host and what they started, ended, waited for and said by one helper.
+        // A fresh private home had no record before launch; never enumerate or kill other Genies.
+        const ended = await endOwnRun({ app, hostPid: root ? readJson(join(root, '.genie', 'runtime', 'host.json'))?.pid : null, since: started, log });
+        if (!ended.ok) { const left = new Error(`LEFT RUNNING by this row's own cleanup: ${ended.words}`); failed ??= left; log(`FAIL: ${left.message}`); }
+        return;
+    }
+    if (app?.pid) { try { process.kill(-app.pid, 'SIGKILL'); } catch { /* gone */ } }
     if (root) {
         // A fresh private home had no record before launch; never enumerate or kill other Genies.
         const hostPid = readJson(join(root, '.genie', 'runtime', 'host.json'))?.pid;
