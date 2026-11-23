@@ -4,6 +4,7 @@ import { builtinToolDefinition, declareBuiltinTool, type BuiltinTool } from './b
 import type { KnowledgeStore, MemoryClass, Scope, ScopeFilter } from './knowledge-store.js';
 import { needsPerson, visibilityNote, type TerminalVisibility } from '../core/terminal-surface.js';
 import { MIRRORED_TERMINAL_ID, type Caller, type McpCall, type Registration, type ToolContext, type ToolHandler } from './mcp-tools.js';
+import { refusalWords } from '../core/approval-words.js';
 
 /**
  * TWO MORE GENIE TOOLS on prism's contract (see `mcp-tools.ts` for the contract and attribution).
@@ -21,7 +22,7 @@ import { MIRRORED_TERMINAL_ID, type Caller, type McpCall, type Registration, typ
  * workspace's terminals and nothing else — and a refusal there never asks for approval.
  */
 
-export type ApprovalGate = (caller: Caller, action: 'create' | 'write', detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
+export type ApprovalGate = (caller: Caller, action: 'create' | 'write', detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied' | 'expired'>;
 
 export interface TerminalsPort {
     /** Why one more terminal would be refused in this workspace (its limit and what is running), or `null`. Absent = no limit. */
@@ -139,7 +140,7 @@ export function moreGenieTools(deps: MoreToolsDeps): Registration[] {
                     const refused = deps.terminals.refusal?.(caller.workspaceId) ?? null;
                     if (refused) return err(refused);
                     const verdict = await deps.approve(caller, 'create', command ?? '(a shell)', context);
-                    if (verdict !== 'allowed') return err(`creating a terminal was denied by the user`);
+                    if (verdict !== 'allowed') return err(refusalWords(verdict, 'creating a terminal', 'no terminal was created'));
                     // The workspace's service env and Genie's endpoint, as the person's own shells get them: a shell an agent
                     // opened once had neither, and could not reach the database the person's could.
                     const env = deps.envFor?.(caller.workspaceId) ?? {};
@@ -172,7 +173,7 @@ export function moreGenieTools(deps: MoreToolsDeps): Registration[] {
                     if (!id || text === undefined) return err('write needs `id` and `text`');
                     if (!own(id)) return err(`terminal ${id} is not one of ${caller.agentName}’s workspace terminals`);
                     const verdict = await deps.approve(caller, 'write', text, context);
-                    if (verdict !== 'allowed') return err(`writing to ${id} was denied by the user`);
+                    if (verdict !== 'allowed') return err(refusalWords(verdict, `writing to ${id}`, 'nothing was written'));
                     const payload = text.includes('\n') ? `${BRACKETED_PASTE_START}${text}${BRACKETED_PASTE_END}` : text;
                     if (!deps.terminals.write(id, payload)) return err(`terminal ${id} is gone`);
                     if (args.enter !== false) deps.terminals.write(id, '\r');

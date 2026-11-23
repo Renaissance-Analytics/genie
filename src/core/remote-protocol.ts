@@ -205,6 +205,8 @@ export const REMOTE_METHODS = [
     // WHAT AN OLDER GENIE SEALED (Tynn #959, 2g-3b): main's one-time unsealer hands each old copy to genie-host, which keeps
     // it in its own keychain (`phase: 'adopt'`), and is told which old copies main then deleted (`phase: 'removed'`).
     'keychain.adoptLegacy',
+    // A window-run tool's approval, asked of genie-host's one queue (Tynn #1006, 2g-4b2): main's own client only.
+    'approvals.gate',
     // genie-host asks Tynn again whether it is signed in: the machine woke, or an agent found IssueWatch signed out (Tynn #959).
     'tynn.recheck',
     ...LOCAL_FILES_METHODS,
@@ -426,6 +428,7 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'deviceLink.close': 'local',
     'deviceLink.openBrowser': 'local',
     'keychain.adoptLegacy': 'local',
+    'approvals.gate': 'local',
     'tynn.recheck': 'local',
     ...Object.fromEntries(LOCAL_FILES_METHODS.map(method => [method, 'local'])) as Record<LocalFilesMethod, 'local'>,
     ...Object.fromEntries(LOCAL_DRAFT_METHODS.map(method => [method, 'local'])) as Record<LocalDraftMethod, 'local'>,
