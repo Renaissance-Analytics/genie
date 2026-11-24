@@ -203,6 +203,16 @@ function putBack(options: { secrets: boolean }): string {
     return home;
 }
 
+describe('wired: a change in what could not be restored reaches every Deck that is watching', () => {
+    it('genie-host touches its estate when the attach items change, as it does for an elevation', () => {
+        // The working tree's line ends are the machine's (CRLF on Windows): read as LF.
+        const host = readFileSync('src/main/genie-host.ts', 'utf8').split(String.fromCharCode(13)).join('');
+        expect(host).toContain('\n    attachHost.onChange(() => { phoneTouch(); });\n');
+        // CONTROL: the neighbour it is modelled on is found the same way.
+        expect(host).toContain('\n    hostingElevation.onChange(() => { phoneTouch(); });\n');
+    });
+});
+
 describe('the fixture: a root a host really lived on', () => {
     it('holds the work (CONTROL for everything below: two agents, a workspace, the mail, the flow, the threads)', () => {
         expect(before.agents).toEqual(agents.map((a) => `${a.id} ${a.name}`).sort());
@@ -292,8 +302,19 @@ describe.each([
 
     it('an action that needs Tynn is refused in words while signed out, and the item stays; Dismiss puts one away for good', async () => {
         if (secrets) {
-            expect(await ask(own, 'features.act', [{ kind: 'deck.answer', item: { id: 'genie:attach:github' }, optionId: 'dismiss' }])).toMatchObject({ ok: true });
-            expect((await attachDeck(own, ['tynn'])).map((i) => i.id)).toEqual(['genie:attach:tynn']);
+            // A WINDOW ALREADY WATCHING HEARS THE CHANGE (gate 1124-011334-e06033: a window that began watching before the
+            // host's first look heard nothing, ever): one watch, kept open across the answer, with no new read asked for.
+            let heard: readonly DeckItem[] = [];
+            const stop = own.watchDeck((items) => { heard = items; });
+            const mine = (): string[] => heard.filter((i) => i.id.startsWith('genie:attach:')).map((i) => i.id).sort();
+            try {
+                for (const end = Date.now() + 20_000; mine().length !== 2 && Date.now() < end;) await sleep(100);
+                // CONTROL: the watch holds both before the answer.
+                expect(mine()).toEqual(['genie:attach:github', 'genie:attach:tynn']);
+                expect(await ask(own, 'features.act', [{ kind: 'deck.answer', item: { id: 'genie:attach:github' }, optionId: 'dismiss' }])).toMatchObject({ ok: true });
+                for (const end = Date.now() + 20_000; mine().length !== 1 && Date.now() < end;) await sleep(100);
+                expect(mine()).toEqual(['genie:attach:tynn']);
+            } finally { stop(); }
             return;
         }
         const refused = await ask(own, 'features.act', [{ kind: 'deck.answer', item: { id: 'genie:attach:workstation' }, optionId: 'workstation-register' }]);
