@@ -10,6 +10,7 @@ import { parseHostRecord, type HostRecord } from '../src/core/engine-protocol.js
 import { agentRecord, mintAgentId } from '../src/core/identity.js';
 import { TYNN_HOST } from '../src/core/tynn.js';
 import { connectSocket } from '../src/main/engine-launch.js';
+import { classifyDataPath } from '../src/main/data-root.js';
 import { openSecretKeychain } from '../src/main/file-secrets.js';
 import { restrictPrivateFile } from '../src/main/private-credentials.js';
 import { flowFormDefaults } from '../src/core/forms.js';
@@ -124,6 +125,9 @@ const AGENT_KEY_B = '01ARZ3NDEKTSV4RRFFQ69G5FAB';
 const PAIRED = 'wss://other-machine.example/ws';
 const THREADS = { 'thread-one.jsonl': '{"turn":1,"text":"first agent, mid-conversation"}\n{"turn":2,"text":"and on"}\n', 'thread-two.jsonl': '{"turn":1,"text":"second agent, mid-conversation"}\n' };
 
+const LEFT_IN_THREADS = ['5ab2ad554899ec5e4af1175766e17108.json.lock', '5ab2ad554899ec5e4af1175766e17108.json.lock.candidate-e6c220b1dfe2b399f1836ae94215be80', '5ab2ad554899ec5e4af1175766e17108.index.json.4242.tmp'];
+/** The STATE files of a folder under a root, by the rule table: never a raw listing, which reads another process's locks and temp files too. */
+const stateFilesOf = (root: string, folder: string): string[] => readdirSync(join(root, ...folder.split('/'))).filter((name) => classifyDataPath(`${folder}/${name}`)?.kind === 'state').sort();
 let keyFile: string;
 let origin: string;
 let workspace: string;
@@ -178,6 +182,9 @@ beforeAll(async () => {
     const { DATA_ROOT_RULES } = await import('../src/main/data-root.js');
     atStart = DATA_ROOT_RULES.filter((r) => r.atStart === true).map((r) => r.path);
     await stopHost(host);
+    // WHAT A HOST THAT WAS KILLED MID-WRITE LEAVES in the threads folder, put there on purpose (gate 1124-052313-102a95 met
+    // one by chance: a lock being taken while this file listed the folder): a lock, a lock being taken, a temp file.
+    for (const name of LEFT_IN_THREADS) put(origin, `runtime/sessions/${name}`, 'left by a process that is gone');
 }, 300_000);
 
 afterAll(async () => {
@@ -196,7 +203,8 @@ function putBack(options: { secrets: boolean }): string {
         if (!existsSync(from)) continue;
         const to = join(home, ...relative.split('/'));
         mkdirSync(dirname(to), { recursive: true });
-        cpSync(from, to, { recursive: true });
+        // The state INSIDE a state folder, as the manifest says it: what its rule names as transient (a lock, a temp file) is not put back.
+        cpSync(from, to, { recursive: true, filter: (source) => source === from || classifyDataPath(`${relative}${source.slice(from.length).replace(/\\/g, '/')}`)?.kind !== 'machine' });
         // SQLite's own files travel with their database.
         for (const side of ['-wal', '-shm']) if (existsSync(`${from}${side}`)) cpSync(`${from}${side}`, `${to}${side}`);
     }
@@ -219,7 +227,9 @@ describe('the fixture: a root a host really lived on', () => {
         expect(before.workspaces).toEqual(['ws']);
         expect(before.mail).toContain('mail that waited through the rebuild');
         expect(before.flows).toContain('the flow that came back');
-        expect(readdirSync(join(origin, 'runtime', 'sessions')).sort()).toEqual(Object.keys(THREADS).sort());
+        expect(stateFilesOf(origin, 'runtime/sessions')).toEqual(Object.keys(THREADS).sort());
+        // CONTROL: the leftovers are really in that folder, beside the threads.
+        for (const name of LEFT_IN_THREADS) expect(readdirSync(join(origin, 'runtime', 'sessions'))).toContain(name);
     });
 
     it('its manifest lists the state and the machine files, and the old machine’s machine files are really there to be left behind', () => {
@@ -247,6 +257,12 @@ describe.each([
         deck = await attachDeck(own, expected);
     }, 300_000);
     afterAll(async () => { close?.(); if (host) await stopHost(host); });
+
+    it('NO LOCK AND NO TEMP FILE OF THE OLD MACHINE CAME ALONG: the threads folder put back holds the threads', () => {
+        const there = readdirSync(join(home, 'runtime', 'sessions'));
+        expect(there.filter((name) => LEFT_IN_THREADS.includes(name))).toEqual([]);
+        expect(stateFilesOf(home, 'runtime/sessions')).toEqual(Object.keys(THREADS).sort());
+    });
 
     it('the host says it found its state with no machine files', () => {
         expect(host.log()).toMatch(/data root: machine-files-gone/);

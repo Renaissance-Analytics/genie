@@ -1,14 +1,20 @@
 import { watch } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { listRepos } from '../core/repo-registry.js';
+import { trustListReads } from './workspace-trust-host.js';
 
 /**
  * WHAT MOVES A WORKSPACE'S VERDICT WHEN NOBODY ASKS: a pull that changes a file the verdict reads, while an agent runs.
  *
  * Small on purpose, because a workstation may hold many workspaces. It watches only the few folders those files are in,
- * each alone and not its tree, and reads each file's size and time, nothing more. The verdict is read again only when one
- * of them really changed, so a busy folder costs a few readings. It runs no git: reading the verdict is `refresh`'s, which
+ * each alone and not its tree, and takes each file's size and time. The verdict is read again only when one of them
+ * really changed, so a busy folder costs a few readings. It runs no git: reading the verdict is `refresh`'s, which
  * keeps its own rules. A slow pass covers what a watcher misses, or a folder that is not watched: on Windows, every one.
+ *
+ * WHICH FILES: EVERY ONE THE TRUST LIST READS, ASKED OF THE LIST ITSELF (`trustListReads`, Tynn #955), and the folders it
+ * lists (`.flows/`, `.processes/`: a file added there is a new name in the folder). The watch used to keep its own list
+ * of names, and those two folders were never on it: a pulled `.flows/x.json` moved no verdict. Its own names stay as
+ * well (each listed repo's settings and git config).
  *
  * A config file's own includes are not followed here: a change to an included file is seen at the next launch's read.
  */
@@ -20,6 +26,8 @@ export interface TrustWatchPorts {
     readText(path: string): Promise<string | null>;
     /** A cheap reading of one file (its size and time), or `null` when it is not there. */
     fingerprint(path: string): Promise<string | null>;
+    /** The names in one folder; rejects when it is not there. Absent = the folders the trust list lists are not looked into. */
+    listDir?(dir: string): Promise<string[]>;
     /** Watch one folder, not its subfolders. The stop, or `null` when it cannot be watched. */
     watchFolder(folder: string, changed: () => void): (() => void) | null;
     refresh(workspaceId: string): void;
@@ -30,7 +38,8 @@ interface Watched {
     reading: string | null;
     readonly stops: Map<string, () => void>;
     timer: ReturnType<typeof setTimeout> | null;
-    running: boolean;
+    /** The check in flight: one at a time, and whoever asks meanwhile waits for it (and it looks once more). */
+    active: Promise<void> | null;
     again: boolean;
 }
 
@@ -113,52 +122,69 @@ export class TrustWatch {
         return [join(gitDir, 'config'), join(gitDir, 'config.worktree')];
     }
 
-    async #filesOf(root: string, mayRead: () => boolean): Promise<string[]> {
+    async #filesOf(root: string, mayRead: () => boolean): Promise<{ files: string[]; dirs: string[] }> {
+        // What the trust list itself reads and lists, first: nothing it looks at can be missing from here.
+        const listDir = this.#ports.listDir?.bind(this.#ports);
+        const listed = await trustListReads(root, {
+            readText: (path) => this.#text(path, mayRead),
+            ...(listDir ? { listDir: (dir: string) => (mayRead() ? listDir(dir) : Promise.reject(new Error('not read now'))) } : {}),
+        }).catch(() => ({ files: [] as string[], dirs: [] as string[] }));
+        if (!mayRead()) return { files: [], dirs: [] };
         let manifest: unknown = null;
         try { manifest = JSON.parse((await this.#text(join(root, 'project.json'), mayRead)) ?? 'null'); } catch { /* the slow pass reads it again */ }
         const folders = [root, ...(isRecord(manifest) ? listRepos(manifest) : []).filter((r) => r.path !== '.').map((r) => join(root, ...r.path.split('/')))];
         const files = [join(root, 'project.json')];
         for (const folder of folders) {
-            if (!mayRead()) return [];
+            if (!mayRead()) return { files: [], dirs: [] };
             files.push(...OF_EACH_FOLDER.map((parts) => join(folder, ...parts)), ...(await this.#gitFiles(folder, mayRead)));
         }
-        return files;
+        return { files: [...new Set([...files, ...listed.files])], dirs: listed.dirs };
+    }
+
+    /** One folder's names, as one reading; `null` when it is not there or is not looked into. */
+    async #names(dir: string, mayRead: () => boolean): Promise<string | null> {
+        if (!mayRead() || !this.#ports.listDir) return null;
+        try { return (await this.#ports.listDir(dir)).slice().sort().join('|'); } catch { return null; }
     }
 
     #entry(id: string): Watched {
         let watched = this.#watched.get(id);
         if (!watched) {
-            watched = { reading: null, stops: new Map(), timer: null, running: false, again: false };
+            watched = { reading: null, stops: new Map(), timer: null, active: null, again: false };
             this.#watched.set(id, watched);
         }
         return watched;
     }
 
-    async #check(id: string, root: string): Promise<void> {
-        if (!this.#awake(id, root)) return;
+    #check(id: string, root: string): Promise<void> {
+        if (!this.#awake(id, root)) return Promise.resolve();
         const watched = this.#entry(id);
-        if (watched.running) { watched.again = true; return; }
-        watched.running = true;
-        try {
-            do {
-                watched.again = false;
-                const mayRead = () => this.#awake(id, root) && this.#watched.get(id) === watched;
-                const files = await this.#filesOf(root, mayRead);
-                if (!mayRead()) return;
-                const readings = await Promise.all(files.map(async (file) => {
-                    if (!mayRead()) return null;
-                    try { return await this.#ports.fingerprint(file); } catch { return null; }
-                }));
-                if (!mayRead()) return;
-                const reading = files.map((file, i) => `${file}=${readings[i] ?? '-'}`).join('\n');
-                const changed = watched.reading !== null && watched.reading !== reading;
-                watched.reading = reading;
-                this.#arm(id, root, watched, new Set([root, ...files.filter((_, i) => readings[i] !== null).map((file) => dirname(file))]));
-                if (changed) this.#ports.refresh(id);
-            } while (watched.again);
-        } finally {
-            watched.running = false;
-        }
+        // One at a time. Whoever asks meanwhile gets the one in flight, which looks once more: a pass is over only when
+        // the readings it asked for have been taken (the hosting reads the verdict after the first ones, hosting-trust.ts).
+        if (watched.active) { watched.again = true; return watched.active; }
+        const active = this.#look(id, root, watched).finally(() => { if (watched.active === active) watched.active = null; });
+        watched.active = active;
+        return active;
+    }
+
+    async #look(id: string, root: string, watched: Watched): Promise<void> {
+        do {
+            watched.again = false;
+            const mayRead = () => this.#awake(id, root) && this.#watched.get(id) === watched;
+            const { files, dirs } = await this.#filesOf(root, mayRead);
+            if (!mayRead()) return;
+            const readings = await Promise.all(files.map(async (file) => {
+                if (!mayRead()) return null;
+                try { return await this.#ports.fingerprint(file); } catch { return null; }
+            }));
+            const names = await Promise.all(dirs.map((dir) => this.#names(dir, mayRead)));
+            if (!mayRead()) return;
+            const reading = [...files.map((file, i) => `${file}=${readings[i] ?? '-'}`), ...dirs.map((dir, i) => `${dir}/=${names[i] ?? '-'}`)].join('\n');
+            const changed = watched.reading !== null && watched.reading !== reading;
+            watched.reading = reading;
+            this.#arm(id, root, watched, new Set([root, ...files.filter((_, i) => readings[i] !== null).map((file) => dirname(file)), ...dirs.filter((_, i) => names[i] !== null)]));
+            if (changed) this.#ports.refresh(id);
+        } while (watched.again);
     }
 
     #arm(id: string, root: string, watched: Watched, folders: ReadonlySet<string>): void {

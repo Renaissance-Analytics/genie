@@ -35,8 +35,11 @@ export interface CloneRestorePorts {
     flows: () => Promise<FlowPorts | null>;
     /** The process book, or null while the host has not opened it yet. */
     processes: () => Promise<ProcessPorts | null>;
-    /** The person's one-time yes to this workspace. */
-    trusted(workspaceId: string): boolean;
+    /**
+     * Whether the workspace is trusted, READ NOW (Tynn #955): the files being restored are themselves on the trust list,
+     * so a verdict kept from before they arrived cannot answer for them. A read that fails is a no.
+     */
+    trusted(workspaceId: string): boolean | Promise<boolean>;
 }
 
 export interface TabsRestoreReport {
@@ -120,7 +123,7 @@ export async function restoreClone(workspace: { id: string; path: string }, port
     }
 
     order.push('trust');
-    trusted = ports.trusted(workspace.id);
+    trusted = (await ports.trusted(workspace.id)) === true;
 
     order.push('flows');
     try {

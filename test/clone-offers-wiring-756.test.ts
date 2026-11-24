@@ -97,3 +97,12 @@ describe('the wiring', () => {
         expect(src('src/renderer/local-session.ts')).toContain('applyOffer: (id, offerId) =>');
     });
 });
+
+describe('the list says whether the workspace is trusted by asking then, and waiting (Tynn #955)', () => {
+    it('an answer that arrives later is the answer: yes for one workspace, no for another', async () => {
+        const service = new CloneOffersService();
+        service.attach({ watch: { pass: async () => {}, list: () => [], apply: async () => ({ ok: true as const }) } as never, trusted: (async (id: string) => id === 'acme') as never });
+        expect(await service.call('list', ['acme'])).toMatchObject({ ok: true, trusted: true });
+        expect(await service.call('list', ['other'])).toMatchObject({ ok: true, trusted: false });
+    });
+});

@@ -11,7 +11,8 @@ export type CloneApplyReply = { ok: true } | { ok: false; reason: string };
 
 export interface CloneOffersParts {
     readonly watch: Pick<CloneWatch, 'pass' | 'list' | 'apply'>;
-    readonly trusted: (workspaceId: string) => boolean;
+    /** Read now, as the offers are (Tynn #955): the verdict the person is shown beside them is of the files as they are. */
+    readonly trusted: (workspaceId: string) => boolean | Promise<boolean>;
 }
 
 const WINDOW_CALLS: ReadonlySet<string> = new Set(['list', 'apply']);
@@ -33,7 +34,7 @@ export class CloneOffersService {
         if (method === 'list') {
             // One look first, so what the person opens is what the repo says now, not what it said 30 seconds ago.
             await parts.watch.pass().catch(() => {});
-            return { ok: true, offers: parts.watch.list(workspaceId), trusted: parts.trusted(workspaceId) };
+            return { ok: true, offers: parts.watch.list(workspaceId), trusted: (await parts.trusted(workspaceId)) === true };
         }
         return parts.watch.apply(workspaceId, typeof args[1] === 'string' ? args[1] : '');
     }

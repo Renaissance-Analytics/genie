@@ -143,3 +143,36 @@ describe('in genie-host', () => {
         expect(host).not.toMatch(/cloneWatch\.apply\(/);
     });
 });
+
+describe('the trust is asked when the offer is applied, and waited for (Tynn #955)', () => {
+    // The verdict kept from an earlier read can be older than the file being applied (the file itself is what would run).
+    // So the port reads the workspace's files then, which takes a moment: an answer still on its way is not a yes.
+    it('an answer that arrives later and is "no": the flow that runs a command is refused, and nothing is created', async () => {
+        const r = rig({ trusted: false });
+        (r.ports.restore as unknown as { trusted: (id: string) => Promise<boolean> }).trusted = async () => false;
+        r.files['/c/acme/.flows/nightly.json'] = JSON.stringify(flowFile('Nightly', 'npm run backup'));
+        await r.watch.pass();
+        const out = await r.watch.apply('ws_clone', 'flow:.flows/nightly.json');
+        expect(out).toMatchObject({ ok: false });
+        if (!out.ok) expect(out.reason).toMatch(/trust/);
+        expect(r.made).toEqual([]);
+    });
+
+    it('a process, the same: refused, and nothing is kept', async () => {
+        const r = rig({ trusted: false });
+        (r.ports.restore as unknown as { trusted: (id: string) => Promise<boolean> }).trusted = async () => false;
+        r.files['/c/acme/.processes/worker.json'] = JSON.stringify({ command: 'php artisan queue:work' });
+        await r.watch.pass();
+        expect(await r.watch.apply('ws_clone', 'process:.processes/worker.json')).toMatchObject({ ok: false });
+        expect(r.writes).toEqual([]);
+    });
+
+    it('control: an answer that arrives later and is "yes" creates it', async () => {
+        const r = rig({ trusted: false });
+        (r.ports.restore as unknown as { trusted: (id: string) => Promise<boolean> }).trusted = async () => true;
+        r.files['/c/acme/.flows/nightly.json'] = JSON.stringify(flowFile('Nightly', 'npm run backup'));
+        await r.watch.pass();
+        expect(await r.watch.apply('ws_clone', 'flow:.flows/nightly.json')).toMatchObject({ ok: true });
+        expect(r.made.map((m) => m.name)).toEqual(['nightly']);
+    });
+});
