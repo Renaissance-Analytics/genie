@@ -17,7 +17,7 @@ import { isOsAgent } from './os-agent.js';
 export type SettingsSection = 'general' | 'permissions' | 'issuewatch' | 'persona' | 'skills';
 
 export type SettingsControl =
-    | 'provider' | 'model' | 'mode' | 'run' | 'tui' | 'remove'
+    | 'provider' | 'model' | 'mode' | 'app-wake-cap' | 'run' | 'tui' | 'remove'
     | 'tools' | 'access' | 'autonomous' | 'manage-tabs' | 'drive-pages'
     | 'issuewatch' | 'persona' | 'skills';
 
@@ -41,6 +41,8 @@ export interface SettingsFacts {
      * for logins", so it lives on General, not on the agents sidebar's terminal button. Absent = false.
      */
     readonly tui?: boolean | undefined;
+    /** The window can set the agent's app wake cap (Tynn #1053): one row on General, after Mode. Absent = false. */
+    readonly appWakeCap?: boolean | undefined;
     /** The agent has a persona path. */
     readonly persona: boolean;
     /** The provider reported its skills and commands. */
@@ -66,7 +68,7 @@ export function settingsSections(f: SettingsFacts): SettingsSectionView[] {
     const out: SettingsSectionView[] = [];
     const push = (id: SettingsSection, controls: SettingsControl[]) => { if (controls.length > 0) out.push({ id, label: SETTINGS_LABEL[id], controls }); };
     if (f.ops) {
-        push('general', ['provider', ...(f.model ? ['model' as const] : []), 'mode', 'run', ...(f.tui ? ['tui' as const] : []), 'remove']);
+        push('general', ['provider', ...(f.model ? ['model' as const] : []), 'mode', ...(f.appWakeCap ? ['app-wake-cap' as const] : []), 'run', ...(f.tui ? ['tui' as const] : []), 'remove']);
         if (!isOsAgent(f)) push('permissions', [
             ...(f.provider === 'claude' && f.tools ? ['tools' as const] : []),
             'access',

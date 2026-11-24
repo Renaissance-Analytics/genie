@@ -206,6 +206,8 @@ export async function ticksOf(cdp, agentId) {
     const pids = [...new Set(ticks.values())];
     return { running: detail.running === true, max: ticks.size === 0 ? 0 : Math.max(...ticks.keys()), pids, last: ticks.size === 0 ? null : ticks.get(Math.max(...ticks.keys())), ticks: providerTicks(detail.rows) };
 }
+/** The first tick from `from` to `to` that is not in `ticks` (a Map or Set of tick numbers), or null: quit-keeps-host-cdp.mjs's gauge. */
+export const contiguous = (ticks, from, to) => { for (let n = from; n <= to; n++) if (!ticks.has(n)) return n; return null; };
 /** Why an agent is or is not running, as the host says: its session, a start's refusal, the provider's last stderr. */
 export const whyOf = (cdp, agentId) => cdp.evaluate(`window.genieTest.agentDetail(${JSON.stringify(agentId)}).then((d) => JSON.stringify({ session: d?.session ? { running: d.session.running, starting: d.session.starting ?? null, inTurn: d.session.inTurn ?? null, turnState: d.session.turnState, failure: d.session.failure ?? null } : null, refusal: d?.refusal ?? null, log: (d?.log ?? []).slice(-4) }))`, 15_000).catch((e) => `(unread: ${e?.message ?? e})`);
 export const running = (cdp, agentId) => cdp.evaluate(`window.genieTest.agentDetail(${JSON.stringify(agentId)}).then((d) => d?.session?.running === true)`, 15_000);

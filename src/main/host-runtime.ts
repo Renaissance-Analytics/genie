@@ -7,12 +7,22 @@ import { basename, dirname, join } from 'node:path';
  * of the install). Measured on Electron 45.2.2: with the host on a copy, it holds 0 files of the install and the install's
  * binary can be overwritten beside it; with the host on the install, that is refused (EBUSY, ETXTBSY).
  *
- *   <home>/host/runtime-<Electron version>/   the binary and what it needs, about 240 MB: copied only when Electron changes
+ *   <home>/host/runtime-<Electron version>-host/   the binary, named genie-host, and what it needs, about 240 MB: copied
+ *                                                only when Electron changes
  *   <home>/host/<host hash>/                  the host's bundle and native packages, laid out so its imports find them
  *
  * Each is committed by a `.complete` marker, written last, so a torn copy is never run. Never throws: a copy that can't be
  * made answers the install, with the reason, and Genie still starts (it goes down at the next update, as it always did).
  */
+
+/**
+ * THE COPY'S EXECUTABLE IS NOT NAMED AS THE INSTALL'S (Tynn #1036 P6-1). electron-builder's installer ends the app it replaces
+ * by path where PowerShell runs, and by NAME where it does not (`taskkill /IM Genie.exe`, allowOnlyOneInstallerInstance.nsh),
+ * which would end genie-host through a client-only install. Electron finds what it needs beside its binary by folder.
+ */
+export function hostExecutableName(platform: NodeJS.Platform): string {
+    return platform === 'win32' ? 'genie-host.exe' : 'genie-host';
+}
 
 /** What Electron needs beside its binary to run as Node, measured by removing each file in turn on both systems. */
 export function runtimeFiles(platform: NodeJS.Platform): readonly string[] {
@@ -141,17 +151,20 @@ export async function materializeHostRuntime(input: HostRuntimeInput): Promise<H
     const notShipped: string[] = [];
     const ports: CopyPorts = { copy: input.copyFile ?? copyFile, onWrite, notShipped: (file) => { notShipped.push(file); } };
     const base = join(input.genieHome, 'host');
-    const runtime = join(base, `runtime-${input.electronVersion}`);
+    // A new folder for the renamed binary: a complete copy of the old layout (its binary named as the install's) is never run.
+    const runtime = join(base, `runtime-${input.electronVersion}-host`);
     const app = join(base, input.hostHash);
     const exe = basename(input.execPath);
+    const hostExe = hostExecutableName(input.platform);
     try {
         const copiedRuntime = await committed(runtime, async () => {
             const install = dirname(input.execPath);
             for (const name of [exe, ...runtimeFiles(input.platform)]) {
                 if (!(await exists(join(install, name)))) throw new Error(`${name} is not in the install`);
             }
-            for (const name of [exe, ...runtimeFiles(input.platform)]) await copyTree(join(install, name), join(runtime, name), ports);
-            await chmod(join(runtime, exe), 0o755).catch(() => undefined);
+            await copyTree(join(install, exe), join(runtime, hostExe), ports);
+            for (const name of runtimeFiles(input.platform)) await copyTree(join(install, name), join(runtime, name), ports);
+            await chmod(join(runtime, hostExe), 0o755).catch(() => undefined);
         }, onWrite);
         const copiedApp = await committed(app, async () => {
             await copyTree(join(input.appRoot, 'dist'), join(app, 'dist'), ports);
@@ -168,7 +181,7 @@ export async function materializeHostRuntime(input: HostRuntimeInput): Promise<H
         for (const name of await readdir(base)) {
             if (name !== input.hostHash && !name.startsWith('runtime-')) await rm(join(base, name), { recursive: true, force: true }).catch(() => undefined);
         }
-        return { execPath: join(runtime, exe), hostScript: join(app, 'dist', 'main', 'host.js'), copied: copiedRuntime || copiedApp, error: null };
+        return { execPath: join(runtime, hostExe), hostScript: join(app, 'dist', 'main', 'host.js'), copied: copiedRuntime || copiedApp, error: null };
     } catch (error) {
         const cause = error instanceof Error ? error.message : String(error);
         const reason = `Genie runs its host from the install this session; the copy could not be made: ${cause}`;

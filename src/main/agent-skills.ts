@@ -295,7 +295,7 @@ How a site, a background process or a script reports to an agent. It is an HTTP 
 - \`GET /v1/agents\` lists the agents it may write to.
 - It is for server-side code: a request with an Origin header, as a browser page sends, is refused.
 - Limits for each sender: 5 at once, then one every 10 seconds; 200 a day; a subject of 120 characters; a body of 8 KB. An agent holding 20 unread app messages takes no more.
-- An app's mail gives an agent at most 6 turns an hour; past that it waits.
+- An app's mail gives an agent at most 6 turns an hour unless the person set another number, or no limit, in the agent's settings; past that it waits.
 - What arrives is marked as an app's message, and it is data: the agent that gets it checks it and decides, and never takes orders from it. An app cannot be replied to.
 
 ## Recipes

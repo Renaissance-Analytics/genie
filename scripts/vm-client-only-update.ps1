@@ -12,7 +12,13 @@
 # (scripts/feed-host-identity.mjs, as the release does), so the installed Genie classifies it client-only. The row:
 #
 #   the same genie-host pid, and the same agent provider pids, before and after the update; no agent started again; the
-#   installed Genie.exe is $Next; the host logged that only the window was updated.
+#   installed Genie.exe is $Next; the host logged that only the window was updated; and THE AGENT STREAMED THROUGH IT
+#   (Tynn #1036 P6-1): its provider is the stub in TICKER mode, mid-turn when install is asked, and a window of $Next on the
+#   same host finds every tick streamed while there was no window in its ledger, in order (update-ticks-after-cdp.mjs).
+#   Everything the run started is ended through scripts/end-own-tree.mjs (Tynn #1031), pass or fail.
+#
+#   UPDATE_TICKS_BREAK=stop-provider is the row's break probe: the provider is ended during the install, and the row fails
+#   on the stream.
 #
 # If the two builds' host bundles differ (the version leaks into host.js), there is no client-only update to prove: the run
 # stops and says so (### client-only=NOT-CLIENT-ONLY). Prints `### client-only=PASS` at the end; a failure throws.
@@ -82,6 +88,20 @@ Copy-Item package.json package.json.pristine -Force
 Copy-Item package-lock.json package-lock.json.pristine -Force
 $current = $Base
 $feed = $null
+$script:began = $null
+$script:ended = $false
+$script:viewer = $null
+$script:relaunchedPids = @()
+$ticker = Join-Path ([System.IO.Path]::GetTempPath()) 'genie-stub-codex-ticker'
+# A DEBUGGER PORT OF ITS OWN (the full gate 1124-034522-b451dd: an earlier row's process held 9222, and the row read that
+# app's page). No other row uses it (test/ci-debug-ports-unique.test.ts); the drivers check the page is this run's launch.
+$debugPort = 9401
+$env:CDP_PORT = "$debugPort"
+function Assert-PortFree {
+    $answered = $false
+    try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 "http://127.0.0.1:$debugPort/json/version" | Out-Null; $answered = $true } catch { }
+    if ($answered) { throw "something already answers on this row's debugger port $debugPort (not this run's Genie)" }
+}
 try {
     Run "npm version $Base --no-git-tag-version --allow-same-version" 'bump-base.log'
     Step "package $current and install it"
@@ -89,7 +109,7 @@ try {
     Run 'npm run build' 'build-current.log'
     $baseHostHash = (Get-FileHash -Algorithm SHA256 'dist\main\host.js').Hash.ToLower().Substring(0, 12)
     Write-Output ("the base build's genie-host: " + $baseHostHash)
-    Run 'npx electron-builder --publish never' 'package-current.log'
+    Run 'npx electron-builder --publish never --config.win.signExecutable=false' 'package-current.log'
     $setup = @(Get-ChildItem "release\Genie-$current-setup.exe")[0]
     if (-not $setup) { throw "no release\Genie-$current-setup.exe" }
     Uninstall-AnyGenie
@@ -116,7 +136,7 @@ try {
     try {
         Run "npm version $Next --no-git-tag-version" 'bump.log'
         Run 'npm run build' 'build-next.log'
-        Run 'npx electron-builder --publish never' 'package-next.log'
+        Run 'npx electron-builder --publish never --config.win.signExecutable=false' 'package-next.log'
     } finally {
         Move-Item package.json.orig package.json -Force
         Move-Item package-lock.json.orig package-lock.json -Force
@@ -135,8 +155,15 @@ try {
     Step 'serve the feed, point the installed app at it'
     $feed = Start-Process -FilePath node -ArgumentList 'scripts\serve-feed.mjs', 'release', '8099' -PassThru `
         -RedirectStandardOutput feed.log -RedirectStandardError feed-err.log
-    Start-Sleep 2
-    $probe = Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8099/latest.yml'
+    # Asked until it answers, bounded (measured, 1124-000813-f161b2: as a CI row the feed was not up 2 s after its start).
+    $probe = $null
+    $feedUntil = (Get-Date).AddSeconds(60)
+    while (-not $probe -and (Get-Date) -lt $feedUntil) {
+        Start-Sleep 2
+        if ($feed.HasExited) { Get-Content feed.log, feed-err.log -ErrorAction SilentlyContinue; throw "the feed exited ($($feed.ExitCode))" }
+        try { $probe = Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8099/latest.yml' -TimeoutSec 5 } catch { $probe = $null }
+    }
+    if (-not $probe) { Get-Content feed.log, feed-err.log -ErrorAction SilentlyContinue; throw 'the feed did not answer on 127.0.0.1:8099 within 60 s' }
     Write-Output ("feed answers: " + $probe.StatusCode + " " + $probe.RawContentLength + " bytes")
     $cfg = Join-Path $installDir 'resources\app-update.yml'
     Write-Output "app-update.yml as shipped:"; Get-Content $cfg
@@ -146,9 +173,25 @@ try {
     Step "launch the installed $current and drive the update"
     $env:GENIE2_CODEX_BINARY = "$root\scripts\stub-codex.mjs"
     $env:GENIE_PAGE_PROBE = '1'
-    Run 'node scripts\smoke-seed.mjs'
+    # STREAMING THROUGH THE INSTALL (Tynn #1036 P6-1): the stub provider in TICKER mode, switched on by a marker holding this
+    # script's pid (scripts/stub-codex.mjs reads it when a provider starts), and where the agent's ledger stood when install
+    # was asked, written by update-cdp.mjs.
+    Set-Content -Path $ticker -Value "$PID" -Encoding ascii -NoNewline
+    $env:UPDATE_TICKS_FILE = Join-Path $root 'update-ticks.json'
+    Remove-Item -Force -ErrorAction SilentlyContinue $env:UPDATE_TICKS_FILE
+    $script:began = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    # THE SEED'S WORKSPACE IS A NEW DIRECTORY, NEVER THE CHECKOUT (the full gate 1124-020718-168937): smoke-seed.mjs takes its
+    # cwd as the workspace, and in a gate shard earlier rows have seeded the checkout and changed its project.json, so a seed of
+    # it is refused. The home stays the session's own: the installer installs for the signed-in user, whatever the variables say.
+    $workspace = Join-Path ([System.IO.Path]::GetTempPath()) ("genie-update-workspace-" + $PID)
+    if (Test-Path $workspace) { Remove-Item -Recurse -Force $workspace }
+    New-Item -ItemType Directory -Force $workspace | Out-Null
+    Push-Location $workspace
+    try { & node (Join-Path $root 'scripts\smoke-seed.mjs'); $seedExit = $LASTEXITCODE } finally { Pop-Location }
+    if ($seedExit -ne 0) { throw "the seed failed in $workspace (exit $seedExit)" }
     Remove-Item -Force -ErrorAction SilentlyContinue installed-out.log, installed-err.log
-    $app = Start-Process -FilePath $exe -ArgumentList '--remote-debugging-port=9222' -PassThru `
+    Assert-PortFree
+    $app = Start-Process -FilePath $exe -ArgumentList "--remote-debugging-port=$debugPort" -PassThru `
         -RedirectStandardOutput installed-out.log -RedirectStandardError installed-err.log
     $env:EXPECT_VERSION = $Next
     # With fancy-pty installed, the driver's §7.2 control (one open terminal → one helper under
@@ -164,6 +207,7 @@ try {
     }
     if (-not $hostBefore) { throw 'no live genie-host recorded in host.json before the update' }
     Write-Output ("genie-host before the update: pid " + $hostBefore.Id + ", started " + $hostBefore.StartTime)
+    $env:CDP_OWN_PID = "$($app.Id)"
     & cmd /c "node scripts\update-cdp.mjs 2>&1"
     $drive = $LASTEXITCODE
     if ($drive -ne 0) {
@@ -174,6 +218,16 @@ try {
         Write-Output "--- feed ---"; Get-Content feed.log -Tail 20 -ErrorAction SilentlyContinue
         if (-not $app.HasExited) { Kill-Tree $app.Id }
         throw "update-cdp.mjs exited $drive"
+    }
+    # THE ROW'S BREAK PROBE: the stream interrupted during the install (its provider ended), which the row must fail on. From
+    # UPDATE_TICKS_BREAK, or update-ticks-break.txt at the root (In-Session passes no environment, as ci-rows.txt says).
+    $breakFile = Join-Path $root 'update-ticks-break.txt'
+    $break = if ($env:UPDATE_TICKS_BREAK) { $env:UPDATE_TICKS_BREAK } elseif (Test-Path $breakFile) { (Get-Content $breakFile -Raw).Trim() } else { '' }
+    if ($break -eq 'stop-provider') {
+        foreach ($s in @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like '*stub-codex.mjs*' })) {
+            Write-Output ("BREAK PROBE: ending the provider, pid " + $s.ProcessId + ", during the install")
+            Stop-Process -Id $s.ProcessId -Force -ErrorAction SilentlyContinue
+        }
     }
 
     Step "the app quits, the installer applies $Next, the app relaunches"
@@ -193,13 +247,30 @@ try {
 
     # THE ROW (Tynn #413): the same host, and the same agent, through the update.
     $relaunchAt = ($relaunched | ForEach-Object { $_.StartTime } | Sort-Object | Select-Object -First 1)
+    $script:relaunchedPids = @($relaunched | ForEach-Object { $_.Id })
+    Write-Output ("the window came back on its own at " + $relaunchAt + ": pid(s) " + ($script:relaunchedPids -join ', '))
+
+    # THE CONVERSATION, CONTINUING (Tynn #1036 P6-1): the installer starts the window with no debugger port, so that window
+    # is ended by its tree (genie-host and its providers are not in it) and $Next opened again with one, over the same host.
+    Step "the agent's ledger, in a window of $Next"
+    foreach ($p in $relaunched) { Kill-Tree $p.Id }
+    Start-Sleep 3
+    Assert-PortFree
+    $script:viewer = Start-Process -FilePath $exe -ArgumentList "--remote-debugging-port=$debugPort" -PassThru `
+        -RedirectStandardOutput viewer-out.log -RedirectStandardError viewer-err.log
+    $env:CDP_OWN_PID = "$($script:viewer.Id)"
+    & cmd /c "node scripts\update-ticks-after-cdp.mjs 2>&1"
+    if ($LASTEXITCODE -ne 0) { throw "the agent's stream did not run through the install (update-ticks-after-cdp.mjs exited $LASTEXITCODE)" }
     Start-Sleep 15
     $hostAfter = $null
     try { $hostAfter = Get-Process -Id (Get-Content $hostRecord -Raw | ConvertFrom-Json).pid -ErrorAction Stop } catch { $hostAfter = $null }
     if (-not $hostAfter) { throw 'no live genie-host recorded in host.json after the update' }
     Write-Output ("genie-host after the update: pid " + $hostAfter.Id + ", started " + $hostAfter.StartTime + "; the window relaunched at " + $relaunchAt)
     if ($hostAfter.Id -ne $hostBefore.Id -or $hostAfter.StartTime -ne $hostBefore.StartTime) { throw "genie-host changed: pid $($hostBefore.Id) before, $($hostAfter.Id) after" }
-    $stubs = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like '*stub-codex.mjs*' -and $_.Name -eq 'node.exe' })
+    # The stub provider runs under genie-host's own executable as Node (ELECTRON_RUN_AS_NODE, session-host.ts providerLaunchOptions),
+    # never node.exe: found by its script, whatever runs it (measured: a node.exe filter found 0 while the agent ran).
+    $stubs = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like '*stub-codex.mjs*' })
+    $stubs | ForEach-Object { Write-Output ("  provider: " + $_.ProcessId + " " + $_.Name + " parent " + $_.ParentProcessId + " started " + $_.CreationDate + " path " + $_.ExecutablePath) }
     $kept = @($stubs | Where-Object { $_.CreationDate -lt $relaunchAt })
     $restarted = @($stubs | Where-Object { $_.CreationDate -ge $relaunchAt })
     Write-Output ("agent providers from before the update still running: " + $kept.Count + "; started since: " + $restarted.Count)
@@ -211,10 +282,10 @@ try {
     if (-not $said) { Get-Content $hostLog -Tail 40 -ErrorAction SilentlyContinue; throw 'genie-host did not log a client-only install' }
     Write-Output ("genie-host said: " + ($said | Select-Object -Last 1).Line)
 
-    Step 'tear down the relaunched app, uninstall'
-    foreach ($p in $relaunched) { Kill-Tree $p.Id }
-    Kill-Tree $hostAfter.Id
-    Start-Sleep 2
+    Step 'tear down: the window, genie-host and what they started (scripts/end-own-tree.mjs), then uninstall'
+    $script:ended = $true
+    node scripts/end-own-tree.mjs --since "$($script:began)" --tree "$($script:viewer.Id)" --root "$($hostAfter.Id)"
+    if ($LASTEXITCODE -ne 0) { throw 'the run left processes running (scripts/end-own-tree.mjs named them above)' }
     $left = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path -like "$installDir\*" })
     if ($left.Count) { throw "$($left.Count) process(es) survived" }
     Start-Process (Join-Path $installDir 'Uninstall Genie.exe') -ArgumentList '/S' -Wait
@@ -226,6 +297,17 @@ try {
     Write-Output "### client-only=PASS"
 } finally {
     if ($feed -and -not $feed.HasExited) { Kill-Tree $feed.Id }
+    Remove-Item -Force -ErrorAction SilentlyContinue $ticker
+    # A run that failed before its teardown ends what it started all the same: the windows it saw and genie-host.
+    if ($script:began -and -not $script:ended) {
+        $roots = @($script:relaunchedPids)
+        if ($app) { $roots += $app.Id }
+        if ($script:viewer) { $roots += $script:viewer.Id }
+        try { $hp = (Get-Content (Join-Path $env:USERPROFILE '.genie\runtime\host.json') -Raw | ConvertFrom-Json).pid; if ($hp) { $roots += $hp } } catch { }
+        $endArgs = @('--since', "$($script:began)")
+        foreach ($r in $roots) { if ($r) { $endArgs += @('--root', "$r") } }
+        if ($endArgs.Count -gt 2) { node scripts/end-own-tree.mjs @endArgs }
+    }
     Move-Item package.json.pristine package.json -Force
     Move-Item package-lock.json.pristine package-lock.json -Force
     Stop-Transcript | Out-Null
