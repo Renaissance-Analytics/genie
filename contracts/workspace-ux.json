@@ -1,8 +1,8 @@
 {
-  "$id": "https://raw.githubusercontent.com/Renaissance-Analytics/tynn.ai/main/contracts/workspace-ux/0.12.0/workspace-ux.json",
+  "$id": "https://raw.githubusercontent.com/Renaissance-Analytics/tynn.ai/main/contracts/workspace-ux/0.13.0/workspace-ux.json",
   "contract": "workspace-ux",
-  "version": "0.12.0",
-  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Canonical in Renaissance-Analytics/tynn.ai at contracts/workspace-ux/0.12.0/workspace-ux.json, published on main and never rewritten (genie#1295). Genie and genie-cloud carry a byte-identical copy beside a pin that records the version and sha256 of these bytes.",
+  "version": "0.13.0",
+  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Canonical in Renaissance-Analytics/tynn.ai at contracts/workspace-ux/0.13.0/workspace-ux.json, published on main and never rewritten (genie#1295). Genie and genie-cloud carry a byte-identical copy beside a pin that records the version and sha256 of these bytes. Version 0.13.0 adds canonical Slice state beside legacy status, and PM-3 release_kind/colour on board, WIP and VIP version presentations. Older status-based clients keep their existing fields.",
   "placeholders": {
     "{P}": "the web project prefix: /u/{user}/{project} or /o/{organization}/{project}",
     "{projectId}": "the Tynn project's id (the workspace's project.json tynn.projectId)"
@@ -73,6 +73,8 @@
             "number",
             "title",
             "status",
+            "release_kind",
+            "colour",
             "story_count",
             "stories_done",
             "task_count",
@@ -83,6 +85,7 @@
             "story_number",
             "title",
             "status",
+            "state",
             "order",
             "task_count",
             "tasks_done",
@@ -307,7 +310,34 @@
             ]
           },
           "reconnect": "backoff; on every (re)subscription the client asks for the changes since its last cursor before it shows live"
-        }
+        },
+        "sliceStates": [
+          "proposed",
+          "ready",
+          "running",
+          "awaiting_review",
+          "accepted",
+          "blocked",
+          "rejected",
+          "cancelled",
+          "failed"
+        ],
+        "releaseKinds": [
+          "normal",
+          "hotfix"
+        ],
+        "versionColours": [
+          "slate",
+          "blue",
+          "teal",
+          "green",
+          "amber",
+          "orange",
+          "red",
+          "pink",
+          "violet"
+        ],
+        "stateContract": "Story state is the persisted PM-1 SliceState value, never inferred from legacy status. Story cards, live catch-up rows, focus details and story mutation replies carry state beside status. Version cards, nested versions and version mutation replies carry release_kind and the effective colour token. Legacy status, columns and actions remain available to older clients."
       },
       "states": [
         {
@@ -722,6 +752,7 @@
             "story_number",
             "title",
             "status",
+            "state",
             "description",
             "task_count",
             "tasks_done",
@@ -752,6 +783,8 @@
             "number",
             "title",
             "status",
+            "release_kind",
+            "colour",
             "story_count",
             "stories_done"
           ]
@@ -1858,7 +1891,9 @@
             "id",
             "number",
             "title",
-            "status"
+            "status",
+            "release_kind",
+            "colour"
           ],
           "story": [
             "id",
@@ -1866,6 +1901,7 @@
             "story_number",
             "title",
             "status",
+            "state",
             "description",
             "task_count",
             "tasks_done"
