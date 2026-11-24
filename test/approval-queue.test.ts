@@ -174,9 +174,9 @@ describe('cancel(id, reason) (Tynn #858)', () => {
         const q = new ApprovalQueue({ now });
         let changes = 0;
         q.onChange(() => { changes += 1; });
-        const a = q.gate(atlas, 'pod.sign', 'Tynn task 7');
-        const b = q.gate(atlas, 'pod.sign', 'Tynn task 7');
-        const keep = q.gate(atlas, 'pod.sign', 'Tynn task 8');
+        const a = q.gate(atlas, 'services.remove', 'redis 7');
+        const b = q.gate(atlas, 'services.remove', 'redis 7');
+        const keep = q.gate(atlas, 'services.remove', 'mysql 8');
         const [first, second] = q.deckItems();
         expect(q.deckItems()).toHaveLength(2);
         const before = changes;
@@ -185,7 +185,7 @@ describe('cancel(id, reason) (Tynn #858)', () => {
         expect(await Promise.all([a, b])).toEqual(['denied', 'denied']);
         // CONTROL: the other request is still on the Deck, still waiting for the person.
         expect(q.deckItems().map((i) => i.id)).toEqual([second!.id]);
-        expect(q.lastCancelled()).toEqual([{ action: 'pod.sign', detail: 'Tynn task 7', reason: 'withdrawn' }]);
+        expect(q.lastCancelled()).toEqual([{ action: 'services.remove', detail: 'redis 7', reason: 'withdrawn' }]);
         q.resolve(second!.id, 'allow');
         expect(await keep).toBe('allowed');
     });

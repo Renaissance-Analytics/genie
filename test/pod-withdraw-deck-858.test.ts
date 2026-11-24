@@ -36,6 +36,8 @@ function host() {
                     return { ok: true, status: 201, json: async () => ({}) };
                 }
                 if (path === '/api/v1/pod/pending') return { ok: status < 300, status, json: async () => ({ data: pending }) };
+                // The task's words (Tynn #742): not described here, so the ask names the repository and the task.
+                if (path.startsWith('/api/v1/projects/')) return { ok: false, status: 404, json: async () => null };
                 signed.push(path);
                 return { ok: true, status: 200, json: async () => ({ data: { token: 't' } }) };
             },
@@ -59,18 +61,19 @@ describe('a superseded claim leaves the Deck (Tynn #858)', () => {
         h.setPending([h.claim('pod-1', 7), h.claim('pod-2', 8)]);
         await h.pod.tick();
         await flush();
-        expect(h.queue.deckItems().map((i) => i.title)).toEqual([
-            expect.stringContaining('Tynn task 7'),
-            expect.stringContaining('Tynn task 8'),
-        ]);
+        // Both claims are lines of ONE ask (Tynn #742).
+        expect(h.queue.deckItems()).toHaveLength(1);
+        expect(h.queue.deckItems()[0]!.title).toContain('task 7');
+        expect(h.queue.deckItems()[0]!.title).toContain('task 8');
 
         h.setPending([h.claim('pod-2', 8)]);
         await h.pod.tick();
         await flush();
         const left = h.queue.deckItems();
         expect(left).toHaveLength(1);
-        expect(left[0]!.title).toContain('Tynn task 8');
-        expect(h.queue.lastCancelled()).toEqual([{ action: 'pod.sign', detail: expect.stringContaining('Tynn task 7'), reason: 'Tynn no longer lists this claim as waiting' }]);
+        expect(left[0]!.title).toContain('task 8');
+        expect(left[0]!.title).not.toContain('task 7');
+        expect(h.queue.lastCancelled()).toEqual([{ action: 'pod.sign', detail: expect.stringContaining('task 7'), reason: 'Tynn no longer lists this claim as waiting' }]);
         expect(h.signed).toEqual([]);
 
         // CONTROL: the card that stayed is still the person's to answer, and Sign still signs it.
