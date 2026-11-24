@@ -132,7 +132,10 @@ describe('the capability table', () => {
         // 190 with `approvals.gate` (local, main's own client only: a window-run tool's approval, from genie-host's queue) (Tynn #1006, 2g-4b2).
         // 191 with `window.view` (local, main's own client only: whether the person is active; genie-host names its workspaces itself) (Tynn #1044, 2g-4d B).
         // 192 with `registry.write` (local, main's own client only: a write to genie-host's registry) (Tynn #1007, 2g-4e).
-        expect(REMOTE_METHODS.length).toBe(192);
+        // 193 with `agents.setAppWakeCap` (a write, agent-scoped, the owner's): an agent's app wake cap (Tynn #1053).
+        expect(REMOTE_METHODS.length).toBe(193);
+        expect(capabilityOf('agents.setAppWakeCap')).toBe('write');
+        expect(AGENT_SCOPED_METHODS).toContain('agents.setAppWakeCap');
         expect(capabilityOf('registry.write')).toBe('local');
         expect(capabilityOf('accounts.list')).toBe('read');
         expect(capabilityOf('accounts.act')).toBe('write');
