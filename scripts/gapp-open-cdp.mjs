@@ -17,7 +17,7 @@ import { join, resolve } from 'node:path';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { closeWhatsNew } from './cdp-whats-new.mjs';
 
-const PORT = Number(process.env.CDP_PORT ?? 9336);
+const PORT = Number(process.env.CDP_PORT ?? 9407);
 const WIN = process.platform === 'win32';
 /** When this row began: nothing older is ever taken for one of its own processes (end-own-tree.mjs). */
 const RUN_BEGAN = Date.now();

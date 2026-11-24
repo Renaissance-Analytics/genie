@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path';
 import { measureChatDraftsPage } from './chat-drafts-measure-page.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 
-const WIN = process.platform === 'win32', BASELINE = process.argv.includes('--baseline'), OUT = resolve('smoke-out'), PORT = 9344, INSPECT = 9345, started = Date.now(), sessions = [], reports = [];
+const WIN = process.platform === 'win32', BASELINE = process.argv.includes('--baseline'), OUT = resolve('smoke-out'), PORT = 9409, INSPECT = 9410, started = Date.now(), sessions = [], reports = [];
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const demand = (ok, reason) => { if (!ok) throw new Error(reason); };
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
