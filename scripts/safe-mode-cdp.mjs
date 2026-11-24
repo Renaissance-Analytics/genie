@@ -34,8 +34,8 @@ import { closeWhatsNew } from './cdp-whats-new.mjs';
 process.env.GENIE_PAGE_PROBE ??= '1';
 
 refuseOffTestMachines('safe-mode-cdp');
-const PORT = Number(process.env.SAFE_CDP_PORT ?? 9352);
-const INSPECT = Number(process.env.SAFE_CDP_INSPECT ?? 9353);
+const PORT = Number(process.env.SAFE_CDP_PORT ?? 9412);
+const INSPECT = Number(process.env.SAFE_CDP_INSPECT ?? 9413);
 const h = makeHome('safe-mode');
 const DID_NOT_END = /safe mode: the last run did not end cleanly/;
 let app = null;

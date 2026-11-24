@@ -53,7 +53,7 @@ export const PHONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([
  * after the remote host's own owner, read-only and workspace checks. Later families of P5d.5 join {@link HOST_ALONE_METHODS}.
  */
 export const PILOT_AGENT_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([
-    'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope',
+    'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setAppWakeCap', 'agents.setMode', 'agents.setAccessScope',
     'agents.setAccessAgents', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setMcpServer', 'agents.setIssueWatch', 'agents.setPermissions',
     'agents.setModel', 'agents.models', 'agents.diagnose', 'agents.toolOutput', 'agents.attachment',
     // What someone is typing (Tynn #730): with no window open, a Pilot and a guest still see each other's.
@@ -133,6 +133,8 @@ export interface HostAlonePorts {
     readonly providerInstalled: AgentOpsWiring['providerInstalled'];
     /** What the provider's status call last said (Tynn #698). Absent = not measured here, so nothing is claimed. */
     readonly signedIn?: AgentOpsWiring['signedIn'];
+    /** The host's lifecycle log, for the agents' operations: a changed setting is one line (Tynn #1053). */
+    readonly lifecycleLog?: ((line: string) => void) | undefined;
     /** The sign-ins (Tynn #896, host-sign-ins.ts): the provider's own login for whoever asked. Absent = this host cannot. */
     readonly signIns?: HostApiDeps['signIns'];
     /** The banner's crash report (Tynn #897, 2c-2). Absent = this host cannot send one. */
@@ -256,6 +258,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         providerInstalled: ports.providerInstalled,
         signedIn: ports.signedIn ?? (() => true),
         applyOnStart: (id) => settingApplier.requested(id),
+        ...(ports.lifecycleLog ? { log: ports.lifecycleLog } : {}),
     });
     // A model change waiting for its agent to be free applies the moment it is, with or without a window.
     const settingApplier = new SettingApplier(agentOps, (id) => agentShells(ports.engine()?.rowsFor(id) ?? []).count);

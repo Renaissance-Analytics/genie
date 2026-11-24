@@ -39,7 +39,7 @@ import { EMPTY_FRONT_DOOR_WATCH, type FrontDoorWatchView } from '../core/front-d
 import { windowApprovals } from './approvals-gate-protocol.js';
 import { readThingSignal } from '../core/thing-sounds.js';
 import { readIssueWatchSound } from '../core/issue-watch-signal.js';
-import { quitAnswer, quitPlan, quitSequence, runQuit, type QuitPorts } from '../core/quit.js';
+import { installQuit, leaveForInstall, quitAnswer, quitPlan, quitSequence, runQuit, type QuitPorts } from '../core/quit.js';
 import { windowLaunchFlags } from '../core/launch-flags.js';
 import { hostDownAnswer, hostDownPlan } from '../core/host-down.js';
 import { hostHashOf } from '../core/update-kind.js';
@@ -1474,11 +1474,14 @@ async function boot(): Promise<void> {
      */
     {
         const replica = agentEngineLink.client.updates();
-        replica.onInstalling(() => {
-            lifecycleLog('update: the host is installing; this window quits');
+        // A CLIENT-ONLY INSTALL (P6-1, Tynn #1036) keeps genie-host and its agents: this window exits and stops nothing of
+        // them (core/quit.ts installQuit). Measured on Windows before: the window shut everything down, the host with it.
+        replica.onInstalling((scope) => {
+            const how = installQuit(scope);
+            lifecycleLog(how === 'exit-window' ? 'update: only the window is updated; this window exits, genie-host keeps running' : 'update: the host is installing; this window quits');
             updateQuitReady = true;
             quit.markRecorded();
-            quit.choose('shut-down');
+            quit.choose(how);
             setTimeout(() => { app.quit(); }, QUIT_DELAY_MS);
         });
         // Why the last install did not happen (the host read its record): said on the Deck, in words, with the log's path.
@@ -2288,6 +2291,14 @@ app.on('before-quit', (event) => {
     crashRecorder.beforeQuit();
     scratchSweepStop?.();
     scratchSweepStop = null;
+    // ONLY THE WINDOW IS UPDATED (P6-1, Tynn #1036): this process exits for the installer, and genie-host keeps every agent,
+    // terminal and process. Its own work is closed and its clean end said to the host; nothing is stopped or shut down.
+    if (step === 'exit-window') {
+        leaveForInstall(quitPorts);
+        crashRecorder.cleanQuit();
+        heartbeatNow?.bye();
+        return;
+    }
     // §7.6: remember who was running, BEFORE anything is stopped; the write finishes, then the quit resumes.
     if (step === 'record') {
         event.preventDefault();

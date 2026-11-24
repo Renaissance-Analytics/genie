@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { CARRY_OVER_BYTES, CARRY_OVER_ROWS } from '../core/carry-over.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import { sessionHostPort, type AgentOpsHostEngine } from './agent-ops-host-port.js';
-import { deleteAgent, diagnose, listModels, previewDelete, restartAgent, setAccessAgents, setAccessScope, setAutoApprove, setBudget, setDrivePages, setIssueWatch, setMcpServer, setManageTabs, setMode, setModel, setPermissions, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
+import { deleteAgent, diagnose, listModels, previewDelete, restartAgent, setAccessAgents, setAccessScope, setAppWakeCap, setAutoApprove, setBudget, setDrivePages, setIssueWatch, setMcpServer, setManageTabs, setMode, setModel, setPermissions, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import type { AgentEngine } from './agent-engine.js';
 import type { Finished } from './attention-store.js';
 import type { HostApiDeps } from './host-api.js';
@@ -33,6 +33,8 @@ export interface AgentOpsWiring {
     /** What the provider's own status call last said (Tynn #698, the health book). */
     readonly signedIn: AgentOpsPorts['signedIn'];
     readonly applyOnStart?: AgentOpsPorts['applyOnStart'];
+    /** The host's lifecycle log: a changed setting is one line of it (Tynn #1053). Absent = nothing is logged. */
+    readonly log?: AgentOpsPorts['log'];
 }
 
 export function agentOpsPorts(wiring: AgentOpsWiring): AgentOpsPorts {
@@ -45,6 +47,7 @@ export function agentOpsPorts(wiring: AgentOpsWiring): AgentOpsPorts {
             clearThread: (id) => registry().clearThread(id),
             setProvider: (id, provider, options) => registry().setProvider(id, provider, options),
             setBudget: (id, usd) => registry().setBudget(id, usd),
+            setAppWakeCap: (id, cap) => registry().setAppWakeCap(id, cap),
             setMode: (id, mode) => registry().setMode(id, mode),
             setAccessScope: (id, scope) => registry().setAccessScope(id, scope),
             setAccessAgents: (id, ids) => registry().setAccessAgents(id, ids),
@@ -83,6 +86,7 @@ export function agentOpsPorts(wiring: AgentOpsWiring): AgentOpsPorts {
         providerInstalled: wiring.providerInstalled,
         signedIn: wiring.signedIn,
         ...(wiring.applyOnStart ? { applyOnStart: wiring.applyOnStart } : {}),
+        ...(wiring.log ? { log: wiring.log } : {}),
         startRefusal: wiring.startRefusal,
     };
 }
@@ -95,6 +99,7 @@ export function agentOpsApi(ops: AgentOpsPorts, touch: () => void, engine: () =>
         delete: (id, outcome, also, handoff) => deleteAgent(ops, id, outcome, also, { handoff }).finally(touch),
         switchDriver: (id, to) => switchDriver(ops, id, to).finally(touch),
         setBudget: (id, usd) => setBudget(ops, id, usd).finally(touch),
+        setAppWakeCap: (id, cap) => setAppWakeCap(ops, id, cap).finally(touch),
         setMode: (id, mode) => setMode(ops, id, mode).finally(touch),
         setAccessScope: (id, scope) => setAccessScope(ops, id, scope).finally(touch),
         setAccessAgents: (id, ids) => setAccessAgents(ops, id, ids).finally(touch),

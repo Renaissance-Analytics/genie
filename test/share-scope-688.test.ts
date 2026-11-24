@@ -78,6 +78,8 @@ const FAMILIES: Record<string, readonly Row[]> = {
         row('agents.setAutoApprove', 'allow', [A, true], [[B, true]]),
         row('agents.setManageTabs', 'allow', [A, true], [[B, true]]),
         row('agents.setDrivePages', 'allow', [A, true], [[B, true]]),
+        // The app wake cap (Tynn #1053) is the host owner's to set: a share-link guest is refused, the owner reaches the host.
+        row('agents.setAppWakeCap', 'refuse', [A, 12]),
         row('agents.setMcpServer', 'allow', [A, 'genie', false], [[B, 'genie', false]]),
         row('agents.setIssueWatch', 'allow', [A, {}], [[B, {}]]),
         row('agents.setPermissions', 'allow', [A, 'ask'], [[B, 'ask']]),

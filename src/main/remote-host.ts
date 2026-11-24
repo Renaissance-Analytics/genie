@@ -155,7 +155,9 @@ const OWNER_ONLY: readonly string[] = ['workspaces.previewAdd', 'workspaces.conf
     'files.openExternal', 'files.reveal', ...ACCOUNTS_METHODS,
     // Where a workspace's folder is (host split P7): it points the workspace at any folder of the host's disk, so it is the
     // owner's alone, as adding a folder is. Never a share link's, the shared workspace's own included.
-    'workspaces.relocate'];
+    'workspaces.relocate',
+    // An agent's app wake cap (Tynn #1053): how often an app may spend the owner's turns; only the owner's own devices set it.
+    'agents.setAppWakeCap'];
 /** One of the sign-ins (Tynn #896), checked in one place: #signInRefusal. */
 const isSignIn = (method: string): boolean => (SIGN_IN_METHODS as readonly string[]).includes(method);
 

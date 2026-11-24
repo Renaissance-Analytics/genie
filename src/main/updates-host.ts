@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, relative, isAbsolute } from 'node:path';
 import { channelFrom, type UpdateChannel } from '../core/update-channel.js';
 import type { AgentId } from '../core/identity.js';
 import { recordShutdown, recordThenStopAll } from './shutdown-record.js';
@@ -142,6 +142,26 @@ export function helperLaunch(launch: HelperLaunch): HelperLaunch {
  * electron-updater installs over the app it runs from. The window, which runs from the install, names its executable to the
  * host as GENIE_INSTALL_EXEC; with none (a host started in place, a dev run) the host's own executable, as before.
  */
+/**
+ * THE INSTALL THE UPDATER REPLACES (Tynn #1036 P6-1): the folder of the window's executable (GENIE_INSTALL_EXEC), never the
+ * folder this host runs from, which is its own copy under `<home>/host/`. With none (a host started in place, a dev run),
+ * the host's own folder.
+ */
+export function hostInstallDir(env: Readonly<Record<string, string | undefined>>, execPath: string): string {
+    const install = env.GENIE_INSTALL_EXEC;
+    return dirname(typeof install === 'string' && install.length > 0 ? install : execPath);
+}
+
+/** Whether this host runs from its own copy, not from the install an update replaces (Tynn #1036 P6-1). */
+export function hostRunsFromCopy(env: Readonly<Record<string, string | undefined>>, execPath: string, caseInsensitive = process.platform === 'win32'): boolean {
+    const install = env.GENIE_INSTALL_EXEC;
+    if (typeof install !== 'string' || install.length === 0) return false;
+    const fold = (p: string) => (caseInsensitive ? p.toLowerCase() : p);
+    const inside = relative(fold(dirname(install)), fold(dirname(execPath)));
+    // Under the install (or the install itself): not a copy. Anywhere else (its copy under <home>/host/): a copy.
+    return !(inside === '' || (!inside.startsWith('..') && !isAbsolute(inside)));
+}
+
 export function updaterDefaultLaunch(env: Readonly<Record<string, string | undefined>>, execPath: string): HelperLaunch {
     const install = env.GENIE_INSTALL_EXEC;
     return { file: typeof install === 'string' && install.length > 0 ? install : execPath, args: ['--updater'] };

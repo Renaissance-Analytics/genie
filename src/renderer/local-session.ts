@@ -346,6 +346,7 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             delete: (id, outcome, also, handoff) => requestAgent((agents) => agents.delete(id, outcome, also, handoff)),
             switchDriver: (id, to) => requestAgent((agents) => agents.switchDriver(id, to)),
             setBudget: (id, usd) => requestAgent((agents) => agents.setBudget(id, usd)),
+            setAppWakeCap: (id, cap) => requestAgent((agents) => agents.setAppWakeCap(id, cap)),
             setMode: (id, mode) => requestAgent((agents) => agents.setMode(id, mode)),
             setAccessScope: (id, scope) => requestAgent((agents) => agents.setAccessScope(id, scope)),
             setAccessAgents: (id, ids) => requestAgent((agents) => agents.setAccessAgents(id, ids)),

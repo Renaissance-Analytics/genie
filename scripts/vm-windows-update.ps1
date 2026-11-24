@@ -92,7 +92,7 @@ try {
     Step "package $current and install it"
     if (Test-Path release) { Remove-Item -Recurse -Force release }
     Run 'npm run build' 'build-current.log'
-    Run 'npx electron-builder --publish never' 'package-current.log'
+    Run 'npx electron-builder --publish never --config.win.signExecutable=false' 'package-current.log'
     $setup = @(Get-ChildItem "release\Genie-$current-setup.exe")[0]
     if (-not $setup) { throw "no release\Genie-$current-setup.exe" }
     Uninstall-AnyGenie
@@ -119,7 +119,7 @@ try {
     try {
         Run "npm version $Next --no-git-tag-version" 'bump.log'
         Run 'npm run build' 'build-next.log'
-        Run 'npx electron-builder --publish never' 'package-next.log'
+        Run 'npx electron-builder --publish never --config.win.signExecutable=false' 'package-next.log'
     } finally {
         Move-Item package.json.orig package.json -Force
         Move-Item package-lock.json.orig package-lock.json -Force

@@ -46,6 +46,7 @@ ROWS=(
     flows zip64 host-plain-node mailpit
     package package-fuse
     toolchain
+    client-only-update
 )
 
 # TRACKED RED ROWS (Tynn #967). An acceptance row that lands RED ahead of the stories that fix it, with the reasons it
@@ -506,7 +507,8 @@ row_layout() { need_app && GENIE2_CODEX_BINARY="$PWD/scripts/stub-codex.mjs" GEN
 row_local-door-break() {
     need_app && need_keyring || return 1
     local code=0
-    timeout 300 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/local-door-cdp.mjs --break-admission >"$OUT/local-door-break.out" 2>&1 || code=$?
+    # Ports of its own: local-door runs the same script on its defaults (test/ci-debug-ports-unique.test.ts).
+    CDP_PORT=9405 LOCAL_DOOR_CDP_INSPECT=9406 timeout 300 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/local-door-cdp.mjs --break-admission >"$OUT/local-door-break.out" 2>&1 || code=$?
     cat "$OUT/local-door-break.out"
     [ "$code" -eq 1 ] && grep -q 'FAIL 1:' "$OUT/local-door-break.out" && grep -q 'actual refusal:.*not an admitted' "$OUT/local-door-break.out"
 }
@@ -542,7 +544,7 @@ row_question-maximize() { need_build && need_display && on_display timeout 240 n
 # Esc unsends a message still in the send buffer, files and all, in the real chat with a real key press (Tynn #1029).
 row_esc-unsend() { need_build && need_display && on_display timeout 240 node scripts/esc-unsend-cdp.mjs; }
 row_site-panel() { need_app && need_keyring && timeout 280 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/site-panel-cdp.mjs; }
-row_site-panel-locked() { need_app && SITE_PANEL_LOCKED=1 CDP_PORT=9336 timeout 120 node scripts/site-panel-cdp.mjs; }
+row_site-panel-locked() { need_app && SITE_PANEL_LOCKED=1 CDP_PORT=9408 timeout 120 node scripts/site-panel-cdp.mjs; }
 row_browser-process() { need_app && need_keyring && timeout 260 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/browser-process-cdp.mjs; }
 # The app opened by need_app wrote this log: the spawn host started, and never fell back.
 row_spawn-host() {
@@ -560,7 +562,7 @@ row_renderer-crash() { need_build && need_display && on_display timeout 420 node
 # genie-host pid, the same provider pid per agent, every tick streamed while no window was open in its ledger, in order;
 # "Shut down everything" ends window, host and providers. Its Genie has a home, a lock and ports of its own beside the
 # shared app (QUIT_CDP_OWN_HOME), its logs under ci-out/quit-keeps-host; its own watchdog (360 s) and cleanup end first.
-row_quit-keeps-host() { need_build && need_display && on_display timeout 450 env QUIT_CDP_OWN_HOME=1 QUIT_CDP_OUT="$OUT/quit-keeps-host" CDP_PORT=9362 QUIT_CDP_INSPECT=9363 QUIT_CDP_DEADLINE_MS=360000 node scripts/quit-keeps-host-cdp.mjs; }
+row_quit-keeps-host() { need_build && need_display && on_display timeout 450 env QUIT_CDP_OWN_HOME=1 QUIT_CDP_OUT="$OUT/quit-keeps-host" CDP_PORT=9414 QUIT_CDP_INSPECT=9415 QUIT_CDP_DEADLINE_MS=360000 node scripts/quit-keeps-host-cdp.mjs; }
 # A data root attached to a rebuilt machine (host split P7.3, Tynn #419): a real genie-host on a real Secret Service, no window.
 row_rebuilt-machine() { need_install && need_keyring && timeout 420 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/rebuilt-machine.mjs; }
 
@@ -643,6 +645,11 @@ row_package-fuse() {
 # land. It must meet the machine before this harness changed it, so it refuses once any need_cmd has installed
 # something with pacman, or say_docker has started Docker. The gate runs it alone, as its own shard on its own VM.
 # It removes git and docker and leaves what it installed; a run that wants other rows after it uses a fresh machine.
+# A CLIENT-ONLY UPDATE KEEPS GENIE-HOST AND ITS AGENT STREAMING (Tynn #1036 P6-1): two AppImages that carry the same host,
+# the base one installed and updated to the other through the real updater while an agent streams; the same host and
+# provider pids after, and every tick streamed while there was no window in the agent's ledger, in order. It builds and
+# packages twice and replaces ~/.genie, ~/Applications/Genie.AppImage and dist/: last in the list, after every row that reads them.
+row_client-only-update() { need_install && need_electron && need_display && timeout 2300 bash scripts/vm-client-only-update-linux.sh; }
 row_toolchain() {
     need_build && need_display || return 1
     local ran
@@ -700,6 +707,7 @@ ceiling() {
         flows|zip64) echo 1200 ;;
         package) echo 1500 ;;
         toolchain) echo 2700 ;;
+        client-only-update) echo 2400 ;;
         *) echo 600 ;;
     esac
 }
@@ -887,7 +895,7 @@ run_rows() {
     for name in "${selected[@]}"; do
         echo "=== $name"
         machine_line "$name"
-        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover trust-step accounts-popover claude-accounts sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash quit-keeps-host host-late-ready package-fuse toolchain " in
+        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover trust-step accounts-popover claude-accounts sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash quit-keeps-host host-late-ready package-fuse toolchain client-only-update " in
             *" $name "*) reap_leftovers "$name" ;;
         esac
         from="$(now_ms)"

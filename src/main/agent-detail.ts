@@ -1,3 +1,4 @@
+import { appWakeCapOf } from '../core/app-inbox.js';
 import { chatCommsOf } from '../core/chat-view.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import type { InboxMessage } from './inbox-store.js';
@@ -52,6 +53,8 @@ export function agentDetailFor(ports: AgentDetailPorts, agentId: AgentId): Agent
             fidelity: takeOver ? 'observed' : 'declared',
             cwd: ports.cwdFor(record),
             dailyBudgetUsd: record.dailyBudgetUsd ?? null,
+            // The app wake cap in force (Tynn #1053): its own, or the default.
+            appWakeCap: appWakeCapOf(record),
             mode: record.mode,
             accessScope: record.accessScope,
             // Chosen agents (Tynn #526): only when the choice is on.

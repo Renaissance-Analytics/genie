@@ -110,6 +110,11 @@ export type QuitStep =
     | 'shut-down'
     /** "Just close the UI": prevent this quit and close the windows; the process stays as the tray. Nothing is confirmed. */
     | 'close-ui'
+    /**
+     * An install that changes only the window (P6-1, Tynn #1036): the window process exits, because the installer replaces
+     * its files, and stops nothing of genie-host: no agent, no terminal, no host. Let the quit proceed.
+     */
+    | 'exit-window'
     /** The shutdown already ran: let the quit proceed, do nothing twice. */
     | 'pass';
 
@@ -117,15 +122,18 @@ export interface QuitSequence {
     readonly quitting: boolean;
     /** The OS is ending the session (shutdown, restart, sign-out): no question is asked — nothing could answer it. Shuts everything down. */
     force(): void;
-    /** The answer is already given (the tray's Shut down everything and Restart, the tray-only exit): the quit asks nothing. */
-    choose(answer: 'shut-down'): void;
+    /**
+     * The answer is already given (the tray's Shut down everything and Restart, the tray-only exit; an install's quit,
+     * `installQuit`): the quit asks nothing.
+     */
+    choose(answer: 'shut-down' | 'exit-window'): void;
     /** An upgrade's drain recorded the running set itself; a later quit must not overwrite it with the empty set it leaves. */
     markRecorded(): void;
     beforeQuit(input: { readonly ready: boolean; readonly plan: () => QuitPlan; readonly ask: (plan: Extract<QuitPlan, { confirm: true }>) => QuitAnswer }): QuitStep;
 }
 
 export function quitSequence(): QuitSequence {
-    let chosen: 'shut-down' | null = null;
+    let chosen: 'shut-down' | 'exit-window' | null = null;
     let forced = false;
     let recorded = false;
     let done = false;
@@ -136,6 +144,10 @@ export function quitSequence(): QuitSequence {
         markRecorded() { recorded = true; },
         beforeQuit({ ready, plan, ask }) {
             if (done) return 'pass';
+            if (chosen === 'exit-window') {
+                done = true;
+                return 'exit-window';
+            }
             if (chosen === null) {
                 let answer: QuitAnswer = 'shut-down';
                 if (ready) {
@@ -185,4 +197,19 @@ export async function runQuit(ports: QuitPorts, options: { readonly drainMs?: nu
     await Promise.race([ports.drained().catch(() => undefined), ...(over ? [over] : [])]);
     clearTimeout(bound);
     await ports.shutDownHost();
+}
+
+/**
+ * HOW THE WINDOW QUITS FOR AN INSTALL GENIE-HOST RUNS (P6-1, Tynn #1036). Measured on Windows: a client-only update kept
+ * nothing, because the window always quit with "Shut down everything", and genie-host logged "shutting down: a window
+ * asked" before the installer ran. Only the window: it exits, and genie-host and its agents keep running. Anything else,
+ * or a scope the window was never told: the shut-down it always was.
+ */
+export function installQuit(scope: import('./update-kind.js').UpdateScope | undefined): 'shut-down' | 'exit-window' {
+    return scope?.kind === 'client-only' ? 'exit-window' : 'shut-down';
+}
+
+/** The window leaves for a client-only install: its own work closed, nothing of genie-host stopped. */
+export function leaveForInstall(ports: Pick<QuitPorts, 'closeWindow'>): void {
+    ports.closeWindow();
 }
