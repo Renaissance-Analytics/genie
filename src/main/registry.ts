@@ -845,6 +845,11 @@ export class Registry {
         return this.#update(agentId, (a) => ({ ...a, dailyBudgetUsd }));
     }
 
+    /** Its app wake cap (Tynn #1053): a number of wakes an hour, or the word `unlimited`. Read by the mail wake each time. */
+    async setAppWakeCap(agentId: AgentId, appWakeCap: number | 'unlimited'): Promise<AgentRecord | null> {
+        return this.#update(agentId, (a) => ({ ...a, appWakeCap }));
+    }
+
     /** The agent's last turn number (identity.ts `lastTurn`): what its next session numbers on from. */
     async setLastTurn(agentId: AgentId, lastTurn: number): Promise<AgentRecord | null> {
         return this.#update(agentId, (a) => (a.lastTurn === lastTurn ? a : { ...a, lastTurn }));

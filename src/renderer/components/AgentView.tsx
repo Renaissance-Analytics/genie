@@ -15,6 +15,7 @@ import { agentIndex, type IndexLive } from '../../core/agent-index.js';
 import { readIndexCollapsed, turnNumbers, writeIndexCollapsed } from '../../core/index-column.js';
 import type { McpRow } from '../../core/agent-mcp.js';
 import { McpServerSwitches, SkillsAndCommands } from './AgentSkills.js';
+import { AppWakeCapControl } from './AppWakeCapControl.js';
 import { FidelityDot } from './Dashboard.js';
 import { Flash } from './Flash.js';
 import { BAR_ACTION, TopBar } from './TopBar.js';
@@ -166,6 +167,9 @@ export interface AgentOpsProps {
     /** The agent's own half of who may message it (§6.4). */
     readonly accessScope: 'none' | 'self' | 'specific' | 'all';
     readonly onSetMode: (mode: 'automated' | 'manual') => void;
+    /** Its app wake cap (Tynn #1053): turns an hour an app's mail may give it, or no limit. Absent setter = no row. */
+    readonly appWakeCap?: number | 'unlimited';
+    readonly onSetAppWakeCap?: (cap: number | 'unlimited') => void;
     readonly onSetAccessScope: (scope: 'none' | 'self' | 'all') => void;
     /** Chosen agents who may message it (Tynn #526); absent = the choice is off. */
     readonly accessAgents?: readonly string[] | undefined;
@@ -1108,6 +1112,7 @@ function AgentViewBody({
                             issueWatch: ops?.onSetIssueWatch !== undefined && ops.issueWatch !== undefined,
                             persona: persona !== null, skills: session?.extensions != null || ops?.mcp !== undefined,
                             tui: onTakeOver !== undefined,
+                            appWakeCap: ops?.onSetAppWakeCap !== undefined,
                         });
                         const shown = settingsSectionShown(sections, settingsSectionProp ?? ownSettingsSection);
                         const has = new Set(sections.find((s) => s.id === shown)?.controls ?? []);
@@ -1306,6 +1311,9 @@ function AgentViewBody({
                                                     {help('Mode is wording for the agent, not a permission boundary.')}
                                                     {outcomeFor('mode')}
                                                 </div>
+                                            ) : null}
+                                            {ops?.onSetAppWakeCap && has.has('app-wake-cap') ? (
+                                                <AppWakeCapControl agentName={agent.name} cap={ops.appWakeCap ?? 6} onSet={(cap) => { touch('app-wake-cap'); ops.onSetAppWakeCap?.(cap); }} outcome={outcomeFor('app-wake-cap')} />
                                             ) : null}
                                             {ops && has.has('run') ? (
                                                 <div data-settings-row="run" className={rowClass}>

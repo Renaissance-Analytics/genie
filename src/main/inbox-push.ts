@@ -3,7 +3,7 @@ import type { LiveSession } from '../core/roster.js';
 import type { PromptContext } from '../core/session.js';
 import type { NoticeMail, StreamEvent } from '../core/stream-event.js';
 import { inboxAgentPaused } from '../core/inbox.js';
-import { AppTurnBudget, appDelivery, isAppSender, type AppDelivery } from '../core/app-inbox.js';
+import { AppTurnBudget, appDelivery, isAppSender, type AppDelivery, type AppWakeCap } from '../core/app-inbox.js';
 
 /**
  * §6.4 THE INBOX PUSH — GENIE'S, FOR EVERY PROVIDER. When mail lands for an agent, Genie puts the notice into that
@@ -337,10 +337,13 @@ export const INBOX_COALESCE_MS = 1_500;
  */
 export function appMailPushPorts(input: {
     readonly modeOf: (agentId: AgentId) => AgentRecord['mode'] | undefined;
+    /** The agent's own cap (Tynn #1053), asked each time. Absent = the default for every agent. */
+    readonly capOf?: ((agentId: AgentId) => AppWakeCap) | undefined;
     readonly now: () => number;
     readonly schedule: (fn: () => void, ms: number) => () => void;
 }): { [K in 'appMail' | 'appBudget' | 'schedule' | 'coalesceMs']-?: NonNullable<InboxPushPorts[K]> } {
-    const budget = new AppTurnBudget(input.now);
+    const { capOf } = input;
+    const budget = new AppTurnBudget(input.now, capOf ? (agentId) => capOf(agentId as AgentId) : undefined);
     return {
         appMail: (to, message) => (isAppSender(message.from) ? appDelivery(input.modeOf(to) ?? 'manual', budget.waitMs(to) === 0) : null),
         appBudget: budget,

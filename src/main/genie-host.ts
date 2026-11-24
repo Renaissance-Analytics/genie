@@ -2112,6 +2112,8 @@ async function main(): Promise<void> {
     });
     phoneApi = hostAloneApi({
         hostName: hostname(),
+        // A changed agent setting is one line of this host's lifecycle log (Tynn #1053).
+        lifecycleLog,
         features: hostFeatures,
         registry: phoneRegistry,
         engine: () => host,

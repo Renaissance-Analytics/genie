@@ -1717,6 +1717,8 @@ function DesktopApp({ bridge }: AppProps) {
               diagnosis: opsView.diagnosis,
               lastOutcome: opsView.lastOutcome,
               budgetUsd: detail?.agent.dailyBudgetUsd ?? null,
+              appWakeCap: detail?.agent.appWakeCap ?? 6,
+              onSetAppWakeCap: (cap) => { void resolvedBridge.agents.setAppWakeCap(agentId, cap).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               mode: detail?.agent.mode ?? 'manual',
               accessScope: detail?.agent.accessScope ?? 'self',
               ...(detail?.agent.accessAgents ? { accessAgents: detail.agent.accessAgents } : {}),

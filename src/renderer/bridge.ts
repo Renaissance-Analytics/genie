@@ -127,7 +127,7 @@ export interface GenieSnapshot {
  * history down the wire to redraw one line.
  */
 export interface AgentDetail {
-    agent: { id: string; name: string; workspaceId?: string | undefined; provider: string; fidelity: Fidelity; cwd: string; raisesApprovals?: boolean | null | undefined; dailyBudgetUsd?: number | null; mode?: 'automated' | 'manual'; accessScope?: 'none' | 'self' | 'specific' | 'all'; /** Chosen agents who may message it (Tynn #526). */ accessAgents?: readonly string[]; /** Autonomous (Tynn #801). */ autoApprove?: boolean; manageTabs?: boolean; /** May drive pages (browser rebuild step 7). */ drivePages?: boolean; /** Its MCP servers (Tynn #628): switched off, and ever reported. */ mcpOff?: readonly string[]; mcpSeen?: readonly string[]; /** On for it over its workspace's default; and that default. */ mcpOn?: readonly string[]; workspaceMcpOff?: readonly string[]; issueWatch?: IssueWatchPrefs; permissions?: AgentPermissions; /** The model CHOSEN for it; `null` = the provider's default. The one IN USE is `session.model`. */ model?: string | null; /** The persona file, workspace-relative (`.agents/<name>/AGENT.md`); `null` when the record names none. */ instructions?: string | null };
+    agent: { id: string; name: string; workspaceId?: string | undefined; provider: string; fidelity: Fidelity; cwd: string; raisesApprovals?: boolean | null | undefined; dailyBudgetUsd?: number | null; /** Its app wake cap in force (Tynn #1053): turns an hour an app's mail may give it, or no limit. */ appWakeCap?: number | 'unlimited'; mode?: 'automated' | 'manual'; accessScope?: 'none' | 'self' | 'specific' | 'all'; /** Chosen agents who may message it (Tynn #526). */ accessAgents?: readonly string[]; /** Autonomous (Tynn #801). */ autoApprove?: boolean; manageTabs?: boolean; /** May drive pages (browser rebuild step 7). */ drivePages?: boolean; /** Its MCP servers (Tynn #628): switched off, and ever reported. */ mcpOff?: readonly string[]; mcpSeen?: readonly string[]; /** On for it over its workspace's default; and that default. */ mcpOn?: readonly string[]; workspaceMcpOff?: readonly string[]; issueWatch?: IssueWatchPrefs; permissions?: AgentPermissions; /** The model CHOSEN for it; `null` = the provider's default. The one IN USE is `session.model`. */ model?: string | null; /** The persona file, workspace-relative (`.agents/<name>/AGENT.md`); `null` when the record names none. */ instructions?: string | null };
     /** `null` when the agent is registered but not running. Not an error. */
     session: LiveSession | null;
     rows: readonly TimedEvent[];
@@ -461,6 +461,8 @@ export interface GenieBridge {
         delete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[], handoff?: boolean): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
         switchDriver(agentId: string, to: string): Promise<SwitchDecision>;
         setBudget(agentId: string, dailyLimitUsd: number | null): Promise<{ ok: true; decision: BudgetDecision } | { ok: false; reason: string }>;
+        /** Its app wake cap (Tynn #1053): a whole number of wakes an hour, or `unlimited`. The host checks it and refuses in words. */
+        setAppWakeCap(agentId: string, cap: number | 'unlimited'): Promise<{ ok: true } | { ok: false; reason: string }>;
         diagnose(agentId: string): Promise<{ ok: true; diagnosis: Diagnosis } | { ok: false; reason: string }>;
         /**
          * A tool row's WHOLE output (Tynn story #386): the window holds a 16 KB preview; the host keeps the rest beside the
