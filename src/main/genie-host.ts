@@ -2516,7 +2516,8 @@ async function main(): Promise<void> {
             settings: { workspaceValues: (id) => settings.workspaceValues(id), setFor: (id, key, value) => settings.setFor(id, key, value), get: (key) => settings.snapshot()[key] },
             flows: async () => { await flowsOpening; return flowStoreNow; },
             processes: async () => { await bookOpening; return processBookNow; },
-            trusted: (id) => hostingStack?.trust.view(id)?.trusted === true,
+            // Read then, not the verdict as last kept (Tynn #955): what is being created is itself on the trust list.
+            trusted: async (id) => (await hostingStack?.trust.refresh(id).catch(() => null))?.trusted === true,
             siteHosts: (id) => (hostingStack?.sites.list() ?? []).filter((s) => s.workspaceId === id).map((s) => `${s.name}.gen`),
     });
     const restoreWorkspaceClone = (workspaceId: string): void => {
@@ -2544,7 +2545,7 @@ async function main(): Promise<void> {
             workspace.path,
         ).model.files.map((f) => ({ path: f.path, value: f.value })),
     });
-    cloneOffersService.attach({ watch: cloneWatch, trusted: (id) => hostingStack?.trust.view(id)?.trusted === true });
+    cloneOffersService.attach({ watch: cloneWatch, trusted: async (id) => (await hostingStack?.trust.refresh(id).catch(() => null))?.trusted === true });
     cloneWatch.onChange((workspaceId, offers) => { if (offers.length > 0) lifecycleLog(`${workspaceId}: the repo has ${offers.length} change${offers.length === 1 ? '' : 's'} to offer: ${offers.map((o) => o.summary).join(', ')}`); });
     const cloneWatchTimer = setInterval(() => { cloneWatch.pass().catch((error: unknown) => say(`clone watch: ${error instanceof Error ? error.message : String(error)}`)); }, 30_000);
     cloneWatchTimer.unref();

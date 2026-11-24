@@ -39,7 +39,7 @@ export interface CloneRestoreDeps {
         kept(): readonly { name: string; workspaceId: string; command: string; cwd: string; restart: ProcessSource['restart']; schedule?: ProcessSource['schedule'] }[];
         keep(input: KeepInput): Promise<unknown>;
     } | null>;
-    trusted(workspaceId: string): boolean;
+    trusted(workspaceId: string): boolean | Promise<boolean>;
     siteHosts(workspaceId: string): readonly string[];
 }
 

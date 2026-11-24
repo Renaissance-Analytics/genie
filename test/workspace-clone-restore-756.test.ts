@@ -196,3 +196,25 @@ describe('a workspace that appears', () => {
         expect(heard).toEqual([]);
     });
 });
+
+describe('the trust is asked at its step, and waited for (Tynn #955)', () => {
+    it('an answer that arrives later and is "no": what would run waits, listed, and nothing of it is created or kept', async () => {
+        const { ports, created, kept } = rig({ trusted: false });
+        (ports as unknown as { trusted: (id: string) => Promise<boolean> }).trusted = async () => false;
+        const out = await restoreClone(WS, ports);
+        expect(out.trusted).toBe(false);
+        expect(created.map((c) => c.name)).toEqual(['quiet']);
+        expect(out.flows?.waiting).toEqual([{ file: '.flows/nightly-backup.json', commands: ['npm run backup'] }]);
+        expect(out.processes?.waiting.map((w) => w.file).sort()).toEqual(['.processes/nightly-dump.json', '.processes/queue-worker.json']);
+        expect(kept).toEqual([]);
+    });
+
+    it('control: an answer that arrives later and is "yes": they are created and kept', async () => {
+        const { ports, created, kept } = rig({ trusted: false });
+        (ports as unknown as { trusted: (id: string) => Promise<boolean> }).trusted = async () => true;
+        const out = await restoreClone(WS, ports);
+        expect(out.trusted).toBe(true);
+        expect(created.map((c) => c.name).sort()).toEqual(['nightly-backup', 'quiet']);
+        expect(kept.length).toBe(2);
+    });
+});

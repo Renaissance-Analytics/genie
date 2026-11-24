@@ -77,6 +77,11 @@ export function trustHash(list: TrustList): string {
     return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
 }
 
+/** The person's yes to the workspace, said or carried at the upgrade: the part of the verdict that reads no file. */
+export function recordSaysYes(record: TrustRecord, workspaceId: string): boolean {
+    return record.workspaces[workspaceId] !== undefined || record.carried.includes(workspaceId);
+}
+
 /**
  * TRUST IS GIVEN ONCE AND STAYS (Tynn #618; the owner's ruling, 2026-11-11: "once I trust a workspace, it should be trusted
  * with everything in that workspace. I should not have to keep re-trusting it every time it adds a new service or site").
@@ -86,6 +91,6 @@ export function trustHash(list: TrustList): string {
  * whether anything would run. `changed` is always false: nothing is ever "changed since you trusted it".
  */
 export function trustVerdict(record: TrustRecord, workspaceId: string, hash: string): { trusted: boolean; changed: boolean } {
-    if (record.workspaces[workspaceId] !== undefined || record.carried.includes(workspaceId)) return { trusted: true, changed: false };
+    if (recordSaysYes(record, workspaceId)) return { trusted: true, changed: false };
     return { trusted: hash === trustHash(NOTHING()), changed: false };
 }
