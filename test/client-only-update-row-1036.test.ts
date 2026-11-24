@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { linuxRow, linuxRows, linuxSh, windowsFunction, windowsPs1, windowsRows } from './helpers/ci-scripts.js';
+import { descends } from '../scripts/cdp-own-launch.mjs';
 
 /*
  * A CLIENT-ONLY UPDATE IS A CI ROW ON BOTH PLATFORMS, AND IT PROVES THE AGENT STREAMED THROUGH IT (Tynn #1036 P6-1).
@@ -100,6 +101,44 @@ describe('the seed never touches the checkout', () => {
         expect(sh()).toMatch(/WORKSPACE="\$\(mktemp -d -t genie-update-workspace-XXXXXX\)"/);
         expect(sh()).toMatch(/\( cd "\$WORKSPACE" && node "\$ROOT\/scripts\/smoke-seed\.mjs" \) >seed\.log 2>&1/);
         expect(sh()).not.toMatch(/run seed\.log node scripts\/smoke-seed\.mjs/);
+    });
+});
+
+describe('the page it drives is its own launch', () => {
+    // The full gate 1124-034522-b451dd: an earlier row's process held 9222 and the row read that app's page. The row has a
+    // port of its own (test/ci-debug-ports-unique.test.ts), refuses one that already answers, and its drivers check that the
+    // process listening there is the launch it names (CDP_OWN_PID) or one it started.
+    it('both scripts: port 9401, refused when something already answers on it, the launch pid handed to each driver', () => {
+        expect(ps1()).toMatch(/\$debugPort = 9401\n\$env:CDP_PORT = "\$debugPort"/);
+        expect(ps1()).toMatch(/if \(\$answered\) \{ throw "something already answers on this row's debugger port \$debugPort/);
+        expect(ps1().match(/Assert-PortFree\n\s*(?:\$app|\$script:viewer) = Start-Process -FilePath \$exe -ArgumentList "--remote-debugging-port=\$debugPort"/g)?.length).toBe(2);
+        expect(ps1()).toMatch(/\$env:CDP_OWN_PID = "\$\(\$app\.Id\)"\n\s*& cmd \/c "node scripts\\update-cdp\.mjs 2>&1"/);
+        expect(ps1()).toMatch(/\$env:CDP_OWN_PID = "\$\(\$script:viewer\.Id\)"\n\s*& cmd \/c "node scripts\\update-ticks-after-cdp\.mjs 2>&1"/);
+        expect(sh()).toMatch(/DEBUG_PORT=9401\nexport CDP_PORT="\$DEBUG_PORT"/);
+        expect(sh().match(/port_free\n"\$APPIMAGE_FILE" --remote-debugging-port="\$DEBUG_PORT"/g)?.length).toBe(2);
+        expect(sh()).toMatch(/CDP_OWN_PID="\$APP_PID" node scripts\/update-cdp\.mjs/);
+        expect(sh()).toMatch(/CDP_OWN_PID="\$VIEWER_PID" node scripts\/update-ticks-after-cdp\.mjs/);
+        for (const text of [ps1(), sh()]) expect(text).not.toMatch(/remote-debugging-port=9222/);
+    });
+
+    it('both drivers refuse a page that is not that launch, before reading it', () => {
+        const cdp = js('update-cdp.mjs');
+        expect(cdp).toMatch(/if \(process\.env\.CDP_OWN_PID\) \{\n\s*const why = notOwnLaunch\(PORT, Number\(process\.env\.CDP_OWN_PID\)\);[\s\S]{0,300}if \(why !== null\) \{[^\n]*process\.exit\(1\); \}/);
+        expect(cdp.indexOf('notOwnLaunch(PORT')).toBeLessThan(cdp.indexOf('Cdp.connect(page.webSocketDebuggerUrl)'));
+        const after = js('update-ticks-after-cdp.mjs');
+        expect(after).toMatch(/const why = notOwnLaunch\(PORT, Number\(process\.env\.CDP_OWN_PID\)\);\n\s*if \(!check\(why === null, [^\n]*\)\) throw new Error/);
+        expect(after.indexOf('notOwnLaunch(PORT')).toBeLessThan(after.indexOf('Cdp.connect(page.webSocketDebuggerUrl'));
+    });
+
+    it('own means the launch or a process it started, by the process table, never anything else on the port', () => {
+        const parent = new Map([[30, 20], [20, 10], [10, 1], [40, 1]]);
+        const parentOf = (pid: number) => parent.get(pid) ?? null;
+        expect(descends(10, 10, parentOf)).toBe(true);
+        expect(descends(30, 10, parentOf)).toBe(true);
+        expect(descends(40, 10, parentOf)).toBe(false);
+        expect(descends(30, 99, parentOf)).toBe(false);
+        // A table with a loop answers, and answers no.
+        expect(descends(5, 10, (pid) => (pid === 5 ? 6 : 5))).toBe(false);
     });
 });
 
