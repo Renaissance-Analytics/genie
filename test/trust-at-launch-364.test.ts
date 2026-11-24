@@ -185,13 +185,6 @@ describe('a read crossed by reads that agree does not undo them (Tynn #364, foun
         expect(f.trust.view('added')?.trusted).toBe(true);
     });
 
-    it('CONTROL: crossed every time by an Untrust, it is not trusted (the read-order rule of Tynn #955 stands)', async () => {
-        const f = fixture();
-        const cross = async (): Promise<void> => { await f.trust.untrust('added'); f.duringGit(cross); };
-        f.duringGit(cross);
-        const view = await f.trust.refresh('added');
-        f.duringGit(async () => {});
-        expect(view?.trusted).toBe(false);
-        expect(f.trust.view('added')?.trusted).toBe(false);
-    });
+    // Where #955 still refuses trust (a crossed read with nothing fresher kept, a read alone that says not trusted, the record's
+    // yes): test/workspace-trust-read-order-955.test.ts.
 });
