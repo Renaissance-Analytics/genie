@@ -14,6 +14,8 @@ import {
     BOARD_STATES,
     BOARD_TRANSITIONS,
 } from '../src/core/tynn-board.js';
+import { RELEASE_KINDS, VERSION_COLOURS } from '../src/core/release-kind.js';
+import { SLICE_STATES } from '../src/core/slice-state.js';
 import {
     RELEASES_ANSWER,
     RELEASES_DATA_API,
@@ -148,14 +150,14 @@ const publishedInSharedSchemas = (v: string) => compareVersions(v, LAST_SHARED_S
 const board = contract.surfaces.find((s) => s.id === 'board')!;
 
 describe('the contract file', () => {
-    it('pins VIP, Features, Home, Releases, Issues and WIP to the 0.12.0 contract published by tynn.ai #469', () => {
+    it('pins VIP, Features, Home, Releases, Issues and WIP to the 0.13.0 contract published by tynn.ai #495', () => {
         expect(pin).toEqual({
             repository: 'Renaissance-Analytics/tynn.ai',
             contract: 'workspace-ux',
-            version: '0.12.0',
-            commit: '7ae7dc15253381119b410ce99483b003ab8f67e2',
-            path: 'contracts/workspace-ux/0.12.0/workspace-ux.json',
-            sha256: '7b4758748779564b7381283b3674e62f045216b61948e5caf79b09acd56967fb',
+            version: '0.13.0',
+            commit: '22bb08b07db2a7f36e4923574c8eab9bd7be5744',
+            path: 'contracts/workspace-ux/0.13.0/workspace-ux.json',
+            sha256: '53aa84c3e7693201bc590e4d687c06e88aa6b0e3b3a39b7158a2761ad7708ade',
         });
     });
 
@@ -213,6 +215,13 @@ describe('the Tynn tab\'s board, against the contract', () => {
     it('shows the contract\'s levels, columns and card fields', () => {
         expect(BOARD_LEVELS).toEqual(board.data.levels);
         expect(BOARD_FIELDS).toEqual(board.data.fields);
+    });
+
+    it('names the Slice states, the release kinds and the colour tokens the contract names (0.13.0)', () => {
+        const named = board.data as unknown as { sliceStates?: string[]; releaseKinds?: string[]; versionColours?: string[] };
+        expect([...SLICE_STATES]).toEqual(named.sliceStates);
+        expect([...RELEASE_KINDS]).toEqual(named.releaseKinds);
+        expect([...VERSION_COLOURS]).toEqual(named.versionColours);
     });
 
     it('drags, gates drops and offers each card\'s next step by the contract\'s rules', () => {

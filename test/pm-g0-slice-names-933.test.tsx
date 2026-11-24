@@ -54,10 +54,10 @@ describe('a Slice\'s state', () => {
         expect(sliceStateOf({ status: 'blocked' })).toBe('blocked');
     });
 
-    it('is nothing for what it cannot name (an archived row, an unknown state falls back to status)', () => {
+    it('is nothing for a status it cannot name (an archived row); a state it cannot name is unknown, never the mapped status', () => {
         expect(sliceStateOf({ status: 'archived' })).toBeNull();
         expect(sliceStateOf({ status: 'weird' })).toBeNull();
-        expect(sliceStateOf({ state: 'nonsense', status: 'qa' })).toBe('awaiting_review');
+        expect(sliceStateOf({ state: 'nonsense', status: 'qa' })).toBe('unknown');
     });
 
     it('has a label for all nine states', () => {
