@@ -46,6 +46,7 @@ ROWS=(
     flows zip64 host-plain-node mailpit
     package package-fuse
     toolchain
+    client-only-update
 )
 
 # TRACKED RED ROWS (Tynn #967). An acceptance row that lands RED ahead of the stories that fix it, with the reasons it
@@ -635,6 +636,11 @@ row_package-fuse() {
 # land. It must meet the machine before this harness changed it, so it refuses once any need_cmd has installed
 # something with pacman, or say_docker has started Docker. The gate runs it alone, as its own shard on its own VM.
 # It removes git and docker and leaves what it installed; a run that wants other rows after it uses a fresh machine.
+# A CLIENT-ONLY UPDATE KEEPS GENIE-HOST AND ITS AGENT STREAMING (Tynn #1036 P6-1): two AppImages that carry the same host,
+# the base one installed and updated to the other through the real updater while an agent streams; the same host and
+# provider pids after, and every tick streamed while there was no window in the agent's ledger, in order. It builds and
+# packages twice and replaces ~/.genie, ~/Applications/Genie.AppImage and dist/: last in the list, after every row that reads them.
+row_client-only-update() { need_install && need_electron && need_display && timeout 2300 bash scripts/vm-client-only-update-linux.sh; }
 row_toolchain() {
     need_build && need_display || return 1
     local ran
@@ -691,6 +697,7 @@ ceiling() {
         flows|zip64) echo 1200 ;;
         package) echo 1500 ;;
         toolchain) echo 2700 ;;
+        client-only-update) echo 2400 ;;
         *) echo 600 ;;
     esac
 }
@@ -878,7 +885,7 @@ run_rows() {
     for name in "${selected[@]}"; do
         echo "=== $name"
         machine_line "$name"
-        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover trust-step accounts-popover claude-accounts sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash host-late-ready package-fuse toolchain " in
+        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover trust-step accounts-popover claude-accounts sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash host-late-ready package-fuse toolchain client-only-update " in
             *" $name "*) reap_leftovers "$name" ;;
         esac
         from="$(now_ms)"

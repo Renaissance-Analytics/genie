@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { closeWhatsNew } from './cdp-whats-new.mjs';
+import { writeFileSync } from 'node:fs';
+import { ticksOf } from './crash-cdp-lib.mjs';
 /**
  * DRIVE AN UPDATE THROUGH THE REAL APP — check → download → install, over CDP, via the same
  * `window.genieTest.updates` on the same page bridge the Dashboard signal strip uses.
@@ -156,6 +158,19 @@ try {
             await new Promise((r) => setTimeout(r, 500));
         }
         check(running === true, '11c. that agent\'s session is RUNNING when install is asked', String(running));
+        // STREAMING THROUGH THE INSTALL (Tynn #1036 P6-1): with UPDATE_TICKS_FILE the agent is mid-turn when install is asked,
+        // its provider the stub in TICKER mode (the caller's marker file holds the caller's pid), and where its ledger stood is
+        // written for the caller, which reads the ledger again after the install (scripts/update-ticks-after-cdp.mjs).
+        const ticksFile = process.env.UPDATE_TICKS_FILE;
+        if (ticksFile && running === true) {
+            const sent = await cdp.evaluate(`(window.genieTest ?? window.genie).prompt(${JSON.stringify(codexId)}, 'Stream ticks until stopped.')`);
+            check(sent?.ok === true, '11t. that agent took a prompt: it is mid-turn', sent?.reason ?? '');
+            let t = null;
+            const tEnd = Date.now() + 30_000;
+            while (Date.now() < tEnd) { t = await ticksOf(cdp, codexId); if (t.max >= 8) break; await new Promise((r) => setTimeout(r, 500)); }
+            check(t !== null && t.max >= 8 && t.pids.length === 1, '11u. its ledger streams ticks from ONE provider pid when install is asked', `ticks to ${t?.max}, pids ${JSON.stringify(t?.pids)}`);
+            writeFileSync(ticksFile, JSON.stringify({ agentId: codexId, pid: t?.pids?.[0] ?? null, max: t?.max ?? 0, askedAt: Date.now() }));
+        }
     }
 
     // §7.2's POSITIVE CONTROL (Fancy, 2026-10-10): with fancy-pty every live terminal is one

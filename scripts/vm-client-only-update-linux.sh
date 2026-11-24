@@ -14,7 +14,11 @@
 #
 #   the same genie-host pid (and start time), running from its copy under ~/.genie/host/, and the same agent provider
 #   pids before and after the update; none started again; ~/Applications/Genie.AppImage is $Next's; the window came back
-#   on its own; genie-host logged that only the window was updated.
+#   on its own; genie-host logged that only the window was updated; and THE AGENT STREAMED THROUGH IT: its provider is the
+#   stub in TICKER mode (a marker holding this script's pid), mid-turn when install is asked, and a window of $Next on the
+#   same host finds every tick streamed while there was no window in its ledger, in order (update-ticks-after-cdp.mjs).
+#
+# UPDATE_TICKS_BREAK=stop-provider is the row's break probe: the provider is ended during the install; the row fails on it.
 #
 # If the two builds' host bundles differ, there is no client-only update to prove: `### client-only=NOT-CLIENT-ONLY`.
 # Prints `### client-only=PASS` at the end; a failure prints `### client-only=FAIL <why>` and exits 1.
@@ -32,6 +36,7 @@ HOST_LOG="$GHOME/logs/genie-host.log"
 FEED_URL='http://127.0.0.1:8099/'
 FEED_PID=''
 APP_PID=''
+TICKER="$(node -p 'require("os").tmpdir()')/genie-stub-codex-ticker"
 
 step() { echo; echo "=== $* ==="; }
 fail() { echo "### client-only=FAIL $*"; exit 1; }
@@ -39,6 +44,9 @@ run() { local log="$1"; shift; "$@" >"$log" 2>&1 || { tail -40 "$log"; fail "FAI
 
 cleanup() {
     [ -n "$FEED_PID" ] && kill "$FEED_PID" 2>/dev/null
+    rm -f "$TICKER"
+    # Pass or fail, what the run started goes: its windows, genie-host from its copy, the providers.
+    end_all
     [ -f package.json.pristine ] && mv -f package.json.pristine package.json
     [ -f package-lock.json.pristine ] && mv -f package-lock.json.pristine package-lock.json
     rm -f "$ROOT/electron-builder.client-only-feed.json"
@@ -88,6 +96,14 @@ genie_pids() {
     pgrep -f "^$APPIMAGE_FILE" || true
 }
 end_all() { for p in $(genie_pids) $(pgrep -f 'stub-codex\.mjs'); do kill -9 "$p" 2>/dev/null; done; sleep 2; }
+# The window's processes only: what runs from an AppImage (mounted or extracted) and the AppImage runtimes. Never the host's copy.
+window_pids() {
+    for p in /proc/[0-9]*; do
+        exe="$(readlink "$p/exe" 2>/dev/null)" || continue
+        case "$exe" in /tmp/.mount_*|/tmp/appimage_extracted_*) echo "${p#/proc/}" ;; esac
+    done
+    pgrep -f "^$APPIMAGE_FILE" || true
+}
 
 cp -f package.json package.json.pristine
 cp -f package-lock.json package-lock.json.pristine
@@ -146,6 +162,11 @@ curl -fsS -o /dev/null -w 'feed answers: %{http_code} %{size_download} bytes\n' 
 
 step "launch the installed $BASE and drive the update"
 export GENIE2_CODEX_BINARY="$ROOT/scripts/stub-codex.mjs" GENIE_PAGE_PROBE=1
+# STREAMING THROUGH THE INSTALL (Tynn #1036 P6-1): the stub provider in TICKER mode, by a marker holding this script's pid, and
+# where the agent's ledger stood when install was asked, written by update-cdp.mjs.
+printf '%s' "$$" >"$TICKER"
+export UPDATE_TICKS_FILE="$ROOT/update-ticks.json"
+rm -f "$UPDATE_TICKS_FILE"
 run seed.log node scripts/smoke-seed.mjs
 "$APPIMAGE_FILE" --remote-debugging-port=9222 >installed-out.log 2>installed-err.log &
 APP_PID=$!
@@ -165,6 +186,10 @@ if [ "$drive" -ne 0 ]; then
     echo '--- feed ---'; tail -20 feed.log
     fail "update-cdp.mjs exited $drive"
 fi
+# THE ROW'S BREAK PROBE: the stream interrupted during the install (its provider ended), which the row must fail on.
+if [ "${UPDATE_TICKS_BREAK:-}" = stop-provider ]; then
+    for p in $stubs_before; do echo "BREAK PROBE: ending the provider, pid $p, during the install"; kill -9 "$p" 2>/dev/null; done
+fi
 
 step "the window quits, the updater replaces the AppImage with $NEXT, the window comes back"
 replaced=''
@@ -180,6 +205,14 @@ done
 [ -n "$relaunched" ] || fail 'the updated window did not come back'
 echo "the window came back: pid $relaunched, started $(started_at "$relaunched")"
 alive "$APP_PID" && fail "the base window (pid $APP_PID) is still running"
+
+# THE CONVERSATION, CONTINUING: the updater starts the window with no debugger port, so that window is ended (genie-host and
+# its providers run from the host's copy, not from the AppImage) and $NEXT opened again with one, over the same host.
+step "the agent's ledger, in a window of $NEXT"
+for p in $(window_pids); do kill -9 "$p" 2>/dev/null; done
+sleep 3
+"$APPIMAGE_FILE" --remote-debugging-port=9222 >viewer-out.log 2>viewer-err.log &
+node scripts/update-ticks-after-cdp.mjs || { tail -40 viewer-err.log; fail "the agent's stream did not run through the install"; }
 
 # THE ROW (Tynn #413): the same host, and the same agent, through the update.
 sleep 15
@@ -202,7 +235,6 @@ echo "genie-host said: $said"
 grep -h 'shutting down' "$HOST_LOG" && fail 'genie-host logged a shutdown'
 
 step 'tear down'
-end_all
 echo
 echo "CLIENT-ONLY UPDATE PROVEN (Linux AppImage): $BASE -> $NEXT, genie-host pid $host_before and the agent kept running through it"
 echo '### client-only=PASS'

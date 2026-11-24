@@ -58,7 +58,8 @@ $Rows = @(
     'build', 'seed', 'no-pty', 'smoke', 'layout', 'app-stopped',
     'local-door-break', 'local-door', 'host-late-ready', 'files-watch', 'chat-drafts', 'gapp-open', 'artboard', 'ui-lag', 'plan-popover',
     'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash',
-    'package', 'sign-plan', 'packed-tree', 'update-metadata', 'package-fuse', 'packaged-launcher'
+    'package', 'sign-plan', 'packed-tree', 'update-metadata', 'package-fuse', 'packaged-launcher',
+    'client-only-update'
 )
 
 if ($List) { $Rows | ForEach-Object { Write-Output $_ }; exit 0 }
@@ -390,6 +391,12 @@ function Row-package-fuse {
 }
 # The packaged app starts genie-host through genie-launch.exe, from its copy, with its supervisor ready. ci.yml's step,
 # command for command, on a home of its own under ci-out.
+# A CLIENT-ONLY UPDATE KEEPS GENIE-HOST AND ITS AGENT STREAMING (Tynn #1036 P6-1): two installers that carry the same host,
+# the base one installed and updated to the other through the real updater while an agent streams; the same host and
+# provider pids after, and every tick streamed while there was no window in the agent's ledger, in order. Everything it
+# starts is ended through scripts/end-own-tree.mjs (Tynn #1031). It builds and packages twice and replaces the install,
+# ~\.genie, release\ and dist\: last in the list, after every row that reads them.
+function Row-client-only-update { Need-Install; Need-Electron; Need-TestMachine; Run 'vm-client-only-update' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-client-only-update.ps1 } }
 function Row-packaged-launcher {
     Need-Packaged
     $saved = @{ USERPROFILE = $env:USERPROFILE; HOME = $env:HOME; APPDATA = $env:APPDATA; LOCALAPPDATA = $env:LOCALAPPDATA }
@@ -481,6 +488,7 @@ function Ceiling([string]$name) {
         { $_ -in 'ui-lag', 'renderer-crash' } { return 480 }
         { $_ -in 'safe-mode', 'hang' } { return 600 }
         'package' { return 1500 }
+        'client-only-update' { return 2400 }
         default { return 600 }
     }
 }
