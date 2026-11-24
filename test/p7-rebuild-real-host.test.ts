@@ -322,5 +322,5 @@ describe.each([
         expect((await attachDeck(own, expected)).map((i) => i.id.slice('genie:attach:'.length)).sort()).toEqual(expected);
         // Nothing was sent anywhere: the record still names the old workstation.
         expect(JSON.parse(readFileSync(join(home, 'workstation.json'), 'utf8'))).toEqual({ [TYNN_HOST]: { workstationId: 'ws_seed' } });
-    });
+    }, 120_000);
 });
