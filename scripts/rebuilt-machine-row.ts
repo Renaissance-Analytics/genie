@@ -231,6 +231,9 @@ async function main(): Promise<void> {
     put('github.json', JSON.stringify({ version: 1, state: 'signed-in', login: 'octo-row', name: null, source: 'sign-in' }));
     put('workstation.json', JSON.stringify({ [TYNN_HOST]: { workstationId: 'ws_row' } }));
     put('runtime/device-hosts.json', JSON.stringify({ hosts: [PAIRED] }));
+    // The person trusted this workspace before the machine went (a State file: it outlives the rebuild). Its agents are
+    // Codex, and Codex starts only in a trusted workspace (Tynn #364).
+    put('runtime/workspace-trust.json', JSON.stringify({ version: 1, carried: [], pendingCarry: [], sites: {}, workspaces: { ws: 'trusted-by-the-row' } }));
     put('agent-credentials/agents.json', JSON.stringify({ version: 1, records: Object.fromEntries(agents.map((a, i) => [JSON.stringify(['user_row', 'proj', a.id]), { userId: 'user_row', projectId: 'proj', genieId: a.id, remoteAgentId: `r${i}`, state: 'ready', publicId: i === 0 ? KEY_A : KEY_B }])) }));
     for (const [name, value] of SECRETS) await entry(name).setPassword(value);
     check((await Promise.all(SECRETS.map(([name]) => held(name)))).every(Boolean), '1-keychain-holds-the-four', 'the control for "missing" below');

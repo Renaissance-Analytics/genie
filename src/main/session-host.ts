@@ -1218,7 +1218,7 @@ export class SessionHost {
             const untrusted = (await this.#untrustedFilesFor?.(record)) ?? null;
             if (signal.aborted) throw new Error('Preparation was cancelled.');
             // CODEX IN A WORKSPACE NOT TRUSTED (Tynn #364): Codex documents only one switch for a folder's own `.codex/`
-            // layer (its MCP servers, hooks and rules): the project's trust_level in the person's ~/.codex/config.toml. No
+            // layer (its MCP servers, hooks and rules): the person's own trust of that folder, in their own Codex config. No
             // documented flag or override turns that layer off for one launch, so Codex does not start here until the
             // person trusts the workspace. Claude Code has those flags (claudeTrustOptions) and starts restricted.
             if (untrusted !== null && record.provider === 'codex') throw new McpPreparationError('codexUntrusted');
