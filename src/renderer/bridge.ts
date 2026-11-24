@@ -424,6 +424,8 @@ export interface GenieBridge {
         removeRepo(workspaceId: string, slug: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** "Locate repo" on a Dashboard group fault: the host asks for the folder (inside the envelope) and moves the manifest's path. */
         locateRepo(workspaceId: string, slug: string, path: string): Promise<{ ok: true; path: string } | { ok: false; reason: string }>;
+        /** "Locate folder" on a workspace whose folder is not there (host split P7): the host's registry is told where it is. Optional: an older host has none. */
+        relocate?(workspaceId: string, path: string): Promise<{ ok: true; path: string } | { ok: false; reason: string }>;
         /** The commits in the workspace's repos since a moment, newest first — git's own account (an observed agent's index). */
         commitsSince(workspaceId: string, sinceMs: number): Promise<{ ok: true; commits: readonly RepoCommit[] } | { ok: false; reason: string; gitDidNotAnswer?: boolean }>;
         /** "Remove stale lock" on a red repo chip: unlinks `index.lock` only when it is stale; refuses with the reason otherwise. */

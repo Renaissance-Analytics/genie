@@ -582,6 +582,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             removeRepo: (workspaceId, slug) => answer('workspaces.removeRepo', workspaceId, slug),
             removeRepoLock: (workspaceId, slug) => answer('workspaces.removeRepoLock', workspaceId, slug),
             locateRepo: (workspaceId, slug, path) => answer('workspaces.locateRepo', workspaceId, slug, path),
+            relocate: (workspaceId, path) => answer('workspaces.relocate', workspaceId, path),
             commitsSince: (workspaceId, since) => answer('workspaces.commitsSince', workspaceId, since),
             settings: (workspaceId) => answer('workspaces.settings', workspaceId),
             setSetting: (workspaceId, key, value) => answer('workspaces.setSetting', workspaceId, key, value),
