@@ -150,6 +150,22 @@ export async function readTrustList(path: string, ports: TrustListPorts): Promis
     return { sites, hooks, servers, gitKeys, approvals, ...(flows.length > 0 ? { flows } : {}), ...(processes.length > 0 ? { processes } : {}) };
 }
 
+/**
+ * EVERY FILE AND FOLDER THE LIST ABOVE LOOKS AT, asked of the list itself (Tynn #955): what the watch must look at too
+ * (trust-watch.ts), so a file added to the list is watched without anyone remembering to add it there. Runs no git: the
+ * folders whose git config counts are the watch's own to find (a `.git` file's target). Reads what the list reads.
+ */
+export async function trustListReads(path: string, ports: Pick<TrustListPorts, 'readText' | 'listDir'>): Promise<{ files: string[]; dirs: string[] }> {
+    const files = new Set<string>();
+    const dirs = new Set<string>();
+    await readTrustList(path, {
+        readText: (file) => { files.add(file); return ports.readText(file); },
+        gitConfig: async () => [],
+        listDir: (dir) => { dirs.add(dir); return ports.listDir ? ports.listDir(dir) : Promise.reject(new Error('this folder is not listed here')); },
+    });
+    return { files: [...files], dirs: [...dirs] };
+}
+
 /** The `.json` files of one folder of the workspace that would run something, in name order; a folder that is not there, or a file that is not JSON, has none. */
 async function rowsIn(root: string, dir: string, ports: TrustListPorts, rowsOf: (file: string, value: unknown) => readonly (TrustFlow | TrustProcess)[]): Promise<(TrustFlow | TrustProcess)[]> {
     if (!ports.listDir) return [];
@@ -172,7 +188,7 @@ const inside = (root: string, path: string): boolean => {
 };
 
 /** The guard's: the workspace went, moved, slept or was redocked while it was being read. Whoever interrupted it owns the verdict now. */
-class TrustReadInterrupted extends Error {
+export class TrustReadInterrupted extends Error {
     constructor() { super('workspace trust read interrupted; redock it first'); }
 }
 

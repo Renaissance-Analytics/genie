@@ -123,6 +123,13 @@ describe('what the trust list reads, the watch looks at', () => {
         expect(t.refreshed).toEqual(['acme', 'acme']);
     });
 
+    it('a folder the list lists is watched from when it is there, before it holds any flow: the first one added to it is noticed where folders are watched', async () => {
+        const t = rig({ [join(W, 'project.json')]: '{}', [join(W, '.flows', 'notes.txt')]: 'not a flow' });
+        await t.watch.pass();
+        expect(t.watch.watching).toContain(join(W, '.flows'));
+        expect(t.watch.watching).not.toContain(join(W, '.processes'));
+    });
+
     it('control: a workspace with none of this still costs a small fixed number of readings, and nothing changed reads no verdict', async () => {
         const t = rig({ [join(W, 'project.json')]: '{}' });
         await t.watch.pass();
