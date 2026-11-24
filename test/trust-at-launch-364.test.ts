@@ -9,6 +9,7 @@ import type { ProcessInfo, ProcessTree } from '../src/core/process-tree.js';
 import { SessionHost, type DriverFor, type GenieInstructionFiles } from '../src/main/session-host.js';
 import { TakeOverHost } from '../src/main/take-over-host.js';
 import { TakeOverService } from '../src/main/take-over-service.js';
+import { WorkspaceTrust } from '../src/main/workspace-trust-host.js';
 
 /*
  * NOTHING RUNS IN A WORKSPACE THE PERSON HAS NOT TRUSTED WITHOUT READING THE VERDICT WHEN IT RUNS (Tynn #364). Trust is given
@@ -145,5 +146,52 @@ describe('Take Over reads the verdict at each click (item 1)', () => {
         const source = readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8');
         const construction = source.slice(source.indexOf('new TakeOverService({'), source.indexOf('});', source.indexOf('new TakeOverService({')));
         expect(construction).toMatch(/untrustedNow:\s*\(record\)\s*=>\s*hostUntrustedNow\(record\)/);
+    });
+});
+
+describe('a read crossed by reads that agree does not undo them (Tynn #364, found by genie-host-process "A WORKSPACE JUST ADDED")', () => {
+    // A workspace just added, where nothing would run: the hosting's pass, mayWriteInto and an agent's start all read it at
+    // once. Each of the others read ALONE and kept "trusted"; the agent's read, crossed by each, used to give up and keep
+    // "not trusted" over them, and its Codex start was refused (2 of 5 runs, Azure 1124-214257-482cd0 / 1124-220818-9255d1).
+    function fixture() {
+        const record = { carried: [] as string[], workspaces: {} as Record<string, string> };
+        let duringGit: (() => Promise<void>) | null = null;
+        const trust = new WorkspaceTrust({
+            readText: async () => null,
+            gitConfig: async () => { const during = duringGit; if (during) { duringGit = null; await during(); } return []; },
+            workspaces: () => [{ id: 'added', path: join('/ws', 'added') }],
+            record: () => record,
+            recordWorkspace: async (id, hash) => { record.workspaces[id] = hash; },
+            forgetWorkspace: async (id) => { delete record.workspaces[id]; },
+            approveSites: async () => {},
+        });
+        return { trust, record, duringGit: (work: () => Promise<void>) => { duringGit = work; } };
+    }
+
+    it('crossed every time by reads that each found nothing would run: it answers as they did, and the verdict stays trusted', async () => {
+        const f = fixture();
+        let crossings = 0;
+        const cross = async (): Promise<void> => {
+            crossings++;
+            // Another reader, alone (nothing is armed while it reads), lands while this read is in its git step.
+            expect((await f.trust.refresh('added'))?.trusted).toBe(true);
+            f.duringGit(cross);
+        };
+        f.duringGit(cross);
+        const view = await f.trust.refresh('added');
+        f.duringGit(async () => {});
+        expect(crossings).toBeGreaterThanOrEqual(3);
+        expect(view?.trusted).toBe(true);
+        expect(f.trust.view('added')?.trusted).toBe(true);
+    });
+
+    it('CONTROL: crossed every time by an Untrust, it is not trusted (the read-order rule of Tynn #955 stands)', async () => {
+        const f = fixture();
+        const cross = async (): Promise<void> => { await f.trust.untrust('added'); f.duringGit(cross); };
+        f.duringGit(cross);
+        const view = await f.trust.refresh('added');
+        f.duringGit(async () => {});
+        expect(view?.trusted).toBe(false);
+        expect(f.trust.view('added')?.trusted).toBe(false);
     });
 });
