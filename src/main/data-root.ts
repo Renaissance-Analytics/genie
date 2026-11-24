@@ -44,6 +44,12 @@ export interface DataRootRule {
     readonly travels?: boolean;
     /** File names code uses inside this folder. */
     readonly names?: readonly string[];
+    /**
+     * A state FOLDER only: what in it is not state, as patterns a file's NAME ends with (regular expressions). A lock, a
+     * lock being taken and a write's temp file are a running process's, here now and gone in a moment: machine, wherever
+     * in the folder they are. Said per folder, never for all: a plugin's own `yarn.lock` is the plugin's.
+     */
+    readonly transient?: readonly string[];
     /** Every host makes it when it starts. */
     readonly atStart?: boolean;
     /**
@@ -53,15 +59,20 @@ export interface DataRootRule {
     readonly live?: true;
 }
 
-const state = (path: string, travels: boolean, holds: string, more: Pick<DataRootRule, 'names' | 'atStart'> = {}): DataRootRule => ({ path, kind: 'state', travels, holds, ...more });
+/** The thread store's lock on a thread (prism-harness: `<log>.json.lock`), and the file it takes one through (`.lock.candidate-<hex>`). */
+const LOCKS = '\\.lock(?:\\.candidate-[0-9a-f]+)?$';
+/** A write on its way to its name: `x.tmp`, `x.<pid>.tmp`, `x.<pid>.<n>.tmp`, `x.<uuid>.tmp`. */
+const TEMPS = '\\.tmp$';
+
+const state = (path: string, travels: boolean, holds: string, more: Pick<DataRootRule, 'names' | 'atStart' | 'transient'> = {}): DataRootRule => ({ path, kind: 'state', travels, holds, ...more });
 const machine = (path: string, holds: string, more: Pick<DataRootRule, 'names' | 'atStart' | 'live'> = {}): DataRootRule => ({ path, kind: 'machine', holds, ...more });
 
 export const DATA_ROOT_RULES: readonly DataRootRule[] = [
     // --- STATE: the work ---------------------------------------------------------------------------------------------
     state('runtime/workspaces.json', true, 'the registry: the workspaces'),
     state('runtime/agents.json', true, 'the registry: the agents'),
-    state('runtime/sessions/', true, 'the agents’ threads, their segments and what was attached to them', { names: ['.index.json', 'attachments.json'] }),
-    state('runtime/inbox/', true, 'the agents’ mail and its attachments', { names: ['mail.json'] }),
+    state('runtime/sessions/', true, 'the agents’ threads, their segments and what was attached to them', { names: ['.index.json', 'attachments.json'], transient: [LOCKS, TEMPS] }),
+    state('runtime/inbox/', true, 'the agents’ mail and its attachments', { names: ['mail.json'], transient: [TEMPS] }),
     state('runtime/attention.json', true, 'the questions, lists and handoffs that wait for the person'),
     state('runtime/attention-history.json', true, 'the finished ones'),
     state('runtime/attention-archive.jsonl', true, 'the finished ones, archived'),
@@ -85,9 +96,9 @@ export const DATA_ROOT_RULES: readonly DataRootRule[] = [
     // --- STATE that is this root's alone: logins, secrets in files, pointers to the keychain, trust ---------------------
     state(DATA_ROOT_FILE, false, 'this manifest', { atStart: true }),
     state('workstation.json', false, 'which workstation this is to Tynn; its key is in the keychain'),
-    state('credentials/', false, 'who is signed in to Tynn; the credential is in the keychain', { names: ['tynn.json'] }),
+    state('credentials/', false, 'who is signed in to Tynn; the credential is in the keychain', { names: ['tynn.json'], transient: [TEMPS] }),
     state('github.json', false, 'who is signed in to GitHub; the tokens are in the keychain'),
-    state('agent-credentials/', false, 'the agents’ Tynn identities; their keys are in the keychain'),
+    state('agent-credentials/', false, 'the agents’ Tynn identities; their keys are in the keychain', { transient: [TEMPS] }),
     state('runtime/device-hosts.json', false, 'the machines this one is paired with; the tokens are in the keychain'),
     state('keychain-migration.json', false, 'which secrets an older Genie’s files were moved from'),
     state('runtime/remote-devices.json', false, 'the devices paired with this machine, by the hash of their token'),
@@ -176,6 +187,8 @@ for (const rule of DATA_ROOT_RULES) {
     if (rule.path.endsWith('/')) FOLDERS.push(rule);
     else FILES.set(rule.path, rule);
 }
+/** Each state folder's transient patterns, compiled once. */
+const TRANSIENT = new Map<string, RegExp[]>(DATA_ROOT_RULES.filter((r) => r.transient !== undefined).map((r) => [r.path, r.transient!.map((pattern) => new RegExp(pattern))]));
 // The longest folder first: `browser/.process/` before `browser/`.
 FOLDERS.sort((a, b) => b.path.length - a.path.length);
 
@@ -189,7 +202,13 @@ export function classifyDataPath(relative: string): DataRootRule | null {
     const path = parts.join('/');
     const exact = FILES.get(path);
     if (exact) return exact;
-    for (const folder of FOLDERS) if (`${path}/`.startsWith(folder.path)) return folder;
+    for (const folder of FOLDERS) {
+        if (!`${path}/`.startsWith(folder.path)) continue;
+        const name = parts[parts.length - 1]!;
+        // A file IN the folder (never the folder itself) whose name ends as the rule says its transient files do.
+        if (`${path}/` !== folder.path && TRANSIENT.get(folder.path)?.some((pattern) => pattern.test(name))) return { path, kind: 'machine', holds: `what a lock or a write left in ${folder.path}` };
+        return folder;
+    }
     const side = path.replace(DATABASE_SIDE, '');
     if (side !== path) return FILES.get(side) ?? null;
     const whole = path.replace(LEFT_BEHIND, '');
@@ -203,7 +222,8 @@ export interface DataRootManifest {
     readonly build: string;
     /** The machine it was written on (`machineMarkOf`: a hash, never the OS's id), or null when the OS gave none. */
     readonly writtenOn: string | null;
-    readonly state: ReadonlyArray<{ readonly path: string; readonly travels: boolean }>;
+    /** `transient`: in that folder, a file whose name ends so is NOT state (a lock, a temp file): never copied with it. */
+    readonly state: ReadonlyArray<{ readonly path: string; readonly travels: boolean; readonly transient?: readonly string[] }>;
     readonly machine: readonly string[];
 }
 
@@ -213,7 +233,7 @@ export function dataRootManifest(build: string, writtenOn: string | null = null)
         format: DATA_ROOT_FORMAT,
         build,
         writtenOn,
-        state: DATA_ROOT_RULES.filter((r) => r.kind === 'state').map((r) => ({ path: r.path, travels: r.travels === true })),
+        state: DATA_ROOT_RULES.filter((r) => r.kind === 'state').map((r) => ({ path: r.path, travels: r.travels === true, ...(r.transient ? { transient: r.transient } : {}) })),
         machine: DATA_ROOT_RULES.filter((r) => r.kind === 'machine').map((r) => r.path),
     };
 }
