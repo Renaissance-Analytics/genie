@@ -26,13 +26,13 @@ import { restrictPrivateFile } from '../src/main/private-credentials.js';
  */
 
 interface Rule { readonly path: string; readonly kind: 'state' | 'machine'; readonly holds: string; readonly travels?: boolean; readonly names?: readonly string[]; readonly atStart?: boolean }
-interface Manifest { readonly format: number; readonly build: string; readonly state: ReadonlyArray<{ readonly path: string; readonly travels: boolean }>; readonly machine: readonly string[] }
+interface Manifest { readonly format: number; readonly build: string; readonly writtenOn: string | null; readonly state: ReadonlyArray<{ readonly path: string; readonly travels: boolean }>; readonly machine: readonly string[] }
 interface DataRootModule {
     DATA_ROOT_FILE: string;
     DATA_ROOT_FORMAT: number;
     DATA_ROOT_RULES: readonly Rule[];
     classifyDataPath(relative: string): Rule | null;
-    dataRootManifest(build: string): Manifest;
+    dataRootManifest(build: string, writtenOn?: string | null): Manifest;
     writeDataRootManifest(home: string, build: string): Promise<void>;
 }
 // Loaded by a path the type checker does not follow, so each row fails on its own while the module is not there.
@@ -134,7 +134,10 @@ describe('the manifest', () => {
     it('is the format, the build and the two lists: every rule in exactly one, each state entry with whether it travels', async () => {
         const { DATA_ROOT_RULES, DATA_ROOT_FORMAT, dataRootManifest } = await dataRoot();
         const m = dataRootManifest('2.0.0-beta.66+abc123');
-        expect(Object.keys(m).sort()).toEqual(['build', 'format', 'machine', 'state']);
+        expect(Object.keys(m).sort()).toEqual(['build', 'format', 'machine', 'state', 'writtenOn']);
+        // The machine it was written on (P7.3): none unless it is given, and then as given.
+        expect(m.writtenOn).toBeNull();
+        expect(dataRootManifest('b', 'f'.repeat(64)).writtenOn).toBe('f'.repeat(64));
         expect(m.format).toBe(DATA_ROOT_FORMAT);
         expect(m.format).toBe(1);
         expect(m.build).toBe('2.0.0-beta.66+abc123');
@@ -380,7 +383,14 @@ describe('completeness 3: a real genie-host on an empty root', () => {
         expect(manifestBeforeRecord).toBe(true);
 
         const { classifyDataPath, dataRootManifest, DATA_ROOT_RULES } = await dataRoot();
-        expect(JSON.parse(readFileSync(manifestFile, 'utf8'))).toEqual(dataRootManifest('p7-manifest-test'));
+        // The lists and the build as the table says, and the machine it was written on: a hash, never the OS's own id.
+        const written = JSON.parse(readFileSync(manifestFile, 'utf8')) as Manifest;
+        expect(written).toEqual({ ...dataRootManifest('p7-manifest-test'), writtenOn: expect.stringMatching(/^[0-9a-f]{64}$/) });
+        if (process.platform === 'linux') {
+            const id = readFileSync('/etc/machine-id', 'utf8').trim();
+            expect(id.length).toBeGreaterThan(8);
+            expect(readFileSync(manifestFile, 'utf8')).not.toContain(id);
+        }
 
         const top = entries(home, (relative) => classifyDataPath(relative)?.path === `${relative}/`);
         // CONTROL: the walk sees what a host always makes.

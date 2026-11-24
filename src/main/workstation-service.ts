@@ -1,4 +1,4 @@
-import { ensureWorkstation, identityFrom, type EnsureWorkstationPorts, type EnsureWorkstationResult, type IdentityStore, type LegacyIdentity, type WorkstationIdentity } from './workstation-identity.js';
+import { ensureWorkstation, identityFrom, registerWorkstationAgain, type RegisterAgainResult, type EnsureWorkstationPorts, type EnsureWorkstationResult, type IdentityStore, type LegacyIdentity, type WorkstationIdentity } from './workstation-identity.js';
 
 /**
  * THIS MACHINE'S KEY, AND WHAT IT SIGNS, ARE THE HOST'S (P3.4; plan §13). The relay lives in the window until P5, so a window asks the host to sign. No method returns the key, and an
@@ -110,6 +110,26 @@ export class WorkstationService implements WorkstationPort {
             },
         });
     }
+
+    /** This machine registered again with a new key, its old one gone (workstation-identity.ts `registerWorkstationAgain`); one registration at a time, as `ensure`. */
+    registerAgain(host: string): Promise<RegisterAgainResult> {
+        const run = this.#registering.then(() => registerWorkstationAgain({
+            host: () => host,
+            hostname: this.#options.hostname,
+            request: async (path, init) => {
+                const res = await this.#options.request(path, init);
+                if (path === '/api/v1/workstations/self-register') this.#options.log?.(`tynn registration: again, unproven (the key is gone); Tynn answered HTTP ${res.status}`);
+                return res;
+            },
+            store: this.#options.store,
+            machineKey: this.#options.machineKey,
+        }));
+        this.#registering = run.catch(() => {});
+        return run;
+    }
+
+    /** The workstation id on record for that Tynn, key or no key. */
+    async recorded(host: string): Promise<string | null> { return (await this.#options.store.recorded?.(host)) ?? null; }
 
     async legacyDone(host: string): Promise<string | null> { return (await this.#options.store.legacyDone?.(host)) ?? null; }
 
