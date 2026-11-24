@@ -355,6 +355,17 @@ export function workspaceFault(
     return { text: `repo ${gone.slug} not found in ${workspaceName}.agi`, repo: gone.slug };
 }
 
+/**
+ * A fault's text in two parts, for a line that has no room for all of it: everything before the path's LAST folder, which
+ * may be cut short, and that last folder, which is always shown (a path is told apart by its end). The two are the text;
+ * a text with no path in it is all head.
+ */
+export function faultTextParts(text: string): { head: string; tail: string } {
+    const end = text.replace(/[\\/]+$/, '').length;
+    const cut = Math.max(text.lastIndexOf('/', end - 1), text.lastIndexOf('\\', end - 1));
+    return cut < 0 ? { head: text, tail: '' } : { head: text.slice(0, cut), tail: text.slice(cut) };
+}
+
 export interface WorkspaceGroup {
     workspaceId: string;
     rows: readonly AgentRow[];
