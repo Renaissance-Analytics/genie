@@ -314,46 +314,44 @@ function CardView({ card, scope, onScope, onAction, claim }: CardProps) {
     };
     const hasDetail = card.kind === 'story' || card.kind === 'task';
     return (
-        <Kanban.Card id={card.id} unstyled className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] p-2 text-[12px]">
-            <div data-tynn-card={card.id} data-tynn-card-status={card.status} className="flex flex-col gap-1">
-                {/* THE LABEL ON ITS OWN LINE (Tynn #676; the owner, 2026-11-13): a version's number is as long as
-                    `2.0.0-host-split`, and beside the title it never shrank, so the title wrapped every word or two.
-                    Cut short when it must, its whole text as the tooltip. */}
-                {card.number !== null ? <span data-tynn-card-label="" title={card.number} className="truncate font-mono text-[11px] text-[var(--fg-3)]">{card.number}</span> : null}
-                <div className="flex items-start">
-                    {drill ? (
-                        <button type="button" data-tynn-open={card.id} onClick={() => onScope(drill)} className="min-w-0 flex-1 text-left text-[var(--fg-1)] hover:underline">{card.title}</button>
-                    ) : (
-                        <span className="min-w-0 flex-1 text-[var(--fg-1)]">{card.title}</span>
-                    )}
-                </div>
-                <div className="flex items-center gap-1 text-[11px] text-[var(--fg-3)]">
-                    {/* A Slice whose state is not its column's (ready, rejected or failed under Proposed; one Genie does not know) says which. */}
-                    {card.state !== null && card.state !== LEGACY_STATUS_STATE[card.status]
-                        ? <span data-tynn-card-state={card.state} className="rounded-full bg-[var(--bg-2)] px-1.5 text-[10px] font-medium text-[var(--fg-2)]">{sliceStateLabel(card.state)}</span>
-                        : null}
-                    {/* A version's kind in Tynn's colour token (workspace-ux 0.13.0): a hotfix says so. */}
-                    <ReleaseKindMark release={card.release} />
-                    {card.progress !== null ? <span data-tynn-progress="">{card.progress}</span> : null}
-                    {card.claim !== null ? (
-                        <span className="inline-flex items-center gap-0.5">
-                            <Avatar who={card.claim} />
-                            {card.claim.mine ? <IconButton icon="x" label="Release claim" onClick={() => onAction({ action: `${card.kind}.unclaim`, ids: idsOf(card) })} data={{ 'data-tynn-release': card.id }} /> : null}
-                        </span>
-                    ) : null}
-                    <span className="ml-auto flex items-center">
-                        {card.quick && card.quick.verb === 'start' && hasDetail ? (
-                            <StartControl card={card} claims={claim.claims} onAction={onAction} />
-                        ) : card.quick ? (
-                            <IconButton icon={card.quick.icon} label={card.quick.label} disabled={card.quick.disabled} onClick={() => onAction({ action: card.quick!.actionId, ids: idsOf(card) })} data={{ 'data-tynn-step': card.quick.actionId }} />
-                        ) : null}
-                        {hasDetail && claim.claims?.canAssign === true ? <AssignControl card={card} claimants={claim.claimants} onLoadClaimants={claim.onLoadClaimants} onAction={onAction} /> : null}
-                        {hasDetail ? <IconButton icon="panel-right-open" label="Details" onClick={() => onScope({ ...scope, focus: `${card.kind}:${card.id}` })} data={{ 'data-tynn-details': card.id }} /> : null}
-                        <IconButton icon="trash-2" label="Delete" onClick={remove} data={{ 'data-tynn-delete': card.id }} />
-                    </span>
-                </div>
+        <div data-tynn-card={card.id} data-tynn-card-status={card.status} className="flex flex-col gap-1">
+            {/* THE LABEL ON ITS OWN LINE (Tynn #676; the owner, 2026-11-13): a version's number is as long as
+                `2.0.0-host-split`, and beside the title it never shrank, so the title wrapped every word or two.
+                Cut short when it must, its whole text as the tooltip. */}
+            {card.number !== null ? <span data-tynn-card-label="" title={card.number} className="truncate font-mono text-[11px] text-[var(--fg-3)]">{card.number}</span> : null}
+            <div className="flex items-start">
+                {drill ? (
+                    <button type="button" data-tynn-open={card.id} onClick={() => onScope(drill)} className="min-w-0 flex-1 text-left text-[var(--fg-1)] hover:underline">{card.title}</button>
+                ) : (
+                    <span className="min-w-0 flex-1 text-[var(--fg-1)]">{card.title}</span>
+                )}
             </div>
-        </Kanban.Card>
+            <div className="flex items-center gap-1 text-[11px] text-[var(--fg-3)]">
+                {/* A Slice whose state is not its column's (ready, rejected or failed under Proposed; one Genie does not know) says which. */}
+                {card.state !== null && card.state !== LEGACY_STATUS_STATE[card.status]
+                    ? <span data-tynn-card-state={card.state} className="rounded-full bg-[var(--bg-2)] px-1.5 text-[10px] font-medium text-[var(--fg-2)]">{sliceStateLabel(card.state)}</span>
+                    : null}
+                {/* A version's kind in Tynn's colour token (workspace-ux 0.13.0): a hotfix says so. */}
+                <ReleaseKindMark release={card.release} />
+                {card.progress !== null ? <span data-tynn-progress="">{card.progress}</span> : null}
+                {card.claim !== null ? (
+                    <span className="inline-flex items-center gap-0.5">
+                        <Avatar who={card.claim} />
+                        {card.claim.mine ? <IconButton icon="x" label="Release claim" onClick={() => onAction({ action: `${card.kind}.unclaim`, ids: idsOf(card) })} data={{ 'data-tynn-release': card.id }} /> : null}
+                    </span>
+                ) : null}
+                <span className="ml-auto flex items-center">
+                    {card.quick && card.quick.verb === 'start' && hasDetail ? (
+                        <StartControl card={card} claims={claim.claims} onAction={onAction} />
+                    ) : card.quick ? (
+                        <IconButton icon={card.quick.icon} label={card.quick.label} disabled={card.quick.disabled} onClick={() => onAction({ action: card.quick!.actionId, ids: idsOf(card) })} data={{ 'data-tynn-step': card.quick.actionId }} />
+                    ) : null}
+                    {hasDetail && claim.claims?.canAssign === true ? <AssignControl card={card} claimants={claim.claimants} onLoadClaimants={claim.onLoadClaimants} onAction={onAction} /> : null}
+                    {hasDetail ? <IconButton icon="panel-right-open" label="Details" onClick={() => onScope({ ...scope, focus: `${card.kind}:${card.id}` })} data={{ 'data-tynn-details': card.id }} /> : null}
+                    <IconButton icon="trash-2" label="Delete" onClick={remove} data={{ 'data-tynn-delete': card.id }} />
+                </span>
+            </div>
+        </div>
     );
 }
 
@@ -366,7 +364,13 @@ function Column({ column, view, scope, override, composer, onScope, onAction, cl
             {composer}
             {column.cards.length === 0 && !composer ? (
                 <p data-tynn-empty={column.status} className="py-2 text-center text-[11px] text-[var(--fg-4)]">No {SINGULAR[view.level]}</p>
-            ) : column.cards.map((c) => <Card key={c.id} card={c} scope={scope} onScope={onScope} onAction={onAction} claim={claim} />)}
+            ) : column.cards.map((c) => (
+                // THE KANBAN CARD IS THE COLUMN'S DIRECT CHILD (Tynn #933): react-fancy counts a column's cards, and finds the one
+                // dragged within it, among Kanban.Card elements in its children. Inside Card it found none: every heading read 0.
+                <Kanban.Card key={c.id} id={c.id} unstyled className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] p-2 text-[12px]">
+                    <Card card={c} scope={scope} onScope={onScope} onAction={onAction} claim={claim} />
+                </Kanban.Card>
+            ))}
         </Kanban.Column>
     );
 }
