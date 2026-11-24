@@ -57,7 +57,7 @@ $Rows = @(
     'unit-build', 'unit',
     'build', 'seed', 'no-pty', 'smoke', 'layout', 'app-stopped',
     'local-door-break', 'local-door', 'host-late-ready', 'files-watch', 'chat-drafts', 'gapp-open', 'artboard', 'ui-lag', 'plan-popover',
-    'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash', 'quit-keeps-host',
+    'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash', 'quit-keeps-host', 'rebuilt-machine',
     'package', 'sign-plan', 'packed-tree', 'update-metadata', 'package-fuse', 'packaged-launcher',
     'client-only-update'
 )
@@ -390,6 +390,8 @@ function Row-quit-keeps-host {
         foreach ($k in $own.Keys) { [Environment]::SetEnvironmentVariable($k, $before[$k], 'Process') }
     }
 }
+# A data root attached to a rebuilt machine (host split P7.3, Tynn #419): a real genie-host on Credential Manager, no window.
+function Row-rebuilt-machine { Need-Install; Need-TestMachine; Run 'rebuilt-machine' { node scripts/rebuilt-machine.mjs } }
 
 # IT PACKAGES, the Windows leg: the installers built unsigned, then what ci.yml checked in what was packaged.
 function Row-package {

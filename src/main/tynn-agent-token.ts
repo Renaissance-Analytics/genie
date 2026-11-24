@@ -52,6 +52,8 @@ export function tynnAgentTokens(credentials?: AgentCredentialPorts) {
     const identities = credentials ? tynnAgentIdentities(credentials) : null;
     return {
         legacyKeys: async (cipher: { decrypt(bytes: Buffer): string }) => identities?.legacyKeys(cipher) ?? [],
+        /** The keys the keychain lost (tynn-agent-identities.ts `lostKeys`). */
+        lostKeys: { ids: async (): Promise<string[]> => identities?.lostKeys.ids() ?? [], forget: async (): Promise<number> => identities?.lostKeys.forget() ?? 0 },
         async ensure(input: {
             workspacePath: string; fs: SyncFs; agent: AgentRecord; tynn: TynnSessionPort | null; signal?: AbortSignal;
             // Accepted for older callers of the identity module; config switches never govern private credentials.
