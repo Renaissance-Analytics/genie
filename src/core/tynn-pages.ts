@@ -1,4 +1,5 @@
-import { sliceStateOf, type SliceState } from './slice-state.js';
+import { releaseLookOf, type ReleaseLook } from './release-kind.js';
+import { sliceStateOf, type ShownSliceState } from './slice-state.js';
 import { type BoardLiveSignal, BOARD_API, BOARD_CLAIMS, BOARD_LIVE, initialsOf, LIVE_QUIET_MS, parseClaims, type BoardClaim, type BoardClaims, type BoardOp, type BoardRefusal, type TynnBoardHost } from './tynn-board.js';
 import { parseFeatures, type FeaturesView } from './tynn-features.js';
 import { issuesQueryPath, normalizeIssueFilters, parseIssueQueue, type IssueQueueView } from './tynn-issues.js';
@@ -70,9 +71,9 @@ export type WipLens = keyof typeof WIP_LENSES;
 export const WIP_ANSWER = ['project_id', 'view', 'active_version', 'available_versions', 'stories', 'selected_story', 'tasks', 'story_counts', 'claims'] as const;
 export const WIP_COUNTS = ['active', 'attention', 'done', 'backlog'] as const;
 export const WIP_FIELDS = {
-    story: ['id', 'slug', 'story_number', 'title', 'status', 'description', 'task_count', 'tasks_done', 'updated_at', 'acceptance_criteria', 'started_at', 'qa_at', 'done_at', 'pr_id', 'commit_id', 'pr_url', 'commit_url'],
+    story: ['id', 'slug', 'story_number', 'title', 'status', 'state', 'description', 'task_count', 'tasks_done', 'updated_at', 'acceptance_criteria', 'started_at', 'qa_at', 'done_at', 'pr_id', 'commit_id', 'pr_url', 'commit_url'],
     task: ['id', 'task_number', 'title', 'status', 'claimed_by', 'claimed_by_me', 'can_start', 'version_active', 'features', 'updated_at'],
-    version: ['id', 'number', 'title', 'status', 'story_count', 'stories_done'],
+    version: ['id', 'number', 'title', 'status', 'release_kind', 'colour', 'story_count', 'stories_done'],
 } as const;
 /** What is in motion first, as the web page lists a story's tasks. */
 export const WIP_TASK_ORDER = ['doing', 'qa', 'blocked', 'backlog', 'done'] as const;
@@ -136,8 +137,8 @@ export interface WipStory {
     readonly number: string | null;
     readonly title: string;
     readonly status: string;
-    /** The story's Slice state (Tynn #933): Tynn's `state`, or its legacy status mapped (sliceStateOf). */
-    readonly state: SliceState | null;
+    /** The story's Slice state (Tynn #933): Tynn's `state` (unknown when Genie does not know it), or an older Tynn's status mapped (sliceStateOf). */
+    readonly state: ShownSliceState | null;
     readonly description: string | null;
     readonly taskCount: number;
     readonly tasksDone: number;
@@ -168,10 +169,11 @@ export interface WipTask {
     readonly updatedAt: string | null;
 }
 /** An active version the person can choose; `served` is the one Tynn's WIP answer is about. */
-export interface WipVersionRef { readonly id: string; readonly number: string | null; readonly title: string; readonly served: boolean; readonly done: number | null; readonly total: number | null }
+export interface WipVersionRef { readonly id: string; readonly number: string | null; readonly title: string; readonly release: ReleaseLook | null; readonly served: boolean; readonly done: number | null; readonly total: number | null }
 export interface WipView {
     readonly lens: WipLens;
-    readonly version: { readonly id: string; readonly number: string | null; readonly title: string } | null;
+    /** The served version, with its kind and colour token (workspace-ux 0.13.0; null from a Tynn that sends none). */
+    readonly version: { readonly id: string; readonly number: string | null; readonly title: string; readonly release: ReleaseLook | null } | null;
     /** Every active version, the served one included (Tynn's `available_versions`, its active ones). */
     readonly versions: readonly WipVersionRef[];
     readonly counts: Readonly<Record<(typeof WIP_COUNTS)[number], number>>;
@@ -279,10 +281,10 @@ export function parseWip(json: unknown): WipView | null {
     const tasks = rows(json.tasks).map(wipTask).filter((t): t is WipTask => t !== null);
     // Stable: equal ranks keep Tynn's order.
     const ordered = tasks.map((t, i) => ({ t, i })).sort((a, b) => rank(a.t.status) - rank(b.t.status) || a.i - b.i).map(({ t }) => t);
-    const version = v && versionId !== null ? { id: versionId, number: str(v.number), title: str(v.title) ?? '' } : null;
+    const version = v && versionId !== null ? { id: versionId, number: str(v.number), title: str(v.title) ?? '', release: releaseLookOf(v) } : null;
     const versions: WipVersionRef[] = rows(json.available_versions)
         .filter((r) => r.status === 'active')
-        .flatMap((r): WipVersionRef[] => { const id = str(r.id); return id === null ? [] : [{ id, number: str(r.number), title: str(r.title) ?? '', served: id === versionId, ...wipVersionCounts(r) }]; });
+        .flatMap((r): WipVersionRef[] => { const id = str(r.id); return id === null ? [] : [{ id, number: str(r.number), title: str(r.title) ?? '', release: releaseLookOf(r), served: id === versionId, ...wipVersionCounts(r) }]; });
     if (version !== null && !versions.some((x) => x.id === version.id)) versions.unshift({ ...version, served: true, done: null, total: null });
     return {
         lens: json.view as WipLens,
@@ -591,8 +593,8 @@ export type TynnPageActionAnswer = ({ ok: true } & TynnPageView) | { ok: true; p
 export const VIP_DATA_API = { method: 'GET', path: '/vip' } as const;
 export const VIP_ANSWER = ['project_id', 'vip_version', 'stories', 'past_vips', 'can_start_vip'] as const;
 export const VIP_FIELDS = {
-    version: ['id', 'number', 'title', 'status'],
-    story: ['id', 'slug', 'story_number', 'title', 'status', 'description', 'task_count', 'tasks_done'],
+    version: ['id', 'number', 'title', 'status', 'release_kind', 'colour'],
+    story: ['id', 'slug', 'story_number', 'title', 'status', 'state', 'description', 'task_count', 'tasks_done'],
     pastVip: ['id', 'number', 'title', 'status', 'story_count', 'ended_at'],
 } as const;
 export const VIP_COLUMNS = ['backlog', 'blocked', 'in_progress', 'qa', 'done'] as const;
@@ -621,7 +623,7 @@ export const vipColumnLabel = (status: string): string => VIP_LABEL[status] ?? s
 export interface VipStory extends WipStory { readonly next: string | null }
 export interface VipPast { readonly id: string; readonly number: string | null; readonly title: string; readonly status: string; readonly storyCount: number; readonly endedAt: string | null }
 export interface VipView {
-    readonly version: { readonly id: string; readonly number: string | null; readonly title: string } | null;
+    readonly version: { readonly id: string; readonly number: string | null; readonly title: string; readonly release: ReleaseLook | null } | null;
     /** Tasks done of all the VIP's tasks (the rose banner's bar). */
     readonly progress: { readonly done: number; readonly total: number; readonly percent: number };
     readonly columns: ReadonlyArray<{ readonly status: string; readonly label: string; readonly stories: readonly VipStory[] }>;
@@ -642,7 +644,7 @@ export function parseVip(json: unknown): VipView | null {
     const total = stories.reduce((n, x) => n + x.taskCount, 0);
     const done = stories.reduce((n, x) => n + x.tasksDone, 0);
     return {
-        version: v && versionId !== null ? { id: versionId, number: str(v.number), title: str(v.title) ?? '' } : null,
+        version: v && versionId !== null ? { id: versionId, number: str(v.number), title: str(v.title) ?? '', release: releaseLookOf(v) } : null,
         progress: { done, total, percent: total > 0 ? Math.round((done / total) * 100) : 0 },
         columns: VIP_COLUMNS.map((status) => ({ status, label: vipColumnLabel(status), stories: stories.filter((x) => x.status === status) })),
         allDone: stories.length > 0 && stories.every((x) => x.status === 'done'),

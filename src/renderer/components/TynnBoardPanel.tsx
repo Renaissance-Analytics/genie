@@ -1,7 +1,8 @@
 import { Icon, Kanban, useKanban } from '@particle-academy/react-fancy';
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Flash } from './Flash.js';
-import { LEGACY_STATUS_STATE, SLICE_STATE_LABEL } from '../../core/slice-state.js';
+import { LEGACY_STATUS_STATE, sliceStateLabel } from '../../core/slice-state.js';
+import { ReleaseKindMark } from './ReleaseKindMark.js';
 import {
     applyBoardChanges,
     BoardFollower,
@@ -327,10 +328,12 @@ function CardView({ card, scope, onScope, onAction, claim }: CardProps) {
                     )}
                 </div>
                 <div className="flex items-center gap-1 text-[11px] text-[var(--fg-3)]">
-                    {/* A Slice whose state is not its column's (ready, rejected or failed under Proposed) says which. */}
+                    {/* A Slice whose state is not its column's (ready, rejected or failed under Proposed; one Genie does not know) says which. */}
                     {card.state !== null && card.state !== LEGACY_STATUS_STATE[card.status]
-                        ? <span data-tynn-card-state={card.state} className="rounded-full bg-[var(--bg-2)] px-1.5 text-[10px] font-medium text-[var(--fg-2)]">{SLICE_STATE_LABEL[card.state]}</span>
+                        ? <span data-tynn-card-state={card.state} className="rounded-full bg-[var(--bg-2)] px-1.5 text-[10px] font-medium text-[var(--fg-2)]">{sliceStateLabel(card.state)}</span>
                         : null}
+                    {/* A version's kind in Tynn's colour token (workspace-ux 0.13.0): a hotfix says so. */}
+                    <ReleaseKindMark release={card.release} />
                     {card.progress !== null ? <span data-tynn-progress="">{card.progress}</span> : null}
                     {card.claim !== null ? (
                         <span className="inline-flex items-center gap-0.5">

@@ -1,8 +1,9 @@
 import { Button, ContentRenderer, Icon, Sidebar } from '@particle-academy/react-fancy';
-import { SLICE_STATE_LABEL, type SliceState } from '../../core/slice-state.js';
+import { sliceStateLabel, type ShownSliceState } from '../../core/slice-state.js';
 import { startPlan, type BoardActionInput, type BoardClaims, type LiveState } from '../../core/tynn-board.js';
 import { WIP_LENSES, wipRef, wipWhen, type TynnPageState, type WipLens, type WipStory, type WipTask, type WipView } from '../../core/tynn-pages.js';
 import { genieClipboardWriter } from '../clipboard.js';
+import { ReleaseKindMark } from './ReleaseKindMark.js';
 import { Avatar, LiveMark, OpLine } from './TynnBoardPanel.js';
 
 /**
@@ -46,15 +47,16 @@ const STATUS_LOOK: Readonly<Record<string, { label: string; className: string }>
 };
 
 /** A story is a Slice (Tynn #933): its chip is its Slice state, in the colour its legacy status had. Tasks keep StatusChip. */
-const SLICE_LOOK: Readonly<Record<SliceState, string>> = {
+const SLICE_LOOK: Readonly<Record<ShownSliceState, string>> = {
     proposed: STATUS_LOOK.backlog!.className, ready: STATUS_LOOK.backlog!.className, running: STATUS_LOOK.in_progress!.className,
     awaiting_review: STATUS_LOOK.qa!.className, accepted: STATUS_LOOK.done!.className, blocked: STATUS_LOOK.blocked!.className,
     rejected: STATUS_LOOK.blocked!.className, failed: STATUS_LOOK.blocked!.className, cancelled: STATUS_LOOK.backlog!.className,
+    unknown: STATUS_LOOK.backlog!.className,
 };
 
-function SliceChip({ status, state }: { status: string; state: SliceState | null }) {
+function SliceChip({ status, state }: { status: string; state: ShownSliceState | null }) {
     if (state === null) return null;
-    return <span data-wip-status={status} data-wip-state={state} className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${SLICE_LOOK[state]}`}>{SLICE_STATE_LABEL[state]}</span>;
+    return <span data-wip-status={status} data-wip-state={state} className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${SLICE_LOOK[state]}`}>{sliceStateLabel(state)}</span>;
 }
 
 function StatusChip({ status }: { status: string }) {
@@ -88,6 +90,7 @@ function Versions({ view, version, onVersion }: { view: WipView; version: string
                         <Icon name="circle-play" size="xs" />
                         <span className="font-mono">{v.number ?? ''}</span>
                         <span className="max-w-[160px] truncate">{v.title}</span>
+                        <ReleaseKindMark release={v.release} />
                         {v.total !== null ? <span data-wip-version-progress="" className="text-[10px] opacity-80">{`${v.done ?? 0}/${v.total}`}</span> : null}
                     </Button>
                 );
@@ -102,6 +105,7 @@ function Banner({ view, live }: { view: WipView; live: LiveState | undefined }) 
             {view.version ? (
                 <>
                     <span className="inline-flex items-center gap-1 rounded-full bg-[var(--accent)]/15 px-2 py-0.5 text-[10px] font-medium text-[var(--accent)]"><Icon name="circle-play" size="xs" /> Active</span>
+                    <ReleaseKindMark release={view.version.release} />
                     <span className="font-mono text-[var(--fg-2)]">{view.version.number}</span>
                     <span className="min-w-0 truncate font-medium text-[var(--fg-1)]">{view.version.title}</span>
                     {view.progress.total > 0 ? (

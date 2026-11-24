@@ -13,7 +13,8 @@
  * is named in BOARD_GAPS with the reason.
  */
 
-import { LEGACY_STATUS_STATE, SLICE_STATE_LABEL, sliceStateOf, type SliceState } from './slice-state.js';
+import { releaseLookOf, type ReleaseLook } from './release-kind.js';
+import { LEGACY_STATUS_STATE, SLICE_STATE_LABEL, sliceStateLabel, sliceStateOf, type ShownSliceState } from './slice-state.js';
 
 export type BoardLevel = 'versions' | 'stories' | 'tasks';
 export type BoardKind = 'version' | 'story' | 'task';
@@ -34,8 +35,8 @@ export const BOARD_LEVELS = {
 
 /** What a card reads from Tynn's row (the rest of the row is ignored). */
 export const BOARD_FIELDS = {
-    version: ['id', 'number', 'title', 'status', 'story_count', 'stories_done', 'task_count', 'tasks_done'],
-    story: ['id', 'story_number', 'title', 'status', 'order', 'task_count', 'tasks_done', 'claimed_by', 'claimed_by_me', 'can_start', 'can_move_to_qa', 'version_active'],
+    version: ['id', 'number', 'title', 'status', 'release_kind', 'colour', 'story_count', 'stories_done', 'task_count', 'tasks_done'],
+    story: ['id', 'story_number', 'title', 'status', 'state', 'order', 'task_count', 'tasks_done', 'claimed_by', 'claimed_by_me', 'can_start', 'can_move_to_qa', 'version_active'],
     task: ['id', 'task_number', 'title', 'status', 'order', 'story_id', 'claimed_by', 'claimed_by_me', 'can_start', 'version_active'],
 } as const satisfies Record<BoardKind, readonly string[]>;
 
@@ -196,8 +197,10 @@ export interface BoardCard {
     readonly number: string | null;
     readonly title: string;
     readonly status: string;
-    /** A story's Slice state: Tynn's `state`, or its legacy status mapped (sliceStateOf); null for versions and tasks. */
-    readonly state: SliceState | null;
+    /** A story's Slice state: Tynn's `state` (unknown when it is not one Genie knows), or an older Tynn's status mapped (sliceStateOf); null for versions and tasks. */
+    readonly state: ShownSliceState | null;
+    /** A version's kind and colour token (workspace-ux 0.13.0); null for stories and tasks, and from a Tynn that sends none. */
+    readonly release: ReleaseLook | null;
     readonly order: number;
     /** `3/5` — done of total, under a version's or story's card. */
     readonly progress: string | null;
@@ -291,6 +294,7 @@ function card(kind: BoardKind, row: Row): BoardCard | null {
         title: str(row.title) ?? '',
         status,
         state: kind === 'story' ? sliceStateOf(row) : null,
+        release: kind === 'version' ? releaseLookOf(row) : null,
         order: num(row.order) ?? 0,
         progress: total !== null && total > 0 ? `${done ?? 0}/${total}` : null,
         claimedBy: claim,
@@ -438,7 +442,7 @@ export interface BoardDetail {
     readonly description: string;
     readonly status: string;
     /** A story's Slice state (sliceStateOf); null for a task. */
-    readonly state: SliceState | null;
+    readonly state: ShownSliceState | null;
     /** What the flyout calls its status: a story's Slice state label, a task's status label. */
     readonly statusLabel: string;
     /** A story's acceptance criteria. */
@@ -496,7 +500,7 @@ export function parseDetail(json: unknown): BoardDetail | null {
         description: typeof json.description === 'string' ? json.description : '',
         status,
         state,
-        statusLabel: state !== null ? SLICE_STATE_LABEL[state] : (COLUMN_LABEL[status] ?? status),
+        statusLabel: state !== null ? sliceStateLabel(state) : (COLUMN_LABEL[status] ?? status),
         acceptanceCriteria: strings(json.acceptance_criteria),
         tasks: Array.isArray(json.tasks)
             ? json.tasks.filter(isRow).flatMap((t) => {
