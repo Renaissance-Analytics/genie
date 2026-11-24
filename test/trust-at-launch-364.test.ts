@@ -66,7 +66,7 @@ describe('an agent start reads the verdict again just before it spawns (item 3)'
         await vi.waitFor(() => expect(t.host.probe(t.record.id)?.failure).toBeTruthy());
         expect(t.created).toEqual([]);
         expect(t.started).toEqual([]);
-        expect(String(t.host.probe(t.record.id)?.failure)).toMatch(/trust/i);
+        expect(JSON.stringify(t.host.probe(t.record.id)?.failure)).toMatch(/trust/i);
     });
 
     it('CONTROL: the verdict did not move during preparation: it starts as trusted', async () => {
@@ -96,7 +96,7 @@ describe('a Codex agent in a workspace not trusted is refused (item 2)', () => {
         await vi.waitFor(() => expect(t.host.probe(t.record.id)?.failure).toBeTruthy());
         expect(t.created).toEqual([]);
         expect(t.started).toEqual([]);
-        expect(String(t.host.probe(t.record.id)?.failure)).toMatch(/Trust this workspace/);
+        expect(JSON.stringify(t.host.probe(t.record.id)?.failure)).toMatch(/Trust this workspace/);
     });
 
     it('CONTROL: trusted, Codex starts', async () => {
