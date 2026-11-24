@@ -3,6 +3,7 @@ import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { closeWhatsNew } from './cdp-whats-new.mjs';
 import { writeFileSync } from 'node:fs';
 import { ticksOf } from './crash-cdp-lib.mjs';
+import { notOwnLaunch } from './cdp-own-launch.mjs';
 /**
  * DRIVE AN UPDATE THROUGH THE REAL APP — check → download → install, over CDP, via the same
  * `window.genieTest.updates` on the same page bridge the Dashboard signal strip uses.
@@ -87,6 +88,13 @@ const until = async (cdp, pred, ms, what) => {
 
 console.log('\nTHE UPDATE PATH — check, download, install, through the installed app\n');
 const page = await findTarget();
+// THIS RUN'S OWN LAUNCH (CDP_OWN_PID, Tynn #1036 P6-1; the full gate 1124-034522-b451dd read another row's page): the process
+// listening on the port must be the launch the caller names, or one it started, before anything there is read.
+if (process.env.CDP_OWN_PID) {
+    const why = notOwnLaunch(PORT, Number(process.env.CDP_OWN_PID));
+    check(why === null, `0. the page on the debugger port ${PORT} is this run's own launch (pid ${process.env.CDP_OWN_PID} or one it started)`, why ?? '');
+    if (why !== null) { console.log('\nUPDATE PATH REFUSED: the page is not this run\'s Genie.'); process.exit(1); }
+}
 const cdp = await Cdp.connect(page.webSocketDebuggerUrl);
 try {
     await cdp.evaluate('document.readyState');

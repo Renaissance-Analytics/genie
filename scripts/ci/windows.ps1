@@ -331,8 +331,11 @@ function Row-app-stopped {
 function Row-local-door-break {
     Need-Build; Need-TestMachine
     $log = Join-Path $Out 'local-door-break.out'
-    node scripts/local-door-cdp.mjs --break-admission *> $log
-    $probe = $LASTEXITCODE
+    # Ports of its own: local-door runs the same script on its defaults (test/ci-debug-ports-unique.test.ts). Put back after.
+    $own = @{ CDP_PORT = '9405'; LOCAL_DOOR_CDP_INSPECT = '9406' }
+    $before = @{}
+    foreach ($k in $own.Keys) { $before[$k] = [Environment]::GetEnvironmentVariable($k, 'Process'); [Environment]::SetEnvironmentVariable($k, $own[$k], 'Process') }
+    try { node scripts/local-door-cdp.mjs --break-admission *> $log; $probe = $LASTEXITCODE } finally { foreach ($k in $own.Keys) { [Environment]::SetEnvironmentVariable($k, $before[$k], 'Process') } }
     Get-Content $log
     if ($probe -ne 1 -or -not (Select-String -Path $log -Pattern 'FAIL 1:' -Quiet) -or -not (Select-String -Path $log -Pattern 'actual refusal:.*not an admitted' -Quiet)) { throw "the admission break control did not fail as it must (exit $probe)" }
 }
@@ -381,7 +384,7 @@ function Row-renderer-crash { Need-Build; Need-TestMachine; Run 'renderer-crash-
 # put back whatever the row's result.
 function Row-quit-keeps-host {
     Need-Build; Need-TestMachine
-    $own = @{ QUIT_CDP_OWN_HOME = '1'; QUIT_CDP_OUT = (Join-Path $Out 'quit-keeps-host'); CDP_PORT = '9362'; QUIT_CDP_INSPECT = '9363'; QUIT_CDP_DEADLINE_MS = '540000' }
+    $own = @{ QUIT_CDP_OWN_HOME = '1'; QUIT_CDP_OUT = (Join-Path $Out 'quit-keeps-host'); CDP_PORT = '9414'; QUIT_CDP_INSPECT = '9415'; QUIT_CDP_DEADLINE_MS = '540000' }
     $before = @{}
     foreach ($k in $own.Keys) { $before[$k] = [Environment]::GetEnvironmentVariable($k, 'Process'); [Environment]::SetEnvironmentVariable($k, $own[$k], 'Process') }
     try {

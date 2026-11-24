@@ -507,7 +507,8 @@ row_layout() { need_app && GENIE2_CODEX_BINARY="$PWD/scripts/stub-codex.mjs" GEN
 row_local-door-break() {
     need_app && need_keyring || return 1
     local code=0
-    timeout 300 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/local-door-cdp.mjs --break-admission >"$OUT/local-door-break.out" 2>&1 || code=$?
+    # Ports of its own: local-door runs the same script on its defaults (test/ci-debug-ports-unique.test.ts).
+    CDP_PORT=9405 LOCAL_DOOR_CDP_INSPECT=9406 timeout 300 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/local-door-cdp.mjs --break-admission >"$OUT/local-door-break.out" 2>&1 || code=$?
     cat "$OUT/local-door-break.out"
     [ "$code" -eq 1 ] && grep -q 'FAIL 1:' "$OUT/local-door-break.out" && grep -q 'actual refusal:.*not an admitted' "$OUT/local-door-break.out"
 }
@@ -543,7 +544,7 @@ row_question-maximize() { need_build && need_display && on_display timeout 240 n
 # Esc unsends a message still in the send buffer, files and all, in the real chat with a real key press (Tynn #1029).
 row_esc-unsend() { need_build && need_display && on_display timeout 240 node scripts/esc-unsend-cdp.mjs; }
 row_site-panel() { need_app && need_keyring && timeout 280 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/site-panel-cdp.mjs; }
-row_site-panel-locked() { need_app && SITE_PANEL_LOCKED=1 CDP_PORT=9336 timeout 120 node scripts/site-panel-cdp.mjs; }
+row_site-panel-locked() { need_app && SITE_PANEL_LOCKED=1 CDP_PORT=9408 timeout 120 node scripts/site-panel-cdp.mjs; }
 row_browser-process() { need_app && need_keyring && timeout 260 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/browser-process-cdp.mjs; }
 # The app opened by need_app wrote this log: the spawn host started, and never fell back.
 row_spawn-host() {
@@ -561,7 +562,7 @@ row_renderer-crash() { need_build && need_display && on_display timeout 420 node
 # genie-host pid, the same provider pid per agent, every tick streamed while no window was open in its ledger, in order;
 # "Shut down everything" ends window, host and providers. Its Genie has a home, a lock and ports of its own beside the
 # shared app (QUIT_CDP_OWN_HOME), its logs under ci-out/quit-keeps-host; its own watchdog (360 s) and cleanup end first.
-row_quit-keeps-host() { need_build && need_display && on_display timeout 450 env QUIT_CDP_OWN_HOME=1 QUIT_CDP_OUT="$OUT/quit-keeps-host" CDP_PORT=9362 QUIT_CDP_INSPECT=9363 QUIT_CDP_DEADLINE_MS=360000 node scripts/quit-keeps-host-cdp.mjs; }
+row_quit-keeps-host() { need_build && need_display && on_display timeout 450 env QUIT_CDP_OWN_HOME=1 QUIT_CDP_OUT="$OUT/quit-keeps-host" CDP_PORT=9414 QUIT_CDP_INSPECT=9415 QUIT_CDP_DEADLINE_MS=360000 node scripts/quit-keeps-host-cdp.mjs; }
 # A data root attached to a rebuilt machine (host split P7.3, Tynn #419): a real genie-host on a real Secret Service, no window.
 row_rebuilt-machine() { need_install && need_keyring && timeout 420 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/rebuilt-machine.mjs; }
 

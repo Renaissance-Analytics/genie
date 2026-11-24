@@ -37,6 +37,11 @@ FEED_URL='http://127.0.0.1:8099/'
 FEED_PID=''
 APP_PID=''
 TICKER="$(node -p 'require("os").tmpdir()')/genie-stub-codex-ticker"
+# A DEBUGGER PORT OF ITS OWN (the full gate 1124-034522-b451dd: an earlier row's process held 9222, and the row read that
+# app's page). No other row uses it (test/ci-debug-ports-unique.test.ts); the drivers check the page is this run's launch.
+DEBUG_PORT=9401
+export CDP_PORT="$DEBUG_PORT"
+port_free() { ! curl -fsS -m 3 "http://127.0.0.1:$DEBUG_PORT/json/version" >/dev/null 2>&1 || fail "something already answers on this row's debugger port $DEBUG_PORT (not this run's Genie)"; }
 
 step() { echo; echo "=== $* ==="; }
 fail() { echo "### client-only=FAIL $*"; exit 1; }
@@ -171,7 +176,8 @@ rm -f "$UPDATE_TICKS_FILE"
 # cwd as the workspace, and in a gate shard earlier rows have seeded the checkout and changed its project.json.
 WORKSPACE="$(mktemp -d -t genie-update-workspace-XXXXXX)"
 ( cd "$WORKSPACE" && node "$ROOT/scripts/smoke-seed.mjs" ) >seed.log 2>&1 || { tail -20 seed.log; fail "the seed failed in $WORKSPACE"; }
-"$APPIMAGE_FILE" --remote-debugging-port=9222 >installed-out.log 2>installed-err.log &
+port_free
+"$APPIMAGE_FILE" --remote-debugging-port="$DEBUG_PORT" >installed-out.log 2>installed-err.log &
 APP_PID=$!
 host_before=''
 for _ in $(seq 1 45); do sleep 2; p="$(host_pid)"; if alive "$p"; then host_before="$p"; break; fi; done
@@ -180,7 +186,7 @@ host_before_at="$(started_at "$host_before")"
 host_exe="$(readlink "/proc/$host_before/exe")"
 echo "genie-host before the update: pid $host_before, started $host_before_at, runs $host_exe"
 case "$host_exe" in "$GHOME"/host/*) ;; *) fail "genie-host does not run from its copy under $GHOME/host/ (it runs $host_exe)" ;; esac
-EXPECT_VERSION="$NEXT" node scripts/update-cdp.mjs
+EXPECT_VERSION="$NEXT" CDP_OWN_PID="$APP_PID" node scripts/update-cdp.mjs
 drive=$?
 stubs_before="$(stub_pids)"
 echo "agent providers when install was asked: ${stubs_before:-none}"
@@ -214,8 +220,10 @@ alive "$APP_PID" && fail "the base window (pid $APP_PID) is still running"
 step "the agent's ledger, in a window of $NEXT"
 for p in $(window_pids); do kill -9 "$p" 2>/dev/null; done
 sleep 3
-"$APPIMAGE_FILE" --remote-debugging-port=9222 >viewer-out.log 2>viewer-err.log &
-node scripts/update-ticks-after-cdp.mjs || { tail -40 viewer-err.log; fail "the agent's stream did not run through the install"; }
+port_free
+"$APPIMAGE_FILE" --remote-debugging-port="$DEBUG_PORT" >viewer-out.log 2>viewer-err.log &
+VIEWER_PID=$!
+CDP_OWN_PID="$VIEWER_PID" node scripts/update-ticks-after-cdp.mjs || { tail -40 viewer-err.log; fail "the agent's stream did not run through the install"; }
 
 # THE ROW (Tynn #413): the same host, and the same agent, through the update.
 sleep 15

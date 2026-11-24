@@ -93,6 +93,15 @@ $script:ended = $false
 $script:viewer = $null
 $script:relaunchedPids = @()
 $ticker = Join-Path ([System.IO.Path]::GetTempPath()) 'genie-stub-codex-ticker'
+# A DEBUGGER PORT OF ITS OWN (the full gate 1124-034522-b451dd: an earlier row's process held 9222, and the row read that
+# app's page). No other row uses it (test/ci-debug-ports-unique.test.ts); the drivers check the page is this run's launch.
+$debugPort = 9401
+$env:CDP_PORT = "$debugPort"
+function Assert-PortFree {
+    $answered = $false
+    try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 "http://127.0.0.1:$debugPort/json/version" | Out-Null; $answered = $true } catch { }
+    if ($answered) { throw "something already answers on this row's debugger port $debugPort (not this run's Genie)" }
+}
 try {
     Run "npm version $Base --no-git-tag-version --allow-same-version" 'bump-base.log'
     Step "package $current and install it"
@@ -181,7 +190,8 @@ try {
     try { & node (Join-Path $root 'scripts\smoke-seed.mjs'); $seedExit = $LASTEXITCODE } finally { Pop-Location }
     if ($seedExit -ne 0) { throw "the seed failed in $workspace (exit $seedExit)" }
     Remove-Item -Force -ErrorAction SilentlyContinue installed-out.log, installed-err.log
-    $app = Start-Process -FilePath $exe -ArgumentList '--remote-debugging-port=9222' -PassThru `
+    Assert-PortFree
+    $app = Start-Process -FilePath $exe -ArgumentList "--remote-debugging-port=$debugPort" -PassThru `
         -RedirectStandardOutput installed-out.log -RedirectStandardError installed-err.log
     $env:EXPECT_VERSION = $Next
     # With fancy-pty installed, the driver's §7.2 control (one open terminal → one helper under
@@ -197,6 +207,7 @@ try {
     }
     if (-not $hostBefore) { throw 'no live genie-host recorded in host.json before the update' }
     Write-Output ("genie-host before the update: pid " + $hostBefore.Id + ", started " + $hostBefore.StartTime)
+    $env:CDP_OWN_PID = "$($app.Id)"
     & cmd /c "node scripts\update-cdp.mjs 2>&1"
     $drive = $LASTEXITCODE
     if ($drive -ne 0) {
@@ -244,8 +255,10 @@ try {
     Step "the agent's ledger, in a window of $Next"
     foreach ($p in $relaunched) { Kill-Tree $p.Id }
     Start-Sleep 3
-    $script:viewer = Start-Process -FilePath $exe -ArgumentList '--remote-debugging-port=9222' -PassThru `
+    Assert-PortFree
+    $script:viewer = Start-Process -FilePath $exe -ArgumentList "--remote-debugging-port=$debugPort" -PassThru `
         -RedirectStandardOutput viewer-out.log -RedirectStandardError viewer-err.log
+    $env:CDP_OWN_PID = "$($script:viewer.Id)"
     & cmd /c "node scripts\update-ticks-after-cdp.mjs 2>&1"
     if ($LASTEXITCODE -ne 0) { throw "the agent's stream did not run through the install (update-ticks-after-cdp.mjs exited $LASTEXITCODE)" }
     Start-Sleep 15

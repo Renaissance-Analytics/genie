@@ -20,6 +20,7 @@ import { readFileSync } from 'node:fs';
 import { mainWindow } from './cdp-main-window.mjs';
 import { alive, Cdp, check, contiguous, failures, ticksOf, until } from './crash-cdp-lib.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
+import { notOwnLaunch } from './cdp-own-launch.mjs';
 
 const PORT = Number(process.env.CDP_PORT ?? 9222);
 const file = process.env.UPDATE_TICKS_FILE;
@@ -32,6 +33,11 @@ let cdp = null;
 try {
     const page = await until(async () => mainWindow(await (await fetch(`http://127.0.0.1:${PORT}/json/list`, { signal: AbortSignal.timeout(3_000) })).json()), 90_000);
     if (!check(page !== null && page !== undefined, '1. a window of the installed build is on the debugger port', `port ${PORT}`)) throw new Error('no window');
+    // THIS RUN'S OWN LAUNCH (CDP_OWN_PID, Tynn #1036 P6-1): the process on the port is the caller's window, or one it started.
+    if (process.env.CDP_OWN_PID) {
+        const why = notOwnLaunch(PORT, Number(process.env.CDP_OWN_PID));
+        if (!check(why === null, `1b. that window is this run's own launch (pid ${process.env.CDP_OWN_PID} or one it started)`, why ?? '')) throw new Error('not this run\'s window');
+    }
     cdp = await Cdp.connect(page.webSocketDebuggerUrl, 'the window after the install');
     await waitForPageProbe(cdp);
     const elapsed = Date.now() - before.askedAt;

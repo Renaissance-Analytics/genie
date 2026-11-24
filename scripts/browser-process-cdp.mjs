@@ -23,8 +23,8 @@ process.env.GENIE_PAGE_PROBE ??= '1';
 if (process.env.CI !== 'true' && process.env.GENIE_TEST_MACHINE !== '1' && process.env.BROWSER_PROCESS_CDP_ALLOW !== '1') { console.error('refused: this launches Electron, and runs only on CI or a test machine'); process.exit(2); }
 if (process.platform !== 'linux') { console.error('Linux only'); process.exit(2); }
 
-const PORT = 9334;
-const BROWSER_PORT = 9335;
+const PORT = 9403;
+const BROWSER_PORT = 9404;
 const DISPLAY = ':77';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const failures = [];
