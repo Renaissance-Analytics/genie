@@ -67,6 +67,8 @@ export interface GenieToolParts {
     readonly hosting?: HostingServices;
     /** A workspace's trust verdict as last read (Tynn #753): the agents' `sites` / `services` act only in a trusted one. Absent = none is (fail closed). */
     readonly workspaceTrusted?: (workspaceId: string) => boolean;
+    /** The verdict read now (Tynn #364), for what acts at once on it (the `playwright` install). Absent = `workspaceTrusted`. */
+    readonly workspaceTrustedNow?: (workspaceId: string) => Promise<boolean>;
     /** Genie's browser, for the agents' `sites open` — the pane the Hosting tab's Open uses. Absent = none (doctor mode), and the tool says so. */
     readonly openInBrowser?: OpenInBrowser;
     /** The background processes the agents' `processes` tool acts on — the Processes tab's book and the supervisor's logs. Absent = none (doctor mode), and the tool says so. */
@@ -181,7 +183,7 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
             playwright: {
                 resolveCaller: p.resolveCaller,
                 port: p.playwright,
-                trusted: p.workspaceTrusted ?? (() => false),
+                trusted: p.workspaceTrustedNow ?? p.workspaceTrusted ?? (() => false),
                 approve: (caller: Caller, action: typeof PLAYWRIGHT_INSTALL_ACTION, detail: string, call: McpCall | undefined) => p.approve(caller, action, detail, call),
             },
         } : {}),

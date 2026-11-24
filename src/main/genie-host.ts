@@ -130,6 +130,7 @@ import { ProcessScheduler } from './process-scheduler.js';
 import { ProcessBookReplica, ProcessesService } from './processes-host.js';
 import { FlowStore } from './flow-store.js';
 import { FlowsReplica, FlowsService } from './flows-host.js';
+import { FLOW_UNTRUSTED_REASON } from './flow-scheduler.js';
 import { startFlowsEngine } from './flows-engine.js';
 import { FlowCallers, createFlowToolCaller } from './flow-tools.js';
 import { GAppBridge, GAppCallers, createGAppToolRunner } from './gapp-bridge.js';
@@ -653,6 +654,25 @@ async function main(): Promise<void> {
         if (!hostRegistry.workspace(record.workspaceId)) return false;
         return hostingStack?.trust.view(record.workspaceId)?.trusted !== true;
     };
+    /**
+     * THE VERDICT READ NOW (Tynn #364), for what acts on it at once (a Playwright install): the person's own yes stands as it
+     * is; anything else is read again. A folder in no workspace here is as `hostUntrustedNow` has it; with no hosting, none is.
+     */
+    const hostTrustedNow = async (workspaceId: string): Promise<boolean> => {
+        if (!hostRegistry.workspace(workspaceId)) return true;
+        return hostingStack ? hostingStack.trust.current(workspaceId) : false;
+    };
+    /**
+     * A WORKSPACE'S VERDICT FOR ITS KEPT PROCESSES AND FLOWS (Tynn #364): `untrusted` once a read says so (the person's
+     * Untrust, or what would run and was never trusted) — they are held; `unread` before the first read, unless the person's
+     * own yes stands — the launch restore waits for it; `trusted` otherwise. With no hosting nothing is held, as before.
+     */
+    const hostTrustState = (workspaceId: string): 'trusted' | 'untrusted' | 'unread' => {
+        if (!hostingStack || !hostRegistry.workspace(workspaceId)) return 'trusted';
+        const view = hostingStack.trust.view(workspaceId);
+        if (view === null) return hostingStack.trust.durable(workspaceId) ? 'trusted' : 'unread';
+        return view.trusted ? 'trusted' : 'untrusted';
+    };
     /** A registered workspace's folder takes Genie's files only once trusted; with no hosting, none is. */
     const hostMayWriteInto = (folder: string): Promise<boolean> => (hostingStack
         ? hostingStack.trust.mayWriteInto(folder)
@@ -723,7 +743,8 @@ async function main(): Promise<void> {
      * clock with no window, its prompts reaching this host's sessions, its commands this host's supervisor, its tool steps
      * this host's tools. Opened at the first window's v1 import, like the process book.
      */
-    const flowsService = new FlowsService();
+    // A flow of a workspace not trusted now says so in the Flows list (Tynn #364).
+    const flowsService = new FlowsService(undefined, { held: (workspaceId) => (hostTrustState(workspaceId) === 'untrusted' ? FLOW_UNTRUSTED_REASON : null) });
     const flowCallers = new FlowCallers((id) => hostRegistry.workspace(id)?.path ?? null);
     const gappCallers = new GAppCallers((id) => hostRegistry.workspace(id)?.path ?? null);
     // The flows as the host's own `flows` tool reads and drives them: the service's list, its actions in place.
@@ -1614,6 +1635,8 @@ async function main(): Promise<void> {
         installer: { ensure: (version) => (playwrightInstaller.byItself() ? playwrightInstaller.ensure(version) : null), installing: () => playwrightInstaller.installing() },
         // A workspace not yet trusted triggers no install (Tynn #846 review): the verdict as last read, as `sites`/`services` read it.
         trusted: (workspaceId) => !hostUntrustedNow({ workspaceId }),
+        // And read now before it installs (Tynn #364): the verdict above can be a slow pass old.
+        trustedNow: (workspaceId) => hostTrustedNow(workspaceId),
     });
     const playwrightSweep = setInterval(() => { void playwrightHost.server.sweep().catch(() => {}); }, 60_000);
     playwrightSweep.unref();
@@ -1731,6 +1754,11 @@ async function main(): Promise<void> {
             return writeGenieInstructions(join(runtime, 'untrusted-agent'), tools, hostTynn?.status().signedIn === true ? 'tynn' : 'files');
         },
         untrustedNow: (record) => hostUntrustedNow(record),
+        // Work for a run launched trusted reads the verdict now (Tynn #364): the person's own yes as it is, else a fresh read.
+        verdictNow: {
+            durable: (record) => hostingStack?.trust.durable(record.workspaceId) === true,
+            read: (record) => hostTrustedNow(record.workspaceId),
+        },
         // WHICH ACCOUNT A HELD LOGIN IS ON (Tynn #699): the provider's own status command, read while a login is held; a
         // different account releases the agents held on it. Nothing to tell it by = no change.
         rateLimit: {
@@ -2401,6 +2429,8 @@ async function main(): Promise<void> {
                 addKnowledge: async (entry) => ({ id: own.knowledge.add(entry as never).id }),
                 attention: own.attention,
                 safeMode: safeNow,
+                // A workspace not trusted now fires none of its flows (Tynn #364).
+                trust: hostTrustState,
                 // A Codex agent in a workspace not trusted gets a flow's values with Genie's skill names escaped (genie#1519):
                 // the host's own verdict, read where the flows run.
                 escapesPromptValues: (address) => {
@@ -2442,6 +2472,8 @@ async function main(): Promise<void> {
                 asleep: (workspaceId: string) => hostRegistry.workspace(workspaceId)?.asleep === true,
                 // Safe mode: the restore starts no kept process, and no scheduled task is armed.
                 safeMode: safeNow,
+                // A workspace not trusted now starts none of its kept processes and fires none of its tasks (Tynn #364).
+                trust: hostTrustState,
             };
             // Each kept process's output, kept past this Genie (Tynn #860): a row "stopped by restart" still has its log.
             let opened: ProcessBook | null = null;
@@ -2492,6 +2524,8 @@ async function main(): Promise<void> {
             processBookNow = processBook;
             mailProcessBook = processBook;
             const restored = processBook.restore();
+            // What the launch held for a verdict not read yet starts if it was read meanwhile (Tynn #364).
+            for (const w of hostRegistry.listWorkspaces()) processBook.trustMoved(w.id);
             if (safeMode.active()) for (const p of processBook.kept()) if (restored.heldBack.includes(p.id)) safeMode.hold('process', { id: p.id, name: p.name });
             lifecycleLog(`process book open: ${restored.started.length} restored, ${restored.heldBack.length} held back`);
         })();
@@ -2531,6 +2565,13 @@ async function main(): Promise<void> {
     watchNewWorkspaces({ workspaceStates: () => hostRegistry.workspaceStates(), subscribe: (listener) => phoneRegistry.subscribe(() => listener()) }, restoreWorkspaceClone);
     // The person's yes (Tynn #756, PR9b): what waited for it is restored now, by the same restore (it leaves what is already here alone).
     hostingStack?.trust.onTrusted?.((id) => restoreWorkspaceClone(id));
+    // A WORKSPACE'S VERDICT MOVED (Tynn #364): untrusted, its kept processes are stopped and held and its schedules and flows
+    // are not armed; trusted again, what was wanted starts and they are armed again. The Processes and Flows lists say which.
+    hostingStack?.trust.onVerdict((id) => {
+        processBookNow?.trustMoved(id);
+        for (const p of planners) p.plan();
+        flowsService.changed();
+    });
     // THE WATCHER (Tynn #756, PR9c): what a teammate pushes to `.flows/`, `.processes/` or `.genie/tabs.json` is noticed and OFFERED,
     // with what the repo says beside what this machine has. The host only looks and says what it found: nothing is applied here;
     // applying one is the person's, asked of the watcher.
@@ -2571,6 +2612,8 @@ async function main(): Promise<void> {
         serviceExec: makeServiceExec(systemProcessTree, processSupervisor, (id, run) => { host.commandStarted(id as AgentId, run); }),
         // The agents' `sites` / `services` act only in a trusted workspace (Tynn #753): the verdict as last read, as a shell call reads it.
         workspaceTrusted: (workspaceId) => !hostUntrustedNow({ workspaceId }),
+        // The agents' `playwright install` reads the verdict now (Tynn #364).
+        workspaceTrustedNow: (workspaceId) => hostTrustedNow(workspaceId),
         // An agent's `sites open` (Tynn #1046 D2): in this host's browser, in the background; every window pulses the site's
         // workspace for the person (a `site-opened` tool signal). With no window it opens all the same.
         openInBrowser: hostOpensSite({

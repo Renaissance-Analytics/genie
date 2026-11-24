@@ -28,6 +28,8 @@ export interface FlowsEngineDeps {
     readonly attention: Parameters<typeof questionWaiter>[0];
     /** SAFE MODE (Tynn #386; genie-host's): no schedule, file or interrupted run starts a flow while it is on. */
     readonly safeMode?: () => boolean;
+    /** The workspace's verdict, read when a flow would fire (Tynn #364): one not trusted fires none. Absent = trusted. */
+    readonly trust?: (workspaceId: string) => 'trusted' | 'untrusted' | 'unread';
     /**
      * A Codex agent in a workspace not trusted (genie#1519): a flow's prompt values reach it with Genie's skill names
      * escaped. The host's own verdict, read where the flows run. Absent = nothing escaped.
@@ -53,6 +55,7 @@ export function startFlowsEngine(deps: FlowsEngineDeps): FlowsEngine {
         store: deps.store,
         now: deps.now,
         ...(deps.safeMode ? { safeMode: deps.safeMode } : {}),
+        ...(deps.trust ? { trust: deps.trust } : {}),
         schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
         run: createFlowRunner({
             now: deps.now,

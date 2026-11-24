@@ -85,7 +85,15 @@ export interface FlowSchedulerDeps {
     readonly run: (flow: FlowRecord, trigger: Schedule | FileFired | null, observer?: RunObserver, resume?: RunResume, control?: RunControl) => Promise<RunResult | void>;
     /** SAFE MODE (Tynn #386): while on, no schedule is armed, no file starts a flow and no interrupted run resumes. */
     readonly safeMode?: () => boolean;
+    /**
+     * THE WORKSPACE'S VERDICT, READ WHEN IT ACTS (Tynn #364): a flow of a workspace not trusted is not armed, a file starts
+     * none of its flows, an interrupted run of its waits, and a Run now is held, recorded with why. Absent = trusted.
+     */
+    readonly trust?: (workspaceId: string) => 'trusted' | 'untrusted' | 'unread';
 }
+
+/** Why a flow did not run (Tynn #364): its workspace is not trusted now. */
+export const FLOW_UNTRUSTED_REASON = 'held: workspace not trusted';
 
 export interface Due {
     readonly flowId: string;
@@ -162,7 +170,7 @@ export class FlowScheduler {
         let at: number | null = null;
         let flows: DueFlow[] = [];
         for (const flow of this.#deps.store.list()) {
-            if (!flow.armed) continue;
+            if (!flow.armed || this.#untrusted(flow.workspaceId)) continue;
             // This flow's own nearest due: its first trigger at its earliest instant (one run per flow per instant).
             let mine: { at: number; trigger: Schedule } | null = null;
             // Strictly after the slot this flow last fired, even when the wall clock still reads before it (genie#1363).
@@ -201,7 +209,8 @@ export class FlowScheduler {
         if (this.#deps.safeMode?.() === true) return;
         for (const flow of this.#deps.store.interrupted()) {
             const going = flow.inFlight!;
-            if (this.#running.has(flow.id)) continue;
+            // Not trusted now (Tynn #364): kept as it is, as safe mode keeps it, for a later start.
+            if (this.#running.has(flow.id) || this.#untrusted(flow.workspaceId)) continue;
             const entry = going.entry;
             const schedule = entry ? this.#deps.store.schedules(flow.id).find((s) => s.nodeId === entry) ?? null : null;
             const trigger: Schedule | FileFired | null = schedule ?? (entry && going.trigger === 'file' ? { nodeId: entry, file: { workspaceId: flow.workspaceId, path: '', relPath: going.file ?? '', name: '', extension: '', sizeBytes: 0 } } : null);
@@ -246,7 +255,7 @@ export class FlowScheduler {
         if (this.#deps.safeMode?.() === true) return false;
         let taken = false;
         for (const flow of this.#deps.store.list()) {
-            if (!flow.armed) continue;
+            if (!flow.armed || this.#untrusted(flow.workspaceId)) continue;
             const hit = this.#deps.store.fileTriggers(flow.id).find((t) => matchesFileTrigger(t.config as unknown as FileTriggerConfig, event));
             if (!hit) continue;
             taken = true;
@@ -272,6 +281,10 @@ export class FlowScheduler {
         }
     }
 
+    #untrusted(workspaceId: string): boolean {
+        return this.#deps.trust?.(workspaceId) === 'untrusted';
+    }
+
     /** Start a run nobody awaits (a fire, a file): a record that cannot be written is reported, never an unhandled rejection. */
     #startReported(flow: FlowRecord, trigger: Schedule | FileFired, kind: FlowRun['trigger']): void {
         this.#start(flow, trigger, kind).catch((error: unknown) => {
@@ -283,6 +296,14 @@ export class FlowScheduler {
         const startedBy = by ? { startedBy: by } : {};
         const startedAt = this.#deps.now();
         const file = trigger !== null && 'file' in trigger ? { file: trigger.file.relPath } : {};
+        // Read now (Tynn #364): a workspace not trusted runs none of its flows, a fire due or a Run now; recorded saying why.
+        if (this.#untrusted(flow.workspaceId)) {
+            const held = this.#record(flow.id, { trigger: kind, outcome: 'held', reason: `${FLOW_UNTRUSTED_REASON}: "${flow.name}" did not run`, startedAt, ...file, ...startedBy });
+            this.#records.add(held);
+            const done = (): void => { this.#records.delete(held); };
+            held.then(done, done);
+            return held;
+        }
         if (this.#running.has(flow.id)) {
             // A previous run whose prompt waits in an agent's queue (Tynn #704) is still going: this fire is not stacked behind it.
             const inFlightNodes = Object.values(this.#deps.store.get(flow.id)?.inFlight?.nodes ?? {});
