@@ -5,6 +5,7 @@ import { fanOut } from '../core/fan-out.js';
 import { TerminalOutputCounter, type TerminalDataPosition, type TerminalPosition } from '../core/terminal-stream.js';
 import {
     configureInProcessBackend,
+    detectShells,
     inProcessBackend,
     parseCommandLine,
     resolveDefaultShell,
@@ -65,6 +66,30 @@ export interface FancyTermPortOptions {
     platform?: NodeJS.Platform;
     /** Where a program is looked for. Defaults to this machine's. */
     lookup?: LookupPorts;
+    /**
+     * WINDOWS: what a bare `bash` starts (Tynn #1044), the Git Bash Terminals open; `null` = none here. Absent = no
+     * override, and `bash` is looked up on PATH like any program. Elsewhere it is never asked.
+     */
+    gitBash?: () => string | null;
+}
+
+/**
+ * The Git Bash Terminals open (fancy-term-host's own detection: fixed install folders under Program Files and LocalAppData,
+ * never PATH or the working folder), or `null` when it is not installed.
+ */
+export function detectedGitBash(): string | null {
+    return detectShells().find((s) => s.id === 'git-bash')?.command ?? null;
+}
+
+/**
+ * A BARE `bash` ON WINDOWS IS GIT BASH (Tynn #1044). Looked up on PATH it is System32's bash.exe, WSL's launcher, because
+ * System32 comes before Git: a kept process's or a flow's `bash -c …` ran in Linux, with Linux's PHP, beside a workspace
+ * whose toolchain is Windows'. The Git Bash Terminals open runs it instead; with none installed, PATH as before. Never a
+ * bash.exe in the working folder: this path comes from fixed install folders, and the PATH lookup skips the working folder.
+ */
+function bareBash(command: string, platform: NodeJS.Platform, gitBash: (() => string | null) | undefined): string | null {
+    if (platform !== 'win32' || !gitBash || !/^bash(\.exe)?$/i.test(command)) return null;
+    return gitBash();
 }
 
 export function fancyTermPort(backend: HostBackend, options: FancyTermPortOptions): PtyPort {
@@ -105,7 +130,7 @@ export function fancyTermPort(backend: HostBackend, options: FancyTermPortOption
 
             // A whole path, always: the engine's own search must never see a bare name, whichever engine this is. Nothing found starts nothing, and the words say so.
             const lookup = options.lookup ?? { platform: options.platform ?? process.platform, env: process.env };
-            const program = findProgram(command, lookup) ?? findBatchFile(command, lookup);
+            const program = bareBash(command, lookup.platform, options.gitBash) ?? findProgram(command, lookup) ?? findBatchFile(command, lookup);
             if (program === null) throw new Error(notFoundWords(command, lookup));
             const unsafe = unsafeBatchArgument(program, args);
             if (unsafe !== null) throw new Error(`${command} is a batch file, and Windows would read part of its argument "${unsafe}" as a command. Nothing was started.`);
@@ -190,5 +215,5 @@ export function realFancyTermPort(settingsValues: () => Readonly<Record<string, 
         settings,
         snapshots: NO_SNAPSHOTS,
     });
-    return fancyTermPort(inProcessBackend(), { defaultShell: () => resolveDefaultShell(settings) });
+    return fancyTermPort(inProcessBackend(), { defaultShell: () => resolveDefaultShell(settings), gitBash: detectedGitBash });
 }
