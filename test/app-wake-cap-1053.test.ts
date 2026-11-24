@@ -411,7 +411,7 @@ describe('the setting is the agent’s record’s, in genie-host', () => {
         const again = await reopened();
         expect(again.find(clerk.id)).toMatchObject({ appWakeCap: 12 });
         // What the restarted host's mail wake reads: twelve turns, then held.
-        const budget = new AppTurnBudget(() => 0, (id) => appWakeCapOf(again.find(id)));
+        const budget = new AppTurnBudget(() => 0, (id) => appWakeCapOf(again.find(id as AgentId)));
         for (let i = 0; i < 12; i++) { expect(budget.waitMs(clerk.id)).toBe(0); budget.spend(clerk.id); }
         expect(budget.waitMs(clerk.id)).toBeGreaterThan(0);
     });
