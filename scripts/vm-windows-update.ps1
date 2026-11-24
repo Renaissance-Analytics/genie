@@ -220,9 +220,10 @@ try {
     $app = Start-Process -FilePath $exe -ArgumentList "--remote-debugging-port=$debugPort" -PassThru `
         -RedirectStandardOutput installed-out.log -RedirectStandardError installed-err.log
     $env:EXPECT_VERSION = $Next
-    # With fancy-pty installed, the driver's control (one open terminal, one helper under the install dir) is asserted.
-    $fancyPty = Test-Path (Join-Path $root 'node_modules\@particle-academy\fancy-pty\package.json')
-    if ($fancyPty) { $env:EXPECT_HELPERS = '1' } else { Remove-Item Env:EXPECT_HELPERS -ErrorAction SilentlyContinue }
+    # NOT the driver's "one helper under the install dir" control: since the host split a terminal's pty helper runs from
+    # genie-host's copy, not the install (measured, 1124-071406-5b696f: 0 under the install dir, three runs). The row
+    # instead records every pty helper there is when install is asked, and none may outlive the update.
+    Remove-Item Env:EXPECT_HELPERS -ErrorAction SilentlyContinue
     # The host the update must replace, recorded before anything is asked of the updater: the base's, from its copy.
     $deadline = (Get-Date).AddSeconds(90)
     $hostBefore = $null
@@ -239,6 +240,8 @@ try {
     & cmd /c "node scripts\update-cdp.mjs 2>&1"
     $drive = $LASTEXITCODE
     $stubsBefore = Stub-Providers
+    $helpersBefore = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'fancy-pty-helper*' } | ForEach-Object { [int]$_.ProcessId })
+    Write-Output ("pty helpers when install was asked: " + $helpersBefore.Count + " (" + ($helpersBefore -join ', ') + ")")
     $beforeIds = @($stubsBefore | ForEach-Object { [int]$_.ProcessId })
     Write-Output ("agent providers when install was asked: " + ($beforeIds -join ', '))
     if ($drive -ne 0) {
@@ -325,8 +328,8 @@ try {
     if (-not (Descends $revived[0].ProcessId $hostAfter.Id)) { throw "the agent came back as pid $($revived[0].ProcessId), not under the new genie-host $($hostAfter.Id)" }
     $spent = @(Json-Ids $runningAtQuit)
     if ($spent.Count -ne 0) { throw "the drain's record still names $($spent -join ', ') after the restore" }
-    $helpers = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'fancy-pty-helper*' -and $_.ExecutablePath -like "$installDir\*" })
-    Write-Output ("fancy-pty helpers under the install dir after the update: " + $helpers.Count)
+    $helpers = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'fancy-pty-helper*' -and $helpersBefore -contains [int]$_.ProcessId })
+    Write-Output ("pty helpers from before the update still running: " + $helpers.Count)
     if ($helpers.Count -ne 0) { $helpers | ForEach-Object { Write-Output ("  survivor: " + $_.ProcessId + " " + $_.ExecutablePath) }; throw "$($helpers.Count) pty helper(s) survived the update" }
 
     Step 'tear down: the window, genie-host and what they started (scripts/end-own-tree.mjs), then uninstall'

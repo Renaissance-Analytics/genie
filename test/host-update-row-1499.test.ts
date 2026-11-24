@@ -196,7 +196,17 @@ describe('a debugger port of its own, its own launch, and its own end', () => {
         expect(ps1()).toMatch(/\$env:CDP_OWN_PID = "\$\(\$app\.Id\)"\n\s*& cmd \/c "node scripts\\update-cdp\.mjs 2>&1"/);
         expect(sh()).toMatch(/DEBUG_PORT=9416\nexport CDP_PORT="\$DEBUG_PORT"/);
         expect(sh()).toMatch(/port_free\n"\$APPIMAGE_FILE" --remote-debugging-port="\$DEBUG_PORT"/);
-        expect(sh()).toMatch(/CDP_OWN_PID="\$APP_PID" node scripts\/update-cdp\.mjs/);
+        // The driver needs the version it is to find (1124-071406-5b696f: without it, exit 2 before anything was asked).
+        expect(sh()).toMatch(/EXPECT_VERSION="\$NEXT" CDP_OWN_PID="\$APP_PID" node scripts\/update-cdp\.mjs/);
+        expect(ps1()).toMatch(/\$env:EXPECT_VERSION = \$Next\n/);
+    });
+
+    it('Windows: no pty helper from before outlives the update, wherever it runs (not the install dir: since the host split it is the host copy)', () => {
+        expect(ps1()).toMatch(/Remove-Item Env:EXPECT_HELPERS -ErrorAction SilentlyContinue/);
+        expect(ps1()).not.toMatch(/\$env:EXPECT_HELPERS = '1'/);
+        expect(ps1()).toMatch(/\$helpersBefore = @\(Get-CimInstance Win32_Process \| Where-Object \{ \$_\.Name -like 'fancy-pty-helper\*' \}/);
+        expect(ps1()).toMatch(/\$helpers = @\(Get-CimInstance Win32_Process \| Where-Object \{ \$_\.Name -like 'fancy-pty-helper\*' -and \$helpersBefore -contains \[int\]\$_\.ProcessId \}\)/);
+        expect(ps1().indexOf('$helpersBefore = @(')).toBeLessThan(ps1().indexOf("Step 'the drain"));
     });
 
     it('the seed runs in a new workspace, never the checkout', () => {

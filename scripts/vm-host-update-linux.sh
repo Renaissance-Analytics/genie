@@ -192,7 +192,7 @@ for _ in $(seq 1 45); do sleep 2; p="$(host_pid)"; if alive "$p"; then host_befo
 host_before_cmd="$(cmdline "$host_before")"
 echo "genie-host before the update: pid $host_before, started $(started_at "$host_before"): $host_before_cmd"
 case "$host_before_cmd" in *"/host/$BASE_HASH/dist/main/host.js"*) ;; *) fail "the base genie-host does not run the base's copy (host/$BASE_HASH): $host_before_cmd" ;; esac
-CDP_OWN_PID="$APP_PID" node scripts/update-cdp.mjs
+EXPECT_VERSION="$NEXT" CDP_OWN_PID="$APP_PID" node scripts/update-cdp.mjs
 drive=$?
 stubs_before="$(stub_pids)"
 echo "agent providers when install was asked: ${stubs_before:-none}"
