@@ -42,7 +42,7 @@ ROWS=(
     deps electron-binary
     typecheck unit build bundles sounds
     seed no-pty smoke layout local-door-break local-door host-late-ready files-watch chat-drafts gapp-open artboard ui-lag plan-popover
-    trust-step accounts-popover claude-accounts sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash
+    trust-step accounts-popover claude-accounts sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash quit-keeps-host
     flows zip64 host-plain-node mailpit
     package package-fuse
     toolchain
@@ -556,6 +556,12 @@ row_spawn-host() {
 row_safe-mode() { need_build && need_display && on_display timeout 540 node scripts/safe-mode-cdp.mjs; }
 row_hang() { need_build && need_display && on_display timeout 540 node scripts/hang-cdp.mjs; }
 row_renderer-crash() { need_build && need_display && on_display timeout 420 node scripts/renderer-crash-cdp.mjs; }
+# QUIT KEEPS THE HOST (Tynn #1036, the host split's promise): three agents stream, the REAL window is closed ("Just close the
+# UI") and built again from the tray, then by a second launch, and every agent keeps streaming through it: the same
+# genie-host pid, the same provider pid per agent, every tick streamed while no window was open in its ledger, in order;
+# "Shut down everything" ends window, host and providers. Its Genie has a home, a lock and ports of its own beside the
+# shared app (QUIT_CDP_OWN_HOME), its logs under ci-out/quit-keeps-host; its own watchdog (360 s) and cleanup end first.
+row_quit-keeps-host() { need_build && need_display && on_display timeout 450 env QUIT_CDP_OWN_HOME=1 QUIT_CDP_OUT="$OUT/quit-keeps-host" CDP_PORT=9362 QUIT_CDP_INSPECT=9363 QUIT_CDP_DEADLINE_MS=360000 node scripts/quit-keeps-host-cdp.mjs; }
 
 # WHETHER THE CHANGE TOUCHES A SUITE. scripts/flows-paths.mjs and scripts/zip64-paths.mjs decide, from the code (every
 # file the suite's subject is made of, by import, plus the suite, its config and the deciding script itself): the same
@@ -694,6 +700,7 @@ ceiling() {
         host-late-ready) echo 240 ;;
         browser-process) echo 320 ;;
         safe-mode|hang) echo 600 ;;
+        quit-keeps-host) echo 510 ;;
         flows|zip64) echo 1200 ;;
         package) echo 1500 ;;
         toolchain) echo 2700 ;;
@@ -885,7 +892,7 @@ run_rows() {
     for name in "${selected[@]}"; do
         echo "=== $name"
         machine_line "$name"
-        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover trust-step accounts-popover claude-accounts sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash host-late-ready package-fuse toolchain client-only-update " in
+        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover trust-step accounts-popover claude-accounts sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash quit-keeps-host host-late-ready package-fuse toolchain client-only-update " in
             *" $name "*) reap_leftovers "$name" ;;
         esac
         from="$(now_ms)"

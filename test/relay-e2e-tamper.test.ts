@@ -581,7 +581,8 @@ describe('review finding 1: the frame cap holds for the SEALED frame (Tynn #579)
 });
 
 describe('review finding 2: a grant renewal travels inside the seal', () => {
-    const soon = () => Math.floor(Date.now() / 1000) + 2;
+    // The first grant lives 3 to 4 s: long enough that a slow machine's connect leaves time to renew, short enough to wait out.
+    const soon = () => Math.floor(Date.now() / 1000) + 4;
 
     it('CONTROL: an honest renewal is taken, the session outlives its first grant, and the relay reads neither the renewal nor the new grant', async () => {
         const r = await rig();
@@ -591,10 +592,10 @@ describe('review finding 2: a grant renewal travels inside the seal', () => {
         const first = mintGrant({ ...cnf, jti: 'g1', exp });
         const fresh = mintGrant({ ...cnf, jti: 'g2' });
         const t = transportOf(await r.connect({ pop, grant: first, renew: async () => ({ ok: true, token: fresh }) }));
-        await vi.waitFor(() => { expect(r.validated).toContain(fresh); }, { timeout: 5_000, interval: 50 });
+        await vi.waitFor(() => { expect(r.validated).toContain(fresh); }, { timeout: 20_000, interval: 50 });
         await settle();
         // The first grant has expired by now; a re-check passes only because the session is under the new one.
-        await vi.waitFor(() => { expect(Date.now() / 1000).toBeGreaterThan(exp + 0.1); }, { timeout: 5_000, interval: 50 });
+        await vi.waitFor(() => { expect(Date.now() / 1000).toBeGreaterThan(exp + 0.1); }, { timeout: 20_000, interval: 50 });
         await r.link.revalidate();
         await settle();
         expect(t.closedBecause()).toBeNull();
@@ -603,7 +604,7 @@ describe('review finding 2: a grant renewal travels inside the seal', () => {
         expect(all).not.toContain(fresh);
         // It did cross the relay: one sealed control frame from the member.
         expect(r.seen('member', 'control').filter((f) => (f.payload as { e2e?: unknown } | undefined)?.e2e === 1)).toHaveLength(1);
-    }, 20_000);
+    }, 60_000);
 
     it('the relay substitutes another valid grant of the same person and key (a plain grant-renew): refused unread, and the session ends in words', async () => {
         const r = await rig();
@@ -625,14 +626,14 @@ describe('review finding 2: a grant renewal travels inside the seal', () => {
         const cnf = { cnf: { jkt: thumbprint(pop.publicJwk) } };
         const fresh = mintGrant({ ...cnf, jti: 'g2' });
         const t = transportOf(await r.connect({ pop, grant: mintGrant({ ...cnf, jti: 'g1', exp: soon() }), renew: async () => ({ ok: true, token: fresh }) }));
-        await vi.waitFor(() => { expect(r.validated).toContain(fresh); }, { timeout: 5_000, interval: 50 });
+        await vi.waitFor(() => { expect(r.validated).toContain(fresh); }, { timeout: 20_000, interval: 50 });
         await settle();
         const sid = [...r.relay.sessions.keys()][0]!;
         const sealed = r.seen('member', 'control').find((f) => (f.payload as { e2e?: unknown } | undefined)?.e2e === 1)!;
         r.relay.toHost(sid, JSON.stringify(sealed));
         await settle();
         expect(t.closedBecause()).toBe(CHANGED_AT_HOST);
-    }, 20_000);
+    }, 60_000);
 });
 
 describe('review finding 3: a session id is opened once', () => {
@@ -711,5 +712,36 @@ describe('review finding 5: one handshake a session, also while the host is answ
         expect((await opening).ok).toBe(true);
         await settle();
         expect(r.admitted).toHaveLength(1);
+    });
+});
+
+describe('review residual: an admission acts only for the open that started it', () => {
+    const challenges = (r: Awaited<ReturnType<typeof rig>>) => r.seen('host', 'control').filter((f) => (f.payload as { type?: string } | undefined)?.type === 'pop-challenge').length;
+
+    it('open, close, open again for the same session id while the first grant is still being checked: a stale admission does nothing, and the later one goes on as itself', async () => {
+        const releases: Array<() => void> = [];
+        const r = await rig({}, { holdValidate: () => new Promise<void>((resolve) => { releases.push(resolve); }) });
+        const first = r.connect({ e2eTimeoutMs: 5_000 });
+        void first.catch(() => {});
+        await vi.waitFor(() => { expect(r.validated).toHaveLength(1); }, { timeout: 5_000, interval: 10 });
+        const sid = [...r.relay.sessions.keys()][0]!;
+        // The relay says the member left, then opens the same session id again with another grant.
+        r.relay.toHost(sid, JSON.stringify({ kind: 'close', channel: 'control', sid, reason: 'member left' }));
+        const other = PopKeypair.generate();
+        const later = mintGrant({ cnf: { jkt: thumbprint(other.publicJwk) }, jti: 'g-later', src: 'invite', scope: ['workspace:tynn'] });
+        r.relay.toHost(sid, JSON.stringify({ kind: 'open', channel: 'control', sid, payload: { grant: later } }));
+        await vi.waitFor(() => { expect(r.validated).toHaveLength(2); }, { timeout: 5_000, interval: 10 });
+        expect(r.validated[1]).toBe(later);
+        expect(challenges(r)).toBe(0);
+        // The FIRST check answers now. Its open is gone: it must not challenge, time, or end anything for the later one.
+        releases[0]!();
+        await settle();
+        expect(challenges(r)).toBe(0);
+        expect(r.hostLog.filter((line) => line.includes('ended'))).toEqual([]);
+        // CONTROL: the later admission is alive and goes on as itself when its own check answers: one challenge.
+        releases[1]!();
+        await settle();
+        expect(challenges(r)).toBe(1);
+        expect(r.admitted).toEqual([]);
     });
 });

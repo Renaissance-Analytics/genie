@@ -57,7 +57,7 @@ $Rows = @(
     'unit-build', 'unit',
     'build', 'seed', 'no-pty', 'smoke', 'layout', 'app-stopped',
     'local-door-break', 'local-door', 'host-late-ready', 'files-watch', 'chat-drafts', 'gapp-open', 'artboard', 'ui-lag', 'plan-popover',
-    'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash',
+    'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash', 'quit-keeps-host',
     'package', 'sign-plan', 'packed-tree', 'update-metadata', 'package-fuse', 'packaged-launcher',
     'client-only-update'
 )
@@ -372,6 +372,24 @@ function Row-spawn-host {
 function Row-safe-mode { Need-Build; Need-TestMachine; Run 'safe-mode-cdp' { node scripts/safe-mode-cdp.mjs } }
 function Row-hang { Need-Build; Need-TestMachine; Run 'hang-cdp' { node scripts/hang-cdp.mjs } }
 function Row-renderer-crash { Need-Build; Need-TestMachine; Run 'renderer-crash-cdp' { node scripts/renderer-crash-cdp.mjs } }
+# QUIT KEEPS THE HOST (Tynn #1036, the host split's promise): three agents stream, the REAL window is closed ("Just close the
+# UI") and built again from the tray, then by a second launch, and every agent keeps streaming through it: the same
+# genie-host pid, the same provider pid per agent, every tick streamed while no window was open in its ledger, in order;
+# "Shut down everything" ends window, host and providers. A home, a lock and ports of its own (QUIT_CDP_OWN_HOME), its logs
+# under ci-out\quit-keeps-host, and its run ended through scripts/end-own-tree.mjs (Tynn #1031). Its watchdog is longer
+# than on Linux: every process-table read here is a PowerShell call (over 30 s measured on a loaded VM). What it sets is
+# put back whatever the row's result.
+function Row-quit-keeps-host {
+    Need-Build; Need-TestMachine
+    $own = @{ QUIT_CDP_OWN_HOME = '1'; QUIT_CDP_OUT = (Join-Path $Out 'quit-keeps-host'); CDP_PORT = '9362'; QUIT_CDP_INSPECT = '9363'; QUIT_CDP_DEADLINE_MS = '540000' }
+    $before = @{}
+    foreach ($k in $own.Keys) { $before[$k] = [Environment]::GetEnvironmentVariable($k, 'Process'); [Environment]::SetEnvironmentVariable($k, $own[$k], 'Process') }
+    try {
+        Run 'quit-keeps-host-cdp' { node scripts/quit-keeps-host-cdp.mjs }
+    } finally {
+        foreach ($k in $own.Keys) { [Environment]::SetEnvironmentVariable($k, $before[$k], 'Process') }
+    }
+}
 
 # IT PACKAGES, the Windows leg: the installers built unsigned, then what ci.yml checked in what was packaged.
 function Row-package {
@@ -487,6 +505,7 @@ function Ceiling([string]$name) {
         { $_ -in 'chat-drafts', 'artboard' } { return 420 }
         { $_ -in 'ui-lag', 'renderer-crash' } { return 480 }
         { $_ -in 'safe-mode', 'hang' } { return 600 }
+        'quit-keeps-host' { return 660 }
         'package' { return 1500 }
         'client-only-update' { return 2400 }
         default { return 600 }
