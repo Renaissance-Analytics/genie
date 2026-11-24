@@ -26,6 +26,11 @@ export interface TakeOverServicePorts {
     workspacePath(record: AgentRecord): string | null;
     /** The provider's own CLI, resolved the way a session resolves it. */
     tuiFor(record: AgentRecord): string;
+    /**
+     * THE WORKSPACE'S VERDICT AS IT IS NOW (Tynn #364), the one its agents read (genie-host's `hostUntrustedNow`): read at each
+     * click, never kept. `true` = not trusted, or not read yet.
+     */
+    untrustedNow(record: AgentRecord): boolean;
     onChange(view: TakeOverView): void;
     readonly schedule?: (ms: number, fn: () => void) => () => void;
     readonly now?: () => number;
@@ -47,6 +52,12 @@ export class TakeOverService {
         if (!record) return { ok: false, reason: `No agent is registered as ${agentId}.` };
         const path = this.#ports.workspacePath(record);
         if (path === null) return { ok: false, reason: `${record.name}'s workspace is not registered.` };
+        // A TUI already open is found, not started: nothing new runs. A new one is the provider's own CLI in the folder, which
+        // loads the folder's settings, hooks and MCP servers with nothing of Genie's in the way: only in a trusted workspace.
+        // No prompt of its own: the person says yes once, on the workspace's Trust step (Tynn #618).
+        if (this.#ports.host.probe(record.id) === null && this.#ports.untrustedNow(record)) {
+            return { ok: false, reason: `${record.name}'s workspace is not trusted, so Genie does not open its provider's own CLI there: the folder's settings, hooks and MCP servers would run. Trust this workspace on its page, then Take Over.` };
+        }
         return this.#ports.host.start(record, path, this.#ports.tuiFor(record), { window: false });
     }
 

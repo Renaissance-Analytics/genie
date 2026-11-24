@@ -10,6 +10,9 @@ const MESSAGES = {
     config: 'Tynn MCP config could not be reconciled. Check .mcp.json, .cursor/mcp.json and .codex/config.toml; remove or rename a conflicting custom tynn entry, then restart. No shared workspace credential was used.',
     workspace: 'This agent’s workspace or Tynn project link is unavailable or changed. Check the workspace, then restart. No shared workspace credential was used.',
     cancelled: 'Tynn agent credential preparation was cancelled.',
+    // THE WORKSPACE VERDICT AT LAUNCH (Tynn #364). Not Tynn's: the start reads the verdict again just before it spawns, and Codex is not started in a workspace not trusted.
+    trustMoved: 'This workspace’s trust changed while the agent was starting, so nothing was started. Start it again.',
+    codexUntrusted: 'Codex agents start only in a trusted workspace: Codex reads the folder’s own .codex settings (MCP servers, hooks) and Genie cannot switch them off. Trust this workspace on its page, then start the agent.',
 } as const;
 
 /** Only these fixed, main-process failure codes may cross the preparation boundary. */
