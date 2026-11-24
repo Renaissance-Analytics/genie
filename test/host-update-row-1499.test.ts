@@ -189,6 +189,16 @@ describe('the row: drained, swapped, restored once', () => {
     });
 });
 
+describe('the relaunched Genie runs the same stand-in provider', () => {
+    // 1124-084713-52fc4e: the installer starts the updated window through Explorer, with Explorer's environment, and the
+    // restored agent's start failed at its handshake on the new host. The stand-in is set for the user, and removed.
+    it('Windows: GENIE2_CODEX_BINARY is set for the user before the launch and removed in the finally', () => {
+        expect(ps1()).toMatch(/\[Environment\]::SetEnvironmentVariable\('GENIE2_CODEX_BINARY', \$env:GENIE2_CODEX_BINARY, 'User'\)\n\s*\$script:userEnvSet = \$true/);
+        expect(ps1()).toMatch(/\} finally \{[\s\S]*if \(\$script:userEnvSet\) \{ \[Environment\]::SetEnvironmentVariable\('GENIE2_CODEX_BINARY', \$null, 'User'\) \}/);
+        expect(ps1().indexOf("SetEnvironmentVariable('GENIE2_CODEX_BINARY', $env:")).toBeLessThan(ps1().indexOf('$app = Start-Process'));
+    });
+});
+
 describe('a debugger port of its own, its own launch, and its own end', () => {
     it('port 9416, refused when something already answers on it, the launch pid handed to the driver', () => {
         expect(ps1()).toMatch(/\$debugPort = 9416\n\$env:CDP_PORT = "\$debugPort"/);

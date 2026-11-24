@@ -130,6 +130,7 @@ $app = $null
 $script:began = $null
 $script:ended = $false
 $script:relaunchedPids = @()
+$script:userEnvSet = $false
 try {
     Run "npm version $Base --no-git-tag-version --allow-same-version" 'bump-base.log'
     Step "package $current and install it"
@@ -204,6 +205,12 @@ try {
 
     Step "launch the installed $current and drive the update"
     $env:GENIE2_CODEX_BINARY = "$root\scripts\stub-codex.mjs"
+    # THE RELAUNCHED GENIE FINDS THE STUB PROVIDER TOO (measured, 1124-084713-52fc4e): the installer starts the updated window
+    # as the signed-in user through Explorer, so it and its new host have Explorer's environment, not this script's; the
+    # restored agent's start failed at its handshake on the new host with no process. Set for the user (SetEnvironmentVariable
+    # tells Explorer), the stand-in reaches it as an installed codex would; removed at the end, pass or fail.
+    [Environment]::SetEnvironmentVariable('GENIE2_CODEX_BINARY', $env:GENIE2_CODEX_BINARY, 'User')
+    $script:userEnvSet = $true
     $env:GENIE_PAGE_PROBE = '1'
     Remove-Item Env:UPDATE_TICKS_FILE -ErrorAction SilentlyContinue
     $script:began = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
@@ -296,6 +303,7 @@ try {
     }
     if ($relaunched.Count -eq 0) { throw 'the updated app did not relaunch' }
     $script:relaunchedPids = @($relaunched | ForEach-Object { $_.Id })
+    foreach ($p in $relaunched) { $c = Get-CimInstance Win32_Process -Filter "ProcessId=$($p.Id)" -ErrorAction SilentlyContinue; if ($c) { $pp = Get-CimInstance Win32_Process -Filter "ProcessId=$($c.ParentProcessId)" -ErrorAction SilentlyContinue; Write-Output ("  relaunched " + $p.Id + ", parent " + $c.ParentProcessId + " " + $(if ($pp) { $pp.Name } else { '(gone)' })) } }
     $relaunchAt = ($relaunched | ForEach-Object { $_.StartTime } | Sort-Object | Select-Object -First 1)
     Write-Output ("the window came back at " + $relaunchAt + ": pid(s) " + ($script:relaunchedPids -join ', '))
 
@@ -339,7 +347,11 @@ try {
     $stubsNow | ForEach-Object { Write-Output ("  provider: " + $_.ProcessId + " " + $_.Name + " parent " + $_.ParentProcessId + " started " + $_.CreationDate) }
     Write-Output ("providers from before still running: " + $survivors.Count + "; started since: " + $revived.Count)
     if ($survivors.Count -ne 0) { $survivors | ForEach-Object { Write-Output ("  survivor: " + $_.ProcessId + " " + $_.CommandLine) }; throw "$($survivors.Count) agent provider(s) from before survived the update" }
-    if ($revived.Count -ne 1) { throw "the agent that was running came back $($revived.Count) times (want exactly 1)" }
+    if ($revived.Count -ne 1) {
+        Write-Output "--- the new host's agent starts (lifecycle.log) ---"
+        Select-String -Path $lifecycle -Pattern 'restore:|agent start|spawn kind=agent' -ErrorAction SilentlyContinue | Select-Object -Last 12 | ForEach-Object { '  ' + $_.Line }
+        throw "the agent that was running came back $($revived.Count) times (want exactly 1)"
+    }
     if (-not (Descends $revived[0].ProcessId $hostAfter.Id)) { throw "the agent came back as pid $($revived[0].ProcessId), not under the new genie-host $($hostAfter.Id)" }
     $spent = @(Json-Ids $runningAtQuit)
     if ($spent.Count -ne 0) { throw "the drain's record still names $($spent -join ', ') after the restore" }
@@ -374,6 +386,7 @@ try {
         foreach ($r in $roots) { if ($r) { $endArgs += @('--root', "$r") } }
         if ($endArgs.Count -gt 2) { node scripts/end-own-tree.mjs @endArgs }
     }
+    if ($script:userEnvSet) { [Environment]::SetEnvironmentVariable('GENIE2_CODEX_BINARY', $null, 'User') }
     Move-Item package.json.pristine package.json -Force
     Move-Item package-lock.json.pristine package-lock.json -Force
     Stop-Transcript | Out-Null
