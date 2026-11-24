@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { statSync } from 'node:fs';
+import { win32 } from 'node:path';
 import { PROGRAM_LOOKUP_VARIABLE, findBatchFile, findProgram, notFoundWords, unsafeBatchArgument, type LookupPorts } from '../core/program-lookup.js';
 import { ptyShellLaunch } from '../core/shell-launch.js';
 import { fanOut } from '../core/fan-out.js';
@@ -73,12 +75,27 @@ export interface FancyTermPortOptions {
     gitBash?: () => string | null;
 }
 
+export interface GitBashPorts {
+    /** The Git Bash Terminals open (fancy-term-host's own detection: fixed install folders), or `null`. */
+    readonly installed: () => string | null;
+    /** Where `git` is looked for: this machine's PATH, absolute entries only, never the working folder. */
+    readonly lookup: LookupPorts;
+}
+
+const realIsFile = (path: string): boolean => { try { return statSync(path).isFile(); } catch { return false; } };
+
 /**
- * The Git Bash Terminals open (fancy-term-host's own detection: fixed install folders under Program Files and LocalAppData,
- * never PATH or the working folder), or `null` when it is not installed.
+ * WINDOWS' GIT BASH: the one Terminals open (fixed install folders under Program Files and LocalAppData), else the bash.exe
+ * beside the `git` on PATH (Git\cmd\git.exe or Git\bin\git.exe → Git\bin\bash.exe: Git installed elsewhere, C:\tools\git,
+ * scoop), else `null`. Never the working folder: neither source looks there.
  */
-export function detectedGitBash(): string | null {
-    return detectShells().find((s) => s.id === 'git-bash')?.command ?? null;
+export function detectedGitBash(ports: GitBashPorts = { installed: () => detectShells().find((s) => s.id === 'git-bash')?.command ?? null, lookup: { platform: process.platform, env: process.env } }): string | null {
+    const installed = ports.installed();
+    if (installed) return installed;
+    const git = findProgram('git', ports.lookup);
+    if (git === null || !win32.isAbsolute(git)) return null;
+    const bash = win32.join(win32.dirname(git), '..', 'bin', 'bash.exe');
+    return (ports.lookup.isFile ?? realIsFile)(bash) ? bash : null;
 }
 
 /**
