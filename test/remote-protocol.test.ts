@@ -132,8 +132,10 @@ describe('the capability table', () => {
         // 190 with `approvals.gate` (local, main's own client only: a window-run tool's approval, from genie-host's queue) (Tynn #1006, 2g-4b2).
         // 191 with `window.view` (local, main's own client only: whether the person is active; genie-host names its workspaces itself) (Tynn #1044, 2g-4d B).
         // 192 with `registry.write` (local, main's own client only: a write to genie-host's registry) (Tynn #1007, 2g-4e).
-        // 193 with `agents.setAppWakeCap` (a write, agent-scoped, the owner's): an agent's app wake cap (Tynn #1053).
-        expect(REMOTE_METHODS.length).toBe(193);
+        // 193 with `workspaces.relocate` ("Locate folder" on a workspace whose folder is not there: a write, workspace-scoped,
+        // the host owner's only) (host split P7).
+        // 194 with `agents.setAppWakeCap` (a write, agent-scoped, the owner's): an agent's app wake cap (Tynn #1053).
+        expect(REMOTE_METHODS.length).toBe(194);
         expect(capabilityOf('agents.setAppWakeCap')).toBe('write');
         expect(AGENT_SCOPED_METHODS).toContain('agents.setAppWakeCap');
         expect(capabilityOf('registry.write')).toBe('local');
@@ -180,6 +182,8 @@ describe('the capability table', () => {
         expect(capabilityOf('workspaces.commitsSince')).toBe('read');
         expect(capabilityOf('workspaces.locateRepo')).toBe('write');
         expect(WORKSPACE_SCOPED_METHODS).toContain('workspaces.locateRepo');
+        expect(capabilityOf('workspaces.relocate')).toBe('write');
+        expect(WORKSPACE_SCOPED_METHODS).toContain('workspaces.relocate');
         expect(capabilityOf('workspaces.previewAddFromGit')).toBe('read');
         expect(capabilityOf('workspaces.removeRepoLock')).toBe('write');
         expect(capabilityOf('workspaces.previewAddFromTynn')).toBe('read');

@@ -66,6 +66,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'workspaces.tynnPageAction': ['work', { action: 'details.update', body: { vision: 'Ship it' } }],
     'workspaces.addRepo': ['work', { name: 'repo', path: 'repos/repo' }], 'workspaces.removeRepo': ['work', 'repo'],
     'workspaces.removeRepoLock': ['work', 'repo'], 'workspaces.locateRepo': ['work', 'repo', ROOT],
+    'workspaces.relocate': ['work', ROOT],
     'workspaces.commitsSince': ['work', 0], 'workspaces.settings': ['work'],
     'workspaces.setSetting': ['work', 'theme', 'dark'], 'workspaces.resetSetting': ['work', 'theme'],
     'workspaces.setGoverns': ['work', []], 'workspaces.setDefaultAgent': ['work', null], 'workspaces.setMcpServer': ['work', 'slack', false],

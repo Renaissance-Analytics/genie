@@ -123,6 +123,9 @@ const FAMILIES: Record<string, readonly Row[]> = {
         // The offers a clone's repo brings are the owner's to see and apply: never from a link to one workspace (Tynn #756).
         row('workspaces.cloneOffers', 'refuse', ['tynn']),
         row('workspaces.applyOffer', 'refuse', ['tynn', 'flow:.flows/a.json']),
+        // Where a workspace's folder is (host split P7): it points the workspace at any folder of the host's disk, so it is
+        // the owner's alone. Never from a link to one workspace, its own included.
+        row('workspaces.relocate', 'refuse', ['tynn', '/w/elsewhere']),
     ],
     'the shared workspace itself': [
         row('workspaces.listRepos', 'allow', ['tynn'], [['fancy']]),

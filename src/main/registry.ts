@@ -78,6 +78,8 @@ export class Registry {
     #namer: (path: string) => string = (path) => folderName(path);
     /** A workspace's colour (genie#1300: project.json `appearance.color`, main/workspace-color-host.ts); `null` = none yet. */
     #colorer: (path: string) => string | null = () => null;
+    /** Whether a workspace's recorded folder is not there now (main/missing-workspaces.ts): a fact of this machine, never stored. */
+    #missing: (workspaceId: string) => boolean = () => false;
 
     constructor(store: RegistryStore) {
         this.#store = store;
@@ -174,6 +176,15 @@ export class Registry {
     /** Each workspace's COLOUR (genie#1300), from the composition root: carried on its snapshot row when it has one. */
     setWorkspaceColorer(colorer: (path: string) => string | null): void {
         this.#colorer = colorer;
+        if (this.#loaded) this.#emit();
+    }
+
+    /**
+     * Which workspaces' folders are NOT THERE now (host split P7; main/missing-workspaces.ts), from the composition root:
+     * such a row carries `missing: true`. It stays in every list; nothing about it is written.
+     */
+    setMissingWorkspaces(isMissing: (workspaceId: string) => boolean): void {
+        this.#missing = isMissing;
         if (this.#loaded) this.#emit();
     }
 
@@ -336,7 +347,7 @@ export class Registry {
             // are none" are different claims, and the Dashboard gives them different surfaces.
             workspaces: this.#loaded
                 // `governs` / `governedBy` appear only when they carry something: every other workspace literal stays exact.
-                ? this.listWorkspaces().map((w) => ({ id: w.id, path: w.path, name: this.#namer(w.path), agentsKnown: true, asleep: false, ...(w.governs && w.governs.length > 0 ? { governs: w.governs.filter((id) => !this.#isHibernated(id)) } : {}), ...(this.governorOf(w.id) ? { governedBy: this.governorOf(w.id) } : {}), ...(w.defaultAgentId ? { defaultAgentId: w.defaultAgentId } : {}), ...(w.mcpOff && w.mcpOff.length > 0 ? { mcpOff: w.mcpOff } : {}), ...(this.#workspaceMcpSeen(w.id).length > 0 ? { mcpSeen: this.#workspaceMcpSeen(w.id) } : {}), ...this.#colorOf(w.path) }))
+                ? this.listWorkspaces().map((w) => ({ id: w.id, path: w.path, name: this.#namer(w.path), agentsKnown: true, asleep: false, ...(w.governs && w.governs.length > 0 ? { governs: w.governs.filter((id) => !this.#isHibernated(id)) } : {}), ...(this.governorOf(w.id) ? { governedBy: this.governorOf(w.id) } : {}), ...(w.defaultAgentId ? { defaultAgentId: w.defaultAgentId } : {}), ...(w.mcpOff && w.mcpOff.length > 0 ? { mcpOff: w.mcpOff } : {}), ...(this.#workspaceMcpSeen(w.id).length > 0 ? { mcpSeen: this.#workspaceMcpSeen(w.id) } : {}), ...this.#colorOf(w.path), ...(this.#missing(w.id) ? { missing: true as const } : {}) }))
                 : null,
             ...(this.#loaded && this.#workspaces.some((workspace) => workspace.asleep) ? {
                 hibernatedWorkspaces: this.#workspaces.filter((workspace) => workspace.asleep).map((workspace) => ({ id: workspace.id, path: workspace.path, name: workspace.hibernatedName ?? folderName(workspace.path), asleep: true as const })),
@@ -876,6 +887,19 @@ export class Registry {
 
     /** Every workspace record, for the one-time v1 import to plan against. */
     /** Each workspace's address slug (core/address.ts slugsFor) — the same names, in the same order, the window uses. */
+    /**
+     * "Locate folder" (host split P7; main/workspace-relocate-host.ts): where the workspace's folder IS. Only the record's
+     * `path` changes: its id, agents, threads, settings, hibernation and every other field stay as they are.
+     */
+    async setWorkspacePath(workspaceId: string, path: string): Promise<boolean> {
+        if (!this.#workspaces.some((w) => w.id === workspaceId)) return false;
+        const workspaces = this.#workspaces.map((w) => (w.id === workspaceId ? { ...w, path } : w));
+        await this.#store.writeWorkspaces(workspaces);
+        this.#workspaces = workspaces;
+        this.#emit();
+        return true;
+    }
+
     workspaceSlugs(): Map<string, string> {
         return slugsFor(this.listWorkspaces().map((w) => ({ id: w.id, path: w.path, name: this.#namer(w.path) })));
     }

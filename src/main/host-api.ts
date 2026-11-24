@@ -227,6 +227,8 @@ export interface HostApiDeps {
         adoptAgent?(workspaceId: string, name: string): Promise<unknown>;
         previewAddFromTynn?(projectId: string, parent: string): Promise<unknown>;
         locateRepo?(workspaceId: string, slug: string, path: string): Promise<unknown>;
+        /** "Locate folder" (host split P7): where the workspace's folder is now; only its record's path changes. */
+        relocate?(workspaceId: string, path: string): Promise<unknown>;
         confirmAdd(path: string): Promise<unknown>;
         /**
          * `remote`: the window's None / GitHub / Paste URL choice, unparsed (main parses it; Add workspace parity 11).
@@ -647,6 +649,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'workspaces.locateRepo':
                 if (!deps.workspaceOps.locateRepo) throw new Error('this host cannot locate a repo');
                 return deps.workspaceOps.locateRepo(str(args[0]), str(args[1]), str(args[2]));
+            case 'workspaces.relocate':
+                if (!deps.workspaceOps.relocate) throw new Error('this host cannot locate a workspace’s folder');
+                return deps.workspaceOps.relocate(str(args[0]), str(args[1]));
             case 'workspaces.tynnOwnerOptions':
                 if (!deps.workspaceOps.tynnOwnerOptions) throw new Error('this host cannot create Tynn projects');
                 return deps.workspaceOps.tynnOwnerOptions();

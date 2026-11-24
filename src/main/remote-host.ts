@@ -153,6 +153,9 @@ const COMPANION_TERMINAL_METHODS: readonly string[] = ['terminals.write', 'termi
 const OWNER_ONLY: readonly string[] = ['workspaces.previewAdd', 'workspaces.confirmAdd', 'workspaces.create', 'workspaces.previewAddFromGit', 'workspaces.confirmAddFromGit', 'workspaces.readSource', 'workspaces.stageFromGit', 'workspaces.registerExisting', 'workspaces.buildEnvelope', 'workspaces.discardStaged', 'workspaces.githubRepos', 'workspaces.tynnProjects', 'workspaces.tynnOwnerOptions', 'workspaces.createTynnProject', 'workspaces.importedAgents', 'workspaces.adoptAgent', 'workspaces.previewAddFromTynn', 'workspaces.confirmAddFromTynn', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'workspaces.tynnPageAction', 'workspaces.savePreview', 'workspaces.save', 'workspaces.cloneOffers', 'workspaces.applyOffer', 'host.mkdir', 'tynnNetwork.shares.list', 'tynnNetwork.shares.mint', 'tynnNetwork.shares.revoke', 'crashReport.draft', 'crashReport.send', 'providers.chooseProgram',
     // Something opened on the host's own screen (Tynn #912, 2f-1): its owner's; a share-link guest never puts anything there.
     'files.openExternal', 'files.reveal', ...ACCOUNTS_METHODS,
+    // Where a workspace's folder is (host split P7): it points the workspace at any folder of the host's disk, so it is the
+    // owner's alone, as adding a folder is. Never a share link's, the shared workspace's own included.
+    'workspaces.relocate',
     // An agent's app wake cap (Tynn #1053): how often an app may spend the owner's turns; only the owner's own devices set it.
     'agents.setAppWakeCap'];
 /** One of the sign-ins (Tynn #896), checked in one place: #signInRefusal. */
