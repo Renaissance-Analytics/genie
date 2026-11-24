@@ -227,6 +227,8 @@ export interface HostApiDeps {
         adoptAgent?(workspaceId: string, name: string): Promise<unknown>;
         previewAddFromTynn?(projectId: string, parent: string): Promise<unknown>;
         locateRepo?(workspaceId: string, slug: string, path: string): Promise<unknown>;
+        /** "Locate folder" (host split P7): where the workspace's folder is now; only its record's path changes. */
+        relocate?(workspaceId: string, path: string): Promise<unknown>;
         confirmAdd(path: string): Promise<unknown>;
         /**
          * `remote`: the window's None / GitHub / Paste URL choice, unparsed (main parses it; Add workspace parity 11).
@@ -291,6 +293,8 @@ export interface HostApiDeps {
         delete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[], handoff: boolean): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
         switchDriver(agentId: string, to: string): Promise<SwitchDecision>;
         setBudget(agentId: string, dailyLimitUsd: number | null): Promise<{ ok: true; decision: BudgetDecision } | { ok: false; reason: string }>;
+        /** Its app wake cap (Tynn #1053): a whole number of wakes an hour, or `unlimited`; checked by the operation, which refuses in words. */
+        setAppWakeCap(agentId: string, cap: unknown): Promise<unknown>;
         setMode(agentId: string, mode: 'automated' | 'manual'): Promise<unknown>;
         setAccessScope(agentId: string, scope: 'none' | 'self' | 'all'): Promise<unknown>;
         /** Chosen agents who may message it (Tynn #526); `null` turns the choice off. */
@@ -378,7 +382,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
         if (isLocalFilesMethod(method)) return invokeLocalFiles(deps.localFiles, method, args);
         if (isLocalDraftMethod(method)) return invokeLocalDrafts(deps.chatDrafts, deps.find, method, args);
         if (isLocalArtboardMethod(method)) return invokeLocalArtboard(deps.artboard, method, args);
-        if (isAccountsMethod(method)) return answerAccounts(deps.accounts, method, args);
+        if (isAccountsMethod(method)) return answerAccounts(deps.accounts, method, args, context);
         switch (method) {
             case 'appInbox.state':
                 return named(args[0]) ? { ok: true, state: owner().appInbox.state(args[0]) } : { ok: false, reason: 'name a workspace' };
@@ -549,6 +553,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'agents.setBudget':
                 if (typeof args[0] !== 'string' || (args[1] !== null && !(typeof args[1] === 'number' && args[1] >= 0))) return { ok: false, reason: 'a budget is a non-negative number of dollars, or null to clear it' };
                 return deps.agentOps.setBudget(args[0], args[1] as number | null);
+            case 'agents.setAppWakeCap':
+                if (typeof args[0] !== 'string') return { ok: false, reason: 'unknown agent' };
+                return deps.agentOps.setAppWakeCap(args[0], args[1]);
             case 'agents.setMode':
                 if (typeof args[0] !== 'string' || (args[1] !== 'automated' && args[1] !== 'manual')) return { ok: false, reason: 'mode is automated or manual' };
                 return deps.agentOps.setMode(args[0], args[1]);
@@ -642,6 +649,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'workspaces.locateRepo':
                 if (!deps.workspaceOps.locateRepo) throw new Error('this host cannot locate a repo');
                 return deps.workspaceOps.locateRepo(str(args[0]), str(args[1]), str(args[2]));
+            case 'workspaces.relocate':
+                if (!deps.workspaceOps.relocate) throw new Error('this host cannot locate a workspace’s folder');
+                return deps.workspaceOps.relocate(str(args[0]), str(args[1]));
             case 'workspaces.tynnOwnerOptions':
                 if (!deps.workspaceOps.tynnOwnerOptions) throw new Error('this host cannot create Tynn projects');
                 return deps.workspaceOps.tynnOwnerOptions();

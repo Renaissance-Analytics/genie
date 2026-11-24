@@ -4,12 +4,11 @@ import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { mintAgentId } from '../src/core/identity.js';
 import { AgentStoresService } from '../src/main/agent-stores-host.js';
-import { InboxReplica } from '../src/main/agent-stores-replica.js';
 import { openAgentStores } from '../src/main/agent-stores-open.js';
 import { ApprovalQueue } from '../src/main/approval-queue.js';
 import { Store } from '../src/main/store.js';
 
-it('story394: an already-connected window loses hidden history and restores its original order without a reconnect', async () => {
+it('story394: genie-host’s inbox (what every window’s inbox and Deck are read from) hides a hibernated workspace’s mail and restores its original order, with no reopen', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'genie2-ghost-replica-394-'));
     const own = await openAgentStores(dir, () => new Date().toISOString());
     const ghost = mintAgentId(), active = mintAgentId();
@@ -20,19 +19,23 @@ it('story394: an already-connected window loses hidden history and restores its 
     const service = new AgentStoresService({ ...own, approvals: new ApprovalQueue(), registry: { store, model: {
         refresh: async () => { asleep = (await store.readWorkspaces()).some((w) => w.id === 'ghost' && w.asleep === true); },
     } } });
-    const replica = new InboxReplica((...args) => service.call(...args));
-    replica.rebase(service.dump().inbox);
-    const off = service.onEvent((e) => { if (e.store === 'inbox') replica.apply(e); });
+    const replica = own.inbox;
+    // What genie-host's readers hear: an inbox change for each hide and restore, so a window's next read is pushed.
+    const heard: string[] = [];
+    const off = service.onEvent((e) => { if (e.store === 'inbox') heard.push(e.kind); });
     try {
         await own.inbox.send({ from: ghost, to: 'human', text: 'Older hidden mail' });
         await own.inbox.send({ from: active, to: 'human', text: 'Newer visible mail' });
         const before = replica.all(); expect(before).toHaveLength(2);
         await service.call('registry', 'writeWorkspaces', [[{ id: 'ghost', path: join(dir, 'ghost'), asleep: true }]]);
         expect(replica.all().map((m) => m.text)).toEqual(['Newer visible mail']);
+        expect(heard).toContain('delta');
+        heard.length = 0;
         await own.inbox.receive({ participant: 'human' });
         expect(replica.unread('human')).toEqual([]);
         expect(replica.involving('human')).toEqual(replica.all());
         await service.call('registry', 'writeWorkspaces', [[{ id: 'ghost', path: join(dir, 'ghost'), asleep: false }]]);
+        expect(heard).toContain('delta');
         expect(replica.all().map((m) => m.id)).toEqual(before.map((m) => m.id));
         expect(replica.involving('human').map((m) => m.id)).toEqual(before.map((m) => m.id));
         expect(replica.unread('human').map((m) => m.text)).toEqual(['Older hidden mail']);

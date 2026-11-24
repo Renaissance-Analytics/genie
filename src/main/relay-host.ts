@@ -1,8 +1,9 @@
 import { createPublicKey, randomBytes, verify } from 'node:crypto';
 import type { ServerConnection, ServerTransport } from '../core/remote-protocol.js';
+import { acceptMember, E2E_HOST_WORDS, E2E_REST_TEXT_MAX_BYTES, RelayE2eError, type FrameCipher, type HostExchange } from './relay-e2e.js';
 import { principalOf, type GrantCheck, type HostGrant } from './relay-grant.js';
 import { isGenHost, pipeSiteStream, type SiteDial, type SiteFrame, type SitePipe } from './relay-site.js';
-import { decodeFrame, encodeFrame, jwkThumbprint, OPEN, popSignedInput, textOf, type Frame, type RelaySocket, type RelaySocketFactory, type TicketHostHello } from './relay-wire.js';
+import { decodeFrame, encodeFrame, jwkThumbprint, OPEN, popSignedInput, textOf, type Frame, type PopJwk, type RelaySocket, type RelaySocketFactory, type TicketHostHello } from './relay-wire.js';
 import { fitRemoteFrame } from '../core/remote-frame.js';
 
 /**
@@ -11,10 +12,16 @@ import { fitRemoteFrame } from '../core/remote-frame.js';
  *
  * One socket to `<relay>/ws/host`, opened with a Tynn-ticketed hello signed by this machine's enrolled key. For each
  * member the relay opens (`control open {grant}`): the grant is checked (Tynn's signature, audience, expiry, still
- * active), the member must prove the key the grant is bound to (a control grant MUST be bound), the grant must map to a
+ * active), the member must prove the key the grant is bound to (every grant MUST be bound, read-only too), the grant must map to a
  * Genie principal — and only then does RemoteHost get a connection, already authenticated as that principal (its
  * `relay` hello takes it). Frames that arrive before admission wait, a few, in order. Every admitted session is
  * re-checked on a timer: a revoked grant ends it, in words.
+ *
+ * END TO END (audit M-a, host split P9.2; relay-e2e.ts): admission has one more step. After the proof this host answers
+ * the member's handshake, signing with its ENROLLED key, and the member must sign the same exchange with the key its
+ * grant names. Only then is there a session, and every `rest` and `site` frame of it is sealed: one that does not open
+ * ends the session and is never delivered. A member that sends no handshake (a Genie from before this) is refused in
+ * words. Nothing is written to the relay but `control` frames and sealed frames.
  */
 
 export type RelayLinkState = 'idle' | 'connecting' | 'authenticating' | 'open' | 'closed';
@@ -23,6 +30,10 @@ export interface RelayHostLinkDeps {
     socket: RelaySocketFactory;
     relayUrl: string;
     workstationId: string;
+    /** SHA-256 (hex) of this machine's enrolled key (workstation-identity.ts `fingerprint`): what Tynn names it by. */
+    fingerprint: string;
+    /** Signs with the enrolled key: the end-to-end handshake's proof that this is the host Tynn named. */
+    sign(data: Buffer): Buffer | Promise<Buffer>;
     /** A fresh ticketed hello for each dial (main asks Tynn for the ticket). */
     hello(): Promise<TicketHostHello>;
     /** Signature + claims, and still active at Tynn. */
@@ -61,6 +72,9 @@ export interface RelayHostLink extends ServerTransport {
 
 const MAX_PENDING_FRAMES = 64;
 
+/** What a member whose grant names no key is told (audit M-f). It reaches the person as the reason the connection closed. */
+export const UNBOUND_GRANT = 'this grant is not bound to a key, so nothing proves who holds it (no proof-of-possession binding, cnf). Nothing was sent. Connect again from a current Genie.';
+
 interface Session {
     /** The grant in use: replaced by a renewal (genie#1401), re-checked on the timer. */
     grant: HostGrant;
@@ -69,6 +83,8 @@ interface Session {
     readonly closes: Set<() => void>;
     /** Its open site streams, by reqId (relay-site.ts). */
     readonly sites: Map<string, SitePipe>;
+    /** The session's seal (relay-e2e.ts): every rest and site frame goes through it, both ways. */
+    readonly cipher: FrameCipher;
 }
 
 /** Why this grant may not open a site stream, or null: only the owner's own control link browses this host's sites. */
@@ -83,6 +99,11 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
     const sessions = new Map<string, Session>();
     const preAdmit = new Map<string, Frame[]>();
     const pendingPop = new Map<string, { grant: HostGrant; token: string; nonce: string; timer: ReturnType<typeof setTimeout> }>();
+    /** A member's `e2e-init`, kept until its grant and proof hold; and the exchange this host answered, until its finish. */
+    const inits = new Map<string, unknown>();
+    const pendingE2e = new Map<string, { grant: HostGrant; token: string; exchange: HostExchange; timer: ReturnType<typeof setTimeout> }>();
+    /** Sessions whose handshake this host is answering right now (its signature is awaited). */
+    const answering = new Set<string>();
     let ws: RelaySocket | null = null;
     let state: RelayLinkState = 'idle';
     let closing = false;
@@ -98,15 +119,31 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
         deps.onState?.(next, detail);
     };
 
-    const send = (frame: Frame) => {
+    /** A control frame: the only kind written unsealed (a challenge, the handshake, a close and its reason). */
+    const sendControl = (frame: Omit<Frame, 'channel'>) => {
         if (state !== 'open' || !ws || ws.readyState !== OPEN) return;
-        ws.send(encodeFrame(frame));
+        ws.send(encodeFrame({ ...frame, channel: 'control' }));
+    };
+
+    /** A rest or site frame of a session: sealed at the moment of the write, or not written. */
+    const sendSealed = (sid: string, session: Session, frame: Frame) => {
+        if (state !== 'open' || !ws || ws.readyState !== OPEN || sessions.get(sid) !== session) return;
+        try {
+            ws.send(encodeFrame(session.cipher.seal(frame)));
+        } catch (error) {
+            reject(sid, error instanceof RelayE2eError && error.code === 'limit' ? E2E_HOST_WORDS.limit : E2E_HOST_WORDS.changed, 'e2e');
+        }
     };
 
     const forget = (sid: string) => {
         const pending = pendingPop.get(sid);
         if (pending) clearTimeout(pending.timer);
         pendingPop.delete(sid);
+        const exchanging = pendingE2e.get(sid);
+        if (exchanging) clearTimeout(exchanging.timer);
+        pendingE2e.delete(sid);
+        inits.delete(sid);
+        answering.delete(sid);
         preAdmit.delete(sid);
         const session = sessions.get(sid);
         if (!session) return;
@@ -116,16 +153,16 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
         for (const l of session.closes) l();
     };
 
-    const reject = (sid: string, reason: string) => {
+    const reject = (sid: string, reason: string, code: 'grant' | 'e2e' = 'grant') => {
         deps.log?.(`relay member ${sid} ended: ${reason}`);
-        send({ kind: 'error', channel: 'control', sid, code: 'grant', reason });
+        sendControl({ kind: 'error', sid, code, reason });
         forget(sid);
     };
 
     const site = (sid: string, session: Session, frame: Frame) => {
         const reqId = frame.reqId;
         if (!reqId) return;
-        const say = (f: SiteFrame) => { if (sessions.get(sid) === session) send({ ...f, channel: 'site', sid, reqId }); };
+        const say = (f: SiteFrame) => { sendSealed(sid, session, { ...f, channel: 'site', sid, reqId }); };
         if (frame.kind !== 'open') {
             session.sites.get(reqId)?.receive(frame);
             return;
@@ -163,9 +200,17 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
         });
     };
 
-    const deliver = (frame: Frame) => {
-        const session = sessions.get(frame.sid);
+    const deliver = (sealed: Frame) => {
+        const session = sessions.get(sealed.sid);
         if (!session) return;
+        // One frame that does not open (changed, repeated, out of order, or never sealed) ends the session; it is not delivered.
+        let frame: Frame;
+        try {
+            frame = session.cipher.open(sealed);
+        } catch {
+            reject(sealed.sid, E2E_HOST_WORDS.changed, 'e2e');
+            return;
+        }
         if (frame.channel === 'rest' && frame.kind === 'data' && typeof frame.payload === 'string') {
             for (const l of session.messages) l(frame.payload);
             return;
@@ -173,13 +218,13 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
         if (frame.channel === 'site') site(frame.sid, session, frame);
     };
 
-    const accept = (sid: string, grant: HostGrant, token: string) => {
+    const accept = (sid: string, grant: HostGrant, token: string, cipher: FrameCipher) => {
         const who = principalOf(grant, deps.signedInHere());
         if (!who.ok) {
             reject(sid, who.reason);
             return;
         }
-        const session: Session = { grant, token, messages: new Set(), closes: new Set(), sites: new Map() };
+        const session: Session = { grant, token, messages: new Set(), closes: new Set(), sites: new Map(), cipher };
         sessions.set(sid, session);
         const connection: ServerConnection = {
             remoteAddress: `relay:${grant.name ?? grant.sub}`,
@@ -187,14 +232,15 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
             // The relay's size cap (Tynn #579): a frame over it is a refusal or not sent, never a disconnect.
             send: (text) => {
                 if (sessions.get(sid) !== session) return;
-                const fit = fitRemoteFrame(text);
-                if (fit.text !== null) send({ kind: 'data', channel: 'rest', sid, payload: fit.text });
+                // Fitted to what SEALS under the cap (relay-e2e.ts): the frame on the wire is never over it, whatever the text holds.
+                const fit = fitRemoteFrame(text, E2E_REST_TEXT_MAX_BYTES);
+                if (fit.text !== null) sendSealed(sid, session, { kind: 'data', channel: 'rest', sid, payload: fit.text });
             },
             onMessage: (l) => { session.messages.add(l); return () => { session.messages.delete(l); }; },
             onClose: (l) => { session.closes.add(l); return () => { session.closes.delete(l); }; },
             close: () => {
                 if (sessions.get(sid) !== session) return;
-                send({ kind: 'close', channel: 'control', sid, reason: 'closed by the host' });
+                sendControl({ kind: 'close', sid, reason: 'closed by the host' });
                 forget(sid);
             },
         };
@@ -204,29 +250,36 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
         for (const frame of buffered) deliver(frame);
     };
 
-    const admit = async (sid: string, token: string) => {
+    /**
+     * `waiting` is the mark of the open that started THIS admission (its own pre-admission buffer): when the grant's check
+     * answers, the session id may have been closed and opened again, and that later open is not this admission's to
+     * challenge, time or end (as in `handshake`).
+     */
+    const admit = async (sid: string, token: string, waiting: Frame[]) => {
         let check: GrantCheck;
         try {
             check = await deps.validateGrant(token);
         } catch {
             check = { ok: false, reason: 'grant validation error' };
         }
-        if (state !== 'open' || !preAdmit.has(sid)) return;
+        if (state !== 'open' || preAdmit.get(sid) !== waiting) return;
         if (!check.ok) {
             reject(sid, check.reason);
             return;
         }
         const grant = check.grant;
         if (!grant.confirmationKeyThumbprint) {
-            // A read-only grant may skip the proof; control may not.
-            if (grant.capability === 'control') reject(sid, 'control grant missing required proof-of-possession binding (cnf)');
-            else accept(sid, grant, token);
+            // EVERY GRANT PROVES ITS KEY (audit M-f, Tynn #423): read-only too. Unbound, it is a bearer token the relay could replay.
+            reject(sid, UNBOUND_GRANT);
             return;
         }
         const nonce = randomBytes(32).toString('hex');
         const timer = setTimeout(() => { if (pendingPop.has(sid)) reject(sid, 'proof-of-possession timeout'); }, deps.popTimeoutMs ?? 10_000);
+        // One challenge a session id: a timer left by an earlier one must not fire for this one.
+        const replaced = pendingPop.get(sid);
+        if (replaced) clearTimeout(replaced.timer);
         pendingPop.set(sid, { grant, token, nonce, timer });
-        send({ kind: 'data', channel: 'control', sid, payload: { type: 'pop-challenge', nonce } });
+        sendControl({ kind: 'data', sid, payload: { type: 'pop-challenge', nonce } });
     };
 
     const proof = (sid: string, payload: Record<string, unknown>) => {
@@ -235,8 +288,68 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
         clearTimeout(pending.timer);
         pendingPop.delete(sid); // the nonce is single-use
         const reason = popFailure(payload, pending.nonce, deps.workstationId, sid, pending.grant.confirmationKeyThumbprint ?? '');
-        if (reason) reject(sid, reason);
-        else accept(sid, pending.grant, pending.token);
+        if (reason) {
+            reject(sid, reason);
+            return;
+        }
+        // The key just proved is the one the grant names (popFailure checked its thumbprint): the handshake is with it.
+        const jwk = payload.jwk as { x: string };
+        void handshake(sid, pending.grant, pending.token, { kty: 'OKP', crv: 'Ed25519', x: jwk.x });
+    };
+
+    /**
+     * THE END-TO-END EXCHANGE (relay-e2e.ts), after the grant and the proof hold: answer the member's `e2e-init`, signed
+     * with this machine's enrolled key, and wait for its finish. A member that sent none is a Genie from before this: it
+     * is refused in words, and whatever it sent meanwhile is dropped unread.
+     */
+    const handshake = async (sid: string, grant: HostGrant, token: string, memberJwk: PopJwk) => {
+        const init = inits.get(sid);
+        inits.delete(sid);
+        if (init === undefined) {
+            reject(sid, E2E_HOST_WORDS.oldMember, 'e2e');
+            return;
+        }
+        // Who this would be, before any exchange: a grant this Genie cannot seat is refused in its own words.
+        const who = principalOf(grant, deps.signedInHere());
+        if (!who.ok) {
+            reject(sid, who.reason);
+            return;
+        }
+        let exchange: HostExchange;
+        // This admission's own mark: one that was refused meanwhile (and a later one for the same id) is not this one.
+        const waiting = preAdmit.get(sid);
+        answering.add(sid);
+        try {
+            exchange = await acceptMember({ workstationId: deps.workstationId, sid, grant: token, hostFingerprint: deps.fingerprint, memberJwk, sign: deps.sign, init });
+        } catch {
+            if (state === 'open' && preAdmit.get(sid) === waiting && waiting !== undefined) reject(sid, E2E_HOST_WORDS.changed, 'e2e');
+            return;
+        }
+        if (state !== 'open' || waiting === undefined || preAdmit.get(sid) !== waiting || pendingE2e.has(sid)) return;
+        answering.delete(sid);
+        const timer = setTimeout(() => { if (pendingE2e.has(sid)) reject(sid, 'the encrypted connection was not completed in time', 'e2e'); }, deps.popTimeoutMs ?? 10_000);
+        pendingE2e.set(sid, { grant, token, exchange, timer });
+        sendControl({ kind: 'data', sid, payload: exchange.accept });
+    };
+
+    /** The member's finish: it holds the grant's key and saw this exchange, or there is no session. */
+    const finishE2e = (sid: string, payload: Record<string, unknown>) => {
+        const pending = pendingE2e.get(sid);
+        if (!pending) {
+            // A finish nobody is waiting for, on a live session: somebody else's.
+            if (sessions.has(sid)) reject(sid, E2E_HOST_WORDS.changed, 'e2e');
+            return;
+        }
+        clearTimeout(pending.timer);
+        pendingE2e.delete(sid);
+        let cipher: FrameCipher;
+        try {
+            cipher = pending.exchange.finish(payload);
+        } catch {
+            reject(sid, E2E_HOST_WORDS.notProved, 'e2e');
+            return;
+        }
+        accept(sid, pending.grant, pending.token, cipher);
     };
 
     /**
@@ -268,16 +381,40 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
         session.token = token;
     };
 
+    /** What only the admitted member may say on control: sealed, opened here, and nothing but a renewal. */
+    const sealedControl = (sealed: Frame) => {
+        const session = sessions.get(sealed.sid);
+        let frame: Frame | null = null;
+        try {
+            if (session) frame = session.cipher.open(sealed);
+        } catch {
+            frame = null;
+        }
+        const payload = (frame?.payload ?? {}) as Record<string, unknown>;
+        if (!frame || frame.kind !== 'data' || payload.type !== 'grant-renew') {
+            reject(sealed.sid, E2E_HOST_WORDS.changed, 'e2e');
+            return;
+        }
+        void renew(sealed.sid, payload.grant);
+    };
+
     const handle = (frame: Frame) => {
         if (frame.channel === 'control') {
             if (frame.kind === 'open') {
+                // A session id is opened once: a second open for one that is live or being admitted is not acted on at all
+                // (no grant read, no challenge, no timer), and the first is left exactly as it was.
+                if (sessions.has(frame.sid) || preAdmit.has(frame.sid)) {
+                    deps.log?.(`relay member ${frame.sid}: an open for a session that is already open was refused`);
+                    return;
+                }
                 const grant = (frame.payload as { grant?: unknown } | undefined)?.grant;
                 if (typeof grant !== 'string') {
                     reject(frame.sid, 'missing grant');
                     return;
                 }
-                preAdmit.set(frame.sid, []);
-                void admit(frame.sid, grant);
+                const waiting: Frame[] = [];
+                preAdmit.set(frame.sid, waiting);
+                void admit(frame.sid, grant, waiting);
                 return;
             }
             if (frame.kind === 'close' || frame.kind === 'error') {
@@ -286,7 +423,15 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
             }
             const payload = (frame.payload ?? {}) as Record<string, unknown>;
             if (frame.kind === 'data' && payload.type === 'pop-proof') proof(frame.sid, payload);
-            else if (frame.kind === 'data' && payload.type === 'grant-renew') void renew(frame.sid, payload.grant);
+            // A renewal comes inside the seal or not at all: a plain one could be anybody's (the relay's, with another grant).
+            else if (frame.kind === 'data' && payload.type === 'grant-renew') reject(frame.sid, E2E_HOST_WORDS.changed, 'e2e');
+            else if (frame.kind === 'data' && payload.e2e !== undefined) sealedControl(frame);
+            else if (frame.kind === 'data' && payload.type === 'e2e-init') {
+                // One exchange a session, asked before admission: a second (also while the first is being answered), or one
+                // on a live session, is somebody else's.
+                if (!preAdmit.has(frame.sid) || inits.has(frame.sid) || answering.has(frame.sid) || pendingE2e.has(frame.sid)) reject(frame.sid, E2E_HOST_WORDS.changed, 'e2e');
+                else inits.set(frame.sid, payload);
+            } else if (frame.kind === 'data' && payload.type === 'e2e-finish') finishE2e(frame.sid, payload);
             return;
         }
         if (sessions.has(frame.sid)) {
@@ -304,6 +449,10 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
         silenceTimer = null;
         for (const p of pendingPop.values()) clearTimeout(p.timer);
         pendingPop.clear();
+        for (const p of pendingE2e.values()) clearTimeout(p.timer);
+        pendingE2e.clear();
+        inits.clear();
+        answering.clear();
         preAdmit.clear();
         for (const sid of [...sessions.keys()]) forget(sid);
     };

@@ -57,9 +57,10 @@ function fixture(refusals: number, reason = 'Genie is still starting') {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('the local page connection retries only a bounded starting refusal', () => {
-    it('main tunnels the door to genie-host after the late-bound services are assigned (Tynn #898 step 2d-4b), so nothing is welcomed too early', () => {
+    it('main tunnels the door to genie-host after what it reads of the host is bound (Tynn #898 step 2d-4b), so nothing is welcomed too early', () => {
         const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
-        const ready = main.indexOf('services = composed;');
+        // The window composes nothing (Tynn #955): the last thing bound before the tunnel is genie-host's safe mode.
+        const ready = main.indexOf('windowSafe = WindowSafeMode.open({ link: agentEngineLink.client });');
         const attach = main.indexOf('tunnelDoor(localDoor, tunnelLinkOf(');
         expect(ready).toBeGreaterThan(0);
         expect(attach).toBeGreaterThan(0);

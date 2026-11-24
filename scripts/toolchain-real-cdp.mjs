@@ -35,7 +35,7 @@ import { mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, statSync, 
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { mainWindow } from './cdp-main-window.mjs';
-import { archiveBase, heldBackOf, readListing } from './toolchain-hold-back.mjs';
+import { archiveBase, heldBackOf, holdBackCheck, holdBackLog, holdGitBack, readListing } from './toolchain-hold-back.mjs';
 import { closeWhatsNew } from './cdp-whats-new.mjs';
 
 if (process.env.GENIE_TEST_MACHINE !== '1' && userInfo().username !== 'genie') {
@@ -437,11 +437,18 @@ try {
         const held = plan?.held ?? null;
         const newest = plan?.newest ?? null;
         const url = held ? `${base}/packages/g/git/git-${held}-x86_64.pkg.tar.zst` : null;
-        const heldOk = url ? sudoP('pacman', '-U', '--noconfirm', url).status === 0 : false;
+        // The install is the harness's own control too (the archive read a second time, and pacman's hooks on a machine this
+        // row has just changed): tried once more after a wait, with every try's output and status in this log.
+        const heldRun = url ? await holdGitBack(() => sudoP('pacman', '-U', '--noconfirm', url)) : null;
+        if (heldRun) for (const line of holdBackLog(url, heldRun)) console.log(line.replaceAll(PW, '<password>'));
+        const heldOk = heldRun?.ok === true;
         if (!plan) {
             track('git-update', 'BLOCKED', 'archive', `CONTROL not set up: ${listing === null ? `the Arch archive (${base}) could not be read` : 'the Arch archive lists fewer than two versions of git'}`);
         } else if (!heldOk) {
-            track('git-update', 'FAIL', 'none', `CONTROL: the harness could not hold git back (pacman -U ${url} failed)`);
+            // Still not set up: a control the harness could not make says nothing about Genie, so it BLOCKS (by `control`,
+            // linux.sh TRACKED_ENV) with pacman's own words. The checks below, which measure Genie, are not reached.
+            const control = holdBackCheck(url, heldRun);
+            track('git-update', control.verdict, control.reason, control.detail);
         } else {
             await recheck();
             const before = await until(120_000, async () => { const c = await card('git'); return c?.version && held.startsWith(c.version.split(/[-+]/)[0]) ? c : null; }) ?? await card('git');

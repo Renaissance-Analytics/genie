@@ -23,6 +23,9 @@ import { SETTINGS, searchSettings, type SettingDef } from '../../core/settings.j
 import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, type AlertKind } from '../../core/alerts.js';
 import { playPreviewSound } from '../alert-sound.js';
 import { SoundPicker } from './SoundPicker.js';
+import { SoundVolume } from './SoundVolume.js';
+import { previewVolume } from '../../core/sound-volume.js';
+import { clientSoundValues } from '../client-sound-settings.js';
 import { LIMIT_ALERTS_SETTING, LIMIT_WINDOW_CHOICES, limitAlertSound, newLimitAlertId, parseLimitAlerts, removeLimitAlert, serializeLimitAlerts, upsertLimitAlert, type LimitWindowChoice, type RateLimitAlert } from '../../core/limit-alerts.js';
 import type { GithubCapability } from '../../core/github.js';
 import type { FeatureAction, FeatureData, InstallPreview, ProcessLogOpen, FirewallRuleFacts, FirewallRuleView, FrontDoorStatus, HostedSite, RemoteSection, SiteEditing, ToolCheckState, ToolchainRefusal } from '../features.js';
@@ -1866,7 +1869,7 @@ function SettingControl({ def, value, onAction, customPath }: { def: SettingDef;
                     value={String(value)}
                     label={def.label}
                     onSelect={(v) => { if (v === 'custom') pickSound(); else onAction({ kind: 'settings.set', key: def.key, value: v }); }}
-                    onPreview={(v) => playPreviewSound(previewSound(kind, v, customPath))}
+                    onPreview={(v) => playPreviewSound(previewSound(kind, v, customPath), previewVolume(kind, clientSoundValues()))}
                     canPreview={(v) => v !== 'off' && (v !== 'custom' || hasCustom)}
                 />
                 {file ? (
@@ -1973,6 +1976,7 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
                             {active === 'notifications' ? (
                                 <>
                                     <SetSection title="Notifications" desc="The master switch for every sound.">{rows('notifications')}</SetSection>
+                                    <SoundVolume values={values} />
                                     <AlertSounds values={values} onAction={onAction} />
                                     <RateLimitAlerts raw={values === null ? undefined : values[LIMIT_ALERTS_SETTING]} onAction={onAction} />
                                 </>
@@ -2120,7 +2124,7 @@ function RateLimitAlerts({ raw, onAction }: { raw: boolean | string | undefined;
                             value={alert.sound}
                             label={`Sound for the ${alert.thresholdPct}% rate-limit alert`}
                             onSelect={(v) => { if (v !== 'custom') save(upsertLimitAlert(alerts, { ...alert, sound: v })); }}
-                            onPreview={(v) => playPreviewSound(limitAlertSound(v, {}))}
+                            onPreview={(v) => playPreviewSound(limitAlertSound(v, {}), previewVolume(null, clientSoundValues()))}
                             canPreview={canPreview}
                         />
                         <Button data-action="limit-alert-remove" type="button" size="sm" variant="ghost" className="justify-start" aria-label={`Remove the ${alert.thresholdPct}% rate-limit alert`} onClick={() => save(removeLimitAlert(alerts, alert.id))}>

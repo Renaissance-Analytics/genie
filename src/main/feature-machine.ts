@@ -3,7 +3,7 @@ import { tynnGate } from '../core/integrations.js';
 import { TYNN_HOST } from '../core/tynn.js';
 import { signedOutGithubView } from '../core/github.js';
 import type { FeatureAction, FeatureData } from '../renderer/features.js';
-import type { WindowServices } from './compose.js';
+import type { WindowServices } from './host-services.js';
 import type { FeaturePorts, FeatureState } from './feature-ipc.js';
 import type { TynnAccountPort } from './tynn-account.js';
 import { unreachableThroughMessage } from './tynn-account.js';

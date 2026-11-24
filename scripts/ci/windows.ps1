@@ -56,8 +56,8 @@ $Rows = @(
     'deps', 'electron-binary',
     'unit-build', 'unit',
     'build', 'seed', 'no-pty', 'smoke', 'layout', 'app-stopped',
-    'local-door-break', 'local-door', 'host-late-ready', 'files-watch', 'chat-drafts', 'gapp-open', 'artboard', 'ui-lag',
-    'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash',
+    'local-door-break', 'local-door', 'host-late-ready', 'files-watch', 'chat-drafts', 'gapp-open', 'artboard', 'ui-lag', 'plan-popover',
+    'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash', 'quit-keeps-host', 'rebuilt-machine',
     'package', 'sign-plan', 'packed-tree', 'update-metadata', 'package-fuse', 'packaged-launcher'
 )
 
@@ -350,10 +350,15 @@ function Row-chat-drafts { Need-Build; Need-TestMachine; Run 'chat-drafts-cdp' {
 function Row-gapp-open { Need-Build; Need-TestMachine; Run 'gapp-open-cdp' { node scripts/gapp-open-cdp.mjs } }
 function Row-artboard { Need-Build; Need-TestMachine; Run 'artboard-cdp' { node scripts/artboard-cdp.mjs --trace-main } }
 function Row-ui-lag { Need-Build; Need-TestMachine; Run 'ui-lag-cdp' { node scripts/ui-lag-cdp.mjs --budget } }
+function Row-plan-popover { Need-Build; Need-TestMachine; Run 'plan-popover-cdp' { node scripts/plan-popover-cdp.mjs } }
 function Row-trust-step { Need-Build; Need-TestMachine; Run 'trust-step-cdp' { node scripts/trust-step-cdp.mjs } }
 function Row-accounts-popover { Need-Build; Need-TestMachine; Run 'accounts-popover-cdp' { node scripts/accounts-popover-cdp.mjs } }
 function Row-claude-accounts { Need-Build; Need-TestMachine; Run 'claude-accounts-cdp' { node scripts/claude-accounts-cdp.mjs } }
 function Row-sound-picker { Need-Build; Need-TestMachine; Run 'sound-picker-cdp' { node scripts/sound-picker-cdp.mjs } }
+# The whole question window maximized and restored, screenshots of both (Tynn #1019): the window's maximize is Windows' own here.
+function Row-question-maximize { Need-Build; Need-TestMachine; Run 'question-maximize-cdp' { node scripts/question-maximize-cdp.mjs } }
+# Esc unsends a message still in the send buffer, files and all, in the real chat with a real key press (Tynn #1029).
+function Row-esc-unsend { Need-Build; Need-TestMachine; Run 'esc-unsend-cdp' { node scripts/esc-unsend-cdp.mjs } }
 # The app opened for no-pty..layout wrote this log: the spawn host started, and never fell back.
 function Row-spawn-host {
     if (-not $script:AppHome) { Block 'the app was not opened in this run (the seed row opens it)' }
@@ -366,6 +371,26 @@ function Row-spawn-host {
 function Row-safe-mode { Need-Build; Need-TestMachine; Run 'safe-mode-cdp' { node scripts/safe-mode-cdp.mjs } }
 function Row-hang { Need-Build; Need-TestMachine; Run 'hang-cdp' { node scripts/hang-cdp.mjs } }
 function Row-renderer-crash { Need-Build; Need-TestMachine; Run 'renderer-crash-cdp' { node scripts/renderer-crash-cdp.mjs } }
+# QUIT KEEPS THE HOST (Tynn #1036, the host split's promise): three agents stream, the REAL window is closed ("Just close the
+# UI") and built again from the tray, then by a second launch, and every agent keeps streaming through it: the same
+# genie-host pid, the same provider pid per agent, every tick streamed while no window was open in its ledger, in order;
+# "Shut down everything" ends window, host and providers. A home, a lock and ports of its own (QUIT_CDP_OWN_HOME), its logs
+# under ci-out\quit-keeps-host, and its run ended through scripts/end-own-tree.mjs (Tynn #1031). Its watchdog is longer
+# than on Linux: every process-table read here is a PowerShell call (over 30 s measured on a loaded VM). What it sets is
+# put back whatever the row's result.
+function Row-quit-keeps-host {
+    Need-Build; Need-TestMachine
+    $own = @{ QUIT_CDP_OWN_HOME = '1'; QUIT_CDP_OUT = (Join-Path $Out 'quit-keeps-host'); CDP_PORT = '9362'; QUIT_CDP_INSPECT = '9363'; QUIT_CDP_DEADLINE_MS = '540000' }
+    $before = @{}
+    foreach ($k in $own.Keys) { $before[$k] = [Environment]::GetEnvironmentVariable($k, 'Process'); [Environment]::SetEnvironmentVariable($k, $own[$k], 'Process') }
+    try {
+        Run 'quit-keeps-host-cdp' { node scripts/quit-keeps-host-cdp.mjs }
+    } finally {
+        foreach ($k in $own.Keys) { [Environment]::SetEnvironmentVariable($k, $before[$k], 'Process') }
+    }
+}
+# A data root attached to a rebuilt machine (host split P7.3, Tynn #419): a real genie-host on Credential Manager, no window.
+function Row-rebuilt-machine { Need-Install; Need-TestMachine; Run 'rebuilt-machine' { node scripts/rebuilt-machine.mjs } }
 
 # IT PACKAGES, the Windows leg: the installers built unsigned, then what ci.yml checked in what was packaged.
 function Row-package {
@@ -401,6 +426,8 @@ function Row-packaged-launcher {
         $otherArch = "release\win-unpacked\resources\app.asar.unpacked\node_modules\@particle-academy\prism-acp\native\win32-arm64\prism-acp-supervisor.exe"
         if (-not (Test-Path $otherArch)) { throw "the other architecture's supervisor is not in win-unpacked ($otherArch): this check no longer matches an install" }
         Remove-Item -Force $otherArch
+        # When the row's own Genie began: nothing older is ever taken for one of its processes (scripts/end-own-tree.mjs).
+        $began = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         $packaged = Start-Process -FilePath (Resolve-Path "release\win-unpacked\Genie.exe") -PassThru
         $log = "$h\.genie\runtime\lifecycle.log"
         $line = $null
@@ -419,8 +446,15 @@ function Row-packaged-launcher {
         $ready = $null
         for ($i = 0; $i -lt 60 -and $up -and -not $ready; $i++) { $ready = Select-String -Path $log -SimpleMatch "containment ready supervisor=" | Select-Object -Last 1; if (-not $ready) { Start-Sleep -Seconds 1 } }
         $unready = if (Test-Path $log) { Select-String -Path $log -SimpleMatch "containment unready" | Select-Object -Last 1 } else { $null }
-        if (Test-Path $hostJson) { $hp = (Get-Content $hostJson | ConvertFrom-Json).pid; if ($hp) { Stop-Process -Id $hp -Force -ErrorAction SilentlyContinue } }
-        if (-not $packaged.HasExited) { taskkill /PID $packaged.Id /T /F *> $null }
+        # THE WHOLE RUN, ENDED AND WAITED FOR (Tynn #1031): the app's tree, the host in the run's own record and what they
+        # started, by the helper every row script uses. It reads the process table before it ends anything, keeps what the
+        # tree kill answered, waits until nothing of this run is in the table, and exits 1 naming what is left.
+        $hp = $null
+        if (Test-Path $hostJson) { $hp = (Get-Content $hostJson | ConvertFrom-Json).pid }
+        $endArgs = @('--since', "$began", '--tree', "$($packaged.Id)")
+        if ($hp) { $endArgs += @('--root', "$hp") }
+        node scripts/end-own-tree.mjs @endArgs
+        $leftByCleanup = ($LASTEXITCODE -ne 0)
         if (-not $line) { throw "the packaged app logged no host spawn within 90 s" }
         Write-Output "the packaged app: $($line.Line)"
         if ($line.Line -notmatch "via=genie-launch") { throw "the packaged app started genie-host WITHOUT genie-launch.exe" }
@@ -433,8 +467,9 @@ function Row-packaged-launcher {
         if (-not $ready) { throw "genie-host did not say its supervisor is ready within 60 s" }
         Write-Output "the packaged app: $($ready.Line)"
         if ($ready.Line -notmatch [regex]::Escape("$h\.genie\host\")) { throw "genie-host's supervisor is not in its copy: $($ready.Line)" }
-        # taskkill above sets $LASTEXITCODE (part of the tree already gone), and the step's result is the last exit code:
-        # 3 of ~20 runs failed after both checks printed. Every failure above has thrown, so reaching here is a pass.
+        if ($leftByCleanup) { throw "the packaged app or its genie-host was left running by the row's own cleanup (the shutdown lines above name it)" }
+        # Every failure above has thrown, so reaching here is a pass: the row's result is never an exit code left behind
+        # by a command above (a tree kill's, once: 3 of ~20 runs failed after both checks printed).
     } finally {
         foreach ($k in $saved.Keys) { Set-Item -Path "env:$k" -Value $saved[$k] }
     }
@@ -454,12 +489,16 @@ function Ceiling([string]$name) {
         { $_ -in 'spawn-host', 'app-stopped' } { return 120 }
         { $_ -in 'no-pty', 'smoke', 'layout', 'local-door-break', 'local-door', 'gapp-open', 'trust-step' } { return 360 }
         'accounts-popover' { return 300 }
+        'plan-popover' { return 480 }
         'claude-accounts' { return 300 }
         'sound-picker' { return 300 }
+        'question-maximize' { return 300 }
+        'esc-unsend' { return 300 }
         'files-watch' { return 240 }
         { $_ -in 'chat-drafts', 'artboard' } { return 420 }
         { $_ -in 'ui-lag', 'renderer-crash' } { return 480 }
         { $_ -in 'safe-mode', 'hang' } { return 600 }
+        'quit-keeps-host' { return 660 }
         'package' { return 1500 }
         default { return 600 }
     }

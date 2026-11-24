@@ -9,9 +9,9 @@ import { WorkspaceTrust, type TrustView } from './workspace-trust-host.js';
 /**
  * WHAT EACH WORKSPACE'S OWN FILES SAY WOULD RUN, AND WHETHER THE PERSON HAS SAID YES TO IT (genie#1519), AS THE HOSTING
  * HOLDS IT. THE HOST OWNS TRUST (the host split): the record and the verdicts live beside the hosting stack in genie-host,
- * which already reads `runtime/workspace-trust.json` for the sites. A local window reads a replica of the verdicts from
- * the hosting dump (hosting-host.ts `HostingReplica`), and FAILS CLOSED: before its first dump, and after its link drops,
- * every workspace reads as untrusted there. The no-host emergency path composes this same stack in the window until P6.
+ * which already reads `runtime/workspace-trust.json` for the sites, and sets its own git read policy from them. A window
+ * reads no verdict of its own (2g-4d E2b, Tynn #955: the hosting replica is gone): the person's Trust and Untrust reach
+ * genie-host over the protocol (features.act workspace.trust/untrust), and the trust steps come in features.snapshot.
  */
 
 /** One workspace's verdict as the host last read it: what a window's synchronous checks read. */

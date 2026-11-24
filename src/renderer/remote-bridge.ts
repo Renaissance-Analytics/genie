@@ -582,6 +582,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             removeRepo: (workspaceId, slug) => answer('workspaces.removeRepo', workspaceId, slug),
             removeRepoLock: (workspaceId, slug) => answer('workspaces.removeRepoLock', workspaceId, slug),
             locateRepo: (workspaceId, slug, path) => answer('workspaces.locateRepo', workspaceId, slug, path),
+            relocate: (workspaceId, path) => answer('workspaces.relocate', workspaceId, path),
             commitsSince: (workspaceId, since) => answer('workspaces.commitsSince', workspaceId, since),
             settings: (workspaceId) => answer('workspaces.settings', workspaceId),
             setSetting: (workspaceId, key, value) => answer('workspaces.setSetting', workspaceId, key, value),
@@ -607,6 +608,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
                 if (usd === undefined || (typeof usd === 'number' && !Number.isFinite(usd))) return Promise.resolve({ ok: false, reason: 'a budget is a finite non-negative number of dollars, or null to clear it' });
                 return answer('agents.setBudget', agentId, usd);
             },
+            setAppWakeCap: (agentId, cap) => answer('agents.setAppWakeCap', agentId, cap),
             setMode: (agentId, mode) => answer('agents.setMode', agentId, mode),
             setAccessScope: (agentId, scope) => answer('agents.setAccessScope', agentId, scope),
             setAccessAgents: (agentId, ids) => answer('agents.setAccessAgents', agentId, ids),

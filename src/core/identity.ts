@@ -170,6 +170,12 @@ export interface AgentRecord {
      */
     readonly dailyBudgetUsd?: number | null;
     /**
+     * THE APP WAKE CAP (Tynn #1053): how many turns an hour an app's mail may give this agent, or `unlimited`. Absent =
+     * never set, and the default applies (core/app-inbox.ts `appWakeCapOf`: 6). OPTIONAL and not in AGENT_RECORD_FIELDS:
+     * older records load, unchanged.
+     */
+    readonly appWakeCap?: number | 'unlimited';
+    /**
      * The number of this agent's last turn, written as each turn STARTS (main, SessionHost `onTurnNumbered`), so a session
      * started after a relaunch numbers on at once — the recorded history is read asynchronously, and a prompt that came
      * first was numbered 1 (the owner's rail, 2026-10-16). OPTIONAL and not in AGENT_RECORD_FIELDS: older records load.

@@ -2,10 +2,11 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 /**
- * P5a WIRING (the host split): genie-host builds Genie's hosting and serves it, raises no OS prompt of its own (every
- * elevation goes to a window), and shuts the hosting's own part down after the supervised processes; a linked window is
- * handed the host's hosting and builds none. The behaviour is proven in hosting-host-contract.test.ts and
- * p5a-hosting-linked.test.ts; this pins that the real entry points are wired to it. Comments are stripped by line.
+ * P5a WIRING (the host split): genie-host builds Genie's hosting and serves it over the protocol (its features and
+ * frontdoor.watch, since 2g-4d E2b), raises no OS prompt of its own (every elevation goes to a window), and shuts the
+ * hosting's own part down after the supervised processes; a linked window builds none. The behaviour is proven in
+ * hosting-host-contract.test.ts, p5a2-hosting-writers.test.ts and split-2g4d-d1-frontdoor-watch.test.ts; this pins that
+ * the real entry points are wired to it. Comments are stripped by line.
  */
 
 const code = (path: string): string => readFileSync(path, 'utf8').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
@@ -14,11 +15,14 @@ describe('P5a: the entry points are wired to the host’s hosting', () => {
     const host = code('src/main/genie-host.ts');
     const main = code('src/main/main.ts');
 
-    it('genie-host composes the hosting under its own supervisor, elevates through a window only, and serves it', () => {
+    it('genie-host composes the hosting under its own supervisor, elevates through a window only, and serves it over the protocol', () => {
         expect(host).toMatch(/hosting = await composeHosting\(\{[\s\S]{0,600}?supervisor: processSupervisor,/);
         expect(host).toMatch(/elevate: \(steps\) => hostingElevation\.run\(steps\),/);
         expect(host).toMatch(/new WindowElevation\(\{\s*connected: \(\) => engineRef\?\.localWindowConnected\(\) \?\? false,\s*ask: \(steps\) => \(engineRef \? engineRef\.elevate\(steps\)/);
-        expect(host).toMatch(/\.\.\.\(hostingService \? \{ hosting: hostingService \} : \{\}\),/);
+        // Its Hosting and Services tabs (features.snapshot/act) are genie-host's HostFeatures over this same stack.
+        expect(host).toMatch(/\.\.\.\(hostingStack \? \{ hosting: \{ api: hostingStack, supervisor: processSupervisor, processes: hostBook,/);
+        // Its front door (frontdoor.watch) is read from this same stack.
+        expect(host).toMatch(/const frontDoorWatch = frontDoorWatchFeed\(\{ read: \(\) => frontDoorViewOf\(hostingStack\),/);
     });
 
     it('genie-host shuts the hosting’s own part down AFTER the supervised processes', () => {
@@ -33,8 +37,8 @@ describe('P5a: the entry points are wired to the host’s hosting', () => {
         expect(host).toMatch(/const stopHostedOnce = \(\): Promise<void> => \{\s*hostedStop \?\?= shutDownHosted\(\{\s*supervisor: processSupervisor,\s*hosting: hostingStack,\s*endChildren: async \(\) => \{ await relay\?\.stop\(\); \},/);
     });
 
-    it('a linked window hands compose the host’s hosting, runs the host’s elevations, and passes what only Electron knows', () => {
-        expect(main).toMatch(/\bhosting: agentEngineLink\.client\.hosting\(\),/);
+    it('a linked window hands compose no hosting (it composes nothing, Tynn #955), runs the host’s elevations, and passes what only Electron knows', () => {
+        expect(main).not.toMatch(/\bhosting: agentEngineLink\.client\.hosting\(\)/);
         expect(main).toMatch(/elevate: \(steps: readonly PrivilegedStep\[\]\) => runElevatedBatch\(process\.platform, steps,/);
         // P6: and the install's own executable, since the host runs from a copy (host-runtime.ts) and still needs the real one.
         expect(main).toMatch(/env: \{ \.\.\.process\.env, GENIE_V1_USERDATA: app\.getPath\('userData'\), GENIE_APPDATA: app\.getPath\('appData'\), GENIE_RESOURCES: process\.resourcesPath, GENIE_INSTALL_EXEC: process\.execPath \},/);

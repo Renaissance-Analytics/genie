@@ -19,7 +19,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { providerProgramProblem, resolveProviderProgram, type ProviderProgramPorts } from '../core/provider-program.js';
 import { providerChoiceFile, readProviderChoice } from './provider-choice.js';
 import { deferredDriverFactory } from './deferred-driver.js';
-import { mcpOffFor } from '../core/agent-mcp.js';
+import { mcpOffFor, sameMcpServer } from '../core/agent-mcp.js';
 import { CLAUDE_DRIVER_CAPABILITIES, CODEX_DRIVER_CAPABILITIES, ClaudeDriver, CodexDriver, claudeAccounts, probeSessionStore } from '@particle-academy/prism-acp';
 import { respawnDecision, stayedWords } from '../core/claude-accounts.js';
 import { accountSwitchNote } from '../core/account-switch.js';
@@ -430,8 +430,13 @@ export function listModelsOptionsFor(
  * home folder (no project's settings choose for it). It reads no file; the CLI's own status carries no credential.
  */
 export function realDescribeClaude(configDir: string | null): ReturnType<typeof claudeAccounts.describe> {
+    return claudeAccounts.describe(configDir, { ...realClaudeCliOptions(), cwd: userHome() });
+}
+
+/** The Claude CLI Genie runs (a configured binary included), for prism-acp's describe, login and logout (Tynn #1011). */
+export function realClaudeCliOptions(): { binary?: string; binaryArgs?: readonly string[]; parentEnv?: Readonly<Record<string, string | undefined>>; allowEnv?: readonly string[] } {
     const o = listModelsOptionsFor('claude', process.env, { execPath: process.execPath, electron: Boolean(process.versions.electron) });
-    return claudeAccounts.describe(configDir, { ...(o.binary ? { binary: o.binary } : {}), ...(o.binaryArgs ? { binaryArgs: o.binaryArgs } : {}), ...(o.parentEnv ? { parentEnv: o.parentEnv } : {}), ...(o.allowEnv ? { allowEnv: o.allowEnv } : {}), cwd: userHome() });
+    return { ...(o.binary ? { binary: o.binary } : {}), ...(o.binaryArgs ? { binaryArgs: o.binaryArgs } : {}), ...(o.parentEnv ? { parentEnv: o.parentEnv } : {}), ...(o.allowEnv ? { allowEnv: o.allowEnv } : {}) };
 }
 
 /** The real ask, for `ProviderModelCache`: a short-lived CLI, no turn, ended when it has answered. */
@@ -601,6 +606,11 @@ export class SessionHost {
     readonly #driverFor: DriverFor;
     readonly #activeAccount: ((provider: string) => AccountRecord | null) | undefined;
     readonly #threadInAccount: (threadId: string, configDir: string | null) => 'present' | 'absent' | 'indeterminate';
+    readonly #launchBlocked: ((account: AccountRecord) => string | null) | undefined;
+    /** Starts a sign-in in their account's folder refused (Tynn #1011), as they were asked: started when the sign-in is over (`launchUnblocked`). */
+    readonly #blockedStarts = new Map<AgentId, { readonly record: AgentRecord; readonly cwd: string; readonly how: { readonly account?: AccountRecord; readonly quiet?: boolean; readonly movedFrom?: AccountRecord }; readonly reason: string }>();
+    /** The Claude folder of each run that is stopping, or that a stop could not end: its process is in that folder until it has ended. */
+    readonly #stoppingIn = new Map<AgentId, string>();
     /** Agents being moved to the active account now (Tynn #1011): one move at a time per agent. */
     readonly #moving = new Set<AgentId>();
     /** The account each agent was last told it could not move to: told once per account, not on every turn. */
@@ -612,6 +622,7 @@ export class SessionHost {
     readonly #untrustedNow: ((record: AgentRecord) => boolean) | undefined;
     readonly #markGenieWords: ((agentId: AgentId) => void) | undefined;
     readonly #prepareMcpServers: ((record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>) | undefined;
+    readonly #builtInMcpServers: readonly McpServer[];
     readonly #onTurnNumbered: ((agentId: AgentId, n: number) => void) | undefined;
     readonly #onPlan: ((agentId: AgentId, steps: readonly { content: string; status: string }[]) => void) | undefined;
     readonly #onAction: ((agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void) | undefined;
@@ -725,6 +736,12 @@ export class SessionHost {
         /** Private session credentials, prepared before constructing or starting either provider. */
         prepareMcpServers?: (record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>;
         /**
+         * THE SERVERS GENIE PROVIDES (Tynn #1017; core/agent-mcp.ts BUILT_IN_MCP_SERVERS, the Fancy Dev Kit's `fancy-ui`).
+         * Handed to every session after the servers above, except one switched off for the agent or its workspace
+         * (mcpOffFor): off, the provider is not given it at all, so it costs the agent no context. Absent = none.
+         */
+        builtInMcpServers?: readonly McpServer[];
+        /**
          * A turn STARTED and took its number — main writes it to the record (`lastTurn`) for the next start. At the start,
          * not the end: a turn cut off by an exit or a quit had already taken its number, and the next run numbered it again.
          */
@@ -752,6 +769,8 @@ export class SessionHost {
          * by default. Asked before an agent is moved to a new active account; anything but `present` keeps it where it is.
          */
         threadInAccount?: (threadId: string, configDir: string | null) => 'present' | 'absent' | 'indeterminate';
+        /** Why nothing may launch in that account's folder now (a sign-in is running there, Tynn #1011), or `null`. */
+        launchBlocked?: (account: AccountRecord) => string | null;
         /** The person wrote to an agent (a message of their own starts a turn): the plan keepalive's count starts again. */
         onPersonTurn?: (agentId: AgentId) => void;
         /** Each agent's headroom reading, with its provider: the Dashboard header's one-per-provider indicator (main buffers). */
@@ -804,6 +823,7 @@ export class SessionHost {
         this.#driverFor = options.driverFor ?? realDriverFor;
         this.#activeAccount = options.activeAccount;
         this.#threadInAccount = options.threadInAccount ?? realThreadInAccount;
+        this.#launchBlocked = options.launchBlocked;
         this.#mcpServersFor = options.mcpServersFor;
         this.#untrustedFilesFor = options.untrustedFilesFor;
         this.#endToolCalls = options.endToolCalls;
@@ -811,6 +831,7 @@ export class SessionHost {
         this.#untrustedNow = options.untrustedNow;
         this.#markGenieWords = options.markGenieWords;
         this.#prepareMcpServers = options.prepareMcpServers;
+        this.#builtInMcpServers = options.builtInMcpServers ?? [];
         this.#onTurnNumbered = options.onTurnNumbered;
         this.#onPlan = options.onPlan;
         this.#onAction = options.onAction;
@@ -1105,6 +1126,8 @@ export class SessionHost {
 
     start(record: AgentRecord, cwd: string, how: { readonly account?: AccountRecord; readonly quiet?: boolean; readonly movedFrom?: AccountRecord } = {}): { ok: true } | { ok: false; reason: string } {
         const existing = this.#running.get(record.id);
+        // This start is the newest word on the agent: one a sign-in refused earlier no longer waits to be started.
+        this.#blockedStarts.delete(record.id);
         if (existing) return { ok: true };
         // A setting/crash replacement of an existing identity must still get its session in the
         // host, so the final restore record cannot drop it. Its work remains held by mayTakeWork.
@@ -1132,6 +1155,7 @@ export class SessionHost {
                 return { ok: false, reason };
             }
             this.#leftovers.delete(record.id);
+            this.#stoppingIn.delete(record.id);
         }
 
         // Two processes driving one workspace's agents is how a conversation forks: a hold is a refusal, said.
@@ -1145,7 +1169,20 @@ export class SessionHost {
             if (found && reason === null) account = found;
             if (reason !== null) { this.refusals.set(record.id, reason); this.#emit(record.id); return { ok: false, reason }; }
         }
-        const mcpServers = this.#mcpServersFor?.(record) ?? [];
+        // Never a launch in a folder a sign-in is running in (prism-acp: one process per folder at a time; Tynn #1011).
+        const blocked = account ? this.#launchBlocked?.(account) ?? null : null;
+        if (blocked !== null) {
+            // "It starts once the sign-in is over": kept as it was asked, and started then (`launchUnblocked`).
+            this.#blockedStarts.set(record.id, { record, cwd, how, reason: blocked });
+            this.refusals.set(record.id, blocked); this.#emit(record.id);
+            return { ok: false, reason: blocked };
+        }
+        // Genie's provided servers after the rest (Tynn #1017), unless off for this agent or its workspace, read per launch.
+        const withBuiltIn = (servers: readonly McpServer[]): readonly McpServer[] => {
+            const off = new Set(mcpOffFor(record, this.#workspaceMcpOffFor?.(record) ?? []));
+            return [...servers, ...this.#builtInMcpServers.filter((b) => !off.has(b.name) && !servers.some((s) => sameMcpServer(s, b)))];
+        };
+        const mcpServers = withBuiltIn(this.#mcpServersFor?.(record) ?? []);
         const serviceEnv = this.#serviceEnvFor?.(record.workspaceId) ?? {};
         // WHERE A START HAS GOT TO (Tynn #558): told to the lifecycle log, and to the person if it does not come up.
         const startPhase = (phase: AgentStartPhase): void => { const run = this.#running.get(record.id)?.run; if (run !== undefined) this.#lifecycle?.phase?.(record.id, run, phase); };
@@ -1156,7 +1193,7 @@ export class SessionHost {
         const driverFactory = deferred ? deferredDriverFactory(async (signal) => {
             const untrusted = (await this.#untrustedFilesFor?.(record)) ?? null;
             if (signal.aborted) throw new Error('Preparation was cancelled.');
-            const prepared = this.#prepareMcpServers ? await this.#prepareMcpServers(record, cwd, signal) : mcpServers;
+            const prepared = this.#prepareMcpServers ? withBuiltIn(await this.#prepareMcpServers(record, cwd, signal)) : mcpServers;
             if (signal.aborted) throw new Error('Preparation was cancelled.');
             const factory = this.#driverFor(record, cwd, record.threadId, { ...(account ? { account } : {}), mcpServers: prepared, serviceEnv, workspaceMcpOff: this.#workspaceMcpOffFor?.(record) ?? [], ...(untrusted ? { untrusted } : {}) });
             if (!factory) throw new Error('The provider is unsupported.');
@@ -1463,6 +1500,38 @@ export class SessionHost {
     }
 
     /**
+     * A SIGN-IN IN AN ACCOUNT'S FOLDER IS OVER, however it ended (Tynn #1011; the review of #2139). A start it refused said "it
+     * starts once the sign-in is over", so it starts now: as it was asked, for the agent's record as it is now (one removed
+     * meanwhile is not started), under every refusal a start has; its sign-in refusal is gone either way. One whose folder is
+     * signing in again waits for that one's end. And an agent that waited to MOVE to that account is asked again. The owner's
+     * rule: an agent never sits waiting on a person once the cause is gone.
+     */
+    launchUnblocked(): void {
+        const waiting = [...this.#blockedStarts];
+        this.#blockedStarts.clear();
+        for (const [id, asked] of waiting) {
+            if (this.#running.has(id)) continue;
+            if (this.refusals.get(id) === asked.reason) this.refusals.delete(id);
+            const record = this.#currentRecord ? this.#currentRecord(id) : asked.record;
+            if (record) this.start(record, asked.cwd, asked.how);
+            this.#emit(id);
+        }
+        for (const [id, entry] of this.#running) if (entry.provider === 'claude') this.#scheduleMove(id);
+    }
+
+    /**
+     * HOW MANY RUNS ARE IN A CLAUDE ACCOUNT'S FOLDER NOW (Tynn #1011): every run launched there, whichever account is active
+     * (after a switch an agent stays in the old account's folder until its turn is over), and one that is still stopping or
+     * that a stop could not end. "Sign out and remove" never takes the folder while this is not zero.
+     */
+    runningIn(configDir: string): number {
+        let count = 0;
+        for (const entry of this.#running.values()) if (entry.launchedConfigDir === configDir) count += 1;
+        for (const dir of this.#stoppingIn.values()) if (dir === configDir) count += 1;
+        return count;
+    }
+
+    /**
      * THE ACTIVE ACCOUNT OF A PROVIDER CHANGED (Tynn #1011). The owner: "agents keep running when we switch. provider accounts
      * never dictate agent operations, only rate limits." Each running agent of the provider draws on the new account from its
      * next clean idle: one idle now moves now; one in a turn, a tool, an approval or with work queued moves when that is over.
@@ -1542,6 +1611,8 @@ export class SessionHost {
         };
         const first = respawnDecision({ ...base, store: 'absent' });
         if (first.kind === 'stay' || first.kind === 'wait') return;
+        // The new account's folder is signing in: the move waits for its end (the next change asks again).
+        if (this.#launchBlocked?.(active) != null) return;
         // Only now is the store asked: it is the one look before anything is stopped.
         const decision = threadId === null ? first : respawnDecision({ ...base, store: this.#threadInAccount(threadId, activeConfigDir) });
         if (decision.kind === 'note') { this.#tellStayed(agentId, entry.account, active, decision.text); return; }
@@ -2102,13 +2173,15 @@ export class SessionHost {
         const graceMs = options.graceful !== false && gracefulEndFor(entry.provider) ? this.#stopGraceMs : 0;
         const ending = entry.session.stop('SIGTERM', { graceMs });
         this.#running.delete(agentId);
+        // Its process is in its account's folder until the stop is over (`runningIn`).
+        if (typeof entry.launchedConfigDir === 'string') this.#stoppingIn.set(agentId, entry.launchedConfigDir);
         // Its last rows (a cancelled approval, the reply the exit closes) are still on their way to the thread.
         this.#stopped.add(entry.session);
         const done = (verdict: StopVerdict): void => {
             if (this.#ending.get(agentId) === ending) this.#ending.delete(agentId);
             this.#verdicts.set(agentId, verdict);
             if (!verdict.verified && verdict.survivors.length > 0) this.#leftovers.set(agentId, verdict.survivors);
-            else this.#leftovers.delete(agentId);
+            else { this.#leftovers.delete(agentId); this.#stoppingIn.delete(agentId); }
             this.#lifecycle?.ended(agentId, entry.run, verdict);
         };
         // Known at once when no grace and no retry was needed (and then a start right after is not refused).

@@ -61,6 +61,8 @@ import { ALERT_KINDS, alertDelivery, alertSound, toastFor, type AlertKind } from
 import { toolchainSecurityAlerts } from '../core/toolchain-alerts.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
+import { alertVolume } from '../core/sound-volume.js';
+import { clientSoundValues } from './client-sound-settings.js';
 import { limitAlertSound } from '../core/limit-alerts.js';
 import { accountSwitchOutcomeOf, accountSwitchToast } from '../core/account-switch.js';
 import type { AccountsSnapshot } from '../core/accounts-view.js';
@@ -665,7 +667,7 @@ function useAlerts(snapshot: GenieSnapshot, settings: Readonly<Record<string, bo
         const deck = snapshot.deckItems !== null ? alertsBetween(prev.current, next) : [];
         for (const alert of [...deck, ...finishes.alerts]) {
             // The chosen sound — a wav or the Default chime — through the one player Preview uses too.
-            playAlertSound(alertSound(alert.kind, settings ?? {}));
+            playAlertSound(alertSound(alert.kind, settings ?? {}), alertVolume(alert.kind, clientSoundValues()));
             // The agent's workspace colour beside its address (genie#1300).
             const color = snapshot.workspaces?.find((w) => w.id === alert.workspace)?.color;
             show({ ...toastFor(alert, slugsFor(snapshot.workspaces ?? [])), ...(color ? { color } : {}) });
@@ -684,7 +686,7 @@ function useToolchainSecurityAlerts(tools: readonly ToolStatus[] | null, setting
     useEffect(() => {
         if (tools === null) return;
         for (const alert of toolchainSecurityAlerts(prev.current, tools)) {
-            playAlertSound(alertSound(alert.kind, settings ?? {}));
+            playAlertSound(alertSound(alert.kind, settings ?? {}), alertVolume(alert.kind, clientSoundValues()));
             show(toastFor(alert));
         }
         prev.current = tools;
@@ -1218,7 +1220,7 @@ function DesktopApp({ bridge }: AppProps) {
     const [accountsSnapshot, setAccountsSnapshot] = useState<AccountsSnapshot | undefined>(undefined);
     const readAccounts = useCallback(() => { void resolvedBridge?.accounts?.().then((s) => { if (s) setAccountsSnapshot(s); }, () => {}); }, [resolvedBridge]);
     useEffect(() => { readAccounts(); }, [readAccounts, rateLimits]);
-    useEffect(() => resolvedBridge?.onAction?.((action) => { if (action.kind === 'account-switch' || action.kind === 'accounts-changed') readAccounts(); }), [resolvedBridge, readAccounts]);
+    useEffect(() => resolvedBridge?.onAction?.((action) => { if (action.kind === 'account-switch' || action.kind === 'accounts-changed' || action.kind === 'account-notice') readAccounts(); }), [resolvedBridge, readAccounts]);
     // DESIGN SIGN-IN for the machine (Tynn #480): one click from the Claude popover or Settings.
     /**
      * ANOTHER MACHINE'S TERMINAL, HERE (Tynn #529 part A; sign-ins, Tynn #896): its host started a Take Over TUI or a
@@ -1246,8 +1248,13 @@ function DesktopApp({ bridge }: AppProps) {
     useEffect(() => resolvedBridge?.onAction?.((action) => {
         // A RATE-LIMIT ALERT the person set (Tynn #748): its own sound, held by Do not disturb, and a notice naming the account.
         if (action.kind === 'limit-alert' && action.title && action.body) {
-            playAlertSound(limitAlertSound(action.sound ?? 'synth', soundSettings.current ?? {}));
+            playAlertSound(limitAlertSound(action.sound ?? 'synth', soundSettings.current ?? {}), alertVolume(null, clientSoundValues()));
             showAlert({ title: action.title, body: action.body });
+            return;
+        }
+        // HOW A CLAUDE SIGN-IN OR SIGN-OUT CAME OUT (Tynn #1011).
+        if (action.kind === 'account-notice') {
+            showAlert({ title: action.title ?? 'Accounts', body: action.body ?? '' });
             return;
         }
         // HOW AN ACCOUNT SWITCH CAME OUT (Tynn #482): the account now active, or nothing changed with Retry (one click, again).
@@ -1256,7 +1263,7 @@ function DesktopApp({ bridge }: AppProps) {
             if (outcome) showAlert(accountSwitchToast(outcome, (provider) => { void resolvedBridge?.switchAccount?.(provider).then((r) => { if (r.ok) openCompanion(r, 'Switch account'); }, () => {}); }));
             return;
         }
-        if (ALERT_KINDS.some((k) => k.kind === action.kind)) playAlertSound(alertSound(action.kind as AlertKind, soundSettings.current ?? {}));
+        if (ALERT_KINDS.some((k) => k.kind === action.kind)) playAlertSound(alertSound(action.kind as AlertKind, soundSettings.current ?? {}), alertVolume(action.kind as AlertKind, clientSoundValues()));
         const emoji = action.agentId ? ROW_EMOJI[action.kind as RowSignalKind] : undefined;
         if (emoji && action.agentId) {
             const id = action.agentId;
@@ -1396,14 +1403,17 @@ function DesktopApp({ bridge }: AppProps) {
     const [workspaceFaults, setWorkspaceFaults] = useState<Record<string, WorkspaceFault | null>>({});
     // Bumped after a repo is relocated, so the faults are read again without waiting for the workspace list to change.
     const [faultsTick, setFaultsTick] = useState(0);
-    const faultKey = (snapshot.workspaces ?? []).map((w) => `${w.id}\u0000${w.name ?? ''}`).join('\n');
+    // A workspace's own folder gone or back, or located elsewhere (host split P7), reads the faults again too.
+    const faultKey = (snapshot.workspaces ?? []).map((w) => `${w.id}\u0000${w.name ?? ''}\u0000${w.path}\u0000${w.missing === true ? 'missing' : ''}`).join('\n');
     useEffect(() => {
         if (!resolvedBridge || !snapshot.workspaces) return;
         let live = true;
         const list = snapshot.workspaces;
         void Promise.all(list.map(async (w) => {
-            const r = await resolvedBridge.workspaces.listRepos(w.id);
             const name = w.name ?? w.path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? w.id;
+            // Its folder is not there: its repos cannot be read, and the folder fault is the one to show.
+            if (w.missing === true) return [w.id, workspaceFault(null, name, w)] as const;
+            const r = await resolvedBridge.workspaces.listRepos(w.id);
             return [w.id, workspaceFault(r.ok ? r.repos : null, name)] as const;
         })).then((entries) => { if (live) setWorkspaceFaults(Object.fromEntries(entries)); });
         return () => { live = false; };
@@ -1413,6 +1423,19 @@ function DesktopApp({ bridge }: AppProps) {
         const envelope = snapshot.workspaces?.find((w) => w.id === workspaceId)?.path;
         void pickFolder(`Where is ${slug} now? Pick its folder inside the envelope`, envelope).then((path) => {
             if (path) void resolvedBridge?.workspaces.locateRepo(workspaceId, slug, path).then((r) => { if (r.ok) setFaultsTick((t) => t + 1); });
+        });
+    };
+    // "Locate folder" on a workspace whose own folder is not there (host split P7): the host's picker, then its registry is
+    // told where the folder is. A refusal is said in the host's words.
+    const locateFolder = (workspaceId: string) => {
+        const workspace = snapshot.workspaces?.find((w) => w.id === workspaceId);
+        const name = workspace?.name ?? workspaceId;
+        const failed = (reason: string) => showAlert({ title: 'Could not locate folder', body: reason });
+        void pickFolder(`Where is ${name} now? Pick its folder`).then((path) => {
+            if (!path || !resolvedBridge) return;
+            const asked = resolvedBridge.workspaces.relocate?.(workspaceId, path);
+            if (!asked) { failed('this host cannot locate a workspace’s folder'); return; }
+            void asked.then((r) => { if (r.ok) setFaultsTick((t) => t + 1); else failed(r.reason); }, (error: unknown) => failed(error instanceof Error ? error.message : String(error)));
         });
     };
     // The workspace-scoped settings (§6.1) of the workspace on screen: its effective values and which it overrides.
@@ -1710,6 +1733,8 @@ function DesktopApp({ bridge }: AppProps) {
               diagnosis: opsView.diagnosis,
               lastOutcome: opsView.lastOutcome,
               budgetUsd: detail?.agent.dailyBudgetUsd ?? null,
+              appWakeCap: detail?.agent.appWakeCap ?? 6,
+              onSetAppWakeCap: (cap) => { void resolvedBridge.agents.setAppWakeCap(agentId, cap).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               mode: detail?.agent.mode ?? 'manual',
               accessScope: detail?.agent.accessScope ?? 'self',
               ...(detail?.agent.accessAgents ? { accessAgents: detail.agent.accessAgents } : {}),
@@ -2192,6 +2217,7 @@ function DesktopApp({ bridge }: AppProps) {
             peerTyping={typing.peer}
             workspaceFaults={workspaceFaults}
             onLocateRepo={locateRepo}
+            onLocateFolder={locateFolder}
             servable={SERVABLE}
             onShareWorkstation={shares ? () => { setShare({ workspaceId: null, name: remote.state?.host ?? snapshot.workstation?.name ?? 'this workstation', links: null, minted: null, problem: null, busy: false }); readShares(null); } : undefined}
             remote={remote.state?.connected && remote.state.host ? {

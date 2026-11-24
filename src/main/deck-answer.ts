@@ -39,6 +39,8 @@ export interface DeckAnswerPorts {
     readonly limitNotices?: { dismiss(id: string): boolean };
     /** A Playwright install Genie could not finish (Tynn #846): Retry installs it again, Dismiss puts it away. */
     readonly playwrightNotices?: { retry(id: string): Promise<boolean>; dismiss(id: string): boolean };
+    /** What this host could not restore (Tynn #419; attach-host.ts): the item's action or Dismiss; a refusal is thrown in words. */
+    readonly attach?: { answer(id: string, optionId: string): Promise<void> };
     /** A turn Genie ended as stalled (Tynn #855): Stop or Restart the agent, or Dismiss; `false` when there is no such item. */
     readonly stalledTurns?: { act(agentId: string, action: 'stop' | 'restart' | 'dismiss'): Promise<boolean> };
     /** `deckItems`: the window's own record of them, the items an answer to one is resolved against (Tynn #861). */
@@ -159,6 +161,10 @@ export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPort
             // A Playwright install Genie could not finish (Tynn #846). Retry runs it again: when it fails again the item stays, with why.
             if (!ports.playwrightNotices) throw new Error('Genie’s Playwright installer is not running here; nothing was done');
             if (command.retry ? !(await ports.playwrightNotices.retry(command.id)) : !ports.playwrightNotices.dismiss(command.id)) throw new Error(`no Playwright install item ${command.id}`);
+            break;
+        case 'attach':
+            if (!ports.attach) throw new Error('this Genie keeps no record of what it could not restore; nothing was done');
+            await ports.attach.answer(command.id, command.optionId);
             break;
         case 'stalled-turn':
             // A turn Genie ended as stalled (Tynn #855): the agent is stopped or restarted on its conversation here, on its host.

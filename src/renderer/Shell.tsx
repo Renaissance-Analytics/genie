@@ -153,6 +153,8 @@ export interface ShellProps {
     workspaceFaults?: Readonly<Record<string, WorkspaceFault | null | undefined>> | undefined;
     /** The fault's fix: the host's folder picker and the manifest write. Absent = the registry door. */
     onLocateRepo?: ((workspaceId: string, repo: string) => void) | undefined;
+    /** "Locate folder" on a workspace whose own folder is not there (host split P7). Absent = the button does nothing. */
+    onLocateFolder?: ((workspaceId: string) => void) | undefined;
     /** Which surfaces this build renders. The rail's rows are DERIVED from it, not parallel. */
     servable: readonly Surface[];
     /** The agent the route names, when it names one. `null` while loading or if unknown. */
@@ -408,6 +410,7 @@ export function Shell({
     mailSignals,
     workspaceFaults,
     onLocateRepo,
+    onLocateFolder,
     servable,
     features = EMPTY_FEATURES,
     marketplace,
@@ -897,6 +900,7 @@ export function Shell({
                             faults={workspaceFaults}
                             // The fix: the host's picker and the manifest write; without a bridge for it, the registry's page.
                             onLocateRepo={onLocateRepo ?? ((id) => onNavigate(`genie://workspace/${id}`))}
+                            onLocateFolder={onLocateFolder}
                             onFix={(fix) => {
                                 // The board's fix buttons act (`fixRoute`): two verbs Genie performs, else the agent's page.
                                 if (fix.kind === 'restart') onRestartAgent?.(fix.agentId);

@@ -1,3 +1,4 @@
+import { appWakeCapOf } from '../core/app-inbox.js';
 import { agentCapFrom } from '../core/inbox.js';
 import { ReminderBook } from '../core/inbox-reminders.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
@@ -110,6 +111,8 @@ export function wireHostMailWake(p: {
         cumulative: true,
         ...appMailPushPorts({
             modeOf: (agentId) => p.registry.find(agentId)?.mode,
+            // Its own app wake cap (Tynn #1053), read from its record each time: a change applies to its next turn.
+            capOf: (agentId) => appWakeCapOf(p.registry.find(agentId)),
             now: () => Date.now(),
             schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
         }),

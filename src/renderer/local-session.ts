@@ -5,7 +5,7 @@ import { localTransport } from './local-transport.js';
 import { connectRemote, type RemoteClient } from './remote-bridge.js';
 import type { LocalFilesBridge } from './local-files-client.js';
 
-export type WorkspaceProtocolKey = 'listRepos' | 'addRepo' | 'removeRepo' | 'removeRepoLock' | 'locateRepo' | 'commitsSince'
+export type WorkspaceProtocolKey = 'listRepos' | 'addRepo' | 'removeRepo' | 'removeRepoLock' | 'locateRepo' | 'relocate' | 'commitsSince'
     | 'settings' | 'setSetting' | 'resetSetting' | 'setGoverns' | 'setDefaultAgent' | 'setColor' | 'savePreview' | 'save' | 'cloneOffers' | 'applyOffer' | 'setMcpServer' | 'onSettingsChanged'
     | 'previewAdd' | 'confirmAdd' | 'create' | 'previewAddFromGit' | 'confirmAddFromGit' | 'readSource'
     | 'stageFromGit' | 'registerExisting' | 'buildEnvelope' | 'discardStaged' | 'githubRepos' | 'tynnProjects'
@@ -346,6 +346,7 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             delete: (id, outcome, also, handoff) => requestAgent((agents) => agents.delete(id, outcome, also, handoff)),
             switchDriver: (id, to) => requestAgent((agents) => agents.switchDriver(id, to)),
             setBudget: (id, usd) => requestAgent((agents) => agents.setBudget(id, usd)),
+            setAppWakeCap: (id, cap) => requestAgent((agents) => agents.setAppWakeCap(id, cap)),
             setMode: (id, mode) => requestAgent((agents) => agents.setMode(id, mode)),
             setAccessScope: (id, scope) => requestAgent((agents) => agents.setAccessScope(id, scope)),
             setAccessAgents: (id, ids) => requestAgent((agents) => agents.setAccessAgents(id, ids)),
@@ -393,6 +394,7 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             removeRepo: (id, slug) => request((ws) => ws.removeRepo(id, slug)),
             removeRepoLock: (id, slug) => request((ws) => ws.removeRepoLock(id, slug)),
             locateRepo: (id, slug, path) => request((ws) => ws.locateRepo(id, slug, path)),
+            relocate: (id, path) => request((ws) => ws.relocate!(id, path)),
             commitsSince: (id, since) => request((ws) => ws.commitsSince(id, since)),
             settings: (id) => request((ws) => ws.settings(id)),
             setSetting: (id, key, value) => request((ws) => ws.setSetting(id, key, value)),

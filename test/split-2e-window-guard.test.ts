@@ -67,7 +67,12 @@ describe('the window serves nothing (step 2e)', () => {
     const reach = valueReach('src/main/main.ts');
 
     it('POSITIVE CONTROL: the walk follows main.ts into what the window really loads', () => {
-        for (const file of ['src/main/window-pages.ts', 'src/main/local-protocol-door.ts', 'src/main/window-tunnel.ts', 'src/main/session-engine-client.ts', 'src/main/compose.ts']) expect(reach, file).toContain(file);
+        // compose.ts left the window in 2g-4d E (Tynn #955): window-tools.ts is the window's own module it reaches instead.
+        for (const file of ['src/main/window-pages.ts', 'src/main/local-protocol-door.ts', 'src/main/window-tunnel.ts', 'src/main/session-engine-client.ts', 'src/main/window-tools.ts']) expect(reach, file).toContain(file);
+    });
+
+    it('the window loads no composition: compose.ts is the tests’ (2g-4d E, Tynn #955)', () => {
+        expect(reach.has('src/main/compose.ts')).toBe(false);
     });
 
     it('no remote-serving module is loaded by the window', () => {
@@ -158,25 +163,31 @@ describe('the window\'s engine link carries only the link, window capabilities, 
         // github, keyring, relayHost and tynn left in 2g-3b (#959): the accounts, the keyring card and the registration are
         // genie-host's; main unseals an older Genie's secrets once and hands them over (keychain.adoptLegacy).
         // catalog and plugins left in 2g-3c (#961): compose read nothing from them in the window.
-        flows: '2g', hosting: '2g',
+        // flows, hosting, stores and supervisor left in 2g-4d E (#955): the window composes nothing.
         // Seen in 2g-4e (#1007) once the scanner followed main's `engineLink` alias; each is a task on 2g-4d (#955).
         // pushWindowView and v1Import left in 2g-4d B (#1044).
         // spawnLink and onSpawnFrame are the link's own since 2g-4d-A (#1043: the processes child's exec route is live);
         // runHostTool and the Files watch (onFilesEvent, filesWatch, filesUnwatch) left with it: nothing in the window read them.
-        // IssueWatch and the Tynn panels' watches (G-1, #934 task #1474).
-        issueWatch: '2g', tynnBoardWatch: '2g', tynnBoardUnwatch: '2g', onTynnBoardEvent: '2g', tynnIssuesWatch: '2g', tynnIssuesUnwatch: '2g',
-        onTynnIssuesEvent: '2g', tynnFeaturesWatch: '2g', tynnFeaturesUnwatch: '2g', onTynnFeaturesEvent: '2g',
+        // IssueWatch and the Tynn panels' watches left in #934 task #1474: the nine watch uses were read by nothing (the Tynn
+        // tab's tynn.watch is genie-host's own), checkIssues is genie-host's own tool, and a batch's sound is a tool signal.
+        // NOTHING IS LEFT TO MOVE: the list is empty, and it stays frozen, so no use can join it.
         // recordsChanged left in 2g-3 (#954): genie-host reads its own registry.
         // remoteAccess left in 2g-4a (#997): main's notifications read genie-host's remote.watch.
-        stores: '2g', supervisor: '2g',
     };
-    const ratchet = (rows: readonly (readonly [string, string])[], usedNow: readonly string[]) => ({
-        joined: rows.filter(([u, d]) => d.startsWith('move:') && STILL_TO_MOVE[u] !== d.slice('move:'.length)).map(([u]) => u).sort(),
-        relabelled: Object.keys(STILL_TO_MOVE).filter((u) => usedNow.includes(u) && !rows.some(([r, d]) => r === u && d.startsWith('move:'))).sort(),
+    const ratchet = (rows: readonly (readonly [string, string])[], usedNow: readonly string[], frozen: Readonly<Record<string, string>> = STILL_TO_MOVE) => ({
+        joined: rows.filter(([u, d]) => d.startsWith('move:') && frozen[u] !== d.slice('move:'.length)).map(([u]) => u).sort(),
+        relabelled: Object.keys(frozen).filter((u) => usedNow.includes(u) && !rows.some(([r, d]) => r === u && d.startsWith('move:'))).sort(),
     });
 
     it('THE RATCHET: every still-to-move use is on the frozen list under its step, and none was re-labelled while still used', () => {
         expect(ratchet(WINDOW_ENGINE_INVENTORY, used)).toEqual({ joined: [], relabelled: [] });
+    });
+
+    it('NOTHING IS LEFT TO MOVE (Tynn #934 task #1474): the frozen list is empty and the inventory has no `move:` row', () => {
+        expect(Object.keys(STILL_TO_MOVE)).toEqual([]);
+        expect(WINDOW_ENGINE_INVENTORY.filter(([, destination]) => destination.startsWith('move:'))).toEqual([]);
+        // CONTROL: the same filter finds a move row when there is one.
+        expect([['welcome', 'link'], ['someUse', 'move:2g']].filter(([, destination]) => destination!.startsWith('move:'))).toEqual([['someUse', 'move:2g']]);
     });
 
     it('CONTROL: the scanner reads members and raw calls, not comments or import paths, and the ratchet notices a newcomer', () => {
@@ -185,7 +196,10 @@ describe('the window\'s engine link carries only the link, window capabilities, 
         expect(engineUses("import { X } from './session-engine-client.js';\n// client.flows()\nagentEngineLink.client.hosting();\nvoid client.call('engine.thing', []);\nlink?.client?.heartbeat(b);"))
             .toEqual(['call:engine.thing', 'heartbeat', 'hosting']);
         expect(ratchet([['newThing', 'move:2g']], []).joined).toEqual(['newThing']);
-        expect(ratchet([['hosting', 'window:chrome']], ['hosting']).relabelled).toEqual(['hosting']);
+        // With a use on a frozen list (none is now): re-labelled while still used is named; on the list under its step it is not.
+        expect(ratchet([['someUse', 'window:chrome']], ['someUse'], { someUse: '2g' }).relabelled).toEqual(['someUse']);
+        expect(ratchet([['someUse', 'move:2g']], ['someUse'], { someUse: '2g' })).toEqual({ joined: [], relabelled: [] });
+        expect(ratchet([['someUse', 'move:2f']], ['someUse'], { someUse: '2g' }).joined).toEqual(['someUse']);
     });
 
     it('CONTROL: the scanner follows an alias of the engine client, and names a client handed over whole (Tynn #1007, 2g-4e)', () => {

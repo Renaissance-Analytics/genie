@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { ProcessSupervisor } from '../src/main/process-supervisor.js';
-import { SupervisorService } from '../src/main/supervisor-host.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 import { ledgerRow } from '../src/core/stream-view.js';
 import type { StreamEvent } from '../src/core/stream-event.js';
@@ -15,10 +14,9 @@ function rig() {
         onData: () => () => {}, onExit: () => () => {},
     };
     const supervisor = new ProcessSupervisor(pty, { now: () => now, schedule: () => () => {} });
-    const service = new SupervisorService(supervisor);
     const spec = { id: 'service-command-1', workspaceId: 'work', name: 'services exec', command: 'php artisan test', cwd: '/workspace' };
     const track = () => supervisor.trackExternal(spec, { pid: 123, stop: () => { calls.cancelled += 1; } });
-    return { supervisor, service, spec, track, calls, advance: (ms: number) => { now += ms; }, now: () => now };
+    return { supervisor, spec, track, calls, advance: (ms: number) => { now += ms; }, now: () => now };
 }
 
 describe('service commands are visible workspace work (#633)', () => {
@@ -28,16 +26,16 @@ describe('service commands are visible workspace work (#633)', () => {
         expect(w.supervisor.list('someone-else')).toEqual([]);
         expect(w.supervisor.command(w.spec.id)).toBe('php artisan test');
         expect(w.calls.opened).toBe(0);
-        expect(w.service.dump().statuses).toMatchObject([{ id: w.spec.id }]);
+        expect(w.supervisor.list()).toMatchObject([{ id: w.spec.id }]);
     });
 
-    it('streams output through the existing supervisor event/log path and replays it on window reconnect', () => {
+    it('streams output through the existing supervisor output/log path, and the log keeps it for any later reader', () => {
         const w = rig(); const events: unknown[] = [];
-        w.service.onEvent((event) => events.push(event));
+        w.supervisor.onOutput((id, data) => events.push({ kind: 'output', id, data }));
         const run = w.track(); run.output('first line\n'); run.output('second line\n');
         expect(w.supervisor.readLog(w.spec.id)?.text).toBe('first line\nsecond line');
         expect(events).toContainEqual({ kind: 'output', id: w.spec.id, data: 'second line\n' });
-        expect(w.service.dump().logs[w.spec.id]).toBe('first line\nsecond line');
+        expect(w.supervisor.log(w.spec.id)).toBe('first line\nsecond line');
     });
 
     it('the existing Stop action cancels this run exactly once and completion stays visible', () => {

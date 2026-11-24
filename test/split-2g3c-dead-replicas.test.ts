@@ -42,8 +42,8 @@ describe('the engine link carries no account, keyring, registration, secret, plu
             expect(client, replica).not.toMatch(new RegExp(`^\\s{4}(async\\s+)?${replica}\\(`, 'm'));
         }
         expect(client).not.toMatch(/prepareMcpServers/);
-        // CONTROL: a replica that stays is found by the same pattern.
-        expect(client).toMatch(/^\s{4}stores\(/m);
+        // CONTROL: a replica that stays is found by the same pattern (the stores' went in 2g-4d E2a; the app inbox's stays).
+        expect(client).toMatch(/^\s{4}appInbox\(/m);
     });
 
     it('their window-side files are gone: the replicas and linkedAgentSecrets (its file held nothing else)', () => {
@@ -74,7 +74,11 @@ describe('the engine link carries no account, keyring, registration, secret, plu
         // 2g-4e (#1007): the scanner follows main's aliases of the engine client, and the uses it found joined the list
         // (tasks on #955 and G-1 #934); the rows are exactly these.
         // 2g-4d-A (#1043): runHostTool and the Files watch left, and the exec route (spawnLink, onSpawnFrame) is `link`.
-        expect(rows).toEqual(['flows', 'hosting', 'issueWatch', 'onTynnBoardEvent', 'onTynnFeaturesEvent', 'onTynnIssuesEvent', 'stores', 'supervisor', 'tynnBoardUnwatch', 'tynnBoardWatch', 'tynnFeaturesUnwatch', 'tynnFeaturesWatch', 'tynnIssuesUnwatch', 'tynnIssuesWatch']);
+        // flows, hosting, stores and supervisor left in 2g-4d E (#955). IssueWatch and the Tynn watches left in #934 task
+        // #1474: nothing is left on move:2g.
+        expect(rows).toEqual([]);
+        // CONTROL: the inventory is read (its link rows are there).
+        expect(WINDOW_ENGINE_INVENTORY.filter(([, d]) => d === 'link').length).toBeGreaterThan(0);
         expect(rows).not.toContain('catalog');
         expect(rows).not.toContain('plugins');
     });

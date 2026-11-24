@@ -158,8 +158,12 @@ describe('CI: the packaged host runs from its copy, with its supervisor (scripts
         expect(step).toContain('containment ready supervisor=');
         expect(step).toMatch(/\.genie\\host\\/);
         expect(step).toContain('is not running from its copy');
-        // Read before anything is killed.
-        expect(step.indexOf('containment ready supervisor=')).toBeLessThan(step.indexOf('Stop-Process'));
+        // Read before anything is killed. The kill is the rows' one cleanup (Tynn #1031, scripts/end-own-tree.mjs), which
+        // ends the app's tree and the host; nothing else in the step ends them.
+        const kill = step.indexOf('node scripts/end-own-tree.mjs');
+        expect(kill, 'the step ends what it started').toBeGreaterThan(-1);
+        expect(step).not.toMatch(/Stop-Process|taskkill/);
+        expect(step.indexOf('containment ready supervisor=')).toBeLessThan(kill);
     });
 
     it('genie-host says so when its supervisor is ready, naming the file', () => {

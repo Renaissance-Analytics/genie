@@ -86,11 +86,11 @@ describe('PROOF: no host tool’s call leaves the window for genie-host, and no 
         expect(runsInWindow('pages', {})).toBe(true);
     });
 
-    it('the window runs no flow engine of its own: compose starts one only with no `flowsEngine`, and main always hands genie-host’s', () => {
+    it('the window runs no flow engine of its own: compose starts one only with no `flowsEngine`, and main composes nothing (2g-4d E)', () => {
         expect(compose).toMatch(/if \(!input\.flowsEngine\) \{\s*ownFlows = await input\.alone!\.openFlows\(\);/);
         expect(compose).toMatch(/const ownEngine = ownFlows \? input\.alone!\.startFlows\(\{/);
         expect(compose).toMatch(/setFlowToolCaller: \(call\) => \{ ownEngine\?\.setToolCaller\(call\); \},/);
-        expect(main).toMatch(/^ {8}flowsEngine: \{ flows: agentEngineLink\.client\.flows\(\), scheduler: agentEngineLink\.client\.flows\(\) \},$/m);
+        expect(main).not.toMatch(/flowsEngine:|composeWindowServices/);
         expect(main).not.toMatch(/\balone:/);
     });
 
@@ -130,8 +130,8 @@ describe('PROOF: compose reads no pty port, and adopts a pty only when it runs t
         expect(compose).toMatch(/input\.(supervisor|flowsEngine)\b/);
     });
 
-    it('main always hands compose genie-host’s supervisor', () => {
-        expect(main).toMatch(/^ {8}supervisor: agentEngineLink\.client\.supervisor\(\),$/m);
+    it('main hands compose no supervisor: it composes nothing (2g-4d E, Tynn #955)', () => {
+        expect(main).not.toMatch(/supervisor: agentEngineLink|composeWindowServices/);
     });
 
     it('nothing reads the ptys main listed at link-up, or its terminals’ spawn host: each is only written', () => {
@@ -233,8 +233,8 @@ describe('the window’s engine inventory', () => {
 
     it('has no row for the host tools’ forward or the Files watch', () => {
         for (const use of ['runHostTool', 'onFilesEvent', 'filesWatch', 'filesUnwatch']) expect(row(use), use).toBeNull();
-        // CONTROL: a row that stays is found.
-        expect(row('supervisor')).toBe('move:2g');
+        // CONTROL: a row that stays is found (supervisor left in 2g-4d E; IssueWatch and the Tynn watches in #934 task #1474).
+        expect(row('browserCall')).toBe('window:feature-effect');
     });
 });
 

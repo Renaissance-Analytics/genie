@@ -1,5 +1,5 @@
 import { Button } from '@particle-academy/react-fancy';
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { previewFullClass, previewFullKey, type PreviewWindow } from '../../core/preview-full.js';
 
 /**
@@ -19,6 +19,30 @@ export function PreviewFullButton({ full, onToggle }: { full: boolean; onToggle:
             aria-label={full ? 'Restore' : 'Fill the window'}
             title={full ? 'Restore (Esc)' : 'Fill the window'}
             {...(full ? { 'aria-keyshortcuts': 'Escape' } : {})}
+            onClick={onToggle}
+        />
+    );
+}
+
+/**
+ * THE MAXIMIZE CONTROL FOR A WHOLE QUESTION (Tynn #1019): the question window's header and a question in the Deck. The
+ * same icon Button as a preview's, named Maximize / Restore, Esc named as its key while maximized. `action` is its
+ * data-action (each place has its own); `style` lets the question window's drag strip exempt it (`no-drag`).
+ */
+export function MaximizeButton({ maximized, onToggle, action, className, style }: { maximized: boolean; onToggle: () => void; action: string; className?: string; style?: CSSProperties }) {
+    return (
+        <Button
+            size="xs"
+            variant="ghost"
+            type="button"
+            icon={maximized ? 'minimize-2' : 'maximize-2'}
+            data-action={action}
+            aria-pressed={maximized ? 'true' : 'false'}
+            aria-label={maximized ? 'Restore' : 'Maximize'}
+            title={maximized ? 'Restore (Esc)' : 'Maximize'}
+            {...(maximized ? { 'aria-keyshortcuts': 'Escape' } : {})}
+            {...(className ? { className } : {})}
+            {...(style ? { style } : {})}
             onClick={onToggle}
         />
     );

@@ -1,56 +1,45 @@
-import { describeMcpTool, type McpToolRow } from '../core/mcp-tool-summaries.js';
+import { describeMcpTool } from '../core/mcp-tool-summaries.js';
 import { featureWorkspaceFiles } from './feature-workspace-files.js';
-import { flowPillSignals } from '../core/flow-pill-signals.js';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AskerState } from '../core/deck-sources.js';
-import type { DeckItem, SignalState } from '../core/deck.js';
 import { type V1Knowledge } from '../core/v1-import.js';
 import type { V1Inbox } from '../core/v1-inbox.js';
 import { runV1FlowImport } from './v1-flows.js';
-import { ensureFlowToolKinds, type FlowToolCall } from './flow-tools.js';
-import { agentAddress, resolveAddress as resolveOnRoster, type InboxSessionProbe, type Resolution } from '../core/inbox.js';
+import { flowPillSignals } from '../core/flow-pill-signals.js';
+import { ensureFlowToolKinds } from './flow-tools.js';
+import { agentAddress, resolveAddress as resolveOnRoster, type InboxSessionProbe } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
 import { ReminderBook } from '../core/inbox-reminders.js';
 import { inboxNotices } from './inbox-notices.js';
-import type { NoticeMail } from '../core/stream-event.js';
 import type { AppEnvSource } from './app-inbox-service.js';
-import { configSync, type SyncResult } from '../core/integrations.js';
-import { AgentFilesHealth, type AgentFilesReport, type SyncSource } from '../core/agent-files-health.js';
+import { AgentFilesHealth } from '../core/agent-files-health.js';
 import { configWriter, writeWorkspaceConfig, type WorkspaceConfigRequest } from './workspace-config-sync.js';
 import { PluginsReplica, type PluginsApi } from './plugins-replica.js';
 import { hostCatalog } from './genie-catalog.js';
-import type { ElementDefinition } from '../core/catalog.js';
 import type { Verification } from './mcp-server.js';
 import { assembleDeckItems } from './deck-assembly.js';
 import { ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
 import type { AgentSessionsPort } from './flow-runner.js';
-import type { FlowScheduler } from './flow-scheduler.js';
 import { startFlowsEngine } from './flows-engine.js';
 import type { FlowSchedulerApi, FlowsApi } from './flows-host.js';
 import { FlowStore } from './flow-store.js';
-import type { OwnAgentStores, WindowAgentStores } from './agent-stores-api.js';
+import type { WindowAgentStores } from './agent-stores-api.js';
 import { importV1Inbox, importV1Knowledge, openAgentStores } from './agent-stores-open.js';
 import { attentionLimitsFrom } from './attention-store.js';
 import { runtimeDir } from './paths.js';
-import { LocalStagingArea } from './local-staging-area.js';
 import { ProcessSupervisor, type SupervisorApi } from './process-supervisor.js';
-import { RemoteAccessReplica, type PairingView, type RemoteAccessView } from './remote-access-replica.js';
+import { RemoteAccessReplica } from './remote-access-replica.js';
 import { hostname } from 'node:os';
 import { setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
 import { writeGenieInstructions } from './genie-instructions.js';
 import type { WorkTracking } from '../core/genie-protocol.js';
-import { trustSteps, type TrustApi } from './hosting-trust.js';
+import { trustSteps } from './hosting-trust.js';
 import { SettingsStore } from './settings-store.js';
 import type { WorkspaceRef } from './envelope-sites-host.js';
 import type { HostingComposeInput, HostingOptions, HostingStack } from './hosting-compose.js';
 import { composeStageDiagnostics, type ComposeStageSample } from './compose-stage-diagnostics.js';
-import type { EnginesApi, EnvelopeSitesApi, HostingApi, SitesApi } from './hosting-host.js';
-import type { SiteManager } from './site-manager.js';
-import type { EnvelopeSites } from './envelope-sites-host.js';
-import type { ServiceRegistry } from './service-registry.js';
-import type { DotEnvSync } from './dotenv-sync.js';
-import type { GenRouterServer } from './gen-router-server.js';
+import type { HostingApi } from './hosting-host.js';
 
 /**
  * THE COMPOSITION ROOT. Every store, the scheduler, the supervisor, the site manager and the front
@@ -76,8 +65,6 @@ export interface ComposeInput extends HostingOptions {
     readonly build?: string;
     /** Optional numeric diagnostics. The hosting fixture logs these only on Windows CI; production leaves it absent. */
     readonly onComposeStage?: (sample: ComposeStageSample) => void;
-    /** Internal scheduling port: maintenance runs after ready, and the returned callback cancels a pending sweep. */
-    readonly scheduleStagingSweep?: (work: () => Promise<void>) => () => void;
     readonly userData: string;
     /** Read-only live pause state for AgentInbox's automatic replies; no session is started by this probe. */
     readonly inboxSession?: InboxSessionProbe;
@@ -98,8 +85,8 @@ export interface ComposeInput extends HostingOptions {
     /** genie-host's process supervisor, through this window's replica (P3.3b). Absent = this window runs its own. */
     readonly supervisor?: SupervisorApi;
     /**
-     * genie-host's front door, service engines and site routes, through this window's replica (the host split, P5a): the
-     * window builds none of its own (Tynn #584).
+     * A hosting handed in (the host split, P5a): a test's stand-in of genie-host's. The app composes none (Tynn #584), and no
+     * window reads genie-host's through the engine link any more (2g-4d E2b, Tynn #955).
      */
     readonly hosting?: HostingApi;
     /** Tests that compose alone hand in a real hosting stack (test/helpers/compose-alone.ts). Nothing in the app does. */
@@ -182,12 +169,10 @@ export interface ComposeInput extends HostingOptions {
     readonly askerLive?: (agentId: string) => AskerState | null | undefined;
 }
 
+import type { ComposedServices, WindowServices } from './host-services.js';
 export type { FrontDoorStatus } from './hosting-compose.js';
+export type { ComposedServices, WindowServices } from './host-services.js';
 
-/**
- * What compose built. `S` is the stores agents write to as this window holds them: genie-host's replicas (engine mode,
- * `WindowServices`) or the stores themselves (`OwnAgentStores`, the default: the emergency path, and every test that composes alone).
- */
 /** The settings as compose and its consumers use them: the store itself, or genie-host's through a replica (P3.2). */
 type S_Settings = NonNullable<WindowAgentStores['settings']>;
 
@@ -202,103 +187,13 @@ export interface ComposeAlone {
 }
 type OwnStores = Awaited<ReturnType<typeof openAgentStores>>;
 
-export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> extends Omit<HostingApi, 'trustDeckItems' | 'shutdown' | 'sites' | 'engines' | 'envelopeSites' | 'trust'> {
-    readonly inbox: S['inbox'];
-    readonly attention: S['attention'];
-    readonly knowledge: S['knowledge'];
-    /** The stores themselves when THIS window opened them (the emergency path); null when genie-host owns them. */
-    readonly own: OwnAgentStores | null;
-    readonly flows: S extends OwnAgentStores ? FlowStore : FlowsApi;
-    readonly flowScheduler: S extends OwnAgentStores ? FlowScheduler : FlowSchedulerApi;
-    /** The flows file itself when THIS window opened it (the emergency path); null when genie-host owns it (P3.3d). */
-    readonly ownFlows: FlowStore | null;
-    readonly settings: S extends OwnAgentStores ? SettingsStore : S_Settings;
-    readonly supervisor: SupervisorApi;
-    /**
-     * WHAT EACH WORKSPACE'S OWN FILES SAY WOULD RUN, AND WHETHER THE PERSON HAS SAID YES TO IT (genie#1519). The host owns
-     * it: genie-host's verdicts through this window's replica (failing closed before the first dump and after the link
-     * drops), or this window's own hosting's on the emergency path, until P6.
-     */
-    readonly workspaceTrust: TrustApi;
-    /** Genie's own files for an agent whose workspace is not trusted, or `null`. */
-    untrustedFilesFor(record: { readonly workspaceId: string }): Promise<import('./session-host.js').GenieInstructionFiles | null>;
-    /** The workspaces read and not trusted, with what would run: the person's trust step. */
-    trustSteps(): readonly { readonly workspaceId: string; readonly changed: boolean; readonly list: import('../core/workspace-trust.js').TrustList }[];
-    /** The verdict as last read, without reading: for a shell call. A workspace not read yet is not trusted. */
-    untrustedNow(record: { readonly workspaceId: string }): boolean;
-    /**
-     * Genie's hosting (P5a): the classes themselves when THIS window built it (the emergency path, and every test that
-     * composes alone); the narrow surface a window uses (hosting-host.ts) when it is genie-host's, through the replica.
-     */
-    readonly sites: S extends OwnAgentStores ? SiteManager : SitesApi;
-    readonly envelopeSites: S extends OwnAgentStores ? EnvelopeSites : EnvelopeSitesApi;
-    readonly engines: S extends OwnAgentStores ? ServiceRegistry : EnginesApi;
-    /** The `.env` sync and the in-app front door, when THIS window built its hosting; null when they are genie-host's. */
-    readonly envFiles: S extends OwnAgentStores ? DotEnvSync : DotEnvSync | null;
-    readonly frontDoor: S extends OwnAgentStores ? GenRouterServer : GenRouterServer | null;
-    /** The gate behind approval-gated tools; its pending requests are Deck items. */
-    readonly approvals: S['approvals'];
-    /** Remote access (§6.8): paired devices, share links, the baton, the lock, the connections. */
-    readonly remote: RemoteAccessView;
-    /** "Pair this device?" — what waits for Allow on this screen (q_8c07b142). */
-    readonly pairing: PairingView;
-    /**
-     * The Deck's signal strip, MEASURED (§4.5): flows and uncollected mail from the stores; the OS agent's turn and whether
-     * GitHub blocks features (the GitHub account's reading of GitHub, main/github-account.ts) handed in by main.
-     */
-    signals(context: { osAgentWorking: boolean; githubBlocked: boolean }): SignalState;
-    /**
-     * §6.4 THE INBOX PUSH: the notices due now — registered agents with mail they have not been told about whose session
-     * can take a turn (`run` answers its run, or `null` while it cannot). Once per arrival batch. Decides; never sends.
-     */
-    inboxReminders(input: { run: (agentId: string) => number | null }): Array<{ agentId: string; text: string; mail: readonly NoticeMail[] }>;
-    /** A notice `inboxReminders` handed out has settled: `delivered` = its turn ended cleanly; otherwise its batch is untold. */
-    inboxNoticeSettled(agentId: string, delivered: boolean): void;
-    /** A source's app credential (genie#1345) under the workspace's switch — what sites get, for the process book too. */
-    appEnv(source: AppEnvSource): Readonly<Record<string, string>>;
-    /** §6.9: Genie's MCP server and the agent files. Tynn and GitHub are their accounts' (main/tynn-account.ts, main/github-account.ts), added by feature-ipc. */
-    integrations(): { mcp: { url: string | null; verified: Verification | null; tools: readonly McpToolRow[] }; agentFiles: readonly AgentFilesReport[] };
-    /** Config sync (§6.9): Genie's MCP endpoint into a workspace's four targets, each reported on its own. `source`: Genie's start (default) or you. */
-    syncConfig(workspacePath: string, source?: SyncSource): Promise<SyncResult[]>;
-    /** The Genie 2 protocol files under `.agents/_genie/`, then the AGENTS.md / CLAUDE.md routers and RULES.md, then the skills (separate from the four config-sync targets). */
-    syncAgentDocs(workspacePath: string, source?: SyncSource): Promise<void>;
-    /** §6.7: the plugins, genie-host's through its replica (ADF A3); re-read when developer mode changes. */
-    readonly plugins: PluginsApi;
-    /**
-     * Every element the catalog holds now (ADF A5): what the window's editors, panels and flow palette are projected from.
-     * genie-host's through the replica; with no host, this window's own plugins' catalog.
-     */
-    catalogDefinitions(): readonly ElementDefinition[];
-    readonly pluginsDir: string;
-    /** Re-read the plugins folder (after developer mode flips, or a plugin was dropped in). */
-    pluginsRefresh(): Promise<void>;
-    /** The Deck's items from the stores, now. */
-    deckItems(): DeckItem[];
-    /** Every roster agent's full address with its name — the human's peer list. */
-    agentAddresses(): Array<{ address: string; agentId: string; name: string }>;
-    /** Resolve an address the way the inbox does: one / ambiguous (both forms named) / none / human. */
-    resolveAddress(text: string): Resolution;
-    /** Genie's tools as flow steps (genie#1204): main hands the call once it has built the tools (main/flow-tools.ts). */
-    setFlowToolCaller(call: FlowToolCall): void;
-    /** The registered workspaces' ids, now — what a flow's save checks a step's workspace against (genie#1204). */
-    workspaceIds(): string[];
-    mailRefusal(address: string): string | null;
-    workspaceVisible(id: string): boolean;
-    shutdown(): Promise<void>;
-}
 
 /** How long a quit waits for in-flight flow runs before it goes on. */
 const FLOW_SETTLE_ON_QUIT_MS = 5_000;
 
-/** What a window that composed against genie-host's stores holds (the host split, P3.1). */
-export type WindowServices = ComposedServices<WindowAgentStores>;
 
-/** Compose with genie-host's stores, through this window's replicas (the host split, P3.1). */
-export async function composeWindowServices(input: ComposeInput & { readonly agentStores: WindowAgentStores }): Promise<WindowServices> {
-    return composeWith(input);
-}
 
-/** The composition itself. `composeWindowServices` is the app's way in; a test that composes alone goes through test/helpers/compose-alone.ts. */
+/** The composition itself: the TESTS' (test/helpers/compose-alone.ts). The app composes nothing: its services are genie-host's (Tynn #955). */
 export async function composeWith(input: ComposeInput): Promise<WindowServices> {
     if (!input.agentStores?.settings && !input.alone) throw new Error("compose was given no settings: they are genie-host's");
     // Tynn story #402: signed in to tynn.ai, the agents' protocol carries Tynn's work model; otherwise the plan-file fallback.
@@ -388,16 +283,16 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
     const pluginsDir = join(input.userData, 'plugins');
     // genie-host's plugins and catalog are read in genie-host (feature-machine.ts runs there): the window keeps an empty stand-in (Tynn #961).
     const plugins: PluginsApi = new PluginsReplica(async () => false);
-    // THE FRONT DOOR, THE SERVICE ENGINES AND THE SITE ROUTES (the host split, P5a): genie-host's when it runs, through this
-    // window's replica — this window then starts no Caddy, opens no engine registry and makes no CA.
+    // THE FRONT DOOR, THE SERVICE ENGINES AND THE SITE ROUTES (the host split, P5a): the one handed in — then this composition
+    // starts no Caddy, opens no engine registry and makes no CA — or a test's own.
     stage?.begin('hosting');
     if (!input.hosting && !input.buildOwnHosting) throw new Error("compose was given no hosting: it is genie-host's");
     const ownHosting = input.hosting ? null : await input.buildOwnHosting!({ ...input, supervisor, settings, appEnv: appEnvOf });
     stage?.end();
     const hosting: HostingApi = input.hosting ?? ownHosting!;
     const workspacesNow = (): readonly WorkspaceRef[] => input.workspaces?.() ?? [];
-    // THE WORKSPACES' TRUST (genie#1519) is the hosting's. With genie-host's, this window's own git reads follow the host's
-    // verdicts through the replica, which fails closed.
+    // THE WORKSPACES' TRUST (genie#1519) is the hosting's. With one handed in, this composition's git reads follow its
+    // verdicts.
     if (!ownHosting) {
         setGitReadPolicy(trustAwarePolicy((path) => hosting.trust.isTrustedPath(path)));
         hosting.trust.onVerdict((id) => input.onTrustVerdict?.(id));
@@ -457,14 +352,7 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
     const stopLiveness = supervisor.watchLiveness();
     let down: Promise<void> | null = null;
 
-    const stagingSweep = new AbortController();
-    let sweeping: Promise<void> | null = null;
-    const sweepOldStaging = (): Promise<void> => sweeping ??= LocalStagingArea.sweepOld(input.userData, { signal: stagingSweep.signal })
-        .catch(() => { if (!stagingSweep.signal.aborted) console.warn('[genie] old local staging could not be swept'); });
-    const stopStagingSweep = input.scheduleStagingSweep ? input.scheduleStagingSweep(sweepOldStaging) : (() => {
-        const timer = setTimeout(() => { void sweepOldStaging(); }, 0); timer.unref();
-        return () => clearTimeout(timer);
-    })();
+    // Old local staging is swept by genie-host (host-staging-sweep.ts, Tynn #955): the composition sweeps nothing.
     stage?.ready();
     return {
         own: ownStores ? { ...ownStores, approvals: ownApprovals! } : null,
@@ -586,7 +474,6 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
         shutdown: () => {
             setGitReadPolicy(null);
             down ??= (async () => {
-                stagingSweep.abort(); stopStagingSweep();
                 ownApprovals?.cancelAll('Genie is shutting down');
                 stopLiveness();
                 stopFlowVisibility?.();
@@ -615,7 +502,6 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
                 // And the flows file's last write has landed (a held record, the run in flight kept as it goes).
                 await ownFlows?.flushed();
                 await ownHosting?.settled();
-                await sweeping;
                 ownStores?.knowledge.close();
             })();
             return down;

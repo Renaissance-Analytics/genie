@@ -540,7 +540,7 @@ describe('A WORKSPACE A WINDOW HAS JUST ADDED IS NEVER REFUSED', () => {
         const handed: Array<readonly McpServer[]> = [];
         const t = tynnFake();
         const keys = hostAgentKeys({ vaultFile, keychain: fakeKeychain(), tynn: () => t.port, workspaces: () => model.listWorkspaces(), settled: () => stores.registrySettled() });
-        const server = new SessionEngineServer({ token: 'a'.repeat(64), build: 'test', stores: stores as never, agentKeys: keys });
+        const server = new SessionEngineServer({ token: 'a'.repeat(64), build: 'test', agentKeys: keys });
         const driverFor: DriverFor = (_r, _cwd, _thread, options) => {
             handed.push((options as { mcpServers?: readonly McpServer[] }).mcpServers ?? []);
             const factory: SessionDriverFactory = () => ({ start: () => {}, prompt: () => {}, kill: () => {}, get cliSessionId() { return null; } });
@@ -552,13 +552,14 @@ describe('A WORKSPACE A WINDOW HAS JUST ADDED IS NEVER REFUSED', () => {
         server.accept(hostSide);
         const client = new SessionEngineClient();
         await client.connect(windowSide, 'a'.repeat(64));
-        return { client, host, handed, release, model };
+        return { client, host, handed, release, model, stores };
     }
 
     it('the write has not landed when the start arrives: the start waits, and the agent has its key', async () => {
-        const { client, host, handed, release, model } = await linked();
+        const { client, host, handed, release, model, stores } = await linked();
         const agent = record({ workspaceId: 'added' });
-        const write = client.call('engine.stores', ['registry', 'writeWorkspaces', [[{ id: 'added', path: workspace }]]]);
+        // The registry's write as genie-host answers registry.write (registry-protocol.ts hostRegistryAnswers: stores.call).
+        const write = stores.call('registry', 'writeWorkspaces', [[{ id: 'added', path: workspace }]]);
         const started = client.start(agent, workspace);
         await new Promise((r) => setTimeout(r, 30));
         // CONTROL: the race is really on: the host does not know this workspace yet.

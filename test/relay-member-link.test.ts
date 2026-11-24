@@ -34,12 +34,12 @@ function fakeTransport() {
 function rig(over: Partial<RelayMemberPorts> = {}) {
     const events: Array<{ owner: string; event: DeviceLinkEvent }> = [];
     const minted: Array<{ workstationId: string; jwk: unknown }> = [];
-    const opened: Array<{ relayUrl: string; workstationId: string; grant: string; renew?: () => Promise<unknown> }> = [];
+    const opened: Array<{ relayUrl: string; workstationId: string; grant: string; hostPublicKey?: string | null; name?: string | null; renew?: () => Promise<unknown> }> = [];
     const t = fakeTransport();
     const relay: RelayMemberPorts = {
         signedIn: () => true,
         keypair: () => PopKeypair.generate(),
-        mint: async (workstationId, jwk) => { minted.push({ workstationId, jwk }); return { ok: true, token: GRANT, relayEndpoint: 'wss://relay.tynn.test' }; },
+        mint: async (workstationId, jwk) => { minted.push({ workstationId, jwk }); return { ok: true, token: GRANT, relayEndpoint: 'wss://relay.tynn.test', hostPublicKey: 'HOST-KEY-FROM-TYNN' }; },
         open: async (input) => { opened.push(input); return { ok: true, transport: t.transport }; },
         ...over,
     };
@@ -49,6 +49,42 @@ function rig(over: Partial<RelayMemberPorts> = {}) {
 }
 
 describe('the relay member, in genie-host', () => {
+    // Audit M-a (P9.2): the member checks the host against the key TYNN named with this grant, so it must be given it.
+    it('hands the member the host key Tynn named with the grant', async () => {
+        const r = rig();
+        await r.service.call('window-1', 'openRelay', ['ws_alpha']);
+        expect(r.opened).toHaveLength(1);
+        expect(r.opened[0]!.hostPublicKey).toBe('HOST-KEY-FROM-TYNN');
+    });
+
+    it('Tynn naming no host key is handed on as none (the member refuses before it dials); the machine’s name goes with it, for the words', async () => {
+        const r = rig({
+            mint: async () => ({ ok: true, token: GRANT, relayEndpoint: 'wss://relay.tynn.test', hostPublicKey: null }),
+            name: async (workstationId) => (workstationId === 'ws_alpha' ? 'alphar' : null),
+        });
+        await r.service.call('window-1', 'openRelay', ['ws_alpha']);
+        expect(r.opened).toHaveLength(1);
+        expect(r.opened[0]!.hostPublicKey).toBeNull();
+        expect(r.opened[0]!.name).toBe('alphar');
+    });
+
+    it('a name that cannot be read does not stop the connection: it opens with no name', async () => {
+        const r = rig({ name: async () => { throw new Error('Tynn could not be reached'); } });
+        expect(await r.service.call('window-1', 'openRelay', ['ws_alpha'])).toMatchObject({ ok: true });
+        expect(r.opened[0]!.name ?? null).toBeNull();
+        expect(r.opened[0]!.hostPublicKey).toBe('HOST-KEY-FROM-TYNN');
+    });
+
+    it('a renewal’s answer never changes the host key the session was opened with', async () => {
+        let n = 0;
+        const r = rig({ mint: async () => ({ ok: true, token: GRANT, relayEndpoint: 'wss://relay.tynn.test', hostPublicKey: `KEY-${++n}` }) });
+        await r.service.call('window-1', 'openRelay', ['ws_alpha']);
+        const renewed = await r.opened[0]!.renew!();
+        expect(renewed).toMatchObject({ ok: true });
+        expect(r.opened).toHaveLength(1);
+        expect(r.opened[0]!.hostPublicKey).toBe('KEY-1');
+    });
+
     it('mints the grant for its own key, opens the member, says the step, and hands the window a channel', async () => {
         const r = rig();
         const result = await r.service.call('window-1', 'openRelay', ['ws_alpha']) as { ok: boolean; channel?: string };

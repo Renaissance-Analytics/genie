@@ -81,7 +81,8 @@ describe('it is where a person sees it (reads the source: no window is opened he
         expect(read('renderer/Shell.tsx')).toMatch(/trustStep=/);
     });
 
-    it('a moved verdict is pushed to the windows', () => {
-        expect(read('main/main.ts')).toMatch(/onTrustVerdict: \(\) => \{[^}]*requestFeaturePush/);
+    it('a moved verdict is pushed to the windows: genie-host’s features push again on one (the window composes nothing, Tynn #955)', () => {
+        expect(read('main/features-host.ts')).toMatch(/trust\.onVerdict\(/);
+        expect(read('main/main.ts')).not.toMatch(/onTrustVerdict/);
     });
 });
