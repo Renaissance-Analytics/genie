@@ -34,6 +34,7 @@ import {
     windowEntriesFor,
     WINDOW_ENTRIES,
     type FixRoute,
+    faultTextParts,
     summaryChips,
     targetOf,
     type AgentRow,
@@ -885,11 +886,19 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
             {workspaces.length === 0 ? <p data-dashboard-no-active-workspaces="" role="status" className="px-7 py-5 text-[13px] text-[var(--fg-3)]">No active workspaces. Redock a hibernated workspace from the sidebar to see it here.</p>
                 : waiting && needsYou.on && shown.length === 0 && groups.genie.length === 0 ? <p data-needs-you="empty" role="status" className="px-7 py-5 text-[13px] text-[var(--fg-3)]">Nothing needs you.</p>
                 : shown.length === 0 && !(waiting && needsYou.on) ? <p role="status" className="px-7 py-5 text-[13px] text-[var(--fg-3)]">No agents shown. Use Sleeping or Stopped to include those agents.</p> : null}
-            {workspaces.filter((workspace) => !rows.some((row) => row.workspaceId === workspace.id)).map((workspace) => <div key={workspace.id} data-empty-workspace={workspace.id} data-workspace={workspace.id} {...(pulsing?.has(workspace.id) ? { 'data-workspace-pulse': 'true' } : {})} className={`flex items-center gap-3 border-b border-[var(--border-1)] px-7 py-3 text-xs text-[var(--fg-3)]${pulsing?.has(workspace.id) ? ` ${WORKSPACE_PULSE}` : ''}`}>
+            {workspaces.filter((workspace) => !rows.some((row) => row.workspaceId === workspace.id)).map((workspace) => <div key={workspace.id} data-empty-workspace={workspace.id} data-workspace={workspace.id} {...(pulsing?.has(workspace.id) ? { 'data-workspace-pulse': 'true' } : {})} className={`@container flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-[var(--border-1)] px-7 py-3 text-xs text-[var(--fg-3)]${pulsing?.has(workspace.id) ? ` ${WORKSPACE_PULSE}` : ''}`}>
                 {workspace.color ? <WorkspaceSwatch color={workspace.color} /> : null}
-                <span>{workspace.name ?? workspace.id} has no agents yet.</span><Button type="button" size="xs" icon="plus" data-add-agent={workspace.id} onClick={() => onAddAgent(workspace.id)}>Add an agent</Button>
-                {faults?.[workspace.id]?.kind === 'folder'
-                    ? <><span data-workspace-missing={workspace.id} className="text-[var(--warning)]">{faults?.[workspace.id]?.text}</span><Button type="button" size="xs" variant="ghost" icon="triangle-alert" data-action="locate-folder" title="Locate folder" onClick={() => onLocateFolder?.(workspace.id)}>Locate folder</Button></>
+                <span className="min-w-0 truncate">{workspace.name ?? workspace.id} has no agents yet.</span>
+                {/* The folder is not there: the message takes the width that is left, its path cut in the middle (the whole text
+                    is its title); in a narrow Dashboard it drops to its own line under the name, the buttons at the right. */}
+                {faults?.[workspace.id]?.kind === 'folder' ? (() => { const text = faults[workspace.id]!.text; const parts = faultTextParts(text); return (
+                    <span data-workspace-missing={workspace.id} title={text} className="order-last flex min-w-0 flex-1 basis-full text-[var(--warning)] @2xl:order-none @2xl:basis-0"><span className="truncate">{parts.head}</span><span className="shrink-0 whitespace-nowrap">{parts.tail}</span></span>
+                ); })() : null}
+                <span data-workspace-actions={workspace.id} className={`flex shrink-0 items-center gap-2${faults?.[workspace.id]?.kind === 'folder' ? ' ml-auto' : ''}`}>
+                    <Button type="button" size="xs" icon="plus" data-add-agent={workspace.id} className="shrink-0 whitespace-nowrap" onClick={() => onAddAgent(workspace.id)}>Add an agent</Button>
+                    {faults?.[workspace.id]?.kind === 'folder' ? <Button type="button" size="xs" variant="ghost" icon="triangle-alert" data-action="locate-folder" title="Locate folder" className="shrink-0 whitespace-nowrap" onClick={() => onLocateFolder?.(workspace.id)}>Locate folder</Button> : null}
+                </span>
+                {faults?.[workspace.id]?.kind === 'folder' ? null
                     : faults?.[workspace.id] ? <><span data-workspace-fault={faults[workspace.id]!.repo} className="text-[var(--warning)]">{faults[workspace.id]!.text}</span><Button type="button" size="xs" variant="ghost" icon="triangle-alert" data-action="locate-repo" onClick={() => onLocateRepo?.(workspace.id, faults[workspace.id]!.repo)}>Locate repo</Button></> : null}
             </div>)}
             <MailSignalLayer signals={mailSignals ?? []} />
