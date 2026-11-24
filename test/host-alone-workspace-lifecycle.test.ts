@@ -99,6 +99,7 @@ const CALLS: Array<[RemoteMethod, () => unknown[]]> = [
     ['workspaces.removeRepo', () => ['nowhere', 'x']],
     ['workspaces.removeRepoLock', () => ['nowhere', 'x']],
     ['workspaces.locateRepo', () => ['nowhere', 'x', join(dir, 'x')]],
+    ['workspaces.relocate', () => ['nowhere', join(dir, 'x')]],
     ['workspaces.setGoverns', () => ['tynn', []]],
     ['workspaces.setDefaultAgent', () => ['tynn', null]],
     ['workspaces.setColor', () => ['tynn', '#112233']],
@@ -113,6 +114,28 @@ describe('each is answered with no window', () => {
     it.each(CALLS)('%s reaches genie-host, not the "open a window" refusal', async (method, args) => {
         const api = gate(hostAloneApi(ports()));
         await expect(api.invoke(method, args())).resolves.toBeDefined();
+    });
+});
+
+describe('locating a workspace\'s folder (host split P7)', () => {
+    it('only the record\'s path changes, the missing look is asked for again, and it survives reopening', async () => {
+        const recheckMissing = vi.fn(async () => {});
+        const api = gate(hostAloneApi(ports({}, { recheckMissing })));
+        const before = registry.workspaceStates().find((w) => w.id === 'tynn')!;
+        expect(before.path).toBe(workspace);
+        expect(await api.invoke('workspaces.relocate', ['tynn', extra])).toEqual({ ok: true, path: extra });
+        expect(registry.workspaceStates().find((w) => w.id === 'tynn')).toEqual({ ...before, path: extra });
+        expect(recheckMissing).toHaveBeenCalledTimes(1);
+        expect((await reopened()).workspace('tynn')).toMatchObject({ id: 'tynn', path: extra, asleep: false });
+    });
+
+    it('a folder that is not there is refused in words, and nothing changes', async () => {
+        const recheckMissing = vi.fn(async () => {});
+        const api = gate(hostAloneApi(ports({}, { recheckMissing })));
+        const gone = join(dir, 'nothing-here');
+        expect(await api.invoke('workspaces.relocate', ['tynn', gone])).toEqual({ ok: false, reason: `${gone} does not exist, or is not a folder` });
+        expect(recheckMissing).not.toHaveBeenCalled();
+        expect((await reopened()).workspace('tynn')).toMatchObject({ path: workspace });
     });
 });
 

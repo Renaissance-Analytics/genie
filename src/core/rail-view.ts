@@ -47,6 +47,8 @@ export interface RailWorkspace {
     mcpSeen?: readonly string[];
     /** Its colour (genie#1300): project.json `appearance.color`, `#rrggbb`. Absent = none known yet. */
     color?: string;
+    /** Its recorded folder is not there now (host split P7): still listed, its agents not started, "Locate folder" offered. Absent = there. */
+    missing?: true;
 }
 
 export interface RailItem {

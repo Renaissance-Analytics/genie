@@ -138,7 +138,7 @@ import { GAppPreviews } from './gapp-previews.js';
 import { runV1FlowImport } from './v1-flows.js';
 import { moveScheduledTasksOutOfFlows } from './scheduled-tasks-move.js';
 import { startForWork } from './start-on-demand.js';
-import { startRefusal } from './workspace-ops-host.js';
+import { missingFolderRefusal, startRefusal } from './workspace-ops-host.js';
 import { agentCapFrom, HUMAN } from '../core/inbox.js';
 import { limitOf } from '../core/shell-limits.js';
 import { resolveAddress as resolveOnRoster } from '../core/inbox.js';
@@ -256,6 +256,7 @@ import { ChatDraftStore } from './chat-draft-store.js';
 import { readV1Settings } from './v1-settings.js';
 import { Store } from './store.js';
 import { HostRegistry } from './host-registry.js';
+import { nodeMissingWorkspaces } from './missing-workspaces.js';
 import { hostAgentWake, wireHostMailWake } from './host-mail-wake.js';
 import { wireHostPlanKeepalive, type HostPlanKeepalive } from './host-plan-keepalive.js';
 import { IssueWatchService, TynnBoardHub } from './issue-watch-host.js';
@@ -470,6 +471,10 @@ async function main(): Promise<void> {
     if (safeMode.active()) void Promise.all([registryStore.readRunningAtQuit(), registryStore.readInterruptedAtQuit()]).then(([running, interrupted]) => safeMode.wasRunning([...running, ...interrupted]), () => {});
     const hostRegistry = new HostRegistry(registryStore);
     await hostRegistry.refresh();
+    // A workspace whose folder is gone is flagged missing, never dropped (P7): looked at now, at each registry write and on a timer.
+    const missingWorkspaces = nodeMissingWorkspaces(() => hostRegistry.workspaceStates(), say);
+    missingWorkspaces.onChange(() => { phoneRegistryNow?.touch(); });
+    void missingWorkspaces.start();
     bootStep('registry', stepAt);
     const hiddenWorkspaces = () => hostRegistry.workspaceStates().filter((w) => w.asleep === true).map((w) => w.id);
     own.knowledge.setHiddenWorkspaces(hiddenWorkspaces);
@@ -1778,6 +1783,9 @@ async function main(): Promise<void> {
     const trustRestart = async (id: AgentId): Promise<{ ok: true } | { ok: false; reason: string | null }> => {
         const record = hostRegistry.find(id);
         if (!record) return { ok: false, reason: null };
+        // Its workspace's folder is gone (P7): refused before the stop, so a running agent is left as it was.
+        const gone = missingFolderRefusal(missingWorkspaces, record);
+        if (gone !== null) return { ok: false, reason: gone };
         host.stop(id);
         const verdict = await host.ended(id);
         if (verdict && !verdict.verified && verdict.survivors.length > 0) return { ok: false, reason: `${record.name}'s previous run did not end, so it was not started again: ${verdict.reason}` };
@@ -1871,6 +1879,7 @@ async function main(): Promise<void> {
     phoneRegistry.setObservedProbe((id) => takeOverHost.probe(id));
     const workspaceColors = new WorkspaceColors({ fs: nodeEnvelopeFs(), writesAssigned: false, mayReadFolder: (path) => hostRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true, onChanged: () => phoneRegistry.touch() });
     phoneRegistry.setWorkspaceColorer((path) => workspaceColors.colorOf(path));
+    phoneRegistry.setMissingWorkspaces((id) => missingWorkspaces.isMissing(id));
     // THE DASHBOARD'S WORKSPACE COLOURS (Tynn #956): this machine's Dashboard is this registry's since Tynn #898 2d-4b, and no
     // pass ever ran here: every swatch blank, every comms arc the fallback violet. The window's pass, without writing the
     // colours it assigns (writesAssigned: false): the window writes those, and the same rail order assigns the same ones.
@@ -1914,6 +1923,8 @@ async function main(): Promise<void> {
     // is read with the estate, so a window already watching hears it now, not when something else happens to push.
     attachHost.onChange(() => { phoneTouch(); });
     stores.onEvent((event) => { if (event.store === 'registry') void phoneRegistry.refresh(); else phoneTouch(); });
+    // The registry was written (P7): a workspace added, or pointed at another folder, is looked at now.
+    stores.onEvent((event) => { if (event.store === 'registry') { void missingWorkspaces.check(); } });
     host.subscribe(() => phoneTouch());
     approvals.onChange(phoneTouch);
     takeOverHost.onChange(phoneTouch);
@@ -2169,7 +2180,7 @@ async function main(): Promise<void> {
         }),
         // ANY FILE IN A MESSAGE (Tynn #829), with no window connected: saved into the agent's workspace on this host.
         saveUploads: (record, files) => saveChatUploads({ workspace: uploadWorkspaceOf(hostRegistry.workspace(record.workspaceId), hostUntrustedNow(record)), files, now: new Date() }),
-        startRefusal: (r) => startRefusal({ registry: hostRegistry }, r, {
+        startRefusal: (r) => startRefusal({ registry: hostRegistry, missing: missingWorkspaces }, r, {
             running: hostRegistry.listAgents().filter((a) => a.workspaceId === r.workspaceId && host.probe(a.id)?.running === true).length,
             cap: agentCapFrom(settings.snapshotFor(r.workspaceId)),
         }),
@@ -2186,6 +2197,7 @@ async function main(): Promise<void> {
             tynn: () => tynnAccountNow,
             defaultEnvFile: () => { const v = settings.snapshot().default_env_file; return typeof v === 'string' ? v : ''; },
             stagingDirectory: () => hostScratch.directory(),
+            recheckMissing: () => missingWorkspaces.check(),
         },
         colors: workspaceColors,
         cloneOffers: { cloneOffers: (id) => cloneOffersService.call('list', [id]), applyOffer: (id, offerId) => cloneOffersService.call('apply', [id, offerId]) },
@@ -2365,7 +2377,7 @@ async function main(): Promise<void> {
                     start: async (id) => {
                         const record = hostRegistry.find(id);
                         if (!record) return false;
-                        const refusal = (r: AgentRecord) => startRefusal({ registry: hostRegistry }, r, {
+                        const refusal = (r: AgentRecord) => startRefusal({ registry: hostRegistry, missing: missingWorkspaces }, r, {
                             running: hostRegistry.listAgents().filter((a) => a.workspaceId === r.workspaceId && host.probe(a.id as AgentId)?.running === true).length,
                             cap: agentCapFrom(settings.snapshotFor(r.workspaceId)),
                         });
