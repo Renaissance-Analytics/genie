@@ -146,8 +146,15 @@ try {
     Step 'serve the feed, point the installed app at it'
     $feed = Start-Process -FilePath node -ArgumentList 'scripts\serve-feed.mjs', 'release', '8099' -PassThru `
         -RedirectStandardOutput feed.log -RedirectStandardError feed-err.log
-    Start-Sleep 2
-    $probe = Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8099/latest.yml'
+    # Asked until it answers, bounded (measured, 1124-000813-f161b2: as a CI row the feed was not up 2 s after its start).
+    $probe = $null
+    $feedUntil = (Get-Date).AddSeconds(60)
+    while (-not $probe -and (Get-Date) -lt $feedUntil) {
+        Start-Sleep 2
+        if ($feed.HasExited) { Get-Content feed.log, feed-err.log -ErrorAction SilentlyContinue; throw "the feed exited ($($feed.ExitCode))" }
+        try { $probe = Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8099/latest.yml' -TimeoutSec 5 } catch { $probe = $null }
+    }
+    if (-not $probe) { Get-Content feed.log, feed-err.log -ErrorAction SilentlyContinue; throw 'the feed did not answer on 127.0.0.1:8099 within 60 s' }
     Write-Output ("feed answers: " + $probe.StatusCode + " " + $probe.RawContentLength + " bytes")
     $cfg = Join-Path $installDir 'resources\app-update.yml'
     Write-Output "app-update.yml as shipped:"; Get-Content $cfg
