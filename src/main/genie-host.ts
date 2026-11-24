@@ -31,7 +31,8 @@ import { makeServiceExec } from './service-exec.js';
 import { doctorHoldNow } from './genie-running-file.js';
 import { openLifecycleLog } from './lifecycle-log.js';
 import { genieRoot, legacyProviderHomes, osaHomeDir, runtimeDir, sessionsDir, userHome } from './paths.js';
-import { writeDataRootManifest } from './data-root.js';
+import { attachDataRoot, machineMarkOf } from './data-root.js';
+import { AttachHost } from './attach-host.js';
 import { WorkspaceStorage, type ChatFile } from './workspace-storage-host.js';
 import { storageFeaturePort } from './storage-feature-port.js';
 import type { InUseFolder } from '../core/workspace-storage.js';
@@ -354,6 +355,9 @@ async function main(): Promise<void> {
     }
     const userKey = createHash('sha256').update(home).digest('hex').slice(0, 16);
     const endpoint = hostEndpoint(process.platform, runtime, userKey);
+    // This machine's id (P7.3), read while the endpoint is bound: the attach below asks whether the root's machine files are this machine's.
+    const thisMachineId = (): Promise<string | null> => readMachineId({ platform: process.platform, readFile: (path) => readFileText(path, 'utf8'), exec: (command, args) => execFileText(command, [...args], { timeoutMs: 10_000 }) });
+    const machineIdRead = thisMachineId();
 
     // ONE HOST PER USER, by the endpoint: bound FIRST, before anything is swept or spawned. A second host finds it taken
     // and leaves the running one alone (Genie 1 genie#774: a second host over a live one took the fleet down).
@@ -370,8 +374,11 @@ async function main(): Promise<void> {
     const pipeAcl = await restrictHostPipe(server, endpoint);
     if (pipeAcl?.ok === true) lifecycleLog(`host pipe: its user and SYSTEM only (${pipeAcl.sddl})`);
     else if (pipeAcl) { say(`the host pipe keeps Windows' default access: ${pipeAcl.reason}`); lifecycleLog(`host pipe: NOT restricted: ${pipeAcl.reason}`); }
-    // THE DATA ROOT'S MANIFEST (P7.2; data-root.ts): what in this root is state and what is this machine's, written by the host that holds the endpoint.
-    await writeDataRootManifest(home, build).catch((error: unknown) => { const line = `data root: the manifest was not written: ${error instanceof Error ? error.message : String(error)}`; say(line); lifecycleLog(line); });
+    // THE DATA ROOT, ATTACHED TO THIS MACHINE (P7.2, P7.3; data-root.ts), by the host that holds the endpoint and before any machine file is read:
+    // another machine's machine files are moved away, and the manifest (what is state, what is this machine's) is written.
+    const attached = await attachDataRoot(home, { build, machine: machineMarkOf(await machineIdRead), log: (line) => { say(line); lifecycleLog(line); } })
+        .catch((error: unknown) => { const line = `data root: not attached: ${error instanceof Error ? error.message : String(error)}`; say(line); lifecycleLog(line); return { kind: 'first' as const, moved: [], notRemoved: [], swept: Promise.resolve() }; });
+    void attached.swept;
     /*
      * SAFE MODE (Tynn #386; safe-mode-host.ts), opened here: only the host that holds the endpoint reads and removes the
      * clean-exit marker (a second host exited above, touching nothing). With no marker the last run did not end cleanly,
@@ -387,6 +394,14 @@ async function main(): Promise<void> {
     const crashState = new CrashStateHost(previousRunRecord(join(runtime, 'crash'), parseHostRecord(readOrNull(recordFile))?.startedAt ?? null));
     // THE KEYCHAIN (P3.4 cut a): said in the log, off the boot path. No OS keychain refuses secrets; it never stops the host.
     const keychain = secrets.keychain;
+    // WHAT COULD NOT BE RESTORED (P7.3; attach-host.ts), opened before the mail service and proof-of-done make their keys again.
+    const attachHost = await AttachHost.open({
+        file: join(runtime, 'attach-report.json'),
+        attach: attached,
+        secrets: keychain,
+        mailInboxIds: async () => { const book = JSON.parse(await readFileText(join(runtime, 'mail-inboxes.json'), 'utf8')) as { inboxes?: Array<{ id?: unknown; name?: unknown }> }; return (book.inboxes ?? []).filter((i) => i.name === 'default' && typeof i.id === 'string').map((i) => i.id as string); },
+        log: (line) => { say(line); lifecycleLog(line); },
+    });
     const keychainOpening = openHostKeychain({ keychain, backend: secrets.kind });
     void keychainOpening.then((opened) => { const line = `keychain: ${opened.state()}`; say(line); lifecycleLog(line); }, (error: unknown) => { const line = `keychain: could not open: ${error instanceof Error ? error.message : String(error)}`; say(line); lifecycleLog(line); });
     /*
@@ -1869,7 +1884,7 @@ async function main(): Promise<void> {
         // What its hosting asks, and what waits for a window to ask it in (WindowElevation): before the split a window read the
         // latter from the hosting replica's dump; genie-host's own Deck says it now, to deck.watch and every client (2g-4d E2b).
         trust: [...(hostingStack?.trustDeckItems() ?? []), ...hostingElevation.deckItems()],
-        notices: [...limitNotices.items(Date.now()), ...playwrightInstaller.items(), ...stalledTurns.items()],
+        notices: [...attachHost.items(), ...limitNotices.items(Date.now()), ...playwrightInstaller.items(), ...stalledTurns.items()],
         attention: own.attention,
         inbox: own.inbox,
         agents: phoneAgents(), workspaceColor: path => workspaceColors.colorOf(path),
@@ -1895,6 +1910,9 @@ async function main(): Promise<void> {
     hostingStack?.onFrontDoorChange(() => { phoneTouch(); });
     // An elevation that starts or stops waiting for a window: the Deck says it (2g-4d E2b).
     hostingElevation.onChange(() => { phoneTouch(); });
+    // What could not be restored (P7.3) changed: a sign-in landed, an item was put away, the first look finished. The Deck
+    // is read with the estate, so a window already watching hears it now, not when something else happens to push.
+    attachHost.onChange(() => { phoneTouch(); });
     stores.onEvent((event) => { if (event.store === 'registry') void phoneRegistry.refresh(); else phoneTouch(); });
     host.subscribe(() => phoneTouch());
     approvals.onChange(phoneTouch);
@@ -2011,7 +2029,7 @@ async function main(): Promise<void> {
         featureChanges.add(listener);
         const offs = [featureTynn.onEvent(listener), featureGithub.onEvent(listener), featureKeyring.onEvent(listener),
             pluginsService.onEvent(listener), catalogService.onEvent(listener), remoteAccessHost.onChange(listener),
-            own.attention.onChange(listener), limitNotices.onChange(listener), playwrightInstaller.onChange(listener), stalledTurns.onChange(listener), approvals.onChange(listener), stores.onEvent(listener)];
+            own.attention.onChange(listener), limitNotices.onChange(listener), playwrightInstaller.onChange(listener), stalledTurns.onChange(listener), attachHost.onChange(listener), approvals.onChange(listener), stores.onEvent(listener)];
         return () => { featureChanges.delete(listener); for (const off of offs) off(); };
     };
     hostFeatures = new HostFeatures({ lifecycleLog, signIn: (provider, context) => signIns.loginFor(provider, context), slowPart: { ms: 1_000, log: (part, ms) => lifecycleLog(`features slow part=${part} ms=${ms}`) }, settings, knowledge: own.knowledge, inbox: own.inbox, attention: own.attention, flows: hostFlows,
@@ -2044,6 +2062,7 @@ async function main(): Promise<void> {
             dismiss: async () => { crashState.dismiss(); return { ok: true }; }, stopAll: async () => { await host.stopAll(); return { ok: true }; } } },
         deck: { attention: own.attention, approvals, inbox: own.inbox, deckItems: featureDeckItems,
             limitNotices,
+            attach: attachHost,
             playwrightNotices: { retry: (id) => playwrightInstaller.retry(id), dismiss: (id) => playwrightInstaller.dismiss(id) },
             // A stalled turn's Stop / Restart / Dismiss (Tynn #855): on this host's session host; Restart is the one Restart.
             stalledTurns: { act: async (agentId, action) => {
@@ -2270,8 +2289,30 @@ async function main(): Promise<void> {
         cwdFor: (record) => hostRegistry.workspace(record.workspaceId)?.path ?? osaHome,
         log: say,
     });
+    // The accounts and services exist: what the keychain no longer holds is said now, and looked at again when a sign-in lands.
+    void attachHost.wire({
+        tynn: () => (tynnAccountNow ? { onRecord: tynnAccountNow.savedUserId() !== null || tynnAccountNow.status().signedIn, signedIn: tynnAccountNow.status().signedIn } : null),
+        githubLogin: () => githubAccountNow?.view().user?.login ?? null,
+        agentKeyIds: () => agentKeys.lostKeys.ids(),
+        workstation: async () => ({ id: await workstationService.recorded(TYNN_HOST), secret: `workstation/${TYNN_HOST}` as const }),
+        deviceUrls: () => deviceTokenStore(join(runtime, 'device-hosts.json'), keychain).hosts(),
+        sites: () => hostingStack?.sites.list().length ?? 0,
+        engines: () => hostingStack?.engines.list().length ?? 0,
+        tynnWorkstationsUrl: `${TYNN_HOST}/account/workstations`,
+        act: {
+            tynnSignIn: async () => { await (await tynnOpening).startSignIn(); },
+            githubSignIn: async () => { await (await githubOpening).startSignIn(); },
+            agentKeys: async () => { const made = await agentKeys.lostKeys.forget(); void tynnRecovery?.recover(); tynnRecovery?.kick(); return { ok: true, made }; },
+            workstationRegister: () => workstationService.registerAgain(TYNN_HOST),
+        },
+    });
+    void githubOpening.then((account) => { account.onChange(() => { void attachHost.refresh(); }); void attachHost.refresh(); }, () => {});
+    void keychainOpening.then((opened) => { opened.keychain.onAnswerChange(() => { void attachHost.refresh(); }); }, () => {});
     void tynnOpening.then((account) => {
         account.onChange(() => { void tynnRecovery?.recover(); });
+        // A sign-in landed, or a sign-out: what is missing is looked at again (P7.3).
+        account.onChange(() => { void attachHost.refresh(); });
+        void attachHost.refresh();
         // Agents may have started while it opened.
         void tynnRecovery?.recover();
         tynnRecovery?.kick();
@@ -2288,7 +2329,8 @@ async function main(): Promise<void> {
     void tynnOpening.then((account) => {
         clocks.push(startProofOfDone({
             file: join(home, 'proof-of-done-notes.json'),
-            keychain,
+            // The signing key is written only when a new one is made: on a rebuilt machine that is said (P7.3; attach-host.ts).
+            keychain: { get: (name) => keychain.get(name), set: async (name, value) => { const kept = await keychain.set(name, value); if (kept.ok) void attachHost.noteProofKeyMade(); return kept; } },
             tynn: { signedIn: () => account.status().signedIn === true, userId: () => account.userId(), credentialId: () => account.credentialId(), request: (path, init) => account.request(path, init) },
             // Its signal withdraws the card when Tynn stops listing the claim as waiting (Tynn #858).
             approve: podApproval(approvals, podCaller),

@@ -27,6 +27,8 @@ export interface HostAgentKeysResult {
 export type HostAgentKeys = ((agent: AgentRecord, cwd: string, signal?: AbortSignal) => Promise<HostAgentKeysResult>) & {
     recovery(options?: { readonly secretsMoved?: boolean }): Promise<string[]>;
     waiting(): boolean;
+    /** The keys the keychain lost: their ids on record, and forgetting them so each agent's next start mints one (P7.3). */
+    readonly lostKeys: { ids(): Promise<string[]>; forget(): Promise<number> };
 };
 
 export function hostAgentKeys(options: HostAgentKeysOptions): HostAgentKeys {
@@ -44,5 +46,5 @@ export function hostAgentKeys(options: HostAgentKeysOptions): HostAgentKeys {
         options.onPrepared?.();
         return { servers, note: prep.note(agent.id) };
     };
-    return Object.assign(read, { recovery: prep.recovery, waiting: prep.waiting });
+    return Object.assign(read, { recovery: prep.recovery, waiting: prep.waiting, lostKeys: prep.lostKeys });
 }

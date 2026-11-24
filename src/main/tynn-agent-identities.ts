@@ -219,6 +219,37 @@ export function tynnAgentIdentities(ports: AgentCredentialPorts) {
                 },
             }));
         },
+        /**
+         * KEYS THE KEYCHAIN LOST (P7.3: a rebuilt machine has an empty keychain). `ids`: the public ids on record as ready,
+         * for whoever asks the keychain whether each is held. `forget`: THE EXPLICIT RENEWAL the rest of this file asks for:
+         * the person said to make new keys, so each ready record whose key the keychain answers is MISSING (never one it
+         * could not read) is taken off record; that agent's next `ensure` finds its identity in Tynn and mints one key, by
+         * the same path as a first key. The lost key is not revoked here: it stays listed in Tynn until the person does.
+         */
+        lostKeys: {
+            async ids(): Promise<string[]> {
+                const records = await load();
+                return Object.values(records).filter((r) => object(r) && r.state === 'ready' && typeof r.publicId === 'string').map((r) => r.publicId!);
+            },
+            forget(): Promise<number> {
+                const run = async (): Promise<number> => {
+                    if (!(await ports.secrets.probe()).ok) return 0;
+                    const records = await load();
+                    const kept: Record<string, Stored> = {};
+                    let lost = 0;
+                    for (const [key, record] of Object.entries(records)) {
+                        if (object(record) && record.state === 'ready' && typeof record.publicId === 'string' && (await ports.secrets.get(agentEntry(record.publicId))).kind === 'missing') { lost += 1; continue; }
+                        kept[key] = record;
+                    }
+                    if (lost > 0) {
+                        try { await writePrivateCredential(ports.file, JSON.stringify({ version: 1, records: kept })); }
+                        catch { throw new ProvisionFailure('storage', 'The private Tynn agent vault could not be saved. No key was made again.'); }
+                    }
+                    return lost;
+                };
+                const work = writes.then(run, run); writes = work.catch(() => {}); return work;
+            },
+        },
         ensure(input: { projectId: string; agent: AgentRecord; tynn: TynnSessionPort | null; signal?: AbortSignal }): Promise<TynnAgentToken> {
             // Signed in: Tynn is asked first, as always. Not (yet) signed in: only the saved account's stored key (genie#1234).
             const signedIn = input.tynn?.status().signedIn === true;

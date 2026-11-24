@@ -4,6 +4,7 @@ import { ELEVATION_WAITING_DECK_ID } from './elevation-waiting.js';
 import { HOSTS_APPROVAL_DECK_ID, HOSTS_APPROVE_OPTION, HOSTS_LATER_OPTION } from './hosts-approval.js';
 import { MAIN_ERROR_DECK_PREFIX } from './main-errors.js';
 import { SITE_REACH_DECK_PREFIX, SITE_REACH_LATER_OPTION, SITE_REACH_OPEN_OPTION, siteReachUrl } from './site-reach.js';
+import { ATTACH_DECK_PREFIX } from './attach-report.js';
 import { LIMIT_NOTICE_DECK_PREFIX } from './limit-alerts.js';
 import { PLAYWRIGHT_NOTICE_DECK_PREFIX } from './playwright-managed.js';
 import { STALLED_DECK_PREFIX } from './hung-call.js';
@@ -45,6 +46,8 @@ export type DeckCommand =
     | { kind: 'dismiss-limit-alert'; id: string }
     /** A Playwright install Genie could not finish (main/playwright-auto.ts, Tynn #846): Retry installs it again, Dismiss puts it away. */
     | { kind: 'playwright-install'; id: string; retry: boolean }
+    /** Something a host could not restore on a rebuilt machine (core/attach-report.ts, Tynn #419): its action, or Dismiss. */
+    | { kind: 'attach'; id: string; optionId: string }
     /** A turn Genie ended as stalled (core/hung-call.ts, Tynn #855): Stop the agent, Restart it, or put the item away. */
     | { kind: 'stalled-turn'; agentId: string; action: 'stop' | 'restart' | 'dismiss' }
     /** Open an editable issue draft for an internal error; the diagnostic log stays local (#636). */
@@ -196,6 +199,7 @@ export function resolveDeckAnswer(item: DeckItem, optionId: string, note = ''): 
                 if (optionId === COPY_DETAIL_OPTION) return refuse('the block is copied in the window that shows it; nothing was answered');
             }
             if (item.id.startsWith(LIMIT_NOTICE_DECK_PREFIX)) return { kind: 'dismiss-limit-alert', id: item.id };
+            if (item.id.startsWith(ATTACH_DECK_PREFIX)) return { kind: 'attach', id: item.id, optionId };
             if (item.id.startsWith(STALLED_DECK_PREFIX)) {
                 const agentId = item.id.slice(STALLED_DECK_PREFIX.length);
                 if (agentId === '') return refuse(`${item.id} names no agent`);
