@@ -12,7 +12,7 @@ import { schedulesIn } from './flow-store.js';
 
 export interface FlowsDump {
     /** Each flow, and why it is held when its workspace is not trusted now (`held`, Tynn #364). */
-    readonly flows: readonly (FlowRecord & { readonly held?: string })[];
+    readonly flows: readonly FlowRecord[];
     readonly inFlight: number;
 }
 

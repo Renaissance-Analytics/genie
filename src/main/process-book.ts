@@ -367,7 +367,7 @@ export class ProcessBook {
             const live = new Map(this.#deps.supervisor.list(workspaceId).map((s) => [s.id, s.state]));
             for (const p of mine) {
                 const state = live.get(p.id);
-                const running = state === 'running' || state === 'restarting' || state === 'starting';
+                const running = state === 'running' || state === 'restarting';
                 if (!p.schedule && p.wanted && (running || this.#heldBack.has(p.id))) this.#heldForTrust.add(p.id);
                 if (running) this.#deps.supervisor.stop(p.id);
                 if (p.wanted || running) this.#heldBack.set(p.id, UNTRUSTED_REASON);
@@ -426,7 +426,9 @@ export class ProcessBook {
         const live = this.#deps.supervisor.list(workspaceId).filter((s) => byId.has(s.id));
         const withSchedule = (p: KeptProcess) => { const v = this.#scheduleView(p); return v ? { schedule: v } : {}; };
         const keptTail = (id: string) => { const log = this.#deps.logs?.read(id, ROW_LOG_LINES); return log && log.lines > 0 ? { log } : {}; };
-        const rows: HostedProcess[] = live.map((s) => ({ ...s, durable: true, command: byId.get(s.id)!.command, ...withSchedule(byId.get(s.id)!) }));
+        // A row the supervisor still lists but that is not running, in a workspace not trusted now, says so too (Tynn #364).
+        const heldNow = (s: ProcessStatus) => (s.state !== 'running' && s.state !== 'restarting' && this.#trust(s.workspaceId) === 'untrusted' ? { reason: UNTRUSTED_REASON } : {});
+        const rows: HostedProcess[] = live.map((s) => ({ ...s, ...heldNow(s), durable: true, command: byId.get(s.id)!.command, ...withSchedule(byId.get(s.id)!) }));
         const seen = new Set(live.map((s) => s.id));
         for (const p of this.#data.processes) {
             if (seen.has(p.id) || (workspaceId !== undefined && p.workspaceId !== workspaceId)) continue;

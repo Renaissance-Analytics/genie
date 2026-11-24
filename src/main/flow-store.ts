@@ -136,6 +136,8 @@ export interface FlowRecord {
     readonly inFlight?: FlowInFlight;
     /** Set on a flow an earlier beta brought over from Genie 1's scheduled tasks; moved to the processes (scheduled-tasks-move.ts). */
     readonly importedFrom?: { readonly v1SpecId: string };
+    /** Why it does not fire now ("held: workspace not trusted", Tynn #364): set on the host's list (flows-host.ts), never stored. */
+    readonly held?: string;
 }
 
 /**

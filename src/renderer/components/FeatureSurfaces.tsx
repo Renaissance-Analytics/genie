@@ -215,6 +215,8 @@ export function FlowRow({ flow: f, workspaces, now, confirming, onAction, onAsk 
             <Button size="xs" type="button" data-flow-open={f.id} className="font-medium" title="Open on the canvas" onClick={open}>{f.name}</Button>
             <span className="font-mono text-xs text-[var(--fg-4)]">{workspaceLabel(workspaces, f.workspaceId)}</span>
             {f.refusals.length > 0 ? <Badge color="amber" variant="soft" size="sm">{f.refusals.length} refused</Badge> : null}
+            {/* Held by its workspace's verdict (Tynn #364): armed or not, it fires nothing until the workspace is trusted. */}
+            {f.held ? <span data-flow-held className="text-xs text-[var(--danger)]">{f.held}</span> : null}
             {last ? (
                 <span data-flow-last={last.outcome} className="flex items-center gap-1 text-xs text-[var(--fg-3)]">
                     <Badge color={OUTCOME_COLOR[last.outcome]} variant="soft" size="sm">{outcomeLabel(last)}</Badge>

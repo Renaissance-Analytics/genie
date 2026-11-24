@@ -191,6 +191,8 @@ describe('flows', () => {
         const file = await r.store.create({ workspaceId: 'tynn', name: 'on a file', document: fileDoc, by: user, armed: true });
         r.verdict.now = 'untrusted';
         await r.store.markInFlight(file.id, { at: new Date().toISOString(), trigger: 'manual', nodes: { t: 'ran' } });
+        // Each create and mark planned already (the store's onChange): only the timers armed from here count.
+        r.armed.length = 0;
         r.scheduler.plan();
         expect(r.armed).toEqual([]);
         expect(r.scheduler.nextDue()).toBeNull();
@@ -208,6 +210,7 @@ describe('flows', () => {
         await r.store.create({ workspaceId: 'tynn', name: 'minutely', document: scheduleDoc, by: user, armed: true });
         await r.store.create({ workspaceId: 'tynn', name: 'on a file', document: fileDoc, by: user, armed: true });
         r.verdict.now = 'untrusted';
+        r.armed.length = 0;
         r.scheduler.plan();
         expect(r.armed).toEqual([]);
         r.verdict.now = 'trusted';
