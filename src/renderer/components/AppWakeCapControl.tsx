@@ -4,8 +4,8 @@ import { APP_LIMITS, parseAppWakeCap, type AppWakeCap } from '../../core/app-inb
 
 /**
  * THE APP WAKE CAP, IN THE AGENT'S SETTINGS (Tynn #1053): how many turns an hour mail from the workspace's apps may give
- * this agent — a number, or no limit. One row on General: the number, Set, a "No limit" switch and one line saying what
- * it is. It draws the cap the host answered (the agent's detail) and keeps only what is being typed; a number the host
+ * this agent — a number, or no limit. One row on General: the number, Set, a "No limit" switch and, on a line of its own
+ * under them, one sentence saying what the number means (wrapping, never cut off). It draws the cap the host answered (the agent's detail) and keeps only what is being typed; a number the host
  * would refuse is not sent, and the row says why in the host's own words (`parseAppWakeCap`). "No limit" sends the word
  * `unlimited`, never a zero or a blank.
  */
@@ -33,7 +33,7 @@ export function AppWakeCapControl({ agentName, cap, onSet, outcome }: AppWakeCap
         if (unlimited || !changed || !parsed.ok) return;
         onSet(parsed.cap);
     };
-    const help = `Mail from this workspace’s apps gives ${agentName} at most this many turns an hour; more of it waits, and none is lost.`;
+    const help = `How many times an hour mail from this workspace’s apps may start a turn for ${agentName}. Mail is kept either way.`;
 
     return (
         <div data-settings-row="app-wake-cap" data-app-wake-cap={String(cap)} className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--border-1)] py-2 last:border-b-0">
@@ -60,8 +60,9 @@ export function AppWakeCapControl({ agentName, cap, onSet, outcome }: AppWakeCap
                 No limit
             </span>
             {refusal ? <span data-app-wake-cap-refusal="" className="text-[11px] text-[var(--warning)]">{refusal}</span> : null}
-            <span data-app-wake-cap-help="" className="min-w-0 flex-1 truncate text-[11px] text-[var(--fg-4)]" title={help}>{help}</span>
             {outcome}
+            {/* A line of its own under the controls, whole: it wraps in a narrow settings column and is never cut off. */}
+            <p data-app-wake-cap-help="" className="m-0 basis-full text-[11px] leading-snug text-[var(--fg-4)]">{help}</p>
         </div>
     );
 }
