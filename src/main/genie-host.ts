@@ -1910,6 +1910,9 @@ async function main(): Promise<void> {
     hostingStack?.onFrontDoorChange(() => { phoneTouch(); });
     // An elevation that starts or stops waiting for a window: the Deck says it (2g-4d E2b).
     hostingElevation.onChange(() => { phoneTouch(); });
+    // What could not be restored (P7.3) changed: a sign-in landed, an item was put away, the first look finished. The Deck
+    // is read with the estate, so a window already watching hears it now, not when something else happens to push.
+    attachHost.onChange(() => { phoneTouch(); });
     stores.onEvent((event) => { if (event.store === 'registry') void phoneRegistry.refresh(); else phoneTouch(); });
     host.subscribe(() => phoneTouch());
     approvals.onChange(phoneTouch);
