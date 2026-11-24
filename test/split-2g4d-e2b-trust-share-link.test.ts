@@ -50,8 +50,13 @@ let dir: string;
 let devices: DeviceStore;
 let admit: (who: PreAuth, auth: 'local' | 'relay') => Promise<ReturnType<typeof client>>;
 
+/** What the trust said and when, from this case's fixture on: printed with a failed "unchanged" (the Windows red). */
+let history: string[] = [];
 beforeEach(async () => {
+    const t0 = Date.now();
     f = await workspaceCallerFixture();
+    history = [`fixture ready +${Date.now() - t0} ms: trusted=${String(f.hosting.trust.view('work')?.trusted)} record=${JSON.stringify(f.hosting.envelopeSites.trustRecord())}`];
+    f.hosting.trust.onVerdict((id) => { history.push(`+${Date.now() - t0} ms verdict ${id}: trusted=${String(f.hosting.trust.view(id)?.trusted)} record=${JSON.stringify(f.hosting.envelopeSites.trustRecord())}`); });
     dir = await mkdtemp(join(tmpdir(), 'genie-e2b-trust-guard-'));
     devices = await DeviceStore.open(dir, { now: () => 1_000_000, random: () => 'tok' });
     const accept: Array<(c: ReturnType<typeof inMemoryPair>['server'] & { remoteAddress: string; preAuth: PreAuth }) => void> = [];
@@ -108,10 +113,14 @@ describe('Trust and Untrust over the protocol: the owner’s own Genie and devic
     for (const [name, who] of [['a share link to this workspace, with write access', SHARE_WORKSPACE], ['a share link to the whole host, with write access', SHARE_HOST]] as const) {
         it(`${name}: Trust is refused in words, nothing is written, the verdict is unchanged`, async () => {
             const c = await admit(who, 'relay');
+            // The trust record itself, at the store (envelope-sites' book), before the call: nothing of it may move.
+            const recordBefore = JSON.stringify(f.hosting.envelopeSites.trustRecord());
             const answer = await c.call('features.act', trust());
             expect(answer).toMatchObject({ ok: false });
             expect((answer as { reason: string }).reason).toMatch(/only its owner can|a shared workspace cannot/);
-            expect(trustOf(f)).toBe(false);
+            expect(JSON.stringify(f.hosting.envelopeSites.trustRecord())).toBe(recordBefore);
+            expect(f.hosting.envelopeSites.trustRecord().workspaces.work).toBeUndefined();
+            expect(trustOf(f), `the verdict's history:\n${history.join('\n')}\nnow: ${JSON.stringify(f.hosting.trust.view('work'))}`).toBe(false);
             expect(f.order).toEqual([]);
             expect(f.trust).not.toHaveBeenCalled();
             expect(f.docs).not.toHaveBeenCalled();
