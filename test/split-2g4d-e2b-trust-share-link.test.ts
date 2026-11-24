@@ -52,6 +52,8 @@ let admit: (who: PreAuth, auth: 'local' | 'relay') => Promise<ReturnType<typeof 
 
 /** What the trust said and when, from this case's fixture on: printed with a failed "unchanged" (the Windows red). */
 let history: string[] = [];
+/** The message of every verdict check in this file: whichever case goes red names the writer and the moment. */
+const said = () => `the verdict's history:\n${history.join('\n')}\nnow: ${JSON.stringify(f.hosting.trust.view('work'))} record=${JSON.stringify(f.hosting.envelopeSites.trustRecord())}`;
 beforeEach(async () => {
     const t0 = Date.now();
     f = await workspaceCallerFixture();
@@ -96,18 +98,18 @@ const untrust = () => ({ kind: 'workspace.untrust', workspaceId: 'work' });
 describe('Trust and Untrust over the protocol: the owner’s own Genie and devices, never a share link', () => {
     it('the owner’s own Genie (this machine’s window): Trust is recorded, and Genie’s files go in', async () => {
         const c = await admit(OWN_WINDOW, 'local');
-        expect(trustOf(f)).toBe(false);
+        expect(trustOf(f), said()).toBe(false);
         expect(await c.call('features.act', trust())).toMatchObject({ ok: true });
-        expect(trustOf(f)).toBe(true);
+        expect(trustOf(f), said()).toBe(true);
         expect(f.order).toEqual(['trust', 'docs:you', 'config:you']);
     });
 
     it('the owner’s own paired device: Trust is recorded, then Untrust withdraws it', async () => {
         const c = await admit(OWN_DEVICE, 'relay');
         expect(await c.call('features.act', trust())).toMatchObject({ ok: true });
-        expect(trustOf(f)).toBe(true);
+        expect(trustOf(f), said()).toBe(true);
         expect(await c.call('features.act', untrust())).toMatchObject({ ok: true });
-        expect(trustOf(f)).toBe(false);
+        expect(trustOf(f), said()).toBe(false);
     });
 
     for (const [name, who] of [['a share link to this workspace, with write access', SHARE_WORKSPACE], ['a share link to the whole host, with write access', SHARE_HOST]] as const) {
@@ -120,7 +122,7 @@ describe('Trust and Untrust over the protocol: the owner’s own Genie and devic
             expect((answer as { reason: string }).reason).toMatch(/only its owner can|a shared workspace cannot/);
             expect(JSON.stringify(f.hosting.envelopeSites.trustRecord())).toBe(recordBefore);
             expect(f.hosting.envelopeSites.trustRecord().workspaces.work).toBeUndefined();
-            expect(trustOf(f), `the verdict's history:\n${history.join('\n')}\nnow: ${JSON.stringify(f.hosting.trust.view('work'))}`).toBe(false);
+            expect(trustOf(f), said()).toBe(false);
             expect(f.order).toEqual([]);
             expect(f.trust).not.toHaveBeenCalled();
             expect(f.docs).not.toHaveBeenCalled();
@@ -133,7 +135,7 @@ describe('Trust and Untrust over the protocol: the owner’s own Genie and devic
             const answer = await c.call('features.act', untrust());
             expect(answer).toMatchObject({ ok: false });
             expect((answer as { reason: string }).reason).toMatch(/only its owner can|a shared workspace cannot/);
-            expect(trustOf(f)).toBe(true);
+            expect(trustOf(f), said()).toBe(true);
             expect(f.untrust).not.toHaveBeenCalled();
         });
     }
