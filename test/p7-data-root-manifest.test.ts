@@ -25,8 +25,8 @@ import { restrictPrivateFile } from '../src/main/private-credentials.js';
  * A new store in no list fails 1 or 2 where it is written, and 3 when it is written at start.
  */
 
-interface Rule { readonly path: string; readonly kind: 'state' | 'machine'; readonly holds: string; readonly travels?: boolean; readonly names?: readonly string[]; readonly atStart?: boolean }
-interface Manifest { readonly format: number; readonly build: string; readonly writtenOn: string | null; readonly state: ReadonlyArray<{ readonly path: string; readonly travels: boolean }>; readonly machine: readonly string[] }
+interface Rule { readonly path: string; readonly kind: 'state' | 'machine'; readonly holds: string; readonly travels?: boolean; readonly names?: readonly string[]; readonly atStart?: boolean; readonly transient?: readonly string[] }
+interface Manifest { readonly format: number; readonly build: string; readonly writtenOn: string | null; readonly state: ReadonlyArray<{ readonly path: string; readonly travels: boolean; readonly transient?: readonly string[] }>; readonly machine: readonly string[] }
 interface DataRootModule {
     DATA_ROOT_FILE: string;
     DATA_ROOT_FORMAT: number;
@@ -123,10 +123,56 @@ describe('the two lists', () => {
         }
         expect(classifyDataPath('runtime/knowledge.db-wal')?.path).toBe('runtime/knowledge.db');
         expect(classifyDataPath('runtime/knowledge.db-shm')?.kind).toBe('state');
-        // Inside a folder a rule lists whole, everything is the folder's: a leftover there is not sorted out one by one.
-        expect(classifyDataPath('credentials/tynn.json.0f8fad5b-d9cb-469f-a165-70867728950e.tmp')?.path).toBe('credentials/');
+        // Inside a folder a rule lists whole, what the folder's rule NAMES as transient is machine (the next block); anything
+        // else in it is the folder's.
+        expect(classifyDataPath('credentials/tynn.json.0f8fad5b-d9cb-469f-a165-70867728950e.tmp')?.kind).toBe('machine');
+        expect(classifyDataPath('credentials/tynn.json.bak')?.path).toBe('credentials/');
         // Control: the leftover rule is for a LISTED file's leftovers only.
         expect(classifyDataPath('runtime/a-new-store.json.4242.17.tmp')).toBeNull();
+    });
+});
+
+/**
+ * A LOCK IS NOT STATE (gate 1124-052313-102a95, Linux: the threads folder held `<hash>.json.lock.candidate-<hex>` for a
+ * moment, a lock being taken, and a listing of "the state" read it). `runtime/sessions/` is state as a whole folder, so
+ * everything in it was state, and travelled: a rebuild, or a bundle for another workstation, would copy another process's
+ * lock. A state folder's rule now names what in it is TRANSIENT (a lock, a lock being taken, a write's temp file): those
+ * are machine, wherever in the folder they are, and the manifest says the patterns to whoever copies the State list.
+ */
+describe('what a lock or a write leaves inside a state folder is machine, not state', () => {
+    const HASH = '5ab2ad554899ec5e4af1175766e17108';
+
+    it('in the threads folder: a lock, a lock being taken and a temp file are machine; the thread, its index and what was attached are state', async () => {
+        const { classifyDataPath } = await dataRoot();
+        for (const transient of [`runtime/sessions/${HASH}.json.lock`, `runtime/sessions/${HASH}.json.lock.candidate-e6c220b1dfe2b399f1836ae94215be80`,
+            `runtime/sessions/${HASH}.index.json.4242.tmp`, `runtime/sessions/${HASH}.segments.json.tmp`, `runtime/sessions/${HASH}/attachments.json.tmp`]) {
+            expect(classifyDataPath(transient)?.kind, transient).toBe('machine');
+        }
+        for (const kept of [`runtime/sessions/${HASH}.jsonl`, `runtime/sessions/${HASH}.index.json`, `runtime/sessions/${HASH}.segments.json`, `runtime/sessions/${HASH}/att-1.png`, `runtime/sessions/${HASH}/attachments.json`, 'runtime/sessions/']) {
+            expect(classifyDataPath(kept), kept).toMatchObject({ kind: 'state', travels: true, path: 'runtime/sessions/' });
+        }
+        // Not a lock, only named like one in passing: the name must END as a lock does.
+        expect(classifyDataPath(`runtime/sessions/${HASH}.lock.candidate-zz.jsonl`)?.kind).toBe('state');
+    });
+
+    it('a write\'s temp file in the mail and the credential folders is machine too; the mail and the pointers are state', async () => {
+        const { classifyDataPath } = await dataRoot();
+        for (const transient of ['runtime/inbox/attachments/ab12.0f8fad5b-d9cb-469f-a165-70867728950e.tmp', 'runtime/inbox/mail.json.4242.7.tmp', 'agent-credentials/agents.json.0f8fad5b-d9cb-469f-a165-70867728950e.tmp']) {
+            expect(classifyDataPath(transient)?.kind, transient).toBe('machine');
+        }
+        expect(classifyDataPath('runtime/inbox/mail.json')?.kind).toBe('state');
+        expect(classifyDataPath('runtime/inbox/attachments/ab12')?.kind).toBe('state');
+    });
+
+    it('CONTROL: only where a rule says so. A plugin\'s or a GApp\'s own files keep their names: yarn.lock and a .tmp of theirs are state', async () => {
+        const { classifyDataPath, DATA_ROOT_RULES } = await dataRoot();
+        expect(classifyDataPath('plugins/some-plugin/yarn.lock')).toMatchObject({ kind: 'state', path: 'plugins/' });
+        expect(classifyDataPath('gapps/pkg/storage/notes.tmp')).toMatchObject({ kind: 'state', path: 'gapps/' });
+        expect(classifyDataPath('browser/ws-1/main/LOCK.lock')?.kind).toBe('state');
+        // Said by state FOLDER rules only, each pattern anchored at the end of a name.
+        const saying = DATA_ROOT_RULES.filter((r) => r.transient !== undefined);
+        expect(saying.map((r) => r.path).sort()).toEqual(['agent-credentials/', 'credentials/', 'runtime/inbox/', 'runtime/sessions/']);
+        for (const r of saying) { expect(r.kind).toBe('state'); for (const pattern of r.transient!) { expect(pattern.endsWith('$'), pattern).toBe(true); expect(() => new RegExp(pattern)).not.toThrow(); } }
     });
 });
 
@@ -141,7 +187,10 @@ describe('the manifest', () => {
         expect(m.format).toBe(DATA_ROOT_FORMAT);
         expect(m.format).toBe(1);
         expect(m.build).toBe('2.0.0-beta.66+abc123');
-        expect(m.state).toEqual(DATA_ROOT_RULES.filter((r) => r.kind === 'state').map((r) => ({ path: r.path, travels: r.travels })));
+        expect(m.state).toEqual(DATA_ROOT_RULES.filter((r) => r.kind === 'state').map((r) => ({ path: r.path, travels: r.travels, ...(r.transient ? { transient: r.transient } : {}) })));
+        // What is transient inside a state folder is in the manifest, for whoever copies the State list (a rebuild, P8's bundle).
+        expect(m.state.find((s) => s.path === 'runtime/sessions/')?.transient?.length).toBeGreaterThan(0);
+        expect(m.state.filter((s) => s.transient !== undefined && !s.path.endsWith('/'))).toEqual([]);
         expect(m.machine).toEqual(DATA_ROOT_RULES.filter((r) => r.kind === 'machine').map((r) => r.path));
         expect(m.state.length + m.machine.length).toBe(DATA_ROOT_RULES.length);
         expect(m.state.length).toBeGreaterThan(15);
@@ -181,11 +230,11 @@ describe('the manifest', () => {
         expect(text).not.toContain(home.replace(/\\/g, '\\\\'));
         expect(text).not.toContain(tmpdir());
         // Every string in it is the build or a rule's path: nothing else can be in there.
-        const allowed = new Set<string>(['build-one', ...DATA_ROOT_RULES.map((r) => r.path)]);
+        const allowed = new Set<string>(['build-one', ...DATA_ROOT_RULES.map((r) => r.path), ...DATA_ROOT_RULES.flatMap((r) => r.transient ?? [])]);
         const strings: string[] = [];
         JSON.parse(text, (_key, value: unknown) => { if (typeof value === 'string') strings.push(value); return value; });
         expect(strings.filter((s) => !allowed.has(s))).toEqual([]);
-        expect(strings.length).toBe(DATA_ROOT_RULES.length + 1);
+        expect(strings.length).toBe(DATA_ROOT_RULES.length + 1 + DATA_ROOT_RULES.flatMap((r) => r.transient ?? []).length);
     });
 });
 
