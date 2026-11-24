@@ -8,7 +8,7 @@
  * click, and an empty list said what to do on the other machine. Genie 2 had the same list four levels deep in Settings
  * and drew nothing when it was empty.
  */
-import { mayBrowse, type WorkstationRole } from './workstation-role.js';
+import type { WorkstationRole } from './workstation-role.js';
 
 /** What the button and its menu are called. */
 export const CONNECT_LABEL = 'Connect to another machine';
@@ -18,12 +18,11 @@ export const OPEN_SHARE_LINK_ACTION = { id: 'open-share-link', label: 'Open a sh
 export const CONNECT_WORKSTATIONS_ACTION = { id: 'connect-workstations', label: 'Connect to my workstations' } as const;
 
 /**
- * What the Command Window offers, for the role Tynn gave this machine. A drone is offered "Open a share link…" (Tynn
- * #963): a share link is how a drone opens another host, and Tynn decides its grant. Its own workstations list stays a
- * pilot's. Signed out (no role) offers both; each then says to sign in.
+ * What the Command Window offers: both ways in, on every machine whatever role Tynn gave it (Tynn #423: the role does not
+ * gate connecting out; Tynn decides the grant). Signed out, each then says to sign in.
  */
-export function connectPaletteActions(role: WorkstationRole | null): ReadonlyArray<{ readonly id: string; readonly label: string }> {
-    return mayBrowse(role) ? [OPEN_SHARE_LINK_ACTION, CONNECT_WORKSTATIONS_ACTION] : [OPEN_SHARE_LINK_ACTION];
+export function connectPaletteActions(_role: WorkstationRole | null): ReadonlyArray<{ readonly id: string; readonly label: string }> {
+    return [OPEN_SHARE_LINK_ACTION, CONNECT_WORKSTATIONS_ACTION];
 }
 
 /**

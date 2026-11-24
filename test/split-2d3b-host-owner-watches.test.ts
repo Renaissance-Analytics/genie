@@ -249,15 +249,19 @@ describe('the owner operations are genie-host\'s', () => {
         expect(calls).toContainEqual(['tynn', 'GET', '/api/v1/workstations/connectable', undefined]);
     });
 
-    it('no account, or a drone, is said before Tynn is asked; Tynn\'s refusal reads the role again first', async () => {
+    it('no account is said before Tynn is asked; a drone is asked of Tynn like any machine, and Tynn\'s refusal stays Tynn\'s (Tynn #423)', async () => {
         const none = owner({ account: false });
         expect(await hostAloneApi(ports({ owner: hostOwnerOps(none.s) })).invoke('tynnNetwork.workstations', [])).toEqual({ ok: false, reason: 'this Genie has no Tynn account' });
-        const drone = owner({ role: 'drone' });
-        expect(await hostAloneApi(ports({ owner: hostOwnerOps(drone.s) })).invoke('tynnNetwork.workstations', [])).toEqual({ ok: false, reason: droneRefusal('drone') });
-        expect(drone.calls.filter((c) => c[0] === 'tynn')).toEqual([]);
-        const demoted = owner({ status: 404, roleAfterRead: 'drone' });
-        expect(await hostAloneApi(ports({ owner: hostOwnerOps(demoted.s) })).invoke('tynnNetwork.workstations', [])).toEqual({ ok: false, reason: droneRefusal('drone') });
-        expect(demoted.calls).toContainEqual(['readRole']);
+        const drone = owner({ role: 'drone', rows: [row('ws_beta')] });
+        const listed = await hostAloneApi(ports({ owner: hostOwnerOps(drone.s) })).invoke('tynnNetwork.workstations', []) as { ok: boolean; workstations?: Array<{ id: string }> };
+        expect(listed.ok).toBe(true);
+        expect(listed.workstations?.map((w) => w.id)).toEqual(['ws_beta']);
+        expect(drone.calls).toContainEqual(['tynn', 'GET', '/api/v1/workstations/connectable', undefined]);
+        const refused = owner({ status: 404, roleAfterRead: 'drone' });
+        const answer = await hostAloneApi(ports({ owner: hostOwnerOps(refused.s) })).invoke('tynnNetwork.workstations', []) as { ok: boolean; reason?: string };
+        expect(answer.ok).toBe(false);
+        expect(answer.reason).not.toBe(droneRefusal('drone'));
+        expect(refused.calls).not.toContainEqual(['readRole']);
     });
 
     it('a role change goes to Tynn with the code, and the role is read again once it is changed', async () => {

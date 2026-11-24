@@ -33,8 +33,8 @@ describe('a drone opens a share link (Tynn decides, not a local gate)', () => {
         expect(decideConnectLink(`${TYNN}/invites/accept/tok_1`, null, 'drone')).toMatchObject({ ok: false, note: expect.stringMatching(/Sign in to Tynn/) });
     });
 
-    it('the Command Window offers a drone "Open a share link…" (its own workstations list stays a pilot’s)', () => {
-        expect(connectPaletteActions('drone')).toEqual([OPEN_SHARE_LINK_ACTION]);
+    it('the Command Window offers a drone "Open a share link…", and its own workstations too since Tynn #423', () => {
+        expect(connectPaletteActions('drone')).toEqual([OPEN_SHARE_LINK_ACTION, CONNECT_WORKSTATIONS_ACTION]);
         expect(connectPaletteActions('pilot')).toEqual([OPEN_SHARE_LINK_ACTION, CONNECT_WORKSTATIONS_ACTION]);
     });
 

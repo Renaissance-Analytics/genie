@@ -7,8 +7,10 @@
  * answer, an unbound pairing, Tynn unreachable): fail closed. Signed out, this Genie is not on the Tynn network and
  * there is no Tynn role to apply.
  *
- * What the UI hides here is not the security boundary: Tynn refuses a drone's list, grants and shares (404), and the
- * relay refuses a member without a Tynn grant. A drone simply offers nothing it would only be refused.
+ * CONNECTING OUT IS NEVER JUDGED BY THE ROLE (Tynn #423; the owner, 2026-11-18: "Every host is effectively a drone and
+ * every client a pilot"). Every desktop after an account's first registers as a drone, so a role gate on the way out
+ * refused the owner's own second machine everything. Tynn decides who may connect (its entitlement: the owner, a share,
+ * a link), and the host decides whom it admits (relay-grant.ts principalOf). What stays a pilot's: changing roles.
  */
 
 export type WorkstationRole = 'pilot' | 'drone';
@@ -29,40 +31,9 @@ export function effectiveRoleOf(reading: RoleReading): WorkstationRole | null {
     return reading.role === 'pilot' ? 'pilot' : 'drone';
 }
 
-/** May this Genie browse and open other workstations, and show what its network holds? */
-export function mayBrowse(role: WorkstationRole | null): boolean {
-    return role !== 'drone';
-}
-
-/**
- * MAY THIS MACHINE CONNECT OUT, and if not, why (beta.61.1). `role` is the effective one (fail closed); `said` is what Tynn
- * answered. Only Tynn's own "drone" is refused as a drone. Signed in with no answer, nothing is dialled either, but the
- * person is told Tynn was not reached, and trying again asks Tynn again.
- */
-export function connectOutRefusal(reading: { role: WorkstationRole | null; said: WorkstationRole | null; why?: string | null }): string | null {
-    if (mayBrowse(reading.role)) return null;
-    if (reading.said === 'drone') return droneRefusal('drone');
-    // Why the role is not known, when genie-host knows (not registered, a sign-in Tynn has not bound): those words are true
-    // and say what to do. "Could not reach Tynn" is only for a read that got no answer.
-    if (reading.why) return reading.why;
-    return 'Genie could not reach Tynn to check this workstation’s role, so it did not connect. Try again.';
-}
-
-/** The words a drone answers a browse with; null when browsing is allowed. */
+/** The words a drone is refused a ROLE CHANGE with (Tynn keeps that a pilot's); null for a pilot or no role. */
 export function droneRefusal(role: WorkstationRole | null): string | null {
-    return mayBrowse(role)
-        ? null
-        : 'This workstation is a drone: it cannot browse or open other workstations. Its owner can make it a pilot in Tynn, with an authenticator code.';
-}
-
-/**
- * A DRONE NEVER CONNECTS OUT (the owner, 2026-10-28; pairing vs share link audit M-b). Is `url` a dial to another
- * workstation — a tailnet host (`ws://`, `wss://`) or a Tynn workstation (`relay:`) — that this machine's role refuses?
- * The drone sentence, or null. Anything that is not a dial (the app's own files, a web page) is not judged here. Main
- * asks it with the role Tynn gave this machine, never one a window sends.
- */
-export function outboundDialRefusal(role: WorkstationRole | null, url: string): string | null {
-    const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(url)?.[1]?.toLowerCase();
-    if (scheme !== 'ws' && scheme !== 'wss' && scheme !== 'relay') return null;
-    return droneRefusal(role);
+    return role === 'drone'
+        ? 'This workstation is a drone: only a pilot changes workstation roles. Its owner can make it a pilot in Tynn, with an authenticator code.'
+        : null;
 }

@@ -161,7 +161,6 @@ import { chmod, mkdir, readFile as readFileText, stat as statFile } from 'node:f
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 import { LOCAL_EVENTS, transportHub, type CallContext, type RemoteMethod } from '../core/remote-protocol.js';
 import { deviceLinkProtocol } from './device-link-protocol.js';
-import { wordTynnRefusal } from './drone-refusal.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { remoteListener } from './remote-listen.js';
 import { remoteAccess } from './remote-access.js';
@@ -1498,14 +1497,12 @@ async function main(): Promise<void> {
     });
     /*
      * A REMOTE WINDOW'S TRANSPORT TO ANOTHER MACHINE, ON THE ONE PROTOCOL (Tynn #941, 2f-2): the window asks over its own
-     * connection, which owns what it opens. A dial is refused for a drone from the role read here; Tynn's refusal of a grant
-     * is worded from a role read again; the relay browser is this machine's, opened here on the caller's own channel.
+     * connection, which owns what it opens. The role gates no dial (Tynn #423); Tynn's refusal of a grant is said in Tynn's
+     * words; the relay browser is this machine's, opened here on the caller's own channel.
      */
     const rereadRoleForGrant = async () => { await relayHostService.readRole().catch(() => {}); return relayHostService.role(); };
     const deviceProtocol = deviceLinkProtocol({
         link: deviceLinkService,
-        role: { role: () => relayHostService.role(), said: () => relayHostService.said(), why: () => relayHostService.unknownWhy(), reread: async () => { await relayHostService.readRole().catch(() => {}); } },
-        wordTynnRefusal: (refusal) => wordTynnRefusal(refusal, rereadRoleForGrant),
         openBrowser: (args) => browserService.call('open', args, 'genie-host'),
         remoteVia: (key, port, ca) => { void browserService.call('remoteVia', [key, port, ca], 'genie-host').catch((error: unknown) => { say(`browser: the door to ${key} could not be updated: ${error instanceof Error ? error.message : String(error)}`); }); },
     });

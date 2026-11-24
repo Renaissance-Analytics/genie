@@ -133,7 +133,7 @@ export async function revokeShareLink(
  * live sessions after a revoke.
  */
 export function shareLinksOver(ports: { request: SessionRequest; workstation: () => string | null; endSessions?: () => Promise<void>; rereadRole?: () => Promise<WorkstationRole | null> }) {
-    // Tynn's 404, worded from the role read again (Tynn #963), as a grant's is (drone-refusal.ts); only {ok, reason} leaves.
+    // Tynn's 404, worded from the role read again (Tynn #963): a drone's share links of ANOTHER machine stay refused; only {ok, reason} leaves.
     const worded = async <R extends { ok: true }>(pending: Promise<R | ShareRefusal>): Promise<R | { ok: false; reason: string }> => {
         const r = await pending;
         if (r.ok) return r;

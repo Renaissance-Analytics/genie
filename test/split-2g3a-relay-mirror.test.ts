@@ -44,9 +44,9 @@ describe('genie-host says them, as its relay host and its Tynn account change', 
 
 describe('main reads the role and the account from the summary', () => {
     const main = code(src('src/main/main.ts'));
-    it('the dial refusals and the WebSocket gate read the summary’s role; a relay window’s account is the summary’s', () => {
+    it('no dial is judged by the role (Tynn #423); a relay window’s account is the summary’s', () => {
         expect(main).not.toMatch(/workstationRoleNow/);
-        expect((main.match(/outboundDialRefusal\(hostSummaryNow\.workstationRole, /g) ?? []).length).toBe(3);
+        expect(main).not.toMatch(/outboundDialRefusal\(/);
         expect(main).toMatch(/const tynnAccountKeyNow = \(\): string \| null => hostSummaryNow\.tynnAccountKey;/);
     });
 

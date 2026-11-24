@@ -1,6 +1,4 @@
 import { FrameJoiner, framePieces } from '../core/device-frames.js';
-import type { WorkstationRole } from '../core/workstation-role.js';
-import { deviceLinkGate } from './device-link-gate.js';
 import { isGenHost } from './relay-site.js';
 import { DEVICE_FRAME_LIMIT_BYTES, type DeviceLinkEvent, type DeviceLinkOpened, type RelayOpened } from './device-link-service.js';
 
@@ -11,8 +9,8 @@ import { DEVICE_FRAME_LIMIT_BYTES, type DeviceLinkEvent, type DeviceLinkOpened, 
  * `openRelay` / `send` / `close` / `openBrowser`. The owner of what a call opens is that connection: only it may use or
  * close it, it hears its frames alone (`local-device`, RemoteHost eventTo), and what it opened closes when it goes.
  *
- * - A dial is refused for a drone here, from the role genie-host read from Tynn, before any socket (device-link-gate.ts,
- *   as main's window did; audit M-b). A relay's Tynn refusal is worded from a role read again (genie#1278 M0 finding 3).
+ * - Nothing here judges this machine's role (Tynn #423): the host dials another machine, and a relay open Tynn refused
+ *   is said in Tynn's own words. Tynn decides who gets a grant; the host at the other end decides whom it admits.
  * - A frame crosses the window's door in pieces, both ways (core/device-frames.ts): joined here before the socket hears
  *   it, and cut here before the window does.
  * - The relay browser: THIS machine's Genie browser on the caller's own relay channel's workstation, opened by genie-host
@@ -27,10 +25,6 @@ export interface DeviceLinkProtocolPorts {
         dropOwner(owner: string): void;
         browserVia(owner: string, channel: string): Promise<{ ok: true; workstationId: string; port: number; ca: string | null } | { ok: false; reason: string }>;
     };
-    /** This machine's Pilot/Drone role as genie-host read it from Tynn, and a fresh read (device-link-gate.ts). */
-    readonly role: { role(): WorkstationRole | null; said(): WorkstationRole | null; why(): string | null; reread(): Promise<void> };
-    /** Tynn refused the grant: the words, from the role read again (drone-refusal.ts wordTynnRefusal). */
-    readonly wordTynnRefusal: (refusal: { ok: false; reason: string; refusedByTynn?: true }) => Promise<{ ok: false; reason: string }>;
     /** Genie's browser process's `open` (browser-service.ts): [address, activation, remote, anchor]. */
     readonly openBrowser: (args: unknown[]) => Promise<unknown>;
     /** A relay workstation's browser door moved, or learned that host's CA: the browser's to hear (browser-service.ts). */
@@ -76,13 +70,13 @@ export function deviceLinkProtocol(ports: DeviceLinkProtocolPorts): DeviceLinkPr
                 case 'open': {
                     const url = args[0];
                     if (typeof url !== 'string' || !/^wss?:\/\/./i.test(url)) return { ok: false, reason: NOT_A_DEVICE };
-                    return deviceLinkGate(url, { ...ports.role, link: () => ({ open: (u: string) => ports.link.open(owner, u) }) });
+                    return ports.link.open(owner, url);
                 }
                 case 'openRelay': {
                     const opened = await ports.link.openRelay(owner, String(args[0] ?? ''));
                     if (opened.ok || !('refusal' in opened)) return opened;
-                    // Where it failed (core/relay-connect.ts): Tynn's way in, worded from a role read again.
-                    return { ...(await ports.wordTynnRefusal(opened.refusal)), stage: 'tynn' };
+                    // Where it failed (core/relay-connect.ts): Tynn's way in, in Tynn's words.
+                    return { ok: false, reason: opened.refusal.reason, stage: 'tynn' };
                 }
                 case 'send': {
                     const channel = String(args[0] ?? '');

@@ -116,16 +116,13 @@ function fakeLink() {
         },
     };
 }
-function protocol(overrides: { role?: 'pilot' | 'drone' } = {}) {
+function protocol() {
     const f = fakeLink();
     const browser: unknown[][] = [];
     const vias: unknown[][] = [];
-    const role = overrides.role ?? 'pilot';
+    // No role: genie-host's role gates no dial (Tynn #423).
     const p = deviceLinkProtocol({
         link: f.link,
-        // The role genie-host read from Tynn (device-link-gate.ts decides with it, as main's window did).
-        role: { role: () => role, said: () => role, why: () => null, reread: async () => {} },
-        wordTynnRefusal: async (refusal) => ({ ...refusal, reason: `worded: ${refusal.reason}` }),
         openBrowser: async (args) => { browser.push(args); return { browserUp: true }; },
         remoteVia: (key, port, ca) => { vias.push([key, port, ca]); },
     });
@@ -133,18 +130,17 @@ function protocol(overrides: { role?: 'pilot' | 'drone' } = {}) {
 }
 
 describe('genie-host’s side: the caller’s connection owns what it opens', () => {
-    it('open and openRelay are the caller’s; Tynn’s refusal is worded with the role read again', async () => {
+    it('open and openRelay are the caller’s; Tynn’s refusal is said in Tynn’s words (Tynn #423)', async () => {
         const t = protocol();
         expect(await t.p.call('conn_7', 'open', ['wss://other.example/genie'])).toEqual({ ok: true, channel: 'device_1' });
         expect(await t.p.call('conn_7', 'openRelay', ['ws_alpha'])).toEqual({ ok: true, channel: 'relay_1' });
-        expect(await t.p.call('conn_7', 'openRelay', ['ws_refused'])).toMatchObject({ ok: false, stage: 'tynn', reason: 'worded: not found' });
+        expect(await t.p.call('conn_7', 'openRelay', ['ws_refused'])).toEqual({ ok: false, stage: 'tynn', reason: 'not found' });
         expect(t.calls.slice(0, 2)).toEqual([['open', 'conn_7', 'wss://other.example/genie'], ['openRelay', 'conn_7', 'ws_alpha']]);
     });
 
-    it('a drone dials nothing: the refusal comes before any socket; not a device url, nothing either', async () => {
-        const t = protocol({ role: 'drone' });
-        expect(await t.p.call('conn_7', 'open', ['wss://other.example/genie'])).toMatchObject({ ok: false, reason: expect.stringMatching(/drone/) });
-        expect(await protocol().p.call('conn_7', 'open', ['https://other.example'])).toEqual({ ok: false, reason: 'another machine is reached over ws:// or wss://' });
+    it('not a device url: nothing is dialled, in words', async () => {
+        const t = protocol();
+        expect(await t.p.call('conn_7', 'open', ['https://other.example'])).toEqual({ ok: false, reason: 'another machine is reached over ws:// or wss://' });
         expect(t.calls).toEqual([]);
     });
 

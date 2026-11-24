@@ -3,7 +3,6 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { mergeWorkstationRead } from '../src/core/connect-machine.js';
 import { accountKeyOf, remoteWindowAction, windowsLeftByAccountChange } from '../src/core/remote-window-policy.js';
-import { wordTynnRefusal } from '../src/main/drone-refusal.js';
 import { connectableWorkstations, mintConnectGrant } from '../src/main/tynn-network.js';
 import { ConnectMenu } from '../src/renderer/components/ConnectMenu.js';
 
@@ -117,7 +116,7 @@ describe('2. Open never brings forward another account’s window, or a dropped 
     });
 });
 
-describe('3. a refusal on a drone says it is a drone — the role read again from Tynn first', () => {
+describe('3. Tynn’s refusal is marked as Tynn’s, and said in its own words', () => {
     it('Tynn’s 404 on a grant or the list is marked as Tynn’s refusal', async () => {
         const grant = await mintConnectGrant(async () => json(404, {}), 'ws_a', { kty: 'OKP', crv: 'Ed25519', x: 'x' } as never);
         expect(grant).toMatchObject({ ok: false, refusedByTynn: true });
@@ -130,43 +129,14 @@ describe('3. a refusal on a drone says it is a drone — the role read again fro
         expect(grant).not.toHaveProperty('refusedByTynn');
     });
 
-    it('refused, and the fresh role is drone: the drone sentence, never "sign in to Tynn"', async () => {
-        const reread = vi.fn(async () => 'drone' as const);
-        const out = await wordTynnRefusal({ ok: false, reason: 'Tynn did not give this machine a way in: sign in to Tynn', refusedByTynn: true }, reread);
-        expect(reread).toHaveBeenCalledOnce();
-        expect(out.ok).toBe(false);
-        if (!out.ok) {
-            expect(out.reason).toContain('drone');
-            expect(out.reason).not.toContain('sign in to Tynn');
-        }
-    });
-
-    it('refused, and the fresh role is still pilot: Tynn’s own reason stands', async () => {
-        const original = { ok: false as const, reason: 'Tynn did not give this machine a way in', refusedByTynn: true as const };
-        expect(await wordTynnRefusal(original, async () => 'pilot')).toBe(original);
-    });
-
-    it('CONTROL: success, or a failure that is not Tynn refusing, never re-reads the role', async () => {
-        const reread = vi.fn(async () => 'drone' as const);
-        const ok = { ok: true as const, token: 't', relayEndpoint: 'ws://r', hostPublicKey: null };
-        expect(await wordTynnRefusal(ok, reread)).toBe(ok);
-        const down = { ok: false as const, reason: 'Tynn could not be reached' };
-        expect(await wordTynnRefusal(down, reread)).toBe(down);
-        expect(reread).not.toHaveBeenCalled();
-    });
-
-    it('wired: both the list (genie-host’s owner operations) and the grant (main) go through it, with a fresh read of the role', () => {
+    it('Tynn’s refusal is said in Tynn’s words: the role is not read again to re-word it (Tynn #423: a drone connects out, so "drone" says nothing about why Tynn refused)', () => {
         // "Your workstations" is genie-host's answer for every client (Tynn #898 steps 2d-3b and 2d-4b2).
         const ops = strip(readFileSync(new URL('../src/main/host-owner-ops.ts', import.meta.url), 'utf8'));
-        expect(ops).toMatch(/const rereadRole = async \(\): Promise<WorkstationRole \| null> => \{ await tynn\.readRole\(\); return tynn\.role\(\); \};/);
         const list = /workstations: async \(\) => \{([^]*?)\n {12}\},/.exec(ops)?.[1] ?? '';
-        // The grant is genie-host's device protocol's since 2f-2 (Tynn #941): Tynn's refusal worded from a role read again.
+        expect(list).toContain('return connectableWorkstations(');
+        expect(list).not.toMatch(/rereadRole|wordTynnRefusal/);
+        // The grant: genie-host's device protocol answers Tynn's own reason (connect-out-any-role-423.test.ts).
         const host = strip(readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8'));
-        const open = /wordTynnRefusal: \(refusal\) => ([^\n]*)/.exec(host)?.[1] ?? '';
-        expect(main).not.toContain("'genie:relay-open'");
-        for (const handler of [list, open]) {
-            expect(handler).toContain('wordTynnRefusal(');
-            expect(handler).toContain('rereadRole');
-        }
+        expect(host).not.toContain('wordTynnRefusal');
     });
 });
