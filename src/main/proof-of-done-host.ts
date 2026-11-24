@@ -1,5 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { gitExecFile } from './git-exec.js';
+import { GIT_NEEDS_TRUST, gitMayRun } from './git-read-policy.js';
 import { resolveProgram } from '../core/program-lookup.js';
 import { ProofOfDone, type PendingNote, type PodPorts } from './proof-of-done.js';
 import type { ApprovalQueue } from './approval-queue.js';
@@ -13,8 +14,16 @@ import type { Caller } from './mcp-tools.js';
 const POLL_MS = 60_000;
 const GIT_TIMEOUT_MS = 60_000;
 
-/** One git command in a folder, as an answer and never a throw: the poll must go on. */
-export function runGit(cwd: string, args: readonly string[]): Promise<{ ok: boolean; stdout: string; error?: string }> {
+/**
+ * One git command in a folder, as an answer and never a throw: the poll must go on.
+ *
+ * THROUGH GENIE'S GIT SAFETY (Tynn #364), as every other git of Genie's: a folder's own git config can name a program
+ * (`core.sshCommand` runs on a push over ssh, `core.fsmonitor` on a read), so in a workspace the person has not trusted, a
+ * folder whose config holds such a key gets no git at all, and the answer says why (`refused`). The policy reads the
+ * verdict and the folder's config at this call, not a copy kept from before (git-read-policy.ts).
+ */
+export async function runGit(cwd: string, args: readonly string[]): Promise<{ ok: boolean; stdout: string; error?: string; refused?: true }> {
+    if (!(await gitMayRun(cwd).catch(() => false))) return { ok: false, stdout: '', error: GIT_NEEDS_TRUST, refused: true };
     return new Promise((resolve) => {
         try {
             gitExecFile(resolveProgram('git'), [...args], { cwd, windowsHide: true, timeout: GIT_TIMEOUT_MS, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (error, stdout, stderr) =>

@@ -292,9 +292,9 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
     const hosting: HostingApi = input.hosting ?? ownHosting!;
     const workspacesNow = (): readonly WorkspaceRef[] => input.workspaces?.() ?? [];
     // THE WORKSPACES' TRUST (genie#1519) is the hosting's. With one handed in, this composition's git reads follow its
-    // verdicts.
+    // verdicts: the person's own yes as it is now, and anywhere else the folder's config read at each call (Tynn #364).
     if (!ownHosting) {
-        setGitReadPolicy(trustAwarePolicy((path) => hosting.trust.isTrustedPath(path)));
+        setGitReadPolicy(trustAwarePolicy((path) => hosting.trust.durablePath(path)));
         hosting.trust.onVerdict((id) => input.onTrustVerdict?.(id));
     }
     const workspaceTrust = hosting.trust;

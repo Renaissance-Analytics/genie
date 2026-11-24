@@ -7,6 +7,9 @@ import type { TrustApi } from '../../src/main/hosting-trust.js';
 export function closedTrust(): TrustApi {
     return {
         isTrustedPath: () => false,
+        durable: () => false,
+        durablePath: () => false,
+        current: async () => false,
         view: () => null,
         entries: () => [],
         refresh: async () => null,

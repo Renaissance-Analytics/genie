@@ -1149,7 +1149,8 @@ export class AgentSession {
         const driver = this.#driver;
         const p = this.#afterTurn.find((q) => q.id === promptId);
         if (!p || !driver?.steer || driver.steeringState?.supported !== true) return;
-        if (!this.#inTurn || this.#held || this.#starting || this.#needsNewDriver || (p.context.mail?.length ?? 0) === 0) return;
+        // Work this run may not take (`mayTakeWork`, Tynn #364) is not steered in either: it waits as any held work does.
+        if (!this.#inTurn || this.#held || this.#starting || this.#needsNewDriver || (p.context.mail?.length ?? 0) === 0 || this.#options.mayTakeWork?.() === false) return;
         const clientId = randomUUID();
         p.steer = clientId;
         this.#steers.set(clientId, { promptId, acceptance: 'pending', kind: null });

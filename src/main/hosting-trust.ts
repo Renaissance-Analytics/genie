@@ -26,6 +26,15 @@ export interface TrustEntry {
 export interface TrustApi {
     /** As last read. A folder in no workspace read yet, or in one not trusted, is not trusted. */
     isTrustedPath(path: string): boolean;
+    /** The person's own yes, as it is now (Tynn #364): the record's, which only their Untrust ends. No reading of files. */
+    durable(workspaceId: string): boolean;
+    /** `durable`, for the workspace holding `path`. */
+    durablePath(path: string): boolean;
+    /**
+     * THE VERDICT NOW (Tynn #364), for what acts on it: the person's own yes stands as it is; anything else (trusted only
+     * because nothing would run, or not trusted) is read again, so a file that arrived since the last read counts.
+     */
+    current(workspaceId: string): Promise<boolean>;
     /** As last read, without reading. `null` = not read yet. */
     view(workspaceId: string): TrustView | null;
     /** Every workspace read, with its verdict. */
@@ -111,7 +120,9 @@ export function ownTrust(input: OwnTrustInput): OwnTrust {
             for (const l of [...listeners]) { try { l(id); } catch { /* one listener never costs another */ } }
         },
     });
-    setGitReadPolicy(trustAwarePolicy((path) => workspaceTrust.isTrustedPath(path)));
+    // GIT READS THE VERDICT NOW (Tynn #364): the person's own yes lets git run as git does; anywhere else the folder's
+    // config is read at each call (trustAwarePolicy), so a key that arrived since the last verdict is seen before git runs.
+    setGitReadPolicy(trustAwarePolicy((path) => workspaceTrust.durablePath(path)));
     // One pass at a time, and a quit waits for the one in flight: it reads through git in the workspace's folder and writes the record.
     let pass: Promise<unknown> = Promise.resolve();
     let closed = false;
@@ -181,6 +192,14 @@ export function ownTrust(input: OwnTrustInput): OwnTrust {
     });
     const api: TrustApi = {
         isTrustedPath: (path) => workspaceTrust.isTrustedPath(path),
+        durable: (id) => workspaceTrust.durable(id),
+        durablePath: (path) => workspaceTrust.durablePath(path),
+        current: async (id) => {
+            if (workspaceTrust.durable(id)) return true;
+            const workspace = input.workspaces().find((w) => w.id === id);
+            if (!workspace || workspace.asleep) return false;
+            return (await read(id).catch(() => null))?.trusted === true;
+        },
         view: (id) => workspaceTrust.view(id),
         entries,
         refresh: (id, purpose) => read(id, purpose),

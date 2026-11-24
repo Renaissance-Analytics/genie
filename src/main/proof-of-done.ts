@@ -47,7 +47,8 @@ export interface PendingNote {
 }
 
 type Response = { ok: boolean; status: number; json(): Promise<unknown> };
-type GitResult = { readonly ok: boolean; readonly stdout: string; readonly error?: string };
+/** `refused`: git was not run there at all (Genie's git safety, Tynn #364); `error` says why. */
+type GitResult = { readonly ok: boolean; readonly stdout: string; readonly error?: string; readonly refused?: true };
 
 export interface PodPorts {
     readonly keychain: {
@@ -318,10 +319,14 @@ export class ProofOfDone {
 
     async #holder(sha: string): Promise<string | null> {
         if (!SHA.test(sha)) return null;
+        const refused: string[] = [];
         for (const workspace of this.#ports.workspaces()) {
             const has = await this.#ports.git(workspace.path, ['cat-file', '-e', `${sha}^{commit}`]);
             if (has.ok) return workspace.path;
+            if (has.refused) refused.push(`${workspace.path}: ${has.error ?? 'git does not run there'}`);
         }
+        // Not found where git ran; where it was not run, said (once a run), and the note waits for a later poll.
+        if (refused.length > 0) this.#say(`note on ${sha.slice(0, 7)} waits: git was not run in ${refused.join('; ')}`, `refused:${sha}:${refused.join('|')}`);
         return null;
     }
 

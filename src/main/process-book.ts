@@ -113,6 +113,11 @@ export interface ProcessBookDeps {
     readonly limit?: (workspaceId: string) => number;
     /** SAFE MODE (Tynn #386): while on, the launch restore starts no kept process; each is held back, saying why. */
     readonly safeMode?: () => boolean;
+    /**
+     * THE WORKSPACE'S VERDICT, READ WHEN IT ACTS (Tynn #364). `untrusted`: nothing of its starts, and `trustMoved` stops
+     * what runs; `unread`: the launch restore waits for the first read; `trusted`: as ever. Absent = trusted.
+     */
+    readonly trust?: (workspaceId: string) => 'trusted' | 'untrusted' | 'unread';
     readonly now?: () => number;
     /** Tynn #860: each kept process's output, kept past a Genie restart (kept-process-logs.ts). Absent = the supervisor's alone. */
     readonly logs?: Pick<import('./kept-process-logs.js').KeptProcessLogs, 'read' | 'forget'>;
@@ -163,6 +168,10 @@ interface BookFile {
 
 const RESTART_POLICIES: readonly RestartPolicy[] = ['never', 'on-failure', 'always'];
 const ASLEEP_REASON = 'its workspace is hibernated; nothing starts there until it is woken';
+/** Held by the workspace's verdict (Tynn #364): the person untrusted it, or what would run there was never trusted. */
+export const UNTRUSTED_REASON = 'held: workspace not trusted';
+/** Held at launch until the workspace's verdict is read (Tynn #364): it starts then, when the verdict says trusted. */
+export const UNREAD_REASON = "held: waiting for the workspace's trust to be read";
 /** Held back by safe mode (Tynn #386): the last run did not end cleanly, so nothing started by itself. */
 export const SAFE_MODE_REASON = 'Genie is in safe mode: the last run did not end cleanly, so nothing was started';
 
@@ -175,6 +184,8 @@ export class ProcessBook {
     readonly #heldBack = new Map<string, string>();
     /** Told after every write — the process scheduler re-plans (genie#1204). */
     readonly #listeners = new Set<() => void>();
+    /** Wanted processes the workspace's verdict held (Tynn #364): what starts again once it says trusted. */
+    readonly #heldForTrust = new Set<string>();
 
     private constructor(file: string, deps: ProcessBookDeps, data: BookFile) {
         this.#file = file;
@@ -334,9 +345,53 @@ export class ProcessBook {
         return p;
     }
 
+    #trust(workspaceId: string): 'trusted' | 'untrusted' | 'unread' {
+        return this.#deps.trust?.(workspaceId) ?? 'trusted';
+    }
+
+    /** A start refused because the workspace is not trusted now (Tynn #364). */
+    #refuseUntrusted(workspaceId: string, verb: string, name: string): void {
+        if (this.#trust(workspaceId) === 'untrusted') throw new Error(`cannot ${verb} ${name}: ${UNTRUSTED_REASON}`);
+    }
+
+    /**
+     * THE WORKSPACE'S VERDICT MOVED (Tynn #364). Untrusted: every kept process of it that runs is stopped (still wanted,
+     * so it is the person's again once trusted) and says why. Trusted: what the verdict held starts again, as the launch
+     * restore would start it; what the person stopped stays stopped. Not read yet: nothing changes.
+     */
+    trustMoved(workspaceId: string): void {
+        const verdict = this.#trust(workspaceId);
+        if (verdict === 'unread') return;
+        const mine = this.#data.processes.filter((p) => p.workspaceId === workspaceId);
+        if (verdict === 'untrusted') {
+            const live = new Map(this.#deps.supervisor.list(workspaceId).map((s) => [s.id, s.state]));
+            for (const p of mine) {
+                const state = live.get(p.id);
+                const running = state === 'running' || state === 'restarting' || state === 'starting';
+                if (!p.schedule && p.wanted && (running || this.#heldBack.has(p.id))) this.#heldForTrust.add(p.id);
+                if (running) this.#deps.supervisor.stop(p.id);
+                if (p.wanted || running) this.#heldBack.set(p.id, UNTRUSTED_REASON);
+            }
+        } else {
+            for (const p of mine) {
+                if (!this.#heldForTrust.delete(p.id)) {
+                    const said = this.#heldBack.get(p.id);
+                    if (said === UNTRUSTED_REASON || said === UNREAD_REASON) this.#heldBack.delete(p.id);
+                    continue;
+                }
+                this.#heldBack.delete(p.id);
+                if (!p.wanted || p.schedule || this.#deps.asleep(p.workspaceId) || this.#deps.safeMode?.() === true) continue;
+                const refused = this.#refusal(p.workspaceId, p.id);
+                if (refused) { this.#heldBack.set(p.id, refused); continue; }
+                this.#run(p);
+            }
+        }
+        this.visibilityChanged();
+    }
+
     #scheduleView(p: KeptProcess): ScheduleView | undefined {
         if (!p.schedule) return undefined;
-        const live = p.wanted && !this.#deps.asleep(p.workspaceId);
+        const live = p.wanted && !this.#deps.asleep(p.workspaceId) && this.#trust(p.workspaceId) !== 'untrusted';
         return { ...p.schedule, enabled: p.wanted, nextRunAt: live ? nextCronAfter(p.schedule.cron, this.#now(), undefined) : null };
     }
 
@@ -375,7 +430,8 @@ export class ProcessBook {
         const seen = new Set(live.map((s) => s.id));
         for (const p of this.#data.processes) {
             if (seen.has(p.id) || (workspaceId !== undefined && p.workspaceId !== workspaceId)) continue;
-            const reason = this.#heldBack.get(p.id);
+            // Read now (Tynn #364): a workspace not trusted says so on each of its rows not running; none of them can start.
+            const reason = this.#trust(p.workspaceId) === 'untrusted' ? UNTRUSTED_REASON : this.#heldBack.get(p.id);
             rows.push({
                 id: p.id,
                 workspaceId: p.workspaceId,
@@ -423,6 +479,14 @@ export class ProcessBook {
                 heldBack.push(p.id);
                 continue;
             }
+            // THE WORKSPACE'S VERDICT (Tynn #364): not trusted, or not read yet; `trustMoved` starts it once it says trusted.
+            const verdict = this.#trust(p.workspaceId);
+            if (verdict !== 'trusted') {
+                this.#heldBack.set(p.id, verdict === 'untrusted' ? UNTRUSTED_REASON : UNREAD_REASON);
+                this.#heldForTrust.add(p.id);
+                heldBack.push(p.id);
+                continue;
+            }
             // Past the workspace's limit (it may have been lowered since): held back, with the limit's own words.
             const refused = this.#refusal(p.workspaceId, p.id);
             if (refused) {
@@ -443,7 +507,7 @@ export class ProcessBook {
      * What `create` would keep, or the refusal it would throw — checked WITHOUT keeping or starting anything, so an agent's
      * `processes add` that Genie would refuse is never put to the person for approval (mcp-tools-processes.ts).
      */
-    prepare(input: CreateProcessInput): { readonly name: string; readonly command: string; readonly cwd: string; readonly restart: RestartPolicy } {
+    prepare(input: CreateProcessInput, keepOnly = false): { readonly name: string; readonly command: string; readonly cwd: string; readonly restart: RestartPolicy } {
         const name = input.name.trim();
         const command = input.command.trim();
         if (!name) throw new Error('a background process needs a name');
@@ -457,6 +521,8 @@ export class ProcessBook {
         if (!RESTART_POLICIES.includes(input.restart)) throw new Error(`restart must be one of ${RESTART_POLICIES.join(', ')}`);
         const cwd = folderInside(input.workspacePath, input.folder);
         if (this.#deps.asleep(input.workspaceId)) throw new Error(`cannot start ${name}: ${ASLEEP_REASON}`);
+        // Kept without starting is not a start (`keep`): the verdict holds only what would run (Tynn #364).
+        if (!keepOnly) this.#refuseUntrusted(input.workspaceId, 'start', name);
         const refused = this.#refusal(input.workspaceId, null);
         if (refused) throw new Error(refused);
         return { name, command, cwd, restart: input.restart };
@@ -469,16 +535,16 @@ export class ProcessBook {
      * are kept this way, after the workspace's one-time trust.
      */
     async keep(input: CreateProcessInput): Promise<ProcessStatus> {
-        if (input.schedule) return this.create({ ...input, enabled: false });
-        const { name, command, cwd, restart } = this.prepare(input);
+        if (input.schedule) return this.create({ ...input, enabled: false }, true);
+        const { name, command, cwd, restart } = this.prepare(input, true);
         const kept: KeptProcess = { id: `proc_${randomUUID()}`, workspaceId: input.workspaceId, name, command, cwd, restart, wanted: false, changedAt: this.#now() };
         this.#data = { ...this.#data, processes: [...this.#data.processes, kept] };
         await this.#flush();
         return { id: kept.id, workspaceId: kept.workspaceId, name, state: 'stopped', pid: null, exitCode: null, restarts: 0, since: kept.changedAt };
     }
 
-    async create(input: CreateProcessInput): Promise<ProcessStatus> {
-        const { name, command, cwd } = this.prepare(input);
+    async create(input: CreateProcessInput, keepOnly = false): Promise<ProcessStatus> {
+        const { name, command, cwd } = this.prepare(input, keepOnly);
         if (input.schedule) {
             const s = input.schedule;
             const schedule: ProcessSchedule = { cron: s.cron.trim(), kind: s.kind, ...(s.kind === 'agent-nudge' ? { prompt: s.prompt!.trim(), agent: s.agent!.trim() } : {}) };
@@ -498,6 +564,7 @@ export class ProcessBook {
         const p = this.#find(id);
         if (p.schedule) throw new Error(`${p.name} is a scheduled task: it runs on its schedule (Run now runs it once)`);
         if (this.#deps.asleep(p.workspaceId)) throw new Error(`cannot start ${p.name}: ${ASLEEP_REASON}`);
+        this.#refuseUntrusted(p.workspaceId, 'start', p.name);
         const wanted = await this.#setWanted(id, true);
         return this.#run(wanted);
     }
@@ -507,6 +574,7 @@ export class ProcessBook {
         const p = this.#find(id);
         if (p.schedule) throw new Error(`${p.name} is a scheduled task: it runs on its schedule (Run now runs it once)`);
         if (this.#deps.asleep(p.workspaceId)) throw new Error(`cannot restart ${p.name}: ${ASLEEP_REASON}`);
+        this.#refuseUntrusted(p.workspaceId, 'restart', p.name);
         const wanted = await this.#setWanted(id, true);
         this.#deps.supervisor.stop(id);
         return this.#run(wanted);

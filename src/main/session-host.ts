@@ -593,6 +593,21 @@ interface Running {
     /** The record and folder this run was started with: what a move to another account starts again (Tynn #1011). */
     startRecord?: AgentRecord;
     cwd?: string;
+    /**
+     * A FRESH READ OF THE VERDICT FOUND THIS RUN'S WORKSPACE TRUSTED (Tynn #364), and no turn has started since: the work
+     * that waited for that read may go. A turn starting spends it, so the next work reads again.
+     */
+    freshTrust?: boolean;
+    /** The read of the verdict in flight for this run, if any: one at a time. */
+    readingVerdict?: boolean;
+}
+
+/** The workspace's verdict read now (Tynn #364): the person's own yes as it is, or a fresh read of everything else. */
+export interface VerdictNow {
+    /** The person's own yes stands: no read is needed. */
+    durable(record: AgentRecord): boolean;
+    /** Read the verdict again, now. `true` = trusted. */
+    read(record: AgentRecord): Promise<boolean>;
 }
 
 /** A stopped agent's ledger before its history is read: one empty array, so two reads are the same ledger. */
@@ -620,6 +635,7 @@ export class SessionHost {
     readonly #endToolCalls: ((agentId: AgentId, intent: CancelIntent) => number) | undefined;
     readonly #workspaceMcpOffFor: ((record: AgentRecord) => readonly string[]) | undefined;
     readonly #untrustedNow: ((record: AgentRecord) => boolean) | undefined;
+    readonly #verdictNow: VerdictNow | undefined;
     readonly #markGenieWords: ((agentId: AgentId) => void) | undefined;
     readonly #prepareMcpServers: ((record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>) | undefined;
     readonly #builtInMcpServers: readonly McpServer[];
@@ -733,6 +749,12 @@ export class SessionHost {
         markGenieWords?: (agentId: AgentId) => void;
         /** The workspace's verdict as last read, for what is decided per call: a shell call's answer. Absent = what the launch read. */
         untrustedNow?: (record: AgentRecord) => boolean;
+        /**
+         * THE VERDICT READ NOW, for work reaching a run launched trusted (Tynn #364): the verdict kept can be up to a slow
+         * pass old (15 s on Windows), and a workspace trusted only because nothing in it would run may hold something that
+         * would by now. Absent = the verdict as last read (`untrustedNow`) decides alone.
+         */
+        verdictNow?: VerdictNow;
         /** Private session credentials, prepared before constructing or starting either provider. */
         prepareMcpServers?: (record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>;
         /**
@@ -829,6 +851,7 @@ export class SessionHost {
         this.#endToolCalls = options.endToolCalls;
         this.#workspaceMcpOffFor = options.workspaceMcpOffFor;
         this.#untrustedNow = options.untrustedNow;
+        this.#verdictNow = options.verdictNow;
         this.#markGenieWords = options.markGenieWords;
         this.#prepareMcpServers = options.prepareMcpServers;
         this.#builtInMcpServers = options.builtInMcpServers ?? [];
@@ -1326,7 +1349,8 @@ export class SessionHost {
                 askWhy: () => askedWhy(this.#approvalWhere(record)),
             } : {}),
             // THE ONE PLACE THAT DECIDES IT: a run launched in a trusted workspace takes no work once it no longer is. It goes to the next run.
-            mayTakeWork: () => !this.#shutdownPending && !(this.#running.get(record.id)?.launchedUntrusted === false && this.#untrustedNow?.(record) === true),
+            // And READ NOW (Tynn #364): work for a run launched trusted waits for a fresh read unless the person's own yes stands.
+            mayTakeWork: () => !this.#shutdownPending && !(this.#running.get(record.id)?.launchedUntrusted === false && this.#untrustedNow?.(record) === true) && this.#readNow(record),
             onLimitBreach: (reason) => this.#limitBreach(record.id, this.#loginFor(record.provider), reason),
             /*
              * A change the UI renders — a parked approval, an answered one, a turn ending.
@@ -1378,6 +1402,9 @@ export class SessionHost {
                 // A TURN TOOK ITS NUMBER: kept on the record now, so a turn cut off before it ends is never numbered again.
                 if (event.kind === 'turn' && event.n > numberedTurn) {
                     numberedTurn = event.n;
+                    // The fresh read covered the work that waited for it, which this turn now carries; the next work reads again.
+                    const running = this.#running.get(record.id);
+                    if (running) running.freshTrust = false;
                     this.#onTurnNumbered?.(record.id, event.n);
                 }
                 // A PLAN ARRIVED: kept on the record now, so the next run — after a relaunch, a restart, a new conversation — shows it.
@@ -1679,6 +1706,30 @@ export class SessionHost {
      * = not running, or nothing parked.
      */
     /** What answers an agent's approval now: its CURRENT record's autonomy, and the workspace's verdict now (else at launch). */
+    /**
+     * WORK FOR A RUN LAUNCHED TRUSTED READS THE VERDICT NOW (Tynn #364). The person's own yes stands as it is (only their
+     * Untrust ends it). Otherwise the work waits, held by the session, while one fresh read is made: trusted, it goes, and
+     * that read covers what waited until a turn starts; not trusted, it stays held, and the verdict's move restarts the run
+     * (trust-verdict.ts). A run launched untrusted is not this rule's: it was given nothing of the workspace's own.
+     */
+    #readNow(record: AgentRecord): boolean {
+        const entry = this.#running.get(record.id);
+        const ports = this.#verdictNow;
+        if (!ports || !entry || entry.launchedUntrusted !== false) return true;
+        if (entry.freshTrust === true || ports.durable(record)) return true;
+        if (entry.readingVerdict !== true) {
+            entry.readingVerdict = true;
+            void ports.read(record).catch(() => false).then((trusted) => {
+                entry.readingVerdict = false;
+                if (this.#running.get(record.id) !== entry || !trusted) return;
+                entry.freshTrust = true;
+                entry.session.releaseWork();
+                this.#emit(record.id);
+            });
+        }
+        return false;
+    }
+
     #approvalWhere(record: AgentRecord): { untrusted: boolean; autonomous: boolean } {
         return {
             untrusted: this.#untrustedNow?.(record) ?? this.#running.get(record.id)?.launchedUntrusted === true,

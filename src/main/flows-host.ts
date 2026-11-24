@@ -11,8 +11,14 @@ import { schedulesIn } from './flow-store.js';
  */
 
 export interface FlowsDump {
-    readonly flows: readonly FlowRecord[];
+    /** Each flow, and why it is held when its workspace is not trusted now (`held`, Tynn #364). */
+    readonly flows: readonly (FlowRecord & { readonly held?: string })[];
     readonly inFlight: number;
+}
+
+export interface FlowsServiceOptions {
+    /** Why a workspace's flows are held now (Tynn #364: "held: workspace not trusted"), or `null`. Absent = none is. */
+    readonly held?: (workspaceId: string) => string | null;
 }
 
 export type FlowsEvent = { readonly kind: 'dump'; readonly dump: FlowsDump } | { readonly kind: 'run'; readonly flowId: string; readonly run: FlowRun };
@@ -34,10 +40,17 @@ export class FlowsService {
     #store: FlowStore | null = null;
     #scheduler: FlowScheduler | null = null;
     readonly #listeners = new Set<(event: FlowsEvent) => void>();
+    readonly #held: ((workspaceId: string) => string | null) | undefined;
 
     /** Served at once; the flows are attached when they open (genie-host opens them at the first window's v1 import). */
-    constructor(parts?: { store: FlowStore; scheduler: FlowScheduler }) {
+    constructor(parts?: { store: FlowStore; scheduler: FlowScheduler }, options: FlowsServiceOptions = {}) {
+        this.#held = options.held;
         if (parts) this.attach(parts);
+    }
+
+    /** What the flows' status reads moved (a workspace's verdict, Tynn #364): every window is told again. */
+    changed(): void {
+        if (this.#store) this.#emit({ kind: 'dump', dump: this.dump() });
     }
 
     attach(parts: { store: FlowStore; scheduler: FlowScheduler }): void {
@@ -49,7 +62,11 @@ export class FlowsService {
     }
 
     dump(): FlowsDump {
-        return { flows: this.#store?.list() ?? [], inFlight: this.#scheduler?.inFlightCount() ?? 0 };
+        const flows = (this.#store?.list() ?? []).map((flow) => {
+            const held = this.#held?.(flow.workspaceId) ?? null;
+            return held === null ? flow : { ...flow, held };
+        });
+        return { flows, inFlight: this.#scheduler?.inFlightCount() ?? 0 };
     }
 
     onEvent(listener: (event: FlowsEvent) => void): () => void {

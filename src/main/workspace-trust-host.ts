@@ -353,6 +353,24 @@ export class WorkspaceTrust {
         };
     }
 
+    /**
+     * THE PERSON'S OWN YES, AS IT IS NOW (Tynn #364): the record's, which nothing but their Untrust ends (Tynn #618), so it
+     * needs no reading of the workspace's files to be current. A workspace trusted only because nothing in it would run is
+     * not this: that verdict is only as fresh as its last read. Asleep, being redocked, or no workspace: no.
+     */
+    durable(workspaceId: string): boolean {
+        const workspace = this.#ports.workspaces().find((w) => w.id === workspaceId);
+        return workspace !== undefined && !workspace.asleep && !this.#redocking.has(workspaceId) && recordSaysYes(this.#ports.record(), workspaceId);
+    }
+
+    /** `durable`, for the workspace holding `path`: the first one, as `isTrustedPath` finds it. */
+    durablePath(path: string): boolean {
+        for (const workspace of this.#ports.workspaces()) {
+            if (inside(workspace.path, path)) return this.durable(workspace.id);
+        }
+        return false;
+    }
+
     /** As last read. A workspace not read yet is not trusted; nor is a folder in none. */
     isTrustedPath(path: string): boolean {
         for (const workspace of this.#ports.workspaces()) {
