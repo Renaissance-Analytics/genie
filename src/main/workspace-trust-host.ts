@@ -195,12 +195,21 @@ export class TrustReadInterrupted extends Error {
 /** How many times one call reads a workspace's list when another verdict landed while it was reading. Then it stops, and nothing it read says "trusted". */
 const READS_WHEN_CROSSED = 3;
 
-/** A workspace's list, and whether it was read ALONE: no other verdict of that workspace was written while it was being read. */
-interface ListRead { readonly list: TrustList; readonly alone: boolean }
+/**
+ * A workspace's list, and whether it was read ALONE: no other verdict of that workspace was written while it was being read.
+ * `fresher`: the read gave up crossed, and a verdict from a reading made alone was kept after this read began (Tynn #364).
+ */
+interface ListRead { readonly list: TrustList; readonly alone: boolean; readonly fresher?: TrustView }
+
+/**
+ * A kept verdict. `seq`: the write count when it was kept (`#writes`), which orders it against every read by the count, never by
+ * a clock. `lone`: it came from a reading made alone, or from the person's yes: a complete verdict, not a crossed one.
+ */
+interface Kept { readonly path: string; readonly view: TrustView; readonly seq: number; readonly lone: boolean }
 
 export class WorkspaceTrust {
     readonly #ports: WorkspaceTrustPorts;
-    readonly #views = new Map<string, { path: string; view: TrustView }>();
+    readonly #views = new Map<string, Kept>();
     /**
      * EVERY WRITE OF A WORKSPACE'S VERDICT, COUNTED (Tynn #955). Several things read one workspace at once (the hosting's
      * pass, the watcher, an agent's start, Genie's own writes, the person's Untrust), a read takes several steps, and
@@ -235,8 +244,10 @@ export class WorkspaceTrust {
         const ensure = this.#guard(workspaceId, workspace.path, epoch, purpose);
         const ports = this.#guardedPorts(ensure);
         try {
-            const view = this.#verdict(workspaceId, await this.#read(workspaceId, workspace.path, ports, ensure));
-            this.#keep(workspaceId, workspace.path, view);
+            const read = await this.#read(workspaceId, workspace.path, ports, ensure);
+            if (read.fresher) return read.fresher;
+            const view = this.#verdict(workspaceId, read);
+            this.#keep(workspaceId, workspace.path, view, read.alone);
             return view;
         } catch (error) {
             this.#notRead(workspaceId, error);
@@ -260,7 +271,7 @@ export class WorkspaceTrust {
         await this.#ports.approveSites(workspaceId);
         ensure();
         const view: TrustView = { trusted: true, changed: false, list };
-        this.#keep(workspaceId, workspace.path, view);
+        this.#keep(workspaceId, workspace.path, view, true);
         // Told after the yes is kept (Tynn #756, PR9b): what waited for it is restored. One listener failing costs nobody the yes or the next listener.
         for (const listener of [...this.#trustedListeners]) { try { listener(workspaceId); } catch { /* the yes stands */ } }
         return view;
@@ -282,8 +293,9 @@ export class WorkspaceTrust {
         ensure();
         // The yes is gone from the record. If the list cannot be read now, the verdict kept from before must not go on saying it.
         const read = await this.#read(workspaceId, workspace.path, this.#guardedPorts(ensure), ensure).catch((error: unknown) => { this.#notRead(workspaceId, error); throw error; });
+        if (read.fresher) return read.fresher;
         const view = this.#verdict(workspaceId, read);
-        this.#keep(workspaceId, workspace.path, view);
+        this.#keep(workspaceId, workspace.path, view, read.alone);
         return view;
     }
 
@@ -293,14 +305,27 @@ export class WorkspaceTrust {
      * reads its files in its own time), so it is read again. Every verdict kept from a reading made alone comes from one
      * that began after the verdict before it was written, so a later one is never replaced by an earlier one. Crossed
      * `READS_WHEN_CROSSED` times, it stops and says so: `#verdict` then takes the record's yes and nothing else.
+     *
+     * UNLESS A FRESHER COMPLETE VERDICT IS ALREADY KEPT (Tynn #364). Each crossing is a verdict written while this read ran.
+     * When the one kept now came from a reading made alone (or the person's yes) and was kept AFTER this read began (by the
+     * write count), it is a complete read at least as fresh as anything this one read: it is the answer, and this read
+     * keeps nothing over it. A workspace just added, read at once by the hosting's pass, a file write and an agent's start,
+     * was left "not trusted" by the last of them, over three reads that each read alone that nothing would run.
+     * Otherwise (nothing kept since, a forget, or a kept verdict that was itself crossed) it is as before.
      */
     async #read(workspaceId: string, path: string, ports: TrustListPorts, ensure: () => void): Promise<ListRead> {
+        const began = this.#writes.get(workspaceId) ?? 0;
         for (let reading = 1; ; reading++) {
             const before = this.#writes.get(workspaceId) ?? 0;
             const list = await readTrustList(path, ports);
             ensure();
             const alone = (this.#writes.get(workspaceId) ?? 0) === before;
-            if (alone || reading === READS_WHEN_CROSSED) return { list, alone };
+            if (alone) return { list, alone };
+            if (reading === READS_WHEN_CROSSED) {
+                const kept = this.#views.get(workspaceId);
+                const fresher = kept !== undefined && kept.lone && kept.path === path && kept.seq > began ? kept.view : undefined;
+                return { list, alone, ...(fresher ? { fresher } : {}) };
+            }
         }
     }
 
@@ -322,10 +347,11 @@ export class WorkspaceTrust {
         if (this.#views.get(workspaceId)?.view.trusted === true && !recordSaysYes(this.#ports.record(), workspaceId)) this.#forget(workspaceId);
     }
 
-    #keep(workspaceId: string, path: string, view: TrustView): void {
+    #keep(workspaceId: string, path: string, view: TrustView, lone: boolean): void {
         const before = this.#views.get(workspaceId)?.view.trusted;
-        this.#views.set(workspaceId, { path, view });
-        this.#writes.set(workspaceId, (this.#writes.get(workspaceId) ?? 0) + 1);
+        const seq = (this.#writes.get(workspaceId) ?? 0) + 1;
+        this.#views.set(workspaceId, { path, view, seq, lone });
+        this.#writes.set(workspaceId, seq);
         if (before !== view.trusted) this.#ports.verdictMoved?.(workspaceId);
     }
 
