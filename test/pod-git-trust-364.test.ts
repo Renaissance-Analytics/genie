@@ -24,6 +24,8 @@ let mark: string;
 let tool: string;
 const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { cwd: repo, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 const ran = () => existsSync(mark);
+/** A notes ref to push: without one, git refuses the push before it reaches the remote, and nothing could run anyway. */
+const seedNote = () => git('notes', '--ref=proof-of-done', 'add', '-f', '-m', 'seed', 'HEAD');
 const untrusted = () => setGitReadPolicy(trustAwarePolicy(() => false));
 const trusted = () => setGitReadPolicy(trustAwarePolicy(() => true));
 
@@ -33,6 +35,9 @@ beforeEach(() => {
     repo = join(root, 'repo');
     mkdirSync(repo);
     git('init', '-q');
+    // Who writes a note: the repository's own (a key that runs nothing), as a host's git has one of its own.
+    git('config', 'user.name', 't');
+    git('config', 'user.email', 't@example.invalid');
     writeFileSync(join(repo, 'a.txt'), 'one\n');
     git('add', '.');
     git('commit', '-q', '-m', 'first');
@@ -50,6 +55,7 @@ afterEach(() => {
 
 describe("runGit, proof-of-done's git", () => {
     it('a key that could run something, untrusted: push runs nothing, and says why', async () => {
+        seedNote();
         git('config', 'core.sshCommand', tool);
         untrusted();
         const pushed = await runGit(repo, ['push', 'origin', 'refs/notes/proof-of-done:refs/notes/proof-of-done']);
@@ -68,6 +74,7 @@ describe("runGit, proof-of-done's git", () => {
     });
 
     it('CONTROL: the same repository, trusted: the push runs the program, as git does', async () => {
+        seedNote();
         git('config', 'core.sshCommand', tool);
         trusted();
         await runGit(repo, ['push', 'origin', 'refs/notes/proof-of-done:refs/notes/proof-of-done']);
