@@ -22,7 +22,7 @@ import { join } from 'node:path';
 // The feature snapshot is read on the page's own bridge now (P4 family 11): window.genieTest needs this.
 process.env.GENIE_PAGE_PROBE ??= '1';
 
-const PORT = Number(process.env.TRUST_CDP_PORT ?? 9344);
+const PORT = Number(process.env.TRUST_CDP_PORT ?? 9411);
 const failures = [];
 /** When this row began: nothing older is ever taken for one of its own processes (end-own-tree.mjs). */
 const RUN_BEGAN = Date.now();

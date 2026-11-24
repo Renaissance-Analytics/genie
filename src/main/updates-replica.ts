@@ -2,6 +2,7 @@ import type { UpdateChannel } from '../core/update-channel.js';
 import type { InstallResult, UpdateState } from './updater.js';
 import type { HelperLaunch, UpdateFailedRecord } from './updates-host.js';
 import type { AgentDrainOutcome } from '../core/agent-shutdown-drain.js';
+import type { UpdateScope } from '../core/update-kind.js';
 
 /**
  * THE WINDOW'S UPDATES, A REPLICA OF GENIE-HOST'S (the host split, P5b). The state is the host's `UpdateState`, sent whole
@@ -11,7 +12,8 @@ import type { AgentDrainOutcome } from '../core/agent-shutdown-drain.js';
  *
  * `install()` keeps `UpdateHost`'s contract: `null` when nothing is downloaded, otherwise the host's answer — the drain's
  * words and the teardown report. When the answer comes with the state `installing`, the window is told once
- * (`onInstalling`): the host has drained and exits, and the window quits without recording anything over the host's record.
+ * (`onInstalling`), with what the update changes (its `scope`): the host has drained and exits, and the window quits without
+ * recording anything over the host's record; or only the window is updated (client-only), and the window alone exits.
  */
 
 const IDLE: UpdateState = { phase: 'idle', version: null, percent: null, error: null, checkedAt: null };
@@ -21,7 +23,7 @@ export class UpdatesReplica {
     readonly #pid: number;
     #state: UpdateState = IDLE;
     readonly #listeners = new Set<(state: UpdateState) => void>();
-    readonly #installing = new Set<() => void>();
+    readonly #installing = new Set<(scope: UpdateScope | undefined) => void>();
     #told = false;
     readonly #failedListeners = new Set<(notice: UpdateFailedRecord) => void>();
     #failedPending: UpdateFailedRecord | null = null;
@@ -43,7 +45,8 @@ export class UpdatesReplica {
     #tellInstalling(): void {
         if (this.#told) return;
         this.#told = true;
-        for (const l of [...this.#installing]) l();
+        const scope = this.#state.scope;
+        for (const l of [...this.#installing]) l(scope);
     }
 
     /** This window says it is one, with its pid, each time it links: the host's install spares it and waits for it to go. */
@@ -105,8 +108,8 @@ export class UpdatesReplica {
         for (const l of [...this.#failedListeners]) l(notice);
     }
 
-    /** Told once, when the host answered an install and is on its way out. */
-    onInstalling(listener: () => void): () => void {
+    /** Told once, when the host answered an install, with the install's scope (P6-1): client-only = the host stays. */
+    onInstalling(listener: (scope: UpdateScope | undefined) => void): () => void {
         this.#installing.add(listener);
         return () => { this.#installing.delete(listener); };
     }

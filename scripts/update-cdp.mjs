@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { closeWhatsNew } from './cdp-whats-new.mjs';
+import { writeFileSync } from 'node:fs';
+import { ticksOf } from './crash-cdp-lib.mjs';
+import { notOwnLaunch } from './cdp-own-launch.mjs';
 /**
  * DRIVE AN UPDATE THROUGH THE REAL APP — check → download → install, over CDP, via the same
  * `window.genieTest.updates` on the same page bridge the Dashboard signal strip uses.
@@ -85,6 +88,13 @@ const until = async (cdp, pred, ms, what) => {
 
 console.log('\nTHE UPDATE PATH — check, download, install, through the installed app\n');
 const page = await findTarget();
+// THIS RUN'S OWN LAUNCH (CDP_OWN_PID, Tynn #1036 P6-1; the full gate 1124-034522-b451dd read another row's page): the process
+// listening on the port must be the launch the caller names, or one it started, before anything there is read.
+if (process.env.CDP_OWN_PID) {
+    const why = notOwnLaunch(PORT, Number(process.env.CDP_OWN_PID));
+    check(why === null, `0. the page on the debugger port ${PORT} is this run's own launch (pid ${process.env.CDP_OWN_PID} or one it started)`, why ?? '');
+    if (why !== null) { console.log('\nUPDATE PATH REFUSED: the page is not this run\'s Genie.'); process.exit(1); }
+}
 const cdp = await Cdp.connect(page.webSocketDebuggerUrl);
 try {
     await cdp.evaluate('document.readyState');
@@ -108,11 +118,11 @@ try {
     const still = await state(cdp);
     check(still.phase === 'available', '5. CONTROL: nothing downloads without being asked', still.phase);
 
-    await cdp.evaluate('location.hash = "#genie://dashboard"; true');
+    // THE UPDATE IS IN THE HEADER, on every surface (core/update-chip.ts; deck.ts: no longer a Dashboard signal).
     await new Promise((r) => setTimeout(r, 400));
-    const shown = await cdp.evaluate('(() => { const b = document.querySelector("[data-signal=update]"); return b ? { text: b.textContent, action: b.dataset.action } : null; })()');
-    check(shown !== null && shown.action === 'update-download', '6. the Dashboard shows the update as a signal whose door is download', JSON.stringify(shown));
-    check(shown !== null && shown.text.includes(EXPECT), '7. the signal names the version', shown?.text ?? '');
+    const shown = await cdp.evaluate('(() => { const b = document.querySelector("[data-update-chip]"); return b ? { text: b.textContent, action: b.dataset.updateAction } : null; })()');
+    check(shown !== null && shown.action === 'update-download', '6. the header shows the update, and its step is download', JSON.stringify(shown));
+    check(shown !== null && shown.text.includes(EXPECT), '7. it names the version', shown?.text ?? '');
     await cdp.screenshot(`${process.cwd()}/update-available.png`);
     if (auto) {
         console.log(failures.length === 0 ? '\nAUTO-CHECK PROVEN — the installed app found the update on the feed without being asked, offered it, and downloaded nothing.' : `\nAUTO-CHECK FAILED — ${failures.length}: ${failures.join(' | ')}`);
@@ -121,7 +131,10 @@ try {
 
     // Click the door rather than call the bridge: this is the path a person takes.
     await closeWhatsNew((expression) => cdp.evaluate(expression));
-    await cdp.evaluate('document.querySelector("[data-signal=update]").click(); true');
+    // The header's update button opens what is in the update (UpdateWindow), whose step button downloads it: a person's path.
+    await cdp.evaluate('document.querySelector("[data-update-chip]").click(); true');
+    await new Promise((r) => setTimeout(r, 400));
+    await cdp.evaluate('document.querySelector("[data-update-window] ~ * [data-action=update-download], button[data-action=update-download]").click(); true');
     const downloading = await until(cdp, (s) => s.phase === 'downloading' || s.phase === 'downloaded', 10_000, 'download to start');
     check(downloading.phase === 'downloading' || downloading.phase === 'downloaded', '8. clicking the signal starts the download', downloading.phase);
 
@@ -130,8 +143,8 @@ try {
     check(downloaded.percent === 100, '10. progress reached 100', String(downloaded.percent));
 
     await new Promise((r) => setTimeout(r, 400));
-    const ready = await cdp.evaluate('(() => { const b = document.querySelector("[data-signal=update]"); return b ? { text: b.textContent, action: b.dataset.action } : null; })()');
-    check(ready !== null && ready.action === 'update-install', '11. the signal now offers install', JSON.stringify(ready));
+    const ready = await cdp.evaluate('(() => { const b = document.querySelector("[data-update-chip]"); return b ? { text: b.textContent, action: b.dataset.updateAction } : null; })()');
+    check(ready !== null && ready.action === 'update-install', '11. the header now offers install', JSON.stringify(ready));
     await cdp.screenshot(`${process.cwd()}/update-downloaded.png`);
 
     // §7.4 — "an upgrade ends every agent session and does not revive them" — is only a claim
@@ -153,6 +166,19 @@ try {
             await new Promise((r) => setTimeout(r, 500));
         }
         check(running === true, '11c. that agent\'s session is RUNNING when install is asked', String(running));
+        // STREAMING THROUGH THE INSTALL (Tynn #1036 P6-1): with UPDATE_TICKS_FILE the agent is mid-turn when install is asked,
+        // its provider the stub in TICKER mode (the caller's marker file holds the caller's pid), and where its ledger stood is
+        // written for the caller, which reads the ledger again after the install (scripts/update-ticks-after-cdp.mjs).
+        const ticksFile = process.env.UPDATE_TICKS_FILE;
+        if (ticksFile && running === true) {
+            const sent = await cdp.evaluate(`(window.genieTest ?? window.genie).prompt(${JSON.stringify(codexId)}, 'Stream ticks until stopped.')`);
+            check(sent?.ok === true, '11t. that agent took a prompt: it is mid-turn', sent?.reason ?? '');
+            let t = null;
+            const tEnd = Date.now() + 30_000;
+            while (Date.now() < tEnd) { t = await ticksOf(cdp, codexId); if (t.max >= 8) break; await new Promise((r) => setTimeout(r, 500)); }
+            check(t !== null && t.max >= 8 && t.pids.length === 1, '11u. its ledger streams ticks from ONE provider pid when install is asked', `ticks to ${t?.max}, pids ${JSON.stringify(t?.pids)}`);
+            writeFileSync(ticksFile, JSON.stringify({ agentId: codexId, pid: t?.pids?.[0] ?? null, max: t?.max ?? 0, askedAt: Date.now() }));
+        }
     }
 
     // §7.2's POSITIVE CONTROL (Fancy, 2026-10-10): with fancy-pty every live terminal is one
@@ -167,7 +193,9 @@ try {
         check(term && term.pid > 0, '11d. a Workspace terminal is open when install is asked', `pid ${term?.pid}`);
         await new Promise((r) => setTimeout(r, 1500));
         const { execFileSync } = await import('node:child_process');
-        const helpers = execFileSync('powershell', ['-NoProfile', '-Command',
+        // The helper count is Windows' (fancy-pty's helper under the install dir); on Linux (scripts/vm-client-only-update-linux.sh)
+        // the terminal stays open through the install and nothing is counted here.
+        const helpers = process.platform !== 'win32' ? '0' : execFileSync('powershell', ['-NoProfile', '-Command',
             // @(...) on purpose: in Windows PowerShell 5.1, (pipeline).Count on exactly ONE CimInstance
             // result is $null (the PSObject intrinsic-member bug) — the first run read "0 helper(s)"
             // while the dump showed the helper, pid 4700, right there. Zero and two counted fine.
@@ -176,7 +204,7 @@ try {
         const n = Number(helpers || 0);
         if (n === 0 && !process.env.EXPECT_HELPERS) console.log('  (no fancy-pty helper under the install dir — node-pty engine, or the helper is elsewhere; set EXPECT_HELPERS=1 to assert)');
         else check(n === 1, '11e. CONTROL: that terminal is exactly ONE fancy-pty-helper under the install dir — the §7.2 scan has something to find', `${n} helper(s)`);
-        if (process.env.EXPECT_HELPERS && n !== 1) {
+        if (process.env.EXPECT_HELPERS && n !== 1 && process.platform === 'win32') {
             // Say what IS there, so a failed control is a measurement and not a shrug: every
             // process that names fancy-pty anywhere, and everything running from the install dir
             // that is not Genie.exe itself (pid, parent, path, first 160 chars of the command line).

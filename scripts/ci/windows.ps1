@@ -58,7 +58,8 @@ $Rows = @(
     'build', 'seed', 'no-pty', 'smoke', 'layout', 'app-stopped',
     'local-door-break', 'local-door', 'host-late-ready', 'files-watch', 'chat-drafts', 'gapp-open', 'artboard', 'ui-lag', 'plan-popover',
     'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash', 'quit-keeps-host', 'rebuilt-machine',
-    'package', 'sign-plan', 'packed-tree', 'update-metadata', 'package-fuse', 'packaged-launcher'
+    'package', 'sign-plan', 'packed-tree', 'update-metadata', 'package-fuse', 'packaged-launcher',
+    'client-only-update'
 )
 
 if ($List) { $Rows | ForEach-Object { Write-Output $_ }; exit 0 }
@@ -330,8 +331,11 @@ function Row-app-stopped {
 function Row-local-door-break {
     Need-Build; Need-TestMachine
     $log = Join-Path $Out 'local-door-break.out'
-    node scripts/local-door-cdp.mjs --break-admission *> $log
-    $probe = $LASTEXITCODE
+    # Ports of its own: local-door runs the same script on its defaults (test/ci-debug-ports-unique.test.ts). Put back after.
+    $own = @{ CDP_PORT = '9405'; LOCAL_DOOR_CDP_INSPECT = '9406' }
+    $before = @{}
+    foreach ($k in $own.Keys) { $before[$k] = [Environment]::GetEnvironmentVariable($k, 'Process'); [Environment]::SetEnvironmentVariable($k, $own[$k], 'Process') }
+    try { node scripts/local-door-cdp.mjs --break-admission *> $log; $probe = $LASTEXITCODE } finally { foreach ($k in $own.Keys) { [Environment]::SetEnvironmentVariable($k, $before[$k], 'Process') } }
     Get-Content $log
     if ($probe -ne 1 -or -not (Select-String -Path $log -Pattern 'FAIL 1:' -Quiet) -or -not (Select-String -Path $log -Pattern 'actual refusal:.*not an admitted' -Quiet)) { throw "the admission break control did not fail as it must (exit $probe)" }
 }
@@ -380,7 +384,7 @@ function Row-renderer-crash { Need-Build; Need-TestMachine; Run 'renderer-crash-
 # put back whatever the row's result.
 function Row-quit-keeps-host {
     Need-Build; Need-TestMachine
-    $own = @{ QUIT_CDP_OWN_HOME = '1'; QUIT_CDP_OUT = (Join-Path $Out 'quit-keeps-host'); CDP_PORT = '9362'; QUIT_CDP_INSPECT = '9363'; QUIT_CDP_DEADLINE_MS = '540000' }
+    $own = @{ QUIT_CDP_OWN_HOME = '1'; QUIT_CDP_OUT = (Join-Path $Out 'quit-keeps-host'); CDP_PORT = '9414'; QUIT_CDP_INSPECT = '9415'; QUIT_CDP_DEADLINE_MS = '540000' }
     $before = @{}
     foreach ($k in $own.Keys) { $before[$k] = [Environment]::GetEnvironmentVariable($k, 'Process'); [Environment]::SetEnvironmentVariable($k, $own[$k], 'Process') }
     try {
@@ -410,6 +414,12 @@ function Row-package-fuse {
 }
 # The packaged app starts genie-host through genie-launch.exe, from its copy, with its supervisor ready. ci.yml's step,
 # command for command, on a home of its own under ci-out.
+# A CLIENT-ONLY UPDATE KEEPS GENIE-HOST AND ITS AGENT STREAMING (Tynn #1036 P6-1): two installers that carry the same host,
+# the base one installed and updated to the other through the real updater while an agent streams; the same host and
+# provider pids after, and every tick streamed while there was no window in the agent's ledger, in order. Everything it
+# starts is ended through scripts/end-own-tree.mjs (Tynn #1031). It builds and packages twice and replaces the install,
+# ~\.genie, release\ and dist\: last in the list, after every row that reads them.
+function Row-client-only-update { Need-Install; Need-Electron; Need-TestMachine; Run 'vm-client-only-update' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-client-only-update.ps1 } }
 function Row-packaged-launcher {
     Need-Packaged
     $saved = @{ USERPROFILE = $env:USERPROFILE; HOME = $env:HOME; APPDATA = $env:APPDATA; LOCALAPPDATA = $env:LOCALAPPDATA }
@@ -463,6 +473,8 @@ function Row-packaged-launcher {
         if ($copyFailed) { throw "the packaged app could not make genie-host's copy: $($copyFailed.Line)" }
         Write-Output "genie-host runs from: $hostPath"
         if (-not $hostPath -or -not $hostPath.StartsWith("$h\.genie\host\", [System.StringComparison]::OrdinalIgnoreCase)) { throw "genie-host is not running from its copy under $h\.genie\host\ (it runs from '$hostPath')" }
+        # As genie-host.exe in runtime-<electron>-host (Tynn #1036 P6-1): never under the install's name, which an installer ends.
+        if (-not ($hostPath -like "$h\.genie\host\runtime-*-host\genie-host.exe")) { throw "genie-host's copy is not runtime-*-host\genie-host.exe (it runs from '$hostPath')" }
         if ($unready) { throw "genie-host's supervisor is not ready: $($unready.Line)" }
         if (-not $ready) { throw "genie-host did not say its supervisor is ready within 60 s" }
         Write-Output "the packaged app: $($ready.Line)"
@@ -500,6 +512,7 @@ function Ceiling([string]$name) {
         { $_ -in 'safe-mode', 'hang' } { return 600 }
         'quit-keeps-host' { return 660 }
         'package' { return 1500 }
+        'client-only-update' { return 2400 }
         default { return 600 }
     }
 }
