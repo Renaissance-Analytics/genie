@@ -167,7 +167,10 @@ export GENIE2_CODEX_BINARY="$ROOT/scripts/stub-codex.mjs" GENIE_PAGE_PROBE=1
 printf '%s' "$$" >"$TICKER"
 export UPDATE_TICKS_FILE="$ROOT/update-ticks.json"
 rm -f "$UPDATE_TICKS_FILE"
-run seed.log node scripts/smoke-seed.mjs
+# THE SEED'S WORKSPACE IS A NEW DIRECTORY, NEVER THE CHECKOUT (the full gate 1124-020718-168937): smoke-seed.mjs takes its
+# cwd as the workspace, and in a gate shard earlier rows have seeded the checkout and changed its project.json.
+WORKSPACE="$(mktemp -d -t genie-update-workspace-XXXXXX)"
+( cd "$WORKSPACE" && node "$ROOT/scripts/smoke-seed.mjs" ) >seed.log 2>&1 || { tail -20 seed.log; fail "the seed failed in $WORKSPACE"; }
 "$APPIMAGE_FILE" --remote-debugging-port=9222 >installed-out.log 2>installed-err.log &
 APP_PID=$!
 host_before=''

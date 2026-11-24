@@ -171,7 +171,15 @@ try {
     $env:UPDATE_TICKS_FILE = Join-Path $root 'update-ticks.json'
     Remove-Item -Force -ErrorAction SilentlyContinue $env:UPDATE_TICKS_FILE
     $script:began = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    Run 'node scripts\smoke-seed.mjs'
+    # THE SEED'S WORKSPACE IS A NEW DIRECTORY, NEVER THE CHECKOUT (the full gate 1124-020718-168937): smoke-seed.mjs takes its
+    # cwd as the workspace, and in a gate shard earlier rows have seeded the checkout and changed its project.json, so a seed of
+    # it is refused. The home stays the session's own: the installer installs for the signed-in user, whatever the variables say.
+    $workspace = Join-Path ([System.IO.Path]::GetTempPath()) ("genie-update-workspace-" + $PID)
+    if (Test-Path $workspace) { Remove-Item -Recurse -Force $workspace }
+    New-Item -ItemType Directory -Force $workspace | Out-Null
+    Push-Location $workspace
+    try { & node (Join-Path $root 'scripts\smoke-seed.mjs'); $seedExit = $LASTEXITCODE } finally { Pop-Location }
+    if ($seedExit -ne 0) { throw "the seed failed in $workspace (exit $seedExit)" }
     Remove-Item -Force -ErrorAction SilentlyContinue installed-out.log, installed-err.log
     $app = Start-Process -FilePath $exe -ArgumentList '--remote-debugging-port=9222' -PassThru `
         -RedirectStandardOutput installed-out.log -RedirectStandardError installed-err.log
