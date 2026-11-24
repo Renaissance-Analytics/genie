@@ -95,6 +95,11 @@ export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPort
                 ? approvalNoteText({ what: `“${item.title}”`, outcome: command.choice === 'allow' ? 'allowed' : 'denied', option: command.choice, note: command.note })
                 : null;
             if (text !== null && !ports.deliverToAgent) throw new Error('your note cannot reach the agent from here; answer without it, or from its own window');
+            // A GROUPED ASK answers the list the person read (Tynn #742): one that grew since is refused, so Sign all never
+            // signs a claim that joined after the person looked. Its revision is the one fact of the item an answer brings.
+            if (typeof item.revision === 'number' && item.revision !== (action.item.revision ?? 0)) {
+                throw new Error('This request changed since you opened it: more were added to its list. Nothing was answered: read it again and answer the current list.');
+            }
             if (!ports.approvals.resolve(command.approvalId, command.choice)) throw new Error(`no pending approval ${command.approvalId}`);
             if (text !== null && !(await ports.deliverToAgent!(item.agentId!, text))) throw new Error(`answered — but ${item.agentName ?? 'the agent'} is not running, so your note was not delivered`);
             break;

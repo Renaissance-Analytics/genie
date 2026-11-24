@@ -67,6 +67,28 @@ const VERBS: Record<string, string> = {
     'page.click': 'click something that changes or deletes on a page',
 };
 
+/**
+ * ONE ASK FOR MANY (Tynn #742; the owner, 2026-11-24: about 100 separate Proof-of-Done cards after a restart). Each request
+ * of a grouped action still waits on its own verdict and still leaves alone (a claim Tynn withdraws is cancelled by its own
+ * id) — but the Deck shows them as ONE item listing every request, answered for all at once. A request that arrives while
+ * the item waits joins it, and the item's `revision` counts the joins: an answer given to an older list is refused
+ * (deck-answer.ts), so Sign all never signs a claim the person did not see.
+ */
+const GROUPED: Readonly<Record<string, { readonly asks: (n: number) => string; readonly allow: string; readonly deny: string; readonly from: string }>> = {
+    'pod.sign': {
+        asks: (n) => (n === 1 ? 'Genie asks you to sign 1 Proof-of-Done for your Tynn work:' : `Genie asks you to sign ${n} Proof-of-Done claims for your Tynn work:`),
+        allow: 'Sign all',
+        deny: 'Deny all',
+        // Genie's own request, for the person's Tynn: never a workspace of this machine (Tynn #742).
+        from: 'Tynn',
+    },
+};
+const GROUP_PREFIX = 'appr_group_';
+const EXPIRED_GROUP_PREFIX = 'apprx_group_';
+const grouped = (action: string): boolean => Object.hasOwn(GROUPED, action);
+/** The Deck id of a grouped action's one item. */
+export const approvalGroupId = (action: string): string => `${GROUP_PREFIX}${action}`;
+
 /** Actions an agent's autonomy never approves for it: each waits for the person — unless a switch below answers it. */
 export const PERSON_ONLY_ACTIONS: readonly string[] = ['agents.create', 'page.submit', 'page.click', 'flows.stop'];
 
@@ -100,6 +122,8 @@ export class ApprovalQueue {
     readonly #autoApproved: ((caller: Caller, action: string) => boolean) | undefined;
     readonly #granted: ((caller: Caller, action: string) => boolean) | undefined;
     #auto: AutoApproved[] = [];
+    /** Per grouped action: how many requests joined its item while it waited (Tynn #742) — the item's revision. */
+    readonly #joins = new Map<string, number>();
 
     /**
      * `autoApproved`: whether this caller's actions run WITHOUT the person (Tynn #801, an autonomous agent). Such a
@@ -178,6 +202,8 @@ export class ApprovalQueue {
                 existing.resolvers.push(resolve);
             } else {
                 const id = `appr_${++this.#n}_${this.#now()}`;
+                // A request joining a grouped item that already waits changes what that item lists: a new revision.
+                if (grouped(action) && [...this.#pending.values()].some((p) => p.action === action)) this.#joins.set(action, (this.#joins.get(action) ?? 0) + 1);
                 entry = { id, caller, action, detail, at: this.#now(), resolvers: [resolve], why: autonomous ? AUTONOMY_PERSON_ONLY : null };
                 this.#pending.set(id, entry);
                 this.#changed();
@@ -188,6 +214,17 @@ export class ApprovalQueue {
     }
 
     resolve(id: string, choice: 'allow' | 'deny'): boolean {
+        // A GROUP'S ANSWER is each of its requests' own answer, as if every one had been answered alone.
+        if (id.startsWith(GROUP_PREFIX)) {
+            const action = id.slice(GROUP_PREFIX.length);
+            if (!grouped(action)) return false;
+            const members = [...this.#pending.values()].filter((p) => p.action === action);
+            if (members.length === 0) return false;
+            for (const p of members) this.#pending.delete(p.id);
+            for (const p of members) for (const r of p.resolvers) r(choice === 'allow' ? 'allowed' : 'denied');
+            this.#changed();
+            return true;
+        }
         const p = this.#pending.get(id);
         if (!p) return false;
         this.#pending.delete(id);
@@ -212,7 +249,46 @@ export class ApprovalQueue {
     }
 
     deckItems(): DeckItem[] {
-        return [...this.#pending.values()].map((p): DeckItem => ({
+        const pending = [...this.#pending.values()];
+        const groups = Object.entries(GROUPED).flatMap(([action, group]): DeckItem[] => {
+            const members = pending.filter((p) => p.action === action);
+            if (members.length === 0) return [];
+            return [{
+                id: approvalGroupId(action),
+                source: 'agent-question',
+                // Genie's own ask: no agent to open, and no workspace of this machine.
+                agentId: null,
+                agentName: 'Genie',
+                workspaceId: null,
+                workspaceName: group.from,
+                title: [group.asks(members.length), ...members.map((m) => `• ${m.detail}`)].join('\n'),
+                blocking: true,
+                priority: 'high',
+                at: Math.min(...members.map((m) => m.at)),
+                answer: { kind: 'inline', options: [{ id: 'allow', label: group.allow, tone: 'ok' }, { id: 'deny', label: group.deny, tone: 'bad' }] },
+                forwardedFrom: null,
+                revision: this.#joins.get(action) ?? 0,
+            }];
+        });
+        const expiredGroups = Object.entries(GROUPED).flatMap(([action, group]): DeckItem[] => {
+            const members = this.#expired.filter((e) => e.action === action);
+            if (members.length === 0) return [];
+            return [{
+                id: `${EXPIRED_GROUP_PREFIX}${action}`,
+                source: 'agent-question',
+                agentId: null,
+                agentName: 'Genie',
+                workspaceId: null,
+                workspaceName: group.from,
+                title: [`${members.length === 1 ? '1 request' : `${members.length} requests`} to ${VERBS[action] ?? action} expired, no answer in 30 min:`, ...members.map((m) => `• ${m.detail}`)].join('\n'),
+                blocking: false,
+                priority: 'normal',
+                at: Math.max(...members.map((m) => m.at)),
+                answer: { kind: 'inline', options: [{ id: 'dismiss', label: 'Dismiss', tone: 'neutral' }] },
+                forwardedFrom: null,
+            }];
+        });
+        return pending.filter((p) => !grouped(p.action)).map((p): DeckItem => ({
             id: p.id,
             source: 'agent-question',
             agentId: p.caller.agentId,
@@ -226,7 +302,7 @@ export class ApprovalQueue {
             answer: { kind: 'inline', options: [{ id: 'allow', label: 'Allow', tone: 'ok' }, { id: 'deny', label: 'Deny', tone: 'bad' }] },
             forwardedFrom: null,
             ...(p.why ? { why: p.why } : {}),
-        })).concat(this.#expired.map((e): DeckItem => ({
+        })).concat(groups, this.#expired.filter((e) => !grouped(e.action)).map((e): DeckItem => ({
             id: e.id,
             source: 'agent-question',
             agentId: e.caller.agentId,
@@ -238,7 +314,7 @@ export class ApprovalQueue {
             at: e.at,
             answer: { kind: 'inline', options: [{ id: 'dismiss', label: 'Dismiss', tone: 'neutral' }] },
             forwardedFrom: null,
-        })));
+        })), expiredGroups);
     }
 
     /** Deny everything pending, with the reason — for a quit or a hibernate. */
@@ -257,7 +333,9 @@ export class ApprovalQueue {
     /** An expired request's Deck item, dismissed by the person. False for an id that is not an expired item. */
     dismissExpired(id: string): boolean {
         const before = this.#expired.length;
-        this.#expired = this.#expired.filter((e) => e.id !== id);
+        // A grouped notice goes whole: every expired request it lists.
+        const action = id.startsWith(EXPIRED_GROUP_PREFIX) ? id.slice(EXPIRED_GROUP_PREFIX.length) : null;
+        this.#expired = this.#expired.filter((e) => (action !== null && grouped(action) ? e.action !== action : e.id !== id));
         if (this.#expired.length === before) return false;
         this.#changed();
         return true;
@@ -271,7 +349,10 @@ export class ApprovalQueue {
                 // EXPIRED, not denied (Tynn #1006): nobody answered. Each caller hears 'expired', and the Deck keeps a notice
                 // the person dismisses, so neither the person nor the agent reads it as a Deny.
                 this.#pending.delete(p.id);
-                this.#expired = [...this.#expired, { id: `apprx_${p.id.slice('appr_'.length)}`, caller: p.caller, action: p.action, detail: p.detail, at: this.#now() }].slice(-20);
+                this.#expired = [...this.#expired, { id: `apprx_${p.id.slice('appr_'.length)}`, caller: p.caller, action: p.action, detail: p.detail, at: this.#now() }];
+                // The last 20 notices are kept; a grouped action's are ONE notice, so each of its requests is kept in it.
+                const singles = this.#expired.filter((e) => !grouped(e.action));
+                if (singles.length > 20) { const drop = new Set(singles.slice(0, singles.length - 20)); this.#expired = this.#expired.filter((e) => !drop.has(e)); }
                 for (const r of p.resolvers) r('expired');
                 n += 1;
             }

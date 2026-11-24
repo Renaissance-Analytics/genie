@@ -94,6 +94,13 @@ export class ProofOfDone {
     readonly #inFlight = new Set<Promise<void>>();
     /** Each HITL claim waiting on the person, by id: what a poll that no longer lists it withdraws (Tynn #858). */
     readonly #asking = new Map<string, AbortController>();
+    /**
+     * Claims the person SIGNED whose signature Tynn has not taken yet (a 429 or a 5xx, Tynn #742: Sign all on a long list
+     * outruns Tynn's 60 a minute). The next poll that lists one sends its signature again, never asking the person twice.
+     */
+    readonly #signed = new Set<string>();
+    /** Each task's words, as Tynn describes it, by project and task: asked once a run, however often its claim is listed. */
+    readonly #tasks = new Map<string, Promise<TaskWords | null>>();
     #retrying = false;
 
     constructor(ports: PodPorts) {
@@ -193,6 +200,8 @@ export class ProofOfDone {
      * answer and the claim is never signed. A failed poll never gets here, so it withdraws nothing.
      */
     #withdraw(waiting: ReadonlySet<string>): void {
+        // A signature still owed for a claim Tynn no longer lists is owed no more.
+        for (const id of this.#signed) if (!waiting.has(id)) this.#signed.delete(id);
         for (const [id, asking] of this.#asking) {
             if (waiting.has(id)) continue;
             this.#asking.delete(id);
@@ -200,6 +209,38 @@ export class ProofOfDone {
             this.#handled.delete(id);
             asking.abort(POD_WITHDRAWN);
         }
+    }
+
+    /**
+     * WHAT THE CLAIM IS FOR, IN WORDS (Tynn #742): the claim names its project and task by id only, so Tynn's own task
+     * detail is read — the Tynn tab's door (`GET /api/v1/projects/{project}/tasks/{task}`: its `number`, `title` and
+     * `project.name`). Asked once per task a run; null when Tynn would not say, and the ask names the repository instead.
+     */
+    #taskWords(claim: unknown): Promise<TaskWords | null> {
+        const request = (claim as { request?: { project?: unknown; task?: unknown } } | null)?.request;
+        const project = request?.project;
+        const task = request?.task;
+        if ((typeof project !== 'string' && typeof project !== 'number') || (typeof task !== 'string' && typeof task !== 'number')) return Promise.resolve(null);
+        const key = `${String(project)}\u0000${String(task)}`;
+        let words = this.#tasks.get(key);
+        if (!words) {
+            words = (async (): Promise<TaskWords | null> => {
+                try {
+                    const res = await this.#ports.tynn.request(`/api/v1/projects/${encodeURIComponent(String(project))}/tasks/${encodeURIComponent(String(task))}`, { method: 'GET' });
+                    if (!res.ok) return null;
+                    const body = (await res.json().catch(() => null)) as { number?: unknown; title?: unknown; project?: { name?: unknown } | null } | null;
+                    const title = typeof body?.title === 'string' && body.title.trim() !== '' ? body.title.trim() : null;
+                    if (title === null) return null;
+                    const number = typeof body?.number === 'number' || (typeof body?.number === 'string' && body.number !== '') ? String(body!.number) : null;
+                    const projectName = typeof body?.project?.name === 'string' && body.project.name.trim() !== '' ? body.project.name.trim() : null;
+                    return { number, title, project: projectName };
+                } catch { return null; }
+            })();
+            // A lookup that failed is asked again next time: only an answer is kept.
+            void words.then((w) => { if (w === null) this.#tasks.delete(key); });
+            this.#tasks.set(key, words);
+        }
+        return words;
     }
 
     /** Everything started so far has finished (a claim waiting on the person included). */
@@ -214,23 +255,31 @@ export class ProofOfDone {
         const given = typeof item.claim_hash === 'string' ? Buffer.from(item.claim_hash, 'base64url') : Buffer.alloc(0);
         if (given.length !== 32 || !given.equals(expected)) { this.#say(`claim ${id} refused: its hash is not the SHA-256 of its claim`); return; }
 
-        if (item.approval === 'hitl') {
+        if (item.approval === 'hitl' && !this.#signed.has(id)) {
             const asking = new AbortController();
             this.#asking.set(id, asking);
             let verdict: 'allowed' | 'denied' | 'expired';
-            try { verdict = await this.#ports.approve({ id, detail: describe(item.claim), signal: asking.signal }); }
+            try { verdict = await this.#ports.approve({ id, detail: describe(item.claim, await this.#taskWords(item.claim)), signal: asking.signal }); }
             finally { if (this.#asking.get(id) === asking) this.#asking.delete(id); }
             // Withdrawn while it waited: whatever the ask answered after that, Tynn is no longer waiting for this claim.
             if (asking.signal.aborted) { this.#say(`claim ${id} withdrawn: Tynn no longer lists it as waiting`); return; }
             if (verdict !== 'allowed') { this.#say(`claim ${id} not signed: ${verdict === 'expired' ? 'nobody answered within 30 minutes, so the request expired' : 'the person declined'}`); return; }
-        } else if (item.approval !== 'agent') {
+            this.#signed.add(id);
+        } else if (item.approval !== 'agent' && item.approval !== 'hitl') {
             this.#say(`claim ${id} refused: unknown approval`);
             return;
         }
 
         const signature = sign(null, expected, held.privateKey).toString('base64url');
         const res = await this.#ports.tynn.request(`/api/v1/pod/${encodeURIComponent(id)}/signature`, { method: 'POST', body: { key_id: held.keyId, signature } });
-        if (!res.ok) { this.#say(`Tynn did not take the signature for ${id} (${res.status})`); return; }
+        if (!res.ok) {
+            // Not now (429) or not working (5xx): the next poll that lists the claim sends it again. A refusal is final.
+            if (res.status === 429 || res.status >= 500) { this.#handled.delete(id); this.#say(`Tynn did not take the signature for ${id} yet (${res.status}); sending it again at the next poll`); return; }
+            this.#signed.delete(id);
+            this.#say(`Tynn did not take the signature for ${id} (${res.status})`);
+            return;
+        }
+        this.#signed.delete(id);
         const body = (await res.json().catch(() => null)) as { data?: { token?: unknown }; token?: unknown } | null;
         const token = body?.data?.token ?? body?.token;
         if (typeof token !== 'string' || token === '') { this.#say(`Tynn signed ${id} but sent no token, so no note is written`); return; }
@@ -312,11 +361,20 @@ function commitsOf(claim: unknown): string[] {
     return [...new Set(shas.filter((s): s is string => typeof s === 'string' && SHA.test(s)))];
 }
 
-/** What the person is asked to sign, in words: the task, the How Done? score, the commits. */
-function describe(claim: unknown): string {
-    const c = claim as { request?: { task?: unknown; story?: unknown }; score?: { value?: unknown; checkpoint?: unknown } } | null;
-    const task = c?.request?.task ?? c?.request?.story ?? '?';
+/** A task as Tynn describes it: its number on the board, its title, and its project's name. */
+interface TaskWords { readonly number: string | null; readonly title: string; readonly project: string | null }
+
+/**
+ * What the person is asked to sign, in one line (Tynn #742): the Tynn project, the task's number and title, the How Done?
+ * score, the commits. Without Tynn's words for the task, the claim's own repository and task stand in.
+ */
+function describe(claim: unknown, words: TaskWords | null): string {
+    const c = claim as { request?: { task?: unknown; story?: unknown }; work?: { repo?: unknown }; score?: { value?: unknown; checkpoint?: unknown } } | null;
+    const repo = typeof c?.work?.repo === 'string' && c.work.repo !== '' ? c.work.repo : null;
+    const what = words
+        ? `${words.project ?? repo ?? 'Tynn'} · ${words.number !== null ? `#${words.number} ` : ''}${words.title}`
+        : `${repo ?? 'Tynn'} · task ${String(c?.request?.task ?? c?.request?.story ?? '?')} (Tynn did not send its title)`;
     const score = c?.score ? `${String(c.score.value)} (${String(c.score.checkpoint)})` : 'unscored';
     const commits = commitsOf(claim).map((s) => s.slice(0, 7)).join(', ');
-    return `Tynn task ${String(task)}, How Done? ${score}${commits ? `, commits ${commits}` : ''}`;
+    return `${what} · How Done? ${score}${commits ? ` · commits ${commits}` : ''}`;
 }
