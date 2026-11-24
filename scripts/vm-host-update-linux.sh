@@ -139,6 +139,8 @@ unset GENIE_TEST_HOST_MARK
 run build-base.log npm run build
 BASE_HASH="$(sha256sum dist/main/host.js | cut -c1-12)"
 echo "the base build's genie-host: $BASE_HASH"
+# A BUILD MADE AS ONE THAT SHIPS (no GENIE_TEST_HOST_MARK) CARRIES NO MARK: its host.js has no row mark in it.
+grep -qF 'host-update-' dist/main/host.js && fail 'the base build, made with no mark, carries a host-update mark in host.js'
 run package-base.log npx electron-builder --linux AppImage --publish never --config "$FEED_CONFIG"
 base_image="$(ls release/*"$BASE"*.AppImage 2>/dev/null | head -1)"
 [ -n "$base_image" ] || { ls -la release; fail "no $BASE AppImage in release/"; }
@@ -153,6 +155,8 @@ run bump-next.log npm version "$NEXT" --no-git-tag-version
 GENIE_TEST_HOST_MARK="$MARK" run build-next.log npm run build
 NEXT_HASH="$(sha256sum dist/main/host.js | cut -c1-12)"
 echo "the update's genie-host: $NEXT_HASH (mark '$MARK')"
+# The control for the base's absence: the same search finds the mark in a build made with one.
+if [ -n "$MARK" ] && ! grep -qF "$MARK" dist/main/host.js; then fail "the update's host.js does not carry its mark '$MARK'"; fi
 if [ "$NEXT_HASH" = "$BASE_HASH" ] && [ "$BREAK" != client-only ]; then echo '### host-update=NOT-A-HOST-UPDATE'; fail "the two builds carry the same host ($BASE_HASH): the mark did not reach host.js"; fi
 run package-next.log npx electron-builder --linux AppImage --publish never --config "$FEED_CONFIG"
 mv -f package.json.pristine package.json

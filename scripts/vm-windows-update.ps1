@@ -139,6 +139,8 @@ try {
     Run 'npm run build' 'build-current.log'
     $baseHostHash = (Get-FileHash -Algorithm SHA256 'dist\main\host.js').Hash.ToLower().Substring(0, 12)
     Write-Output ("the base build's genie-host: " + $baseHostHash)
+    # A BUILD MADE AS ONE THAT SHIPS (no GENIE_TEST_HOST_MARK) CARRIES NO MARK: its host.js has no row mark in it.
+    if (Select-String -Path 'dist\main\host.js' -Pattern 'host-update-' -SimpleMatch -Quiet) { throw 'the base build, made with no mark, carries a host-update mark in host.js' }
     Run 'npx electron-builder --publish never --config.win.signExecutable=false' 'package-current.log'
     $setup = @(Get-ChildItem "release\Genie-$current-setup.exe")[0]
     if (-not $setup) { throw "no release\Genie-$current-setup.exe" }
@@ -174,6 +176,8 @@ try {
     if (-not $nextSetup) { throw "no release\Genie-$Next-setup.exe" }
     $nextHostHash = (Get-FileHash -Algorithm SHA256 'dist\main\host.js').Hash.ToLower().Substring(0, 12)
     Write-Output ("the update's genie-host: " + $nextHostHash + " (mark '" + $mark + "')")
+    # The control for the base's absence: the same search finds the mark in a build made with one.
+    if ($mark -and -not (Select-String -Path 'dist\main\host.js' -Pattern $mark -SimpleMatch -Quiet)) { throw "the update's host.js does not carry its mark '$mark'" }
     if ($nextHostHash -eq $baseHostHash -and $break -ne 'client-only') { Write-Output '### host-update=NOT-A-HOST-UPDATE'; throw "the two builds carry the same host ($baseHostHash): the mark did not reach host.js" }
     Run 'node scripts\feed-host-identity.mjs release\latest.yml' 'feed-host.log'
     $latest = Get-Content release\latest.yml -Raw

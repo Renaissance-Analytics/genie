@@ -1,6 +1,6 @@
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { linuxRow, linuxRows, linuxSh, windowsFunction, windowsPs1, windowsRows } from './helpers/ci-scripts.js';
 
 /*
@@ -70,6 +70,59 @@ describe('the update carries another genie-host', () => {
     it('the client-only break probe builds the update with no mark', () => {
         expect(ps1()).toMatch(/\$mark = if \(\$break -eq 'client-only'\) \{ '' \} else \{ "host-update-\$Next" \}/);
         expect(sh()).toMatch(/if \[ "\$BREAK" = client-only \]; then MARK=''; else MARK="host-update-\$NEXT"; fi/);
+    });
+});
+
+describe('the mark never reaches a build that ships', () => {
+    /** Every file under these roots, as paths relative to the checkout with forward slashes. */
+    const files = (...roots: string[]): string[] => roots.flatMap((r) => {
+        const at = join(root, r);
+        if (statSync(at, { throwIfNoEntry: false })?.isFile()) return [r];
+        if (!statSync(at, { throwIfNoEntry: false })?.isDirectory()) return [];
+        const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((d) =>
+            d.isDirectory() ? walk(join(dir, d.name)) : d.isFile() ? [relative(root, join(dir, d.name)).split('\\').join('/')] : []);
+        return walk(at);
+    });
+    /** The environment variable by name (not the define, __GENIE_TEST_HOST_MARK__). */
+    const ENV_NAME = /(?<![A-Z_])GENIE_TEST_HOST_MARK(?![A-Z_])/;
+
+    it('only vite.main.config.ts and the two row scripts name it: no workflow, CI runner, packaging config or source sets it', () => {
+        const naming = files('scripts', '.github', 'src', 'package.json', 'electron-builder.yml', 'vite.main.config.ts')
+            .filter((f) => ENV_NAME.test(readFileSync(join(root, f), 'utf8')));
+        expect(naming.sort()).toEqual(['scripts/vm-host-update-linux.sh', 'scripts/vm-windows-update.ps1', 'vite.main.config.ts']);
+        // CONTROL: the search reaches the workflows and the CI runners it clears.
+        expect(files('.github')).toContain('.github/workflows/release.yml');
+        expect(files('scripts')).toEqual(expect.arrayContaining(['scripts/ci/linux.sh', 'scripts/ci/windows.ps1']));
+    });
+
+    describe('the main bundle’s define', () => {
+        const saved = process.env.GENIE_TEST_HOST_MARK;
+        afterEach(() => { if (saved === undefined) delete process.env.GENIE_TEST_HOST_MARK; else process.env.GENIE_TEST_HOST_MARK = saved; vi.resetModules(); });
+        const define = async (): Promise<Record<string, string>> => {
+            vi.resetModules();
+            const config = (await import('../vite.main.config.ts')).default as { define: Record<string, string> };
+            return config.define;
+        };
+
+        it('with nothing set, as every build that ships is made, the mark is the empty string', async () => {
+            delete process.env.GENIE_TEST_HOST_MARK;
+            expect((await define()).__GENIE_TEST_HOST_MARK__).toBe('""');
+        });
+
+        it('CONTROL: set, it is that string', async () => {
+            process.env.GENIE_TEST_HOST_MARK = 'host-update-9.9.9';
+            expect((await define()).__GENIE_TEST_HOST_MARK__).toBe('"host-update-9.9.9"');
+        });
+    });
+
+    it('both rows prove it on a real build: the base (no mark) has none in host.js, the update’s has its own (the control)', () => {
+        expect(ps1()).toMatch(/if \(Select-String -Path 'dist\\main\\host\.js' -Pattern 'host-update-' -SimpleMatch -Quiet\) \{ throw 'the base build, made with no mark/);
+        expect(ps1()).toMatch(/if \(\$mark -and -not \(Select-String -Path 'dist\\main\\host\.js' -Pattern \$mark -SimpleMatch -Quiet\)\) \{ throw/);
+        expect(sh()).toMatch(/grep -qF 'host-update-' dist\/main\/host\.js && fail 'the base build, made with no mark/);
+        expect(sh()).toMatch(/if \[ -n "\$MARK" \] && ! grep -qF "\$MARK" dist\/main\/host\.js; then fail/);
+        // Checked on the base's own build, before the update's replaces dist/.
+        expect(ps1().indexOf("-Pattern 'host-update-'")).toBeLessThan(ps1().indexOf("'build-next.log'"));
+        expect(sh().indexOf("grep -qF 'host-update-'")).toBeLessThan(sh().indexOf('run build-next.log'));
     });
 });
 
