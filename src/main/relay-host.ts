@@ -250,14 +250,19 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
         for (const frame of buffered) deliver(frame);
     };
 
-    const admit = async (sid: string, token: string) => {
+    /**
+     * `waiting` is the mark of the open that started THIS admission (its own pre-admission buffer): when the grant's check
+     * answers, the session id may have been closed and opened again, and that later open is not this admission's to
+     * challenge, time or end (as in `handshake`).
+     */
+    const admit = async (sid: string, token: string, waiting: Frame[]) => {
         let check: GrantCheck;
         try {
             check = await deps.validateGrant(token);
         } catch {
             check = { ok: false, reason: 'grant validation error' };
         }
-        if (state !== 'open' || !preAdmit.has(sid)) return;
+        if (state !== 'open' || preAdmit.get(sid) !== waiting) return;
         if (!check.ok) {
             reject(sid, check.reason);
             return;
@@ -270,6 +275,9 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
         }
         const nonce = randomBytes(32).toString('hex');
         const timer = setTimeout(() => { if (pendingPop.has(sid)) reject(sid, 'proof-of-possession timeout'); }, deps.popTimeoutMs ?? 10_000);
+        // One challenge a session id: a timer left by an earlier one must not fire for this one.
+        const replaced = pendingPop.get(sid);
+        if (replaced) clearTimeout(replaced.timer);
         pendingPop.set(sid, { grant, token, nonce, timer });
         sendControl({ kind: 'data', sid, payload: { type: 'pop-challenge', nonce } });
     };
@@ -404,8 +412,9 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
                     reject(frame.sid, 'missing grant');
                     return;
                 }
-                preAdmit.set(frame.sid, []);
-                void admit(frame.sid, grant);
+                const waiting: Frame[] = [];
+                preAdmit.set(frame.sid, waiting);
+                void admit(frame.sid, grant, waiting);
                 return;
             }
             if (frame.kind === 'close' || frame.kind === 'error') {

@@ -216,7 +216,7 @@ async function cleanup(): Promise<void> {
     for (const dir of [home, workspace]) { try { rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }); } catch { /* a handle still closing */ } }
 }
 
-const watchdog = setTimeout(() => { console.log(`### rebuilt-machine deadline=FAIL  in: ${current}`); void cleanup().finally(() => process.exit(1)); }, Number(process.env['REBUILT_ROW_DEADLINE_MS'] ?? 540_000));
+const watchdog = setTimeout(() => { console.log(`### rebuilt-machine deadline=FAIL  in: ${current}`); void cleanup().finally(() => process.exit(1)); }, Number(process.env['REBUILT_ROW_DEADLINE_MS'] ?? 360_000));
 
 async function main(): Promise<void> {
     step('1.1 the keychain answers (a write, a read back, a delete: a probe entry of this row’s own)');
