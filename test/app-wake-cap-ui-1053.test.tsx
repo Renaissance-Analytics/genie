@@ -92,7 +92,18 @@ describe('the control: a number field, a "No limit" switch, one line of explanat
         expect(row().textContent).toContain('No limit');
         const help = row().querySelectorAll('[data-app-wake-cap-help]');
         expect(help).toHaveLength(1);
-        expect(help[0]!.textContent).toBe('Mail from this workspace’s apps gives kai at most this many turns an hour; more of it waits, and none is lost.');
+        expect(help[0]!.textContent).toBe('How many times an hour mail from this workspace’s apps may start a turn for kai. Mail is kept either way.');
+    });
+
+    it('the explanation is a line of its own under the controls, whole: it wraps, and is never cut off', () => {
+        show(6);
+        const help = row().querySelector('[data-app-wake-cap-help]') as HTMLElement;
+        // Its own line: it takes the row's whole width, after every control (the row wraps).
+        expect(help.className).toMatch(/(^|\s)basis-full(\s|$)/);
+        expect(help).toBe(row().lastElementChild);
+        // Never truncated: no ellipsis class, no single-line clamp, and no tooltip standing in for the words.
+        expect(help.className).not.toMatch(/truncate|text-ellipsis|whitespace-nowrap|line-clamp|overflow-hidden/);
+        expect(help.hasAttribute('title')).toBe(false);
     });
 
     it('a new number is sent when Set is pressed, as a number; Set is offered only for a number that differs', async () => {
