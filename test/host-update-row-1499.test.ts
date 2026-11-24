@@ -49,8 +49,10 @@ describe('the update carries another genie-host', () => {
 
     it('genie-host says its mark when it has one, so the row can tell which host code runs', () => {
         const host = read('src', 'main', 'genie-host.ts');
-        expect(host).toMatch(/declare const __GENIE_TEST_HOST_MARK__: string;/);
-        expect(host).toMatch(/if \(__GENIE_TEST_HOST_MARK__ !== ''\) lifecycleLog\(`host build mark: \$\{__GENIE_TEST_HOST_MARK__\}`\);/);
+        // Through `typeof`: the tests run genie-host.ts from source (tsx), where nothing defines it.
+        expect(host).toMatch(/declare const __GENIE_TEST_HOST_MARK__: string \| undefined;/);
+        expect(host).toMatch(/const hostMark = typeof __GENIE_TEST_HOST_MARK__ === 'string' \? __GENIE_TEST_HOST_MARK__ : '';/);
+        expect(host).toMatch(/if \(hostMark !== ''\) lifecycleLog\(`host build mark: \$\{hostMark\}`\);/);
     });
 
     it('both rows build the update with the mark, stop when the hosts are the same, and have the feed name the update’s host', () => {
@@ -82,9 +84,13 @@ describe('the row: drained, swapped, restored once', () => {
     });
 
     it('the drain recorded the agent in running-at-quit.json once the old host was gone, before the relaunch', () => {
-        expect(ps1()).toMatch(/\$atQuit = @\(Get-Content \$runningAtQuit -Raw \| ConvertFrom-Json\)/);
+        // Read by node, one id a line: PowerShell 5.1's ConvertFrom-Json reads `[]` as one item (RULES.md, the one-as-nothing gauge).
+        expect(ps1()).toMatch(/function Json-Ids\(\$file\) \{[^\n]*JSON\.parse\(require\('fs'\)\.readFileSync\(process\.argv\[1\], 'utf8'\)\)\) console\.log\(id\)/);
+        expect(ps1()).toMatch(/\$atQuit = @\(Json-Ids \$runningAtQuit\)/);
+        expect(ps1()).not.toMatch(/ConvertFrom-Json\)\.Count|\| ConvertFrom-Json\)\n/);
         expect(ps1()).toMatch(/if \(\$atQuit\.Count -lt 1\) \{ throw 'the drain recorded no agent to come back/);
-        expect(sh()).toMatch(/at_quit="\$\(node -e [^\n]*"\$RUNNING_AT_QUIT"\)"/);
+        expect(sh()).toMatch(/ids_in\(\) \{ node -e '[^\n]*JSON\.parse\(require\("fs"\)\.readFileSync\(process\.argv\[1\], "utf8"\)\)\.length/);
+        expect(sh()).toMatch(/at_quit="\$\(ids_in "\$RUNNING_AT_QUIT"\)"/);
         expect(sh()).toMatch(/\[ "\$at_quit" -ge 1 \] \|\| fail 'the drain recorded no agent to come back/);
         // Read when the old host is gone, before the installer has finished.
         expect(ps1().indexOf('$atQuit = @(')).toBeLessThan(ps1().indexOf('Installed-Version\n'));

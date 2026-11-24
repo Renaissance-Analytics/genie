@@ -59,7 +59,8 @@ $Rows = @(
     'local-door-break', 'local-door', 'host-late-ready', 'files-watch', 'chat-drafts', 'gapp-open', 'artboard', 'ui-lag', 'plan-popover',
     'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash', 'quit-keeps-host', 'rebuilt-machine',
     'package', 'sign-plan', 'packed-tree', 'update-metadata', 'package-fuse', 'packaged-launcher',
-    'client-only-update'
+    'client-only-update',
+    'host-update'
 )
 
 if ($List) { $Rows | ForEach-Object { Write-Output $_ }; exit 0 }
@@ -420,6 +421,8 @@ function Row-package-fuse {
 # starts is ended through scripts/end-own-tree.mjs (Tynn #1031). It builds and packages twice and replaces the install,
 # ~\.genie, release\ and dist\: last in the list, after every row that reads them.
 function Row-client-only-update { Need-Install; Need-Electron; Need-TestMachine; Run 'vm-client-only-update' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-client-only-update.ps1 } }
+# A host update drains and swaps (Tynn #1036 P6-2): last, as it replaces the install, the home and the build once more.
+function Row-host-update { Need-Install; Need-Electron; Need-TestMachine; Run 'vm-windows-update' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-windows-update.ps1 } }
 function Row-packaged-launcher {
     Need-Packaged
     $saved = @{ USERPROFILE = $env:USERPROFILE; HOME = $env:HOME; APPDATA = $env:APPDATA; LOCALAPPDATA = $env:LOCALAPPDATA }
@@ -513,6 +516,7 @@ function Ceiling([string]$name) {
         'quit-keeps-host' { return 660 }
         'package' { return 1500 }
         'client-only-update' { return 2400 }
+        'host-update' { return 2400 }
         default { return 600 }
     }
 }

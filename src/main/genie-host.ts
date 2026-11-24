@@ -308,6 +308,12 @@ const home = genieRoot();
 const osaHome = osaHomeDir(home);
 const runtime = runtimeDir(home);
 const build = process.env.GENIE_HOST_BUILD ?? 'dev';
+/**
+ * The host-update row's mark (vite.main.config.ts): empty in every build that ships. Read through `typeof`: the tests run this
+ * file from source (tsx), where nothing defines it.
+ */
+declare const __GENIE_TEST_HOST_MARK__: string | undefined;
+const hostMark = typeof __GENIE_TEST_HOST_MARK__ === 'string' ? __GENIE_TEST_HOST_MARK__ : '';
 const hostAppVersion = build.includes('+') ? build.slice(0, build.lastIndexOf('+')) : build;
 const IDLE_MS = hostIdleMs(process.env.GENIE_HOST_IDLE_MS);
 /** What this host can have — a window, the Genie browser, an elevation — from ONE helper: all three in the app, none on plain Node (genie-cloud). */
@@ -371,6 +377,8 @@ async function main(): Promise<void> {
     if (process.platform !== 'win32') chmodSync(endpoint, 0o600);
 
     lifecycleLog(`host boot pid=${process.pid} build=${build} endpoint=${endpoint}`);
+    // Which host code this is, for the host-update row (Tynn #1036 P6-2): the update's build has a mark, the base's none.
+    if (hostMark !== '') lifecycleLog(`host build mark: ${hostMark}`);
     // THE PIPE ANSWERS ITS OWN USER ONLY (Tynn #398; host-pipe-acl.ts): on Windows, before host.json names it to anyone.
     const pipeAcl = await restrictHostPipe(server, endpoint);
     if (pipeAcl?.ok === true) lifecycleLog(`host pipe: its user and SYSTEM only (${pipeAcl.sddl})`);
