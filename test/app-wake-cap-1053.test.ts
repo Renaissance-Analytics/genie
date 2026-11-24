@@ -381,7 +381,7 @@ describe('the setting is the agent’s record’s, in genie-host', () => {
         return again;
     };
     const stored = async (id: string): Promise<Record<string, unknown>> => {
-        const rows = JSON.parse(await readFile(join(dir, 'agents.json'), 'utf8')) as Array<Record<string, unknown>>;
+        const rows = JSON.parse(await readFile(new Store(dir).agentsFile, 'utf8')) as Array<Record<string, unknown>>;
         return rows.find((r) => r['id'] === id)!;
     };
 
