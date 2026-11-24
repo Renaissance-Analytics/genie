@@ -18,9 +18,10 @@ import type { RunningProcess } from '../src/main/upgrade.js';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const code = (path: string) => readFileSync(resolve(root, path), 'utf8').split(/\r?\n/).filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l)).join('\n');
 
-// Linux-shaped paths; the same holds with Windows ones (case-insensitive, below).
-const INSTALL = '/opt/Genie';
-const COPY = '/home/u/.genie/host/runtime-41.2.0';
+// Roots by resolve, not as literals (the repo's rule for fixture roots): drive-qualified on Windows, where node's path
+// answers '\opt\Genie' for a '/opt/Genie' literal (the full gate 1124-020718-168937's windows/unit). The same cases on both.
+const INSTALL = resolve('/', 'opt', 'Genie');
+const COPY = resolve('/', 'home', 'u', '.genie', 'host', 'runtime-41.2.0');
 const env = { GENIE_INSTALL_EXEC: join(INSTALL, 'genie') };
 const HOST_EXEC = join(COPY, 'genie');
 

@@ -86,6 +86,23 @@ describe('the agent streams through the install', () => {
     });
 });
 
+describe('the seed never touches the checkout', () => {
+    // The full gate 1124-020718-168937: in a shard, earlier rows have seeded the checkout and changed its project.json, and a
+    // second seed of it is refused ("seed refuses to overwrite <checkout>/project.json"). So the row's workspace is a fresh
+    // directory of its own, as quit-keeps-host's own home is (smoke-seed.mjs takes its cwd as the workspace).
+    it('Windows: smoke-seed.mjs runs from a new workspace directory, never from the checkout', () => {
+        expect(ps1()).toMatch(/\$workspace = Join-Path \(\[System\.IO\.Path\]::GetTempPath\(\)\) \("genie-update-workspace-" \+ \$PID\)/);
+        expect(ps1()).toMatch(/Push-Location \$workspace\n\s*try \{ & node \(Join-Path \$root 'scripts\\smoke-seed\.mjs'\)/);
+        expect(ps1()).not.toMatch(/Run 'node scripts\\smoke-seed\.mjs'/);
+    });
+
+    it('Linux: smoke-seed.mjs runs from a new workspace directory, never from the checkout', () => {
+        expect(sh()).toMatch(/WORKSPACE="\$\(mktemp -d -t genie-update-workspace-XXXXXX\)"/);
+        expect(sh()).toMatch(/\( cd "\$WORKSPACE" && node "\$ROOT\/scripts\/smoke-seed\.mjs" \) >seed\.log 2>&1/);
+        expect(sh()).not.toMatch(/run seed\.log node scripts\/smoke-seed\.mjs/);
+    });
+});
+
 describe('what the row starts, it ends', () => {
     it('Windows: through scripts/end-own-tree.mjs, at the teardown and after a failure', () => {
         expect(ps1()).toMatch(/node scripts\/end-own-tree\.mjs --since "\$\(\$script:began\)" --tree "\$\(\$script:viewer\.Id\)" --root "\$\(\$hostAfter\.Id\)"/);
