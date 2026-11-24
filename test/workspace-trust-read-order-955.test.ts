@@ -145,24 +145,102 @@ describe('two reads of one workspace at once: the older one landing last', () =>
         expect(trusted(f)).toBe(true);
     });
 
-    it('a read crossed every time stops reading, and is not trusted: never the "nothing would run" of a read that was crossed', async () => {
+    // THE RULE SINCE Tynn #364. A read crossed READS_WHEN_CROSSED times gives up. Its own reading never says "trusted" (only
+    // the record's yes does), and it never overwrites a verdict kept AFTER it began (by the write count) from a reading made
+    // alone or from the person's yes: that verdict is a complete read at least as fresh, and it is the answer.
+
+    it('a read crossed every time, with no fresher complete verdict kept (each crossing ends in a read that failed): it is not trusted', async () => {
         const f = fixture();
-        // Each read of the list is crossed by another write of the verdict (an Untrust landing while it is in its git step).
+        let crossings = 0;
+        // Each crossing: a read alone keeps "trusted, nothing would run", then a read that fails forgets it (EBUSY).
         const cross = async (): Promise<void> => {
-            await f.trust.untrust('acme');
+            crossings++;
+            expect((await f.trust.refresh('acme'))?.trusted).toBe(true);
+            f.failing.set(MCP, Object.assign(new Error('EBUSY'), { code: 'EBUSY' }));
+            await expect(f.trust.refresh('acme')).rejects.toThrow(/EBUSY/);
+            f.failing.clear();
+            expect(f.trust.view('acme')).toBeNull();
             f.duringGit(cross);
         };
         f.duringGit(cross);
         const before = f.gitReads();
         const view = await f.trust.refresh('acme');
-        // Bounded: a handful of reads (each crossed read costs its own and the crossing one's), not one without end.
+        f.duringGit(async () => {});
+        expect(crossings).toBe(3);
+        // Bounded: its own three readings and each crossing's own read.
         expect(f.gitReads() - before).toBeLessThanOrEqual(8);
         // Nothing would run here, and no yes was given: a read that was never left alone may not say "trusted".
         expect(view?.trusted).toBe(false);
         expect(trusted(f)).toBe(false);
         // The next read left alone says what is so.
-        f.duringGit(async () => {});
         expect((await f.trust.refresh('acme'))?.trusted).toBe(true);
+        expect(trusted(f)).toBe(true);
+    });
+
+    it('THE CASE FOUND: three reads alone keep "trusted" while a fourth is crossed by each: it gives up and answers with theirs, overwriting nothing', async () => {
+        const f = fixture();
+        let crossings = 0;
+        const cross = async (): Promise<void> => {
+            crossings++;
+            expect((await f.trust.refresh('acme'))?.trusted).toBe(true);
+            f.duringGit(cross);
+        };
+        f.duringGit(cross);
+        const view = await f.trust.refresh('acme');
+        f.duringGit(async () => {});
+        expect(crossings).toBe(3);
+        const kept = f.trust.view('acme');
+        expect(view?.trusted).toBe(true);
+        // The very verdict the last read alone kept: nothing new was written over it.
+        expect(view).toBe(kept);
+        expect(f.record).toEqual({ carried: [], workspaces: {} });
+    });
+
+    it('a read alone that says NOT trusted is not turned into trusted by a crossed read: crossed every time by reads that see the file, it answers not trusted', async () => {
+        const f = fixture();
+        // Each crossing: the file is there for a read alone (not trusted), and gone again before the crossed read reads on, so
+        // every reading of the crossed read finds nothing would run.
+        const cross = async (): Promise<void> => {
+            f.files.set(MCP, COMMAND);
+            expect((await f.trust.refresh('acme'))?.trusted).toBe(false);
+            f.files.delete(MCP);
+            f.duringGit(cross);
+        };
+        f.duringGit(cross);
+        const view = await f.trust.refresh('acme');
+        f.duringGit(async () => {});
+        expect(view?.trusted).toBe(false);
+        expect(trusted(f)).toBe(false);
+        expect(f.trust.view('acme')?.list.servers).toEqual([{ file: '.mcp.json', name: 'theirs', command: 'node server.js' }]);
+    });
+
+    it('crossed every time by an Untrust that finds the file: not trusted, and the record holds no yes', async () => {
+        const f = fixture({ carried: ['acme'] });
+        f.files.set(MCP, COMMAND);
+        const cross = async (): Promise<void> => {
+            expect((await f.trust.untrust('acme'))?.trusted).toBe(false);
+            f.duringGit(cross);
+        };
+        f.duringGit(cross);
+        const view = await f.trust.refresh('acme');
+        f.duringGit(async () => {});
+        expect(view?.trusted).toBe(false);
+        expect(trusted(f)).toBe(false);
+        expect(f.record).toEqual({ carried: [], workspaces: {} });
+    });
+
+    it('control: the person’s yes is by the record: crossed every time by reads that see the file, a workspace the person trusted stays trusted', async () => {
+        const f = fixture();
+        f.files.set(MCP, COMMAND);
+        expect((await f.trust.trust('acme'))?.trusted).toBe(true);
+        const cross = async (): Promise<void> => {
+            expect((await f.trust.refresh('acme'))?.trusted).toBe(true);
+            f.duringGit(cross);
+        };
+        f.duringGit(cross);
+        const view = await f.trust.refresh('acme');
+        f.duringGit(async () => {});
+        expect(view?.trusted).toBe(true);
         expect(trusted(f)).toBe(true);
     });
 });

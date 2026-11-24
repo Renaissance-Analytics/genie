@@ -727,6 +727,8 @@ async function main(): Promise<void> {
         find: (id) => hostRegistry.find(id),
         workspacePath: (record) => hostRegistry.workspace(record.workspaceId)?.path ?? null,
         tuiFor: (record) => providerBinary(record.provider) ?? record.provider,
+        // The verdict its agents read, at each click (Tynn #364).
+        untrustedNow: (record) => hostUntrustedNow(record),
         onChange: (view) => engineRef?.takeOverEvent(view),
     });
     /** This host's own spawn-host children (no window reaches them): their frames, and their "ready". */

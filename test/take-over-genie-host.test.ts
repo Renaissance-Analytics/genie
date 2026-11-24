@@ -91,6 +91,7 @@ async function rig(over: Record<string, unknown> = {}) {
         find: (id: string) => (id === atlas.id ? atlas : null),
         workspacePath: () => '/w/tynn',
         tuiFor: () => 'claude',
+        untrustedNow: () => false,
         onChange: (view: TakeOverView) => pushed.push(view),
         schedule: clock.schedule,
         now: clock.now,

@@ -19,6 +19,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { providerProgramProblem, resolveProviderProgram, type ProviderProgramPorts } from '../core/provider-program.js';
 import { providerChoiceFile, readProviderChoice } from './provider-choice.js';
 import { deferredDriverFactory } from './deferred-driver.js';
+import { McpPreparationError } from './mcp-preparation-error.js';
 import { mcpOffFor, sameMcpServer } from '../core/agent-mcp.js';
 import { CLAUDE_DRIVER_CAPABILITIES, CODEX_DRIVER_CAPABILITIES, ClaudeDriver, CodexDriver, claudeAccounts, probeSessionStore } from '@particle-academy/prism-acp';
 import { respawnDecision, stayedWords } from '../core/claude-accounts.js';
@@ -1216,8 +1217,17 @@ export class SessionHost {
         const driverFactory = deferred ? deferredDriverFactory(async (signal) => {
             const untrusted = (await this.#untrustedFilesFor?.(record)) ?? null;
             if (signal.aborted) throw new Error('Preparation was cancelled.');
+            // CODEX IN A WORKSPACE NOT TRUSTED (Tynn #364): Codex documents only one switch for a folder's own `.codex/`
+            // layer (its MCP servers, hooks and rules): the person's own trust of that folder, in their own Codex config. No
+            // documented flag or override turns that layer off for one launch, so Codex does not start here until the
+            // person trusts the workspace. Claude Code has those flags (claudeTrustOptions) and starts restricted.
+            if (untrusted !== null && record.provider === 'codex') throw new McpPreparationError('codexUntrusted');
             const prepared = this.#prepareMcpServers ? withBuiltIn(await this.#prepareMcpServers(record, cwd, signal)) : mcpServers;
             if (signal.aborted) throw new Error('Preparation was cancelled.');
+            // THE VERDICT AGAIN, JUST BEFORE THE SPAWN (Tynn #364): preparing MCP servers can take a while on the network, and
+            // the person's Untrust can land meanwhile. A start read as trusted that is not trusted now starts nothing. The
+            // other way (read as not trusted, trusted now) starts restricted, which runs nothing of the folder's.
+            if (untrusted === null && this.#untrustedNow?.(record) === true) throw new McpPreparationError('trustMoved');
             const factory = this.#driverFor(record, cwd, record.threadId, { ...(account ? { account } : {}), mcpServers: prepared, serviceEnv, workspaceMcpOff: this.#workspaceMcpOffFor?.(record) ?? [], ...(untrusted ? { untrusted } : {}) });
             if (!factory) throw new Error('The provider is unsupported.');
             const current = this.#running.get(record.id);

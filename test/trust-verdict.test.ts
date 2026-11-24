@@ -465,14 +465,14 @@ describe("Genie's words, once in a thread", () => {
         expect(messages).toEqual([NOW_TRUSTED, 'work']);
     });
 
-    it('Codex has no file route: its first work carries them, even on a new thread, once', async () => {
+    // Tynn #364: Codex does not start in a workspace not trusted (no documented switch turns off a folder's own `.codex/`
+    // layer for one launch), so there is no Codex thread here for Genie's words to reach. test/trust-at-launch-364.test.ts.
+    it('Codex, untrusted: no provider starts, so no words are held for it and nothing is marked', async () => {
         const t = launch({ threadId: null, provider: 'codex' } as Partial<AgentRecord>);
         t.host.start(t.record(), dir);
         await flush();
+        expect(t.fakes).toEqual([]);
         expect(t.marks).toEqual([]);
-        await work(t, 'work');
-        expect(t.fakes[0]!.prompts).toEqual(['genie words\n\nwork']);
-        expect(t.marks).toEqual([t.record().id]);
     });
 
     it('that thread on its next launch: not twice', async () => {
