@@ -293,6 +293,8 @@ export interface HostApiDeps {
         delete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[], handoff: boolean): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
         switchDriver(agentId: string, to: string): Promise<SwitchDecision>;
         setBudget(agentId: string, dailyLimitUsd: number | null): Promise<{ ok: true; decision: BudgetDecision } | { ok: false; reason: string }>;
+        /** Its app wake cap (Tynn #1053): a whole number of wakes an hour, or `unlimited`; checked by the operation, which refuses in words. */
+        setAppWakeCap(agentId: string, cap: unknown): Promise<unknown>;
         setMode(agentId: string, mode: 'automated' | 'manual'): Promise<unknown>;
         setAccessScope(agentId: string, scope: 'none' | 'self' | 'all'): Promise<unknown>;
         /** Chosen agents who may message it (Tynn #526); `null` turns the choice off. */
@@ -551,6 +553,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'agents.setBudget':
                 if (typeof args[0] !== 'string' || (args[1] !== null && !(typeof args[1] === 'number' && args[1] >= 0))) return { ok: false, reason: 'a budget is a non-negative number of dollars, or null to clear it' };
                 return deps.agentOps.setBudget(args[0], args[1] as number | null);
+            case 'agents.setAppWakeCap':
+                if (typeof args[0] !== 'string') return { ok: false, reason: 'unknown agent' };
+                return deps.agentOps.setAppWakeCap(args[0], args[1]);
             case 'agents.setMode':
                 if (typeof args[0] !== 'string' || (args[1] !== 'automated' && args[1] !== 'manual')) return { ok: false, reason: 'mode is automated or manual' };
                 return deps.agentOps.setMode(args[0], args[1]);

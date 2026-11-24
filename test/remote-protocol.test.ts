@@ -134,7 +134,10 @@ describe('the capability table', () => {
         // 192 with `registry.write` (local, main's own client only: a write to genie-host's registry) (Tynn #1007, 2g-4e).
         // 193 with `workspaces.relocate` ("Locate folder" on a workspace whose folder is not there: a write, workspace-scoped,
         // the host owner's only) (host split P7).
-        expect(REMOTE_METHODS.length).toBe(193);
+        // 194 with `agents.setAppWakeCap` (a write, agent-scoped, the owner's): an agent's app wake cap (Tynn #1053).
+        expect(REMOTE_METHODS.length).toBe(194);
+        expect(capabilityOf('agents.setAppWakeCap')).toBe('write');
+        expect(AGENT_SCOPED_METHODS).toContain('agents.setAppWakeCap');
         expect(capabilityOf('registry.write')).toBe('local');
         expect(capabilityOf('accounts.list')).toBe('read');
         expect(capabilityOf('accounts.act')).toBe('write');

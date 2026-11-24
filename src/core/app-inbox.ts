@@ -97,7 +97,8 @@ export const APP_LIMITS = {
      * THE APP WAKE CAP (genie#1379): at most `wakeTurns` turns an app's mail causes, per agent, in any `wakeWindowMs` —
      * a turn Genie gives an agent for mail that is ALL from apps (an idle agent's wake, a busy one's follow-up, a stopped
      * automated one started). Past it the mail waits for the window, then one turn: a chatty app cannot run up spend, and
-     * nothing waits for the person. Mail from a person or an agent is never held by it.
+     * nothing waits for the person. Mail from a person or an agent is never held by it. `wakeTurns` is the DEFAULT: the
+     * person sets each agent's own number, or no limit, in its settings (`AppWakeCap`, Tynn #1053).
      */
     wakeTurns: 6,
     wakeWindowMs: 60 * 60_000,
@@ -242,15 +243,41 @@ export function appDelivery(mode: AgentRecord['mode'], wakeAllowed: boolean): Ap
 }
 
 /**
- * THE APP WAKE CAP's ledger (APP_LIMITS.wakeTurns per wakeWindowMs), per agent. Pure: the clock is passed in. Memory
- * only, like the rate limiter: a restart forgets it, which costs at most one window's allowance.
+ * AN AGENT'S OWN APP WAKE CAP (Tynn #1053): how many turns an hour an app's mail may give it — a whole number, 1 or
+ * more — or the word `unlimited`. "No limit" is that STORED WORD: a missing value is the default
+ * (APP_LIMITS.wakeTurns), and a zero, a null or anything else that is not a cap is never read as "no limit".
+ */
+export type AppWakeCap = number | 'unlimited';
+
+export const APP_WAKE_CAP_REFUSAL = 'the app wake cap is a whole number of wakes an hour, 1 or more, or "unlimited" for no limit';
+
+/** A cap as a caller sent it: checked, or refused in words. */
+export function parseAppWakeCap(value: unknown): { ok: true; cap: AppWakeCap } | { ok: false; reason: string } {
+    if (value === 'unlimited') return { ok: true, cap: 'unlimited' };
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 1) return { ok: true, cap: value };
+    return { ok: false, reason: APP_WAKE_CAP_REFUSAL };
+}
+
+/** The cap in force for an agent's record: its own when it holds one, else the default. */
+export function appWakeCapOf(record: { readonly appWakeCap?: unknown } | null | undefined): AppWakeCap {
+    const parsed = parseAppWakeCap(record?.appWakeCap);
+    return parsed.ok ? parsed.cap : APP_LIMITS.wakeTurns;
+}
+
+/**
+ * THE APP WAKE CAP's ledger (each agent's own cap per wakeWindowMs; APP_LIMITS.wakeTurns where none is given), per
+ * agent. Pure: the clock is passed in. Memory only, like the rate limiter: a restart forgets it, which costs at most one
+ * window's allowance. The cap is ASKED each time (`capOf`), so a change in the agent's settings applies to its next
+ * turn with no restart.
  */
 export class AppTurnBudget {
     readonly #now: () => number;
+    readonly #capOf: (agentId: string) => AppWakeCap;
     readonly #turns = new Map<string, number[]>();
 
-    constructor(now: () => number) {
+    constructor(now: () => number, capOf: (agentId: string) => AppWakeCap = () => APP_LIMITS.wakeTurns) {
         this.#now = now;
+        this.#capOf = capOf;
     }
 
     #recent(agentId: string): number[] {
@@ -263,9 +290,11 @@ export class AppTurnBudget {
 
     /** 0 when an app-caused turn is allowed now; else how long until the oldest in the window ages out. */
     waitMs(agentId: string): number {
+        const cap = this.#capOf(agentId);
+        if (cap === 'unlimited') return 0;
         const recent = this.#recent(agentId);
-        if (recent.length < APP_LIMITS.wakeTurns) return 0;
-        return Math.max(1, recent[recent.length - APP_LIMITS.wakeTurns]! + APP_LIMITS.wakeWindowMs - this.#now());
+        if (recent.length < cap) return 0;
+        return Math.max(1, recent[recent.length - cap]! + APP_LIMITS.wakeWindowMs - this.#now());
     }
 
     /** An app-caused turn was given to `agentId` now. */

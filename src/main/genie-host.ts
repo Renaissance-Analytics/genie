@@ -2127,6 +2127,8 @@ async function main(): Promise<void> {
         registry: phoneRegistry,
         engine: () => host,
         cwdFor: phoneCwd,
+        // A changed agent setting is one line of this host's lifecycle log (Tynn #1053).
+        lifecycleLog,
         // The sign-ins (Tynn #896): the provider's own login, started here for the caller, whose window shows it.
         signIns,
         // A PROVIDER'S PROGRAM (Tynn #577; #897 2c-3): the .exe the owner picked on this host's disk, from any of their
