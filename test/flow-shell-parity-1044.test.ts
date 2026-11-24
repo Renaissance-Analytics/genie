@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, win32 } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { fancyTermPort, type HostBackend } from '../src/main/fancy-term-port.js';
+import { detectedGitBash, fancyTermPort, type HostBackend } from '../src/main/fancy-term-port.js';
 import { supervisedCommand } from '../src/main/flow-runner.js';
 import { ProcessBook } from '../src/main/process-book.js';
 import { ProcessSupervisor } from '../src/main/process-supervisor.js';
@@ -103,5 +103,23 @@ describe('a flow’s terminal_run and a kept process start the same program with
             expect(flow.args).toEqual(['-c', 'uname']);
             expect(asked).toBe(0);
         }
+    });
+});
+
+describe('which Git Bash a bare `bash` starts on Windows (Tynn #1044)', () => {
+    const PATH = 'C:\\Windows\\System32;C:\\tools\\git\\cmd';
+    const lookup = (files: readonly string[]) => ({ platform: 'win32' as const, env: { PATH, SystemRoot: 'C:\\Windows' }, isFile: (p: string) => files.includes(p) });
+
+    it('the one Terminals detect, first', () => {
+        expect(detectedGitBash({ installed: () => GIT_BASH, lookup: lookup([SYSTEM32_BASH, 'C:\\tools\\git\\cmd\\git.exe', 'C:\\tools\\git\\bin\\bash.exe']) })).toBe(GIT_BASH);
+    });
+
+    it('else the bash.exe beside the git on PATH (Git installed outside Program Files: C:\\tools\\git, scoop…)', () => {
+        expect(detectedGitBash({ installed: () => null, lookup: lookup([SYSTEM32_BASH, 'C:\\tools\\git\\cmd\\git.exe', 'C:\\tools\\git\\bin\\bash.exe']) })).toBe('C:\\tools\\git\\bin\\bash.exe');
+    });
+
+    it('else none: no git, or a git with no bash.exe beside it', () => {
+        expect(detectedGitBash({ installed: () => null, lookup: lookup([SYSTEM32_BASH]) })).toBeNull();
+        expect(detectedGitBash({ installed: () => null, lookup: lookup([SYSTEM32_BASH, 'C:\\tools\\git\\cmd\\git.exe']) })).toBeNull();
     });
 });
