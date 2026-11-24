@@ -481,14 +481,9 @@ describe('the setting is the agent’s record’s, in genie-host', () => {
         expect(await detail(clerk.id)).toBe(40);
     });
 
-    it('a write refreshes what clients see, as every agent setting does', async () => {
-        const host = api({ schedule: (_ms: number, fn: () => void) => { fn(); return () => {}; } });
-        const seen: string[] = [];
-        const off = host.onEvent((channel) => { seen.push(channel); });
-        await host.invoke('agents.setAppWakeCap' as RemoteMethod, [clerk.id, 12]);
-        off();
-        expect(seen).toContain('snapshot');
-    });
+    // "A write refreshes what clients see" is held by test/host-alone-agent-ops.test.ts ("every write in the adapter
+    // refreshes what clients see"), which names this method. A row here that listened for a snapshot event stayed green
+    // with the refresh taken out (break probe P14, run 1124-042811-0325da): the registry's own write announces one too.
 });
 
 describe('the wiring (source guards)', () => {
