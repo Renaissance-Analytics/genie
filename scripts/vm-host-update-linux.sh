@@ -192,9 +192,15 @@ for _ in $(seq 1 45); do sleep 2; p="$(host_pid)"; if alive "$p"; then host_befo
 host_before_cmd="$(cmdline "$host_before")"
 echo "genie-host before the update: pid $host_before, started $(started_at "$host_before"): $host_before_cmd"
 case "$host_before_cmd" in *"/host/$BASE_HASH/dist/main/host.js"*) ;; *) fail "the base genie-host does not run the base's copy (host/$BASE_HASH): $host_before_cmd" ;; esac
+# THE PROVIDERS ARE SAMPLED WHILE THE DRIVER RUNS, never after it: a full install drains at once, so by the time
+# update-cdp.mjs exits they are already gone (measured, 1124-081929-7eb671: none found after it, on both platforms, while
+# the client-only probe, whose agent is kept, found its provider).
+( while :; do pgrep -f 'stub-codex\.mjs'; sleep 0.5; done ) >stub-samples.txt 2>/dev/null &
+SAMPLER=$!
 EXPECT_VERSION="$NEXT" CDP_OWN_PID="$APP_PID" node scripts/update-cdp.mjs
 drive=$?
-stubs_before="$(stub_pids)"
+kill "$SAMPLER" 2>/dev/null; wait "$SAMPLER" 2>/dev/null
+stubs_before="$(sort -nu stub-samples.txt | tr '\n' ' ' | sed 's/ $//')"
 echo "agent providers when install was asked: ${stubs_before:-none}"
 if [ "$drive" -ne 0 ]; then
     echo '--- installed stderr ---'; tail -120 installed-err.log

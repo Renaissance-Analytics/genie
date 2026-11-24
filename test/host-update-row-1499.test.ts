@@ -193,7 +193,7 @@ describe('a debugger port of its own, its own launch, and its own end', () => {
     it('port 9416, refused when something already answers on it, the launch pid handed to the driver', () => {
         expect(ps1()).toMatch(/\$debugPort = 9416\n\$env:CDP_PORT = "\$debugPort"/);
         expect(ps1()).toMatch(/Assert-PortFree\n\s*\$app = Start-Process -FilePath \$exe -ArgumentList "--remote-debugging-port=\$debugPort"/);
-        expect(ps1()).toMatch(/\$env:CDP_OWN_PID = "\$\(\$app\.Id\)"\n\s*& cmd \/c "node scripts\\update-cdp\.mjs 2>&1"/);
+        expect(ps1()).toMatch(/\$env:CDP_OWN_PID = "\$\(\$app\.Id\)"\n(?:\s*#[^\n]*\n)*\s*\$driver = Start-Process -FilePath node -ArgumentList 'scripts\\update-cdp\.mjs' -PassThru -NoNewWindow/);
         expect(sh()).toMatch(/DEBUG_PORT=9416\nexport CDP_PORT="\$DEBUG_PORT"/);
         expect(sh()).toMatch(/port_free\n"\$APPIMAGE_FILE" --remote-debugging-port="\$DEBUG_PORT"/);
         // The driver needs the version it is to find (1124-071406-5b696f: without it, exit 2 before anything was asked).
@@ -204,9 +204,22 @@ describe('a debugger port of its own, its own launch, and its own end', () => {
     it('Windows: no pty helper from before outlives the update, wherever it runs (not the install dir: since the host split it is the host copy)', () => {
         expect(ps1()).toMatch(/Remove-Item Env:EXPECT_HELPERS -ErrorAction SilentlyContinue/);
         expect(ps1()).not.toMatch(/\$env:EXPECT_HELPERS = '1'/);
-        expect(ps1()).toMatch(/\$helpersBefore = @\(Get-CimInstance Win32_Process \| Where-Object \{ \$_\.Name -like 'fancy-pty-helper\*' \}/);
+        expect(ps1()).toMatch(/if \(\$p\.Name -like 'fancy-pty-helper\*'\) \{ \$seenHelpers\[\[int\]\$p\.ProcessId\] = \$true \}/);
+        expect(ps1()).toMatch(/\$helpersBefore = @\(\$seenHelpers\.Keys \| ForEach-Object \{ \[int\]\$_ \}\)/);
         expect(ps1()).toMatch(/\$helpers = @\(Get-CimInstance Win32_Process \| Where-Object \{ \$_\.Name -like 'fancy-pty-helper\*' -and \$helpersBefore -contains \[int\]\$_\.ProcessId \}\)/);
         expect(ps1().indexOf('$helpersBefore = @(')).toBeLessThan(ps1().indexOf("Step 'the drain"));
+    });
+
+    it('the agent providers are sampled WHILE the driver runs, never after it (a full install drains at once)', () => {
+        // 1124-081929-7eb671: read after update-cdp.mjs exited, no provider was found on either platform, the drain having
+        // already ended it; the client-only probe, whose agent is kept, found its provider.
+        expect(ps1()).toMatch(/while \(-not \$driver\.HasExited\) \{\n\s*foreach \(\$p in @\(Get-CimInstance Win32_Process\)\) \{\n\s*if \(\$p\.CommandLine -and \$p\.CommandLine -like '\*stub-codex\.mjs\*'\) \{ \$seenStubs\[\[int\]\$p\.ProcessId\] = \$true \}/);
+        expect(ps1()).toMatch(/\$drive = \$driver\.ExitCode/);
+        expect(ps1()).toMatch(/\$beforeIds = @\(\$seenStubs\.Keys \| ForEach-Object \{ \[int\]\$_ \}\)/);
+        expect(ps1()).not.toMatch(/\$stubsBefore = Stub-Providers/);
+        expect(sh()).toMatch(/\( while :; do pgrep -f 'stub-codex\\\.mjs'; sleep 0\.5; done \) >stub-samples\.txt 2>\/dev\/null &\nSAMPLER=\$!\nEXPECT_VERSION=/);
+        expect(sh()).toMatch(/kill "\$SAMPLER" 2>\/dev\/null; wait "\$SAMPLER" 2>\/dev\/null\nstubs_before="\$\(sort -nu stub-samples\.txt/);
+        expect(sh()).not.toMatch(/stubs_before="\$\(stub_pids\)"/);
     });
 
     it('the seed runs in a new workspace, never the checkout', () => {

@@ -237,12 +237,27 @@ try {
     Write-Output ("genie-host before the update: pid " + $hostBefore.Id + ", started " + $hostBefore.StartTime + ": " + $hostBeforeLine)
     if ($hostBeforeLine -notlike "*\host\$baseHostHash\dist\main\host.js*") { throw "the base genie-host does not run the base's copy (host\$baseHostHash): $hostBeforeLine" }
     $env:CDP_OWN_PID = "$($app.Id)"
-    & cmd /c "node scripts\update-cdp.mjs 2>&1"
-    $drive = $LASTEXITCODE
-    $stubsBefore = Stub-Providers
-    $helpersBefore = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'fancy-pty-helper*' } | ForEach-Object { [int]$_.ProcessId })
-    Write-Output ("pty helpers when install was asked: " + $helpersBefore.Count + " (" + ($helpersBefore -join ', ') + ")")
-    $beforeIds = @($stubsBefore | ForEach-Object { [int]$_.ProcessId })
+    # THE PROVIDERS AND PTY HELPERS ARE SAMPLED WHILE THE DRIVER RUNS, never after it: a full install drains at once, so by
+    # the time update-cdp.mjs exits they are already gone (measured, 1124-081929-7eb671: none found after it, on both
+    # platforms, while the client-only probe, whose agent is kept, found its provider).
+    $driver = Start-Process -FilePath node -ArgumentList 'scripts\update-cdp.mjs' -PassThru -NoNewWindow `
+        -RedirectStandardOutput update-cdp.log -RedirectStandardError update-cdp-err.log
+    $null = $driver.Handle
+    $seenStubs = @{}
+    $seenHelpers = @{}
+    while (-not $driver.HasExited) {
+        foreach ($p in @(Get-CimInstance Win32_Process)) {
+            if ($p.CommandLine -and $p.CommandLine -like '*stub-codex.mjs*') { $seenStubs[[int]$p.ProcessId] = $true }
+            if ($p.Name -like 'fancy-pty-helper*') { $seenHelpers[[int]$p.ProcessId] = $true }
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    $driver.WaitForExit()
+    $drive = $driver.ExitCode
+    Get-Content update-cdp.log, update-cdp-err.log -ErrorAction SilentlyContinue
+    $helpersBefore = @($seenHelpers.Keys | ForEach-Object { [int]$_ })
+    Write-Output ("pty helpers seen while the driver ran: " + $helpersBefore.Count + " (" + ($helpersBefore -join ', ') + ")")
+    $beforeIds = @($seenStubs.Keys | ForEach-Object { [int]$_ })
     Write-Output ("agent providers when install was asked: " + ($beforeIds -join ', '))
     if ($drive -ne 0) {
         Write-Output "--- installed stderr ---"; Get-Content installed-err.log -Tail 200 -ErrorAction SilentlyContinue
