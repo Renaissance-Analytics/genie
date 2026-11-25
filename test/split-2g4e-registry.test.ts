@@ -71,18 +71,26 @@ describe('the protocol: registry.watch and registry.read, controls; registry.wri
 
     it('a write is one of the registry’s writes with its own arguments, read strictly; anything else is refused', async () => {
         const p = await protocol();
-        expect([...p.REGISTRY_WRITES].sort()).toEqual(['beginRestore', 'restoreStarted', 'writeAgents', 'writeInterruptedAtQuit', 'writeRunningAtQuit', 'writeWorkspaces']);
-        expect(p.readRegistryWrite(['writeWorkspaces', [[WS]]])).toEqual({ method: 'writeWorkspaces', args: [[WS]] });
-        expect(p.readRegistryWrite(['writeAgents', [[]]])).toEqual({ method: 'writeAgents', args: [[]] });
+        // The registry's lists change one record at a time (Tynn #1007): no whole list crosses.
+        expect([...p.REGISTRY_WRITES].sort()).toEqual(['beginRestore', 'changeAgents', 'changeWorkspaces', 'restoreStarted', 'writeInterruptedAtQuit', 'writeRunningAtQuit']);
+        expect(p.readRegistryWrite(['changeWorkspaces', [{ add: [WS] }]])).toEqual({ method: 'changeWorkspaces', args: [{ add: [WS] }] });
+        expect(p.readRegistryWrite(['changeAgents', [{ patch: [{ id: 'a1', set: { mode: 'manual' }, unset: ['model'] }], remove: ['a2'] }]])).toEqual({ method: 'changeAgents', args: [{ patch: [{ id: 'a1', set: { mode: 'manual' }, unset: ['model'] }], remove: ['a2'] }] });
+        expect(p.readRegistryWrite(['changeAgents', [{}]])).toEqual({ method: 'changeAgents', args: [{}] });
         expect(p.readRegistryWrite(['writeRunningAtQuit', [['a1']]])).toEqual({ method: 'writeRunningAtQuit', args: [['a1']] });
         expect(p.readRegistryWrite(['writeInterruptedAtQuit', [[]]])).toEqual({ method: 'writeInterruptedAtQuit', args: [[]] });
         expect(p.readRegistryWrite(['beginRestore', []])).toEqual({ method: 'beginRestore', args: [] });
         expect(p.readRegistryWrite(['restoreStarted', ['a1']])).toEqual({ method: 'restoreStarted', args: ['a1'] });
         for (const bad of [
-            [], ['writeAgents'], ['readAgents', []], ['__proto__', []], ['nope', []],
-            ['writeWorkspaces', [7]], ['writeWorkspaces', [[7]]], ['writeAgents', [{}]], ['writeAgents', [[null]]],
+            [], ['changeAgents'], ['readAgents', []], ['__proto__', []], ['nope', []],
+            // The whole-list writes are gone (Tynn #1007): a window that sends one is refused.
+            ['writeWorkspaces', [[WS]]], ['writeAgents', [[]]],
+            ['changeWorkspaces', [7]], ['changeWorkspaces', [[WS]]], ['changeWorkspaces', [{ add: [7] }]], ['changeWorkspaces', [{ add: [{ path: '/no/id' }] }]],
+            ['changeAgents', [{ whole: [] }]], ['changeAgents', [{ remove: [7] }]], ['changeAgents', [{ patch: [{ set: { mode: 'manual' } }] }]],
+            ['changeAgents', [{ patch: [{ id: 'a1', set: { id: 'a2' } }] }]], ['changeAgents', [{ patch: [{ id: 'a1', unset: ['id'] }] }]],
+            ['changeAgents', [{ patch: [{ id: 'a1', set: JSON.parse('{"__proto__": {"polluted": true}}') }] }]],
+            ['changeAgents', [{ patch: [{ id: 'a1', set: { constructor: 1 } }] }]], ['changeAgents', [{ patch: [{ id: 'a1', extra: 1 }] }]],
             ['writeRunningAtQuit', [[7]]], ['writeInterruptedAtQuit', ['a1']],
-            ['beginRestore', [1]], ['restoreStarted', [7]], ['restoreStarted', []], ['writeAgents', [[], 'more']],
+            ['beginRestore', [1]], ['restoreStarted', [7]], ['restoreStarted', []], ['changeAgents', [{}, 'more']],
         ]) expect(p.readRegistryWrite(bad as unknown[]), JSON.stringify(bad)).toMatchObject({ ok: false });
     });
 
@@ -206,13 +214,13 @@ describe('genie-host’s host API: registry.write from main’s own client only,
     it('main’s own client writes through the host’s registry; a page in the window is refused and the registry never written', async () => {
         const call = vi.fn(async () => undefined);
         const api = buildHostApi(deps({ call, dropped: () => [] }));
-        expect(await api.invoke(WRITE, ['writeWorkspaces', [[WS]]], { ...base, own: true })).toBeUndefined();
-        expect(call).toHaveBeenCalledWith('writeWorkspaces', [[WS]]);
-        expect(await api.invoke(WRITE, ['writeWorkspaces', [[WS]]], base)).toMatchObject({ ok: false });
+        expect(await api.invoke(WRITE, ['changeWorkspaces', [{ add: [WS] }]], { ...base, own: true })).toBeUndefined();
+        expect(call).toHaveBeenCalledWith('changeWorkspaces', [{ add: [WS] }]);
+        expect(await api.invoke(WRITE, ['changeWorkspaces', [{ add: [WS] }]], base)).toMatchObject({ ok: false });
         expect(await api.invoke(WRITE, ['nope', []], { ...base, own: true })).toMatchObject({ ok: false });
         expect(call).toHaveBeenCalledTimes(1);
         // CONTROL: a host with no registry says so.
-        expect(await buildHostApi(deps()).invoke(WRITE, ['writeWorkspaces', [[WS]]], { ...base, own: true })).toMatchObject({ ok: false });
+        expect(await buildHostApi(deps()).invoke(WRITE, ['changeWorkspaces', [{ add: [WS] }]], { ...base, own: true })).toMatchObject({ ok: false });
     });
 
 });
@@ -237,19 +245,20 @@ describe('main’s side: a registry store over its own client', () => {
 
     it('opens by reading what the host dropped; reads are registry.read, writes registry.write', async () => {
         const w = await windowStore();
-        const o = own({ dropped: ['agents.json: row 2'], readWorkspaces: [WS], restoreStarted: true, beginRestore: { running: ['a1'], interrupted: [] } });
+        const o = own({ dropped: ['agents.json: row 2'], readWorkspaces: [WS], changeWorkspaces: [WS], changeAgents: [], restoreStarted: true, beginRestore: { running: ['a1'], interrupted: [] } });
         const store = await w.openWindowRegistryStore(o.client);
         expect(store.dropped).toEqual(['agents.json: row 2']);
         expect(await store.readWorkspaces()).toEqual([WS]);
-        await store.writeWorkspaces([WS] as never);
-        await store.writeAgents([]);
+        // One record at a time (Tynn #1007), answered with the list as the host has it after.
+        expect(await store.changeWorkspaces({ add: [WS] } as never)).toEqual([WS]);
+        expect(await store.changeAgents({ remove: ['a1'] })).toEqual([]);
         await store.writeRunningAtQuit(['a1']);
         await store.writeInterruptedAtQuit([]);
         expect(await store.beginRestore()).toEqual({ running: ['a1'], interrupted: [] });
         expect(await store.restoreStarted('a1')).toBe(true);
         expect(o.calls).toEqual([
             [READ, ['dropped']], [READ, ['readWorkspaces']],
-            [WRITE, ['writeWorkspaces', [[WS]]]], [WRITE, ['writeAgents', [[]]]], [WRITE, ['writeRunningAtQuit', [['a1']]]], [WRITE, ['writeInterruptedAtQuit', [[]]]],
+            [WRITE, ['changeWorkspaces', [{ add: [WS] }]]], [WRITE, ['changeAgents', [{ remove: ['a1'] }]]], [WRITE, ['writeRunningAtQuit', [['a1']]]], [WRITE, ['writeInterruptedAtQuit', [[]]]],
             [WRITE, ['beginRestore', []]], [WRITE, ['restoreStarted', ['a1']]],
         ]);
     });
@@ -263,7 +272,7 @@ describe('main’s side: a registry store over its own client', () => {
         const s2 = await w.openWindowRegistryStore(refused.client);
         await expect(s2.readWorkspaces()).rejects.toThrow('this host keeps no registry');
         refused.refuse('Genie is still starting');
-        await expect(s2.writeAgents([])).rejects.toThrow('Genie is still starting');
+        await expect(s2.changeAgents({})).rejects.toThrow('Genie is still starting');
         await expect(w.openWindowRegistryStore(refused.client)).rejects.toThrow('Genie is still starting');
     });
 
@@ -292,7 +301,7 @@ describe('main’s side: a registry store over its own client', () => {
             const feed = p.registryWatchFeed({ dropped: () => files.dropped, onWritten: (l) => { written = l; return () => {}; } });
             const call = async (method: string, args: unknown[]) => {
                 const out = await (files as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[method]!(...args);
-                if (method.startsWith('write')) written();
+                if (method.startsWith('write') || method.startsWith('change')) written();
                 return out;
             };
             const answers = p.hostRegistryAnswers({ call, dropped: () => files.dropped }, feed);
@@ -320,12 +329,12 @@ describe('main’s side: a registry store over its own client', () => {
         const call = vi.fn(async () => undefined);
         const answers = p.hostRegistryAnswers({ call, dropped: () => [] }, p.registryWatchFeed({ dropped: () => [], onWritten: () => () => {} }));
         const base = { connectionId: 'c1', origin: 'local-window', profile: 'desktop', isOwner: true, workspaceId: null, readonly: false, label: 'this Genie window' } as const;
-        expect(await answers.own['registry.write']!(['writeWorkspaces', [[WS]]], base as never)).toMatchObject({ ok: false });
+        expect(await answers.own['registry.write']!(['changeWorkspaces', [{ add: [WS] }]], base as never)).toMatchObject({ ok: false });
         expect(await answers.own['registry.write']!(['nope', []], { ...base, own: true } as never)).toMatchObject({ ok: false });
         expect(call).not.toHaveBeenCalled();
         // CONTROL: main's own client writes.
-        expect(await answers.own['registry.write']!(['writeWorkspaces', [[WS]]], { ...base, own: true } as never)).toBeUndefined();
-        expect(call).toHaveBeenCalledWith('writeWorkspaces', [[WS]]);
+        expect(await answers.own['registry.write']!(['changeWorkspaces', [{ add: [WS] }]], { ...base, own: true } as never)).toBeUndefined();
+        expect(call).toHaveBeenCalledWith('changeWorkspaces', [{ add: [WS] }]);
         // Its reads: the files, and what the store dropped.
         expect(await answers.registry.read('dropped')).toEqual([]);
         await answers.registry.read('readAgents');

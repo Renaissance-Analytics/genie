@@ -374,8 +374,8 @@ describe('never dropped, and nothing written by the look', () => {
 
     it('the flag is never stored: no write is made for it, the file does not say it, and a registry read again has no flag', async () => {
         const e = await estate();
-        const writeWorkspaces = vi.spyOn(e.store, 'writeWorkspaces');
-        const writeAgents = vi.spyOn(e.store, 'writeAgents');
+        const writeWorkspaces = vi.spyOn(e.store, 'changeWorkspaces');
+        const writeAgents = vi.spyOn(e.store, 'changeAgents');
         e.registry.setMissingWorkspaces((id) => id === 'gone');
         expect(e.registry.snapshot().workspaces?.find((w) => w.id === 'gone')).toMatchObject({ missing: true });
         e.registry.touch();

@@ -169,8 +169,8 @@ beforeAll(async () => {
     // THE HOST LIVES ON IT: the registry, mail and a flow, written by the host itself over its protocol.
     const host = await startHost(origin, keyFile);
     const w = await windowOn(host);
-    expect(await ask(w.own, 'registry.write', ['writeWorkspaces', [[{ id: 'ws', path: workspace }]]])).toMatchObject({ ok: true });
-    expect(await ask(w.own, 'registry.write', ['writeAgents', [agents]])).toMatchObject({ ok: true });
+    expect(await ask(w.own, 'registry.write', ['changeWorkspaces', [{ add: [{ id: 'ws', path: workspace }] }]])).toMatchObject({ ok: true });
+    expect(await ask(w.own, 'registry.write', ['changeAgents', [{ add: agents }]])).toMatchObject({ ok: true });
     expect(await ask(w.own, 'features.act', [{ kind: 'inbox.send', to: 'first', text: 'mail that waited through the rebuild' }])).toMatchObject({ ok: true });
     // The form's own default flow (hourly, one log step), not armed: an empty graph is refused by the flow door (the RED run said so).
     expect(await ask(w.own, 'features.act', [{ kind: 'flows.create', form: { ...flowFormDefaults({ workspaceId: 'ws' }), name: 'the flow that came back' } }])).toMatchObject({ ok: true });
