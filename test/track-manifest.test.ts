@@ -161,8 +161,11 @@ describe('verify before run', () => {
         const entries = await readArchive(packed.archive);
         expect(entries.map((e) => e.path)).toEqual(Object.keys(FILES).sort());
         for (const e of entries) expect(e.data.toString()).toBe(FILES[e.path]);
-        expect(entries.find((e) => e.path === 'genie-host')!.mode & 0o111).toBe(0o111);
-        expect(entries.find((e) => e.path === 'LICENSE')!.mode & 0o111).toBe(0);
+        // The executable bit is read from the file system, which Windows does not have; Linux packages are packed on Linux.
+        if (process.platform !== 'win32') {
+            expect(entries.find((e) => e.path === 'genie-host')!.mode & 0o111).toBe(0o111);
+            expect(entries.find((e) => e.path === 'LICENSE')!.mode & 0o111).toBe(0);
+        }
 
         const unpacked = join(dir, 'unpacked');
         for (const e of entries) { await mkdir(dirname(join(unpacked, e.path)), { recursive: true }); await writeFile(join(unpacked, e.path), e.data); }
@@ -218,7 +221,7 @@ describe('verify before run', () => {
         const { bytes, sig } = signed(key);
         const flipped = Buffer.from(bytes);
         const at = flipped.indexOf('"notes"') + 2;
-        flipped[at] ^= 0x01;
+        flipped[at] = flipped[at]! ^ 0x01;
         const verdict = verifyManifest(flipped, sig, [key.publicKey], EXPECT);
         expect(verdict).toMatchObject({ ok: false, code: 'signature' });
         if (!verdict.ok) expect(verdict.reason).toMatch(/This update's signature is not Genie's\. Nothing was installed\./);
@@ -228,7 +231,7 @@ describe('verify before run', () => {
         const key = keyPair();
         const { bytes, sig } = signed(key);
         const raw = Buffer.from(sig, 'base64');
-        raw[10] ^= 0x80;
+        raw[10] = raw[10]! ^ 0x80;
         expect(verifyManifest(bytes, raw.toString('base64'), [key.publicKey], EXPECT)).toMatchObject({ ok: false, code: 'signature' });
         expect(verifyManifest(bytes, '', [key.publicKey], EXPECT)).toMatchObject({ ok: false, code: 'signature' });
         expect(verifyManifest(bytes, 'not base64!', [key.publicKey], EXPECT)).toMatchObject({ ok: false, code: 'signature' });
@@ -327,7 +330,7 @@ describe('every file, none missing, none extra', () => {
         const { manifest, root } = await installed();
         const path = join(root, 'resources/app/host.js');
         const b = await readFile(path);
-        b[3] ^= 0x01;
+        b[3] = b[3]! ^ 0x01;
         await writeFile(path, b);
         expect(await verifyTree(manifest, root)).toMatchObject({ ok: false, code: 'sha256', path: 'resources/app/host.js' });
     });
