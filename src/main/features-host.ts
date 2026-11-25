@@ -254,6 +254,8 @@ export class HostFeatures {
             ...(tc ? { toolchain: { ...tc,
             ...(tc.install ? { install: (tool: string, consent: boolean) => tc.install!(tool, consent, elevate) } : {}),
             update: (tool: string, version?: string, progress?: (step: string | null) => void) => tc.update(tool, version, progress, elevate),
+            // Tynn #970: Docker's Start asks THIS connection too.
+            ...(tc.startDocker ? { startDocker: () => tc.startDocker!(elevate) } : {}),
             login: async provider => {
                 const started = await this.ports.signIn?.(provider, context);
                 if (!started) return { ok: false, reason: 'this host cannot start a sign-in' };

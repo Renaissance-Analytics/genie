@@ -17,7 +17,9 @@ import { installPlaywrightBrowsers, listPlaywrightBrowsers, nodePlaywrightFs, ty
 import { installJavaVersion, javaVersionsRoot, listJavaVersions, managedJava, removeJavaVersion, type JavaVersionsPorts } from './java-versions.js';
 import { installNodeVersion, listNodeVersions, managedNode, nodeVersionsRoot, removeNodeVersion, type NodeVersionsPorts } from './node-versions.js';
 import { httpFetchOver, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, phpVersionsRoot, refreshAllManagedInis, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCaPort, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
-import { availableParallelism } from 'node:os';
+import { availableParallelism, userInfo } from 'node:os';
+import { dockerAccount, probeDockerHealth, startDocker, withDockerHealth } from './docker-engine.js';
+import type { ToolStatus } from '../core/toolchain.js';
 import { userHome } from './paths.js';
 import { join } from 'node:path';
 import { statSync } from 'node:fs';
@@ -29,6 +31,11 @@ import type { ToolchainActivity } from '../core/toolchain-risk.js';
 export function nativeFeatureToolchain(deps: { home: string; providerHealth: ProviderHealthBook;
     activity(): Promise<ToolchainActivity>; busy(step: string | null): void; download(url: string): Promise<Response> }): NonNullable<FeaturePorts['toolchain']> {
     const { providerHealth } = deps;
+    // Tynn #970: Docker on Linux is a HEALTH beside its version, read as the user Genie runs as.
+    const linuxUser = () => userInfo().username;
+    const withDocker = async (statuses: ToolStatus[]): Promise<ToolStatus[]> => process.platform === 'linux' && statuses.some((s) => s.tool === 'docker' && s.installed !== null)
+        ? withDockerHealth(statuses, await probeDockerHealth(execFileRunner, linuxUser()))
+        : statuses;
     const toolchainDataDir = () => join(deps.home, 'genie2-toolchain');
     const httpFetch = httpFetchOver(url => deps.download(url));
     let detectedPackageManager: Promise<PackageManager | null> | null = null;
@@ -53,6 +60,8 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
         now: Date.now,
         // Genie's own Node, newest first (main/node-versions.ts): Check and repair makes it the node and npm Genie runs.
         genieNode: () => managedNode({ platform: process.platform as NodeVersionsPorts['platform'], root: nodeVersionsRoot(toolchainDataDir()), fs: nodePhpVersionsFs() })[0] ?? null,
+        // Tynn #970: the account Docker's install adds to the docker group.
+        dockerAccount: () => dockerAccount(execFileRunner, linuxUser()),
     });
     const phpVersionsPorts = (): PhpVersionsPorts => ({
         ...phpVersionsBase(),
@@ -190,12 +199,12 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
             repairCli: (provider, progress) => runCliRepair(provider, cliPorts(progress)),
             // Not signed in on the Toolchain: the provider's own login, as the Agent view's Log in opens it (Tynn #698).
             // An agent CLI the health check finds cannot run reads Broken, with why (Tynn #698).
-            probe: async () => withProviderHealth(await probeToolsLive(latestFor), await providerHealth.refreshAll()),
+            probe: async () => withDocker(withProviderHealth(await probeToolsLive(latestFor), await providerHealth.refreshAll())),
             // Tynn #714: one tool, for the one-at-a-time "Check for updates".
             probeTool: async (name) => {
                 const status = await probeToolLive(name, latestFor);
                 if (status === null) throw new Error('Genie does not manage this tool');
-                return withProviderHealth([status], await providerHealth.refreshAll())[0]!;
+                return (await withDocker(withProviderHealth([status], await providerHealth.refreshAll())))[0]!;
             },
             update: async (tool, version, progress, elevate) => AGENT_CLI_PROVIDER[tool] !== undefined
                 ? runCliUpdate(AGENT_CLI_PROVIDER[tool]!, cliPorts((step) => { busyLine(step); if (step) progress?.(step); }))
@@ -207,8 +216,12 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
             activity: () => deps.activity(),
             // Tynn #973: `elevate` is the host's, bound to the client that clicked (genie-host's effectsFor).
             install: (tool, consent, elevate) => installTool(tool, consent, { ...toolchainOps(), ...(elevate ? { elevate } : {}) }),
+            // Tynn #970: Docker's Start, one elevated batch for the client that clicked, judged by `docker info` after.
+            startDocker: (elevate) => startDocker({ platform: process.platform as Platform, run: execFileRunner, user: linuxUser(), elevate }),
             preview: async (tool) => {
-                const plan = planInstall({ tool, platform: process.platform as Platform, packageManager: await packageManager() });
+                // Docker on Linux (Tynn #970): the preview names the group step the install would run, for this account.
+                const account = tool === 'docker' && process.platform === 'linux' ? await dockerAccount(execFileRunner, linuxUser()) : undefined;
+                const plan = planInstall({ tool, platform: process.platform as Platform, packageManager: await packageManager(), ...(account ? { account } : {}) });
                 return 'refused' in plan ? { refused: plan.refused } : { label: plan.label, elevated: plan.elevated };
             },
             // Repaired in the host environment: every future agent and site reads
