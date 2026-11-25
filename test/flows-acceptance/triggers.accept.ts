@@ -155,6 +155,42 @@ describe('Schedule: the scheduler’s timer fires an armed flow', () => {
     });
 });
 
+describe('Mail crosses workstations: a message to or from another of the owner’s workstations starts the armed flows it matches', () => {
+    const genie = useGenie();
+    // What genie-host's cross-station mail hands the scheduler for each message that crossed (cross-station-host.ts `crossed`).
+    const crossing = (over: Record<string, unknown> = {}) => ({ direction: 'in' as const, station: '01m88e0vzh4a36rj22h53hfcwr', stationName: 'laptop', agentId: 'agent_atlas', workspaceId: WS, address: 'bolt@p8x@laptop', messageId: 'msg_1', ...over });
+    const mailFlow = (g: Genie, name: string, trigger: Record<string, unknown>) =>
+        save(g, name, [node('t', 'genie/station_mail', { workspace: WS, ...trigger }), logStep('l', 'mail {{ $json.direction }} {{ $json.address }} via {{ $json.stationName }}')], [edge('t', 'l')]);
+
+    kindCase('genie/station_mail', 'a message that crossed runs the armed flow once, as a station run, and the steps get who and which way', genie, async () => {
+        const g = genie();
+        const id = await mailFlow(g, 'any mail', {});
+        await arm(g, id);
+        expect(g.services.flowScheduler.stationMail(crossing())).toBe(true);
+        const [run] = await runsOf(g, id, 1);
+        expect(run).toMatchObject({ trigger: 'station', outcome: 'ran', nodes: { t: 'ran', l: 'ran' }, log: ['mail in bolt@p8x@laptop via laptop'] });
+    });
+
+    it('direction: an "out" flow is not started by mail coming in (CONTROL: mail going out, after it, does)', async () => {
+        const g = genie();
+        const id = await mailFlow(g, 'outgoing', { direction: 'out' });
+        await arm(g, id);
+        expect(g.services.flowScheduler.stationMail(crossing({ direction: 'in' }))).toBe(false);
+        expect(g.services.flowScheduler.stationMail(crossing({ direction: 'out' }))).toBe(true);
+        const [run] = await runsOf(g, id, 1);
+        expect(run).toMatchObject({ trigger: 'station', log: ['mail out bolt@p8x@laptop via laptop'] });
+    });
+
+    it('another workspace’s mail, and a disarmed flow, start nothing', async () => {
+        const g = genie();
+        const id = await mailFlow(g, 'mine', {});
+        expect(g.services.flowScheduler.stationMail(crossing())).toBe(false); // not armed yet
+        await arm(g, id);
+        expect(g.services.flowScheduler.stationMail(crossing({ workspaceId: 'some-other-workspace' }))).toBe(false);
+        expect(g.services.flows.get(id)!.runs).toEqual([]);
+    });
+});
+
 describe('A file is added: a file landing in the workspace starts the armed flows it matches', () => {
     const genie = useGenie();
     const fileFlow = (g: Genie, name: string, trigger: Record<string, unknown>) =>

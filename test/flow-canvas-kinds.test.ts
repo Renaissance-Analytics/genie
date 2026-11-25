@@ -3,7 +3,7 @@ import { SUPPORTED_KINDS, canonicalKind, documentToGraph, graphToDocument, type 
 import { FLOW_SCHEMA_URL } from '../src/core/flow-form.js';
 import type { FlowPorts } from '../src/main/flow-executors.js';
 import { createFlowRunner } from '../src/main/flow-runner.js';
-import type { FileFired, FlowRecord, Schedule } from '../src/main/flow-store.js';
+import type { FileFired, FlowRecord, Schedule, StationFired } from '../src/main/flow-store.js';
 
 /**
  * EVERY KIND IN THE PALETTE RUNS (genie#1204, acceptance (a)). For each kind the canvas offers, a flow is built the way the
@@ -36,7 +36,7 @@ function harness(over: Partial<FlowPorts> = {}) {
     };
     const logs: string[] = [];
     let nodes: Record<string, NodeOutcome> = {};
-    const run = (document: Record<string, unknown>, trigger: Schedule | FileFired | null = schedule) =>
+    const run = (document: Record<string, unknown>, trigger: Schedule | FileFired | StationFired | null = schedule) =>
         createFlowRunner({ ports: () => ports, asleep: () => false })(flowOf(document), trigger, { nodes: (m) => { nodes = m; }, log: (_id, line) => logs.push(line) });
     return { run, commands, prompts, knowledge, moves, logs, nodes: () => nodes };
 }
@@ -61,6 +61,13 @@ describe('each palette kind runs, and does what it says', () => {
         await h.run(onCanvas([n('t', 'genie/file_added', { workspace: WS, folder: 'uploads' }), n('m', 'genie/file_move', { workspace: WS, from: '{{in.path}}', to: '.untracked' }, 240)], [e('t', 'm')]), { nodeId: 't', file });
         expect(h.moves).toEqual([[WS, '/w/uploads/a.png', '.untracked']]);
         expect(h.commands).toEqual([]);
+    });
+
+    it('"Mail crosses workstations" trigger: hands on which way, the other end and the station', async () => {
+        const h = harness();
+        const station = { direction: 'in' as const, station: '01m88e0vzh4a36rj22h53hfcwr', stationName: 'laptop', agentId: 'agent_atlas', workspaceId: WS, address: 'bolt@p8x@laptop', messageId: 'msg_1' };
+        await h.run(onCanvas([n('t', 'genie/station_mail', { workspace: WS }), sink('s', 'echo {{in.direction}} {{in.address}}')], [e('t', 's')]), { nodeId: 't', station });
+        expect(h.commands).toEqual(['echo in bolt@p8x@laptop']);
     });
 
     it('Prompt an agent: the agent is prompted, and its reply goes on to the next step', async () => {
@@ -135,7 +142,7 @@ describe('each palette kind runs, and does what it says', () => {
     });
 
     it('GUARD: every palette kind is exercised above (a kind added to the palette needs a test here)', () => {
-        const tested = ['manual_trigger', 'schedule_trigger', 'genie/file_added', 'genie/file_move', 'genie/agent_prompt', 'genie/knowledge_add', 'genie/terminal_run', 'branch', 'switch_case', 'transform', 'variable', 'merge', 'wait', 'log', 'output', 'note'].map(canonicalKind).sort();
+        const tested = ['manual_trigger', 'schedule_trigger', 'genie/file_added', 'genie/station_mail', 'genie/file_move', 'genie/agent_prompt', 'genie/knowledge_add', 'genie/terminal_run', 'branch', 'switch_case', 'transform', 'variable', 'merge', 'wait', 'log', 'output', 'note'].map(canonicalKind).sort();
         expect(tested).toEqual([...SUPPORTED_KINDS].sort());
     });
 });

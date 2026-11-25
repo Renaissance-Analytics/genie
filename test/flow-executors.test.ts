@@ -33,7 +33,7 @@ const ctx = (kind: string, config: Record<string, unknown>, inputs: Record<strin
 describe('the kinds', () => {
     // Five since genie#1204 item 5: four steps, and the file trigger — a trigger has no input; every step has one.
     it('are four genie/ steps and one genie/ trigger, each with a category, ports and a config schema the canvas can draw', () => {
-        expect(GENIE_NODE_KINDS.map((k) => k.name).sort()).toEqual(['genie/agent_prompt', 'genie/file_added', 'genie/file_move', 'genie/knowledge_add', 'genie/terminal_run']);
+        expect(GENIE_NODE_KINDS.map((k) => k.name).sort()).toEqual(['genie/agent_prompt', 'genie/file_added', 'genie/file_move', 'genie/knowledge_add', 'genie/station_mail', 'genie/terminal_run']);
         for (const k of GENIE_NODE_KINDS) {
             // A category fancy-flow's NodeCategory has; the old 'action' is not one of them.
             expect(['ai', 'io', 'data', 'trigger']).toContain(k.category);
