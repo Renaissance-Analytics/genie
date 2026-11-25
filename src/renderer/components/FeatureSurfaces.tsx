@@ -16,7 +16,7 @@ import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import { mobilePageUrl } from '../../core/mobile.js';
 import { PairGuide } from './PairGuide.js';
 import { toneLabel, type ToolStatus } from '../../core/toolchain.js';
-import { INSTALL_KIND, REMOVE_KIND, cardKeyOfTool, cardOfAction, defaultSelection, formatElapsed, installNote, langView, nextFix, patchFor, toolchainActivity, toolchainCards, toolchainProblems, toolchainTally, type LangKey, type ToolCard, type ToolchainProblem } from '../toolchain-view.js';
+import { INSTALL_KIND, REMOVE_KIND, cardKeyOfTool, cardOfAction, defaultSelection, formatElapsed, installNote, langView, nextFix, nextInFlight, patchFor, toolchainActivity, toolchainCards, toolchainProblems, toolchainTally, type InFlight, type LangKey, type ToolCard, type ToolchainProblem } from '../toolchain-view.js';
 import { ToolLogo } from './ToolLogo.js';
 import { NAV_GROUPS, NEW_PROJECT_DEFAULTS, sectionOf, type SectionId } from '../../core/settings-nav.js';
 import { SETTINGS, searchSettings, type SettingDef } from '../../core/settings.js';
@@ -1223,18 +1223,19 @@ export function ToolchainSurface({ data, onAction: act, selected: initial }: Sur
     const [pending, setPending] = useState<{ tool: string; version?: string } | null>(null);
     useEffect(() => { setPending(null); }, [tc]);
     // Main reports every install through ONE busy line; the card it is drawn on is the one the person clicked.
-    const [inFlight, setInFlight] = useState<{ card: string; at: number } | null>(null);
+    const [inFlight, setInFlight] = useState<InFlight | null>(null);
     const [chosen, setChosen] = useState<string | null>(initial ?? null);
     const [now, setNow] = useState(() => Date.now());
     const onAction: SurfaceProps['onAction'] = (action) => {
         if (action.kind === 'toolchain.update') setPending({ tool: action.tool, ...(action.version ? { version: action.version } : {}) });
         const card = cardOfAction(action);
-        if (card !== null && action.kind !== 'toolchain.setDefault' && action.kind !== 'toolchain.login') setInFlight({ card, at: Date.now() });
+        if (card !== null && action.kind !== 'toolchain.setDefault' && action.kind !== 'toolchain.login') setInFlight({ card, at: Date.now(), started: false });
         return act(action);
     };
     const updating = tc?.updating ?? (pending ? { ...pending, step: 'Starting' } : null);
     const running = busy !== null || updating !== null;
-    useEffect(() => { if (tc && tc.busy === undefined && tc.updating === undefined && pending === null) setInFlight(null); }, [tc, pending]);
+    // Tynn #968: the mark ends when its work has ended, never on a snapshot that came before the work started.
+    useEffect(() => { if (tc) setInFlight((f) => nextInFlight(f, tc, Date.now(), pending !== null)); }, [tc, pending]);
     useEffect(() => {
         if (!running) return undefined;
         const tick = setInterval(() => setNow(Date.now()), 1000);

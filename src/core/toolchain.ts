@@ -276,6 +276,19 @@ export function pacmanSteps(pkgs: readonly string[]): { readonly steps: readonly
     return { steps: [{ command: 'pacman', args: ['-Sy'] }, { command: 'pacman', args: ['-S', '--needed', '--noconfirm', ...pkgs] }] };
 }
 
+/**
+ * What pacman installs for a tool: its package, and what Arch splits out that Genie needs with it. PHP: `php-cgi`, what
+ * Genie runs a site with and how it finds the system PHP (main/php-versions.ts asks `php-cgi -v`); the toolchain row
+ * 1125-195556-df6ca9 installed `php` alone and the card still read "not here".
+ */
+const PACMAN_ALSO: Readonly<Record<string, readonly string[]>> = { php: ['php-cgi'] };
+export const pacmanPackages = (tool: string, pkg: string): string[] => [pkg, ...(PACMAN_ALSO[tool] ?? [])];
+
+/** The packages a batch's `pacman -S` steps install: what the partial-upgrade check reads (main/pacman.ts). */
+export function pacmanInstalls(steps: readonly ElevatedStep[]): string[] {
+    return steps.filter((s) => s.command === 'pacman' && s.args[0] === '-S').flatMap((s) => s.args.slice(1).filter((a) => !a.startsWith('-')));
+}
+
 export type UpdatePlan =
     | { readonly command: string; readonly manager: PackageManager | 'rustup' | 'npm' | 'vendor' | 'composer'; readonly argv?: readonly string[] }
     /**
@@ -319,9 +332,10 @@ export function planUpdate(input: { tool: string; platform: Platform; packageMan
         }
         // pacman (Tynn #968): the same batch as an install; `--needed` leaves a current package alone.
         case 'pacman': {
-            const batch = pacmanSteps([pkg]);
+            const pkgs = pacmanPackages(input.tool, pkg);
+            const batch = pacmanSteps(pkgs);
             if ('refused' in batch) return batch;
-            return { command: `pacman ${batch.steps[1]!.args.join(' ')}`, manager: pm, elevated: true, items: [pkg], steps: batch.steps };
+            return { command: `pacman ${batch.steps[1]!.args.join(' ')}`, manager: pm, elevated: true, items: pkgs, steps: batch.steps };
         }
     }
 }
@@ -373,9 +387,10 @@ export function planInstall(input: { tool: string; platform: Platform; packageMa
         }
         // pacman (Tynn #968): the sync and the install in one prompt, only after main/pacman.ts's partial-upgrade check.
         case 'pacman': {
-            const batch = pacmanSteps([pkg]);
+            const pkgs = pacmanPackages(input.tool, pkg);
+            const batch = pacmanSteps(pkgs);
             if ('refused' in batch) return batch;
-            return { steps: batch.steps, items: [pkg], label: `pacman ${batch.steps[1]!.args.join(' ')} (as administrator)`, manager: pm, elevated: true };
+            return { steps: batch.steps, items: pkgs, label: `pacman ${batch.steps[1]!.args.join(' ')} (as administrator)`, manager: pm, elevated: true };
         }
     }
 }

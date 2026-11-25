@@ -303,6 +303,29 @@ export function cardOfAction(action: FeatureAction): string | null {
 }
 
 /** 134 000 ms → "2:14"; an hour and more → "1:02:05". */
+/** The card main's ONE busy line is drawn on: the one the person clicked. `started` = its work has been seen busy. */
+export interface InFlight {
+    readonly card: string;
+    readonly at: number;
+    readonly started: boolean;
+}
+
+/** How long a click whose work never showed busy (a refusal, nothing to run) keeps its card marked. */
+const NEVER_STARTED_MS = 60_000;
+
+/**
+ * THE IN-FLIGHT MARK, after a snapshot (Tynn #968; toolchain row 1125-195556-df6ca9). It ends only once the work it marks
+ * has ended: busy (or an update, or a pending click) seen, then gone. A snapshot with nothing busy that arrives BEFORE the
+ * work starts (the previous install's rescan) keeps it: clearing on that left composer's busy line with no card.
+ */
+export function nextInFlight(current: InFlight | null, tc: { readonly busy?: string | undefined; readonly updating?: unknown }, now: number, pending: boolean): InFlight | null {
+    if (current === null) return null;
+    const active = tc.busy !== undefined || tc.updating !== undefined || pending;
+    if (active) return current.started ? current : { ...current, started: true };
+    if (current.started) return null;
+    return now - current.at > NEVER_STARTED_MS ? null : current;
+}
+
 export function formatElapsed(ms: number): string {
     const s = Math.max(0, Math.floor(ms / 1000));
     const pad = (n: number) => String(n).padStart(2, '0');

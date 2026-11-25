@@ -1,5 +1,5 @@
 import { pacmanPreflight, type PacmanSync } from './pacman.js';
-import { HOST_TOOLS, parseVersionOutput, planUpdate, platformArgv, repairOutcome, toolStatus, type PackageManager, type Platform, type RepairOutcome, type ToolStatus } from '../core/toolchain.js';
+import { HOST_TOOLS, pacmanInstalls, parseVersionOutput, planUpdate, platformArgv, repairOutcome, toolStatus, type PackageManager, type Platform, type RepairOutcome, type ToolStatus } from '../core/toolchain.js';
 import { LANGUAGE_LABEL, genieUpdates, installableVersions, updateChoices, type LanguageTool } from '../core/toolchain-update.js';
 import { latestFromBrewOutdated, latestFromNodeIndex, latestFromNpmOutdated, latestFromWingetUpgrade, phpLatestFromReleases } from '../core/toolchain-indexes.js';
 import type { Elevate } from '../core/elevation.js';
@@ -148,7 +148,7 @@ export async function runUpdate(
     // pacman (Tynn #968): the sync rule's check, against Genie's fresh copy of the repositories, before anyone is asked.
     if ('elevated' in plan && plan.manager === 'pacman') {
         if (!where.pacman) return { kind: 'refused', reason: `Genie has no copy of Arch's package databases to check updating ${tool} against; nothing was updated` };
-        const refused = await pacmanPreflight(where.pacman, tool, plan.items[0]!, 'update');
+        const refused = await pacmanPreflight(where.pacman, tool, pacmanInstalls(plan.steps), 'update');
         if (refused !== null) return { kind: 'refused', reason: refused };
     }
     const before = await probeInstalled(def, run, where.platform);

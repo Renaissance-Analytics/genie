@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { HOST_TOOLS, planInstall, planUpdate, pacmanSteps } from '../src/core/toolchain.js';
+import { HOST_TOOLS, pacmanInstalls, planInstall, planUpdate, pacmanSteps } from '../src/core/toolchain.js';
 import { pacmanVersion, parsePacmanQ, parsePacmanSi, parsePacmanTargets, upgradedByInstall } from '../src/core/pacman.js';
 import type { ElevatedBatch as ElevateBatch, ElevatedResult as ElevateResult } from '../src/core/elevation.js';
 import { detectPackageManager, installTool, type ToolchainOpsPorts } from '../src/main/toolchain-ops.js';
@@ -79,6 +79,11 @@ describe('the pacman table and plans, per tool', () => {
             expect(pacmanSteps([bad])).toEqual({ refused: `${JSON.stringify(bad)} is not an Arch package name Genie will hand to pacman` });
         }
         expect(pacmanSteps([])).toEqual({ refused: 'nothing to install' });
+    });
+
+    it('what a batch installs is read from its own pacman -S steps, never from the prompt\'s items (which may name actions)', () => {
+        expect(pacmanInstalls([{ command: 'pacman', args: ['-Sy'] }, { command: 'pacman', args: ['-S', '--needed', '--noconfirm', 'php', 'php-cgi'] }, { command: 'systemctl', args: ['enable', '--now', 'docker.socket'] }])).toEqual(['php', 'php-cgi']);
+        expect(pacmanInstalls([{ command: 'systemctl', args: ['start', 'x'] }])).toEqual([]);
     });
 });
 

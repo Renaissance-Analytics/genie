@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { putOnPath } from './cli-repair.js';
 import { join } from 'node:path';
 import { NODE_LTS_DEFAULT } from '../core/node-versions.js';
-import { HOST_TOOLS, PREREQUISITES, parseVersionOutput, planInstall, vcRuntimeFiles, type PackageManager, type Platform } from '../core/toolchain.js';
+import { HOST_TOOLS, PREREQUISITES, pacmanInstalls, parseVersionOutput, planInstall, vcRuntimeFiles, type PackageManager, type Platform } from '../core/toolchain.js';
 import {
     PRECEDENCE_TOOLS,
     caExportArgv,
@@ -164,7 +164,7 @@ export async function installTool(tool: string, consent: boolean, ports: Toolcha
     // pacman (Tynn #968): the sync rule's check, against Genie's fresh copy of the repositories, before anyone is asked.
     if (plan.elevated && plan.manager === 'pacman') {
         ports.progress?.(`Checking what installing ${tool} would change`);
-        const refused = await pacmanPreflight(ports.pacman ?? pacmanSync({ run: ports.run, dbPath: pacmanDbPath(ports.dataDir) }), tool, plan.items[0]!, 'install');
+        const refused = await pacmanPreflight(ports.pacman ?? pacmanSync({ run: ports.run, dbPath: pacmanDbPath(ports.dataDir) }), tool, pacmanInstalls(plan.steps), 'install');
         if (refused !== null) { ports.progress?.(null); return { kind: 'refused', reason: refused }; }
     }
     try {

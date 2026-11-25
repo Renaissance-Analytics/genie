@@ -84,17 +84,17 @@ export function withPacmanLatest(base: LatestIndex, ports: { packageManager: () 
  * transaction upgrades no installed package but `pkg` itself (an update) — nothing, for an install. `null` = go ahead;
  * otherwise the refusal, in words the card shows.
  */
-export async function pacmanPreflight(sync: PacmanSync, tool: string, pkg: string, verb: 'install' | 'update'): Promise<string | null> {
+export async function pacmanPreflight(sync: PacmanSync, tool: string, pkgs: readonly string[], verb: 'install' | 'update'): Promise<string | null> {
     const ing = verb === 'install' ? 'installing' : 'updating';
-    const info = await sync.info([pkg]);
+    const info = await sync.info(pkgs);
     if (info === null) return `Genie could not read Arch's package databases (checkupdates failed), so it cannot check that ${ing} ${tool} upgrades nothing else; nothing was ${verb === 'install' ? 'installed' : 'changed'}`;
-    const hit = info.get(pkg);
-    if (!hit || !OFFICIAL_REPOSITORIES.includes(hit.repository)) {
-        return `${pkg} is not in Arch's official repositories here (${OFFICIAL_REPOSITORIES.join(', ')}); Genie does not install from the AUR, so yay is not used`;
+    const missing = pkgs.find((p) => { const hit = info.get(p); return !hit || !OFFICIAL_REPOSITORIES.includes(hit.repository); });
+    if (missing !== undefined) {
+        return `${missing} is not in Arch's official repositories here (${OFFICIAL_REPOSITORIES.join(', ')}); Genie does not install from the AUR, so yay is not used`;
     }
-    const targets = await sync.targets([pkg]);
+    const targets = await sync.targets(pkgs);
     if (targets === null) return `Genie could not work out what ${ing} ${tool} with pacman would change; nothing was ${verb === 'install' ? 'installed' : 'changed'}`;
-    const moved = upgradedByInstall(targets, await sync.installed(), verb === 'update' ? [pkg] : []);
+    const moved = upgradedByInstall(targets, await sync.installed(), verb === 'update' ? pkgs : []);
     if (moved.length > 0) return `${ing} ${tool} with pacman would also upgrade ${moved.join(', ')}, a partial upgrade Arch does not support; update the whole system first (omarchy-update, or pacman -Syu), then ${verb} ${tool}`;
     return null;
 }
