@@ -190,15 +190,32 @@ describe('the store: one record at a time, under its lock', () => {
         await seed.writeWorkspaces([{ id: 'ws', path: join(dir, 'ws') }]);
         await phone.refresh();
         const bolt = await phone.register({ workspaceId: 'ws', provider: 'claude', name: 'bolt' });
+        await phone.setModel(bolt.id, 'opus');
         const a = new Store(dir), b = new Store(dir), c = new Store(dir);
         await Promise.all([
             a.changeAgents({ patch: [{ id: bolt.id, set: { permissions: 'edits' } }] }),
             b.changeAgents({ patch: [{ id: bolt.id, set: { mode: 'automated' } }] }),
-            c.changeAgents({ patch: [{ id: bolt.id, set: { autoApprove: true }, unset: ['instructions'] }] }),
+            c.changeAgents({ patch: [{ id: bolt.id, set: { autoApprove: true }, unset: ['model'] }] }),
         ]);
         const record = (await seed.readAgents()).find((x) => x.id === bolt.id)!;
         expect(record).toMatchObject({ permissions: 'edits', mode: 'automated', autoApprove: true });
-        expect('instructions' in record).toBe(false);
+        expect('model' in record).toBe(false);
+    });
+
+    it('a patch never takes away a field every record must have: the record stays readable (the row would be dropped as malformed)', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'registry-store-required-'));
+        dirs.push(dir);
+        const store = new Store(dir);
+        await store.writeWorkspaces([{ id: 'ws', path: join(dir, 'ws') }]);
+        const phone = new Registry(store);
+        await phone.load(WORKSTATION);
+        const bolt = await phone.register({ workspaceId: 'ws', provider: 'claude', name: 'bolt', instructions: '.agents/bolt/AGENT.md' });
+        const after = await store.changeAgents({ patch: [{ id: bolt.id, set: { workspaceId: undefined, mode: 'automated' }, unset: ['instructions', 'threadId', 'name'] }] });
+        expect(after.find((x) => x.id === bolt.id)).toMatchObject({ name: 'bolt', workspaceId: 'ws', instructions: '.agents/bolt/AGENT.md', threadId: null, mode: 'automated' });
+        expect(store.dropped).toEqual([]);
+        // The same for a workspace's path.
+        const workspaces = await store.changeWorkspaces({ patch: [{ id: 'ws', unset: ['path'], set: { asleep: true } }] });
+        expect(workspaces).toEqual([{ id: 'ws', path: join(dir, 'ws'), asleep: true, defaultAgentId: bolt.id, defaultAgentAuto: true }]);
     });
 });
 
