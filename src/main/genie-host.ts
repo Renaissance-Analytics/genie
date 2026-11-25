@@ -156,6 +156,7 @@ import { GithubAccount } from './github-account.js';
 import { GithubAccountService } from './github-account-service.js';
 import { hostHttpsFetch } from './host-https-fetch.js';
 import { relayFetchOver } from './host-relay-fetch.js';
+import { agentTynnSync } from './agent-tynn-sync.js';
 import { hostAgentKeys } from './host-agent-keys.js';
 import { chmod, mkdir, readFile as readFileText, stat as statFile } from 'node:fs/promises';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
@@ -877,6 +878,18 @@ async function main(): Promise<void> {
         ready: () => tynnOpening.catch(() => null),
         settled: () => stores.registrySettled(),
         onPrepared: () => tynnRecovery?.kick(),
+        // MOUNTING A SHARED AGENT (Tynn #1016): a Tynn agent another of THIS machine's agents registered is never mounted.
+        isLocalAgent: (id) => hostRegistry.listAgents().some((a) => a.id === id),
+        // ...and a mounted one takes the settings Tynn holds for it, written before its first session gets its servers.
+        onAdopted: async (agent, settings) => {
+            const registry = phoneRegistryNow;
+            if (!registry) return;
+            // A tool setting is Claude's alone (agent-ops-host setPermissions); one write for all of it.
+            const { permissions, ...rest } = settings;
+            await registry.applyMountedSettings(agent.id, { ...rest, ...(permissions && agent.provider === 'claude' ? { permissions } : {}) });
+            registry.touch();
+            lifecycleLog(`agent mounted from Tynn agent=${agent.id} settings=${Object.keys(settings).join(',') || 'none'}`);
+        },
     });
     // THE HOST BRINGS TYNN TOOLS BACK, with no window (host-tynn-recovery.ts). Built once the session host exists.
     let tynnRecovery: ReturnType<typeof hostTynnRecovery> | null = null;
@@ -1967,6 +1980,11 @@ async function main(): Promise<void> {
     const phoneRegistry = phoneRegistryNow = new Registry(new HostRegistryStore({ call: (store, method, args) => stores.call(store, method, args), registryDropped: () => registryStore.dropped }));
     await phoneRegistry.load({ name: hostname(), healthy: true });
     await phoneRegistry.assignMissingDefaults();
+    // AN AGENT'S SETTINGS FOLLOW IT TO TYNN (Tynn #1001): after each registry write, and when the account signs in again.
+    const agentSettingsSync = agentTynnSync({ agents: () => hostRegistry.listAgents(), push: (agent) => agentKeys.push(agent), log: lifecycleLog });
+    agentSettingsSync.prime();
+    stores.onEvent((event) => { if (event.store === 'registry') void agentSettingsSync.changed(); });
+    void tynnOpening.then((account) => { account.onChange(() => { if (account.status().signedIn) void agentSettingsSync.changed(); }); }, () => {});
     phoneRegistry.setWorkspaceNamer(workspaceNameFor);
     // The Dashboard's comms (Tynn #956): this machine's window has been served from this registry since Tynn #898 2d-4b, and
     // the SessionHost's probe carries none, so the rows take them from the host's own inbox (main/dashboard-comms.ts).

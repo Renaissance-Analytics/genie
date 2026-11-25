@@ -5,7 +5,7 @@ import type { AgentRecord } from '../core/identity.js';
 import { tynnProjectIdOf } from '../core/issue-watch.js';
 import { OS_WORKSPACE } from '../core/os-agent.js';
 import { McpPreparationError } from './mcp-preparation-error.js';
-import type { AgentSecrets } from './tynn-agent-identities.js';
+import type { AgentSecrets, TynnAgentSettings } from './tynn-agent-identities.js';
 import { tynnAgentTokens, tynnUnavailableNote, type TynnFailure, type TynnSessionPort } from './tynn-agent-token.js';
 import { nodeTynnConfigFs, reconcileLegacyTynnConfig } from './tynn-config-cleanup.js';
 
@@ -31,6 +31,13 @@ export interface AgentTynnPrepOptions {
      * socket as its start, and the host runs its calls concurrently. Waits for those writes, so an ordinary click is never refused.
      */
     readonly settled?: () => Promise<void>;
+    /** Is this id one of this machine's agents? A Tynn agent another local agent registered is never mounted by a second (Tynn #1016). */
+    readonly isLocalAgent?: (id: string) => boolean;
+    /**
+     * MOUNTED (Tynn #1016): the agent was bound to Tynn's shared agent of its name; these are the settings Tynn holds for it.
+     * Awaited BEFORE its servers are handed back, so its first session already runs under them.
+     */
+    readonly onAdopted?: (agent: AgentRecord, settings: TynnAgentSettings) => Promise<void>;
 }
 
 const projectText = async (workspacePath: string): Promise<string | null> => {
@@ -49,7 +56,7 @@ const projectText = async (workspacePath: string): Promise<string | null> => {
 };
 
 export function agentTynnPrep(options: AgentTynnPrepOptions) {
-    const tokens = tynnAgentTokens({ file: options.vaultFile, secrets: options.secrets });
+    const tokens = tynnAgentTokens({ file: options.vaultFile, secrets: options.secrets, ...(options.isLocalAgent ? { isLocalAgent: options.isLocalAgent } : {}) });
     const withConfig = options.withConfig ?? (<T>(_path: string, run: () => Promise<T>) => run());
     const without = new Map<string, TynnFailure>();
     /** What each of them needs to ask again. */
@@ -137,6 +144,7 @@ export function agentTynnPrep(options: AgentTynnPrepOptions) {
         const current = options.workspaces()?.find((w) => w.id === agent.workspaceId);
         if (!current || current.asleep || current.path !== here.path || tynnProjectIdOf(await projectText(here.path)) !== projectId) throw new McpPreparationError('workspace');
         checkStop();
+        if (result.adopted && options.onAdopted) { await options.onAdopted(agent, result.adopted); checkStop(); }
         without.delete(agent.id);
         prepared.delete(agent.id);
         if (result.unverified) unverified.set(agent.id, { agent, path: here.path, text });
@@ -146,5 +154,15 @@ export function agentTynnPrep(options: AgentTynnPrepOptions) {
     /** Is an agent running without what Tynn answering would give it: no key for want of Tynn, or a key nobody has checked? */
     const waiting = (): boolean => unverified.size > 0 || [...without.values()].includes('offline');
 
-    return { prepare, note, recovery, waiting, legacyKeys: tokens.legacyKeys, lostKeys: tokens.lostKeys };
+    /** A later setting change of this agent, sent to its Tynn agent (Tynn #1001). Nothing for an agent with no Tynn-linked workspace. */
+    const push = async (agent: AgentRecord): Promise<'sent' | 'unbound' | 'failed' | 'unlinked'> => {
+        const workspace = options.workspaces()?.find((w) => w.id === agent.workspaceId);
+        if (agent.workspaceId === OS_WORKSPACE || !workspace || workspace.asleep) return 'unlinked';
+        let text: string | null;
+        try { text = await projectText(workspace.path); } catch { return 'failed'; }
+        if (tynnProjectIdOf(text) === null) return 'unlinked';
+        return tokens.push({ workspacePath: workspace.path, agent, tynn: options.tynn() ?? null, fs: { read: async () => text, write: async () => { throw new Error('Private agent credentials never enter a workspace'); } } });
+    };
+
+    return { prepare, note, recovery, waiting, push, legacyKeys: tokens.legacyKeys, lostKeys: tokens.lostKeys };
 }

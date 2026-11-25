@@ -53,6 +53,8 @@ const record = (over: Partial<Parameters<typeof agentRecord>[0]> = {}): AgentRec
 
 function tynnFake() {
     const remote: Array<{ id: string; name: string; external_id: string | null; status: string; tokens: Array<{ public_id: string; active: boolean }> }> = [];
+    // conflict: Tynn holds an agent whose name differs from this one's only in case. That is refused, never mounted: an agent of
+    // EXACTLY this name from another machine is this agent, shared (Tynn #1016), so it would be no refusal at all.
     const state = { signedIn: true, reachable: true, minted: 0, conflict: false };
     const answer = (status: number, body: unknown) => ({ ok: status < 300, status, json: async () => body });
     const port: TynnSessionPort = {
@@ -61,7 +63,7 @@ function tynnFake() {
         savedUserId: () => 'user-7',
         request: async (path, init) => {
             if (!state.reachable) throw new Error('Tynn could not be reached.');
-            if (path === `/api/v1/projects/${PROJECT}/agents` && init.method === 'GET') return answer(200, { project_id: PROJECT, agents: state.conflict ? [{ id: 'taken', name: 'atlas', external_id: 'someone-else', status: 'active', tokens: [] }] : remote });
+            if (path === `/api/v1/projects/${PROJECT}/agents` && init.method === 'GET') return answer(200, { project_id: PROJECT, agents: state.conflict ? [{ id: 'taken', name: 'Atlas', external_id: 'someone-else', status: 'active', tokens: [] }] : remote });
             if (path === `/api/v1/projects/${PROJECT}/agents` && init.method === 'POST') {
                 const body = init.body as { name: string; external_id: string };
                 const row = { id: `remote-${remote.length + 1}`, name: body.name, external_id: body.external_id, status: 'active', tokens: [] };

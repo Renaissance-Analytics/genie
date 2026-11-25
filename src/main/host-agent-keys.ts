@@ -19,6 +19,10 @@ export interface HostAgentKeysOptions {
     readonly withConfig?: <T>(path: string, run: () => Promise<T>) => Promise<T>;
     /** An agent was prepared: whoever keeps asking for Tynn looks again. */
     readonly onPrepared?: () => void;
+    /** This machine's agents, by id: a Tynn agent one of them registered is never mounted by another (Tynn #1016). */
+    readonly isLocalAgent?: AgentTynnPrepOptions['isLocalAgent'];
+    /** A mounted agent takes the settings Tynn holds for it, before its first session gets its servers (Tynn #1016). */
+    readonly onAdopted?: AgentTynnPrepOptions['onAdopted'];
 }
 export interface HostAgentKeysResult {
     readonly servers: readonly McpServer[];
@@ -29,6 +33,8 @@ export type HostAgentKeys = ((agent: AgentRecord, cwd: string, signal?: AbortSig
     waiting(): boolean;
     /** The keys the keychain lost: their ids on record, and forgetting them so each agent's next start mints one (P7.3). */
     readonly lostKeys: { ids(): Promise<string[]>; forget(): Promise<number> };
+    /** A later setting change of this agent, sent to its Tynn agent (Tynn #1001). */
+    push(agent: AgentRecord): Promise<'sent' | 'unbound' | 'failed' | 'unlinked'>;
 };
 
 export function hostAgentKeys(options: HostAgentKeysOptions): HostAgentKeys {
@@ -40,11 +46,13 @@ export function hostAgentKeys(options: HostAgentKeysOptions): HostAgentKeys {
         ...(options.withConfig ? { withConfig: options.withConfig } : {}),
         ...(options.ready ? { ready: options.ready } : {}),
         ...(options.settled ? { settled: options.settled } : {}),
+        ...(options.isLocalAgent ? { isLocalAgent: options.isLocalAgent } : {}),
+        ...(options.onAdopted ? { onAdopted: options.onAdopted } : {}),
     });
     const read = async (agent: AgentRecord, _cwd: string, signal: AbortSignal = new AbortController().signal): Promise<HostAgentKeysResult> => {
         const servers = await prep.prepare(agent, signal);
         options.onPrepared?.();
         return { servers, note: prep.note(agent.id) };
     };
-    return Object.assign(read, { recovery: prep.recovery, waiting: prep.waiting, lostKeys: prep.lostKeys });
+    return Object.assign(read, { recovery: prep.recovery, waiting: prep.waiting, lostKeys: prep.lostKeys, push: prep.push });
 }

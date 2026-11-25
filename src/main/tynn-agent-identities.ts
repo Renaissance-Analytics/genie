@@ -19,7 +19,29 @@ export interface AgentSecrets {
 export interface AgentCredentialPorts {
     readonly file: string;
     readonly secrets: AgentSecrets;
+    /**
+     * Is this id one of THIS machine's agents (the registry)? A Tynn agent whose Genie id is here belongs to another local
+     * agent, and is never mounted by a second one (Tynn #1016). Absent = only the vault's own bindings say so.
+     */
+    readonly isLocalAgent?: (id: string) => boolean;
 }
+/** The settings Tynn holds for an agent, as Genie keeps them: what a mounting machine applies (Tynn #1016). */
+export interface TynnAgentSettings {
+    readonly permissions?: 'all' | 'ask' | 'edits';
+    readonly mode?: 'automated' | 'manual';
+    readonly autoApprove?: boolean;
+    readonly accessScope?: AgentRecord['accessScope'];
+    readonly model?: string;
+}
+/** An agent's settings as Tynn's config holds them (Tynn AgentConfig: a closed set of keys). Sent on register and on change. */
+export function tynnConfigOf(agent: AgentRecord): Record<string, unknown> {
+    return {
+        provider: agent.provider, ...(agent.model ? { model: agent.model } : {}),
+        ...(agent.instructions ? { instructions: agent.instructions } : {}), permissions: [agent.permissions ?? 'all'], mode: agent.mode,
+        auto_approve: agent.autoApprove === true, access_scope: agent.accessScope,
+    };
+}
+const ACCESS_SCOPES: ReadonlySet<string> = new Set(['none', 'self', 'specific', 'all']);
 type FailureCode = 'offline' | 'inactive' | 'conflict' | 'pending' | 'storage' | 'refused';
 class ProvisionFailure extends Error {
     constructor(readonly code: FailureCode, message: string) { super(message); }
@@ -40,11 +62,24 @@ interface RemoteAgent {
     readonly external_id: string | null;
     readonly status: 'active' | 'suspended' | 'archived';
     readonly tokens: readonly { readonly public_id: string; readonly active: boolean; readonly scope_target?: string }[];
+    readonly config?: unknown;
 }
 const agentEntry = (publicId: string): SecretName => `tynn/agent/${publicId}`;
 const MCP_URL = `${TYNN_HOST}/mcp/tynn`;
 const RPK = /^rpk_([0-9A-HJKMNP-TV-Z]{26})\.[a-f0-9]{64}$/i;
 const object = (value: unknown): Record<string, unknown> | null => typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
+/** What of Tynn's config this agent takes: only values Genie knows, and a model only for the provider it names. */
+function settingsFrom(config: unknown, agent: AgentRecord): TynnAgentSettings {
+    const c = object(config) ?? {};
+    const permission = Array.isArray(c.permissions) && c.permissions.length === 1 ? c.permissions[0] : undefined;
+    return {
+        ...(permission === 'all' || permission === 'ask' || permission === 'edits' ? { permissions: permission } : {}),
+        ...(c.mode === 'automated' || c.mode === 'manual' ? { mode: c.mode } : {}),
+        ...(typeof c.auto_approve === 'boolean' ? { autoApprove: c.auto_approve } : {}),
+        ...(typeof c.access_scope === 'string' && ACCESS_SCOPES.has(c.access_scope) ? { accessScope: c.access_scope as AgentRecord['accessScope'] } : {}),
+        ...(typeof c.model === 'string' && c.model.trim() && !c.model.startsWith('-') && c.provider === agent.provider ? { model: c.model } : {}),
+    };
+}
 function remoteAgent(value: unknown): RemoteAgent | null {
     const row = object(value);
     if (!row || typeof row.id !== 'string' || !row.id || typeof row.name !== 'string' || !row.name.trim()
@@ -136,7 +171,7 @@ export function tynnAgentIdentities(ports: AgentCredentialPorts) {
         if (Object.hasOwn(records, key) && (!known || !object(known) || known.userId !== userId || known.projectId !== projectId || known.genieId !== agent.id || typeof known.remoteAgentId !== 'string' || !['pending', 'ready'].includes(known.state))) {
             throw new ProvisionFailure('storage', 'The stored Tynn agent binding is invalid.');
         }
-        const api = async (path: string, method: 'GET' | 'POST', body?: unknown): Promise<Record<string, unknown>> => {
+        const api = async (path: string, method: 'GET' | 'POST' | 'PATCH', body?: unknown): Promise<Record<string, unknown>> => {
             currentAccount();
             try {
                 const response = await tynn!.request(path, { method, ...(body === undefined ? {} : { body }), ...(input.signal ? { signal: input.signal } : {}) });
@@ -158,15 +193,32 @@ export function tynnAgentIdentities(ports: AgentCredentialPorts) {
         const matches = agents.filter((a) => a?.external_id === agent.id) as RemoteAgent[];
         if (matches.length > 1) throw new ProvisionFailure('conflict', 'Tynn returned duplicate bindings for this Genie agent.');
         let remote = matches[0];
+        /** Another binding in this vault, for this person and project, to that Tynn agent: a local twin holds it. */
+        const heldByAnother = (remoteId: string) => Object.entries(records).some(([k, r]) => k !== key && object(r) && r.remoteAgentId === remoteId && r.userId === userId && r.projectId === projectId);
+        // MOUNTED (Tynn #1016): the binding this vault holds names Tynn's agent by its id, whatever Genie id Tynn has on it
+        // (the machine that registered it).
+        if (!remote && known) remote = (agents as RemoteAgent[]).find((a) => a.id === known.remoteAgentId && !heldByAnother(a.id));
         if (known && (!remote || remote.id !== known.remoteAgentId)) throw new ProvisionFailure('conflict', 'The stored Tynn agent identity no longer matches this project.');
+        let adopted: TynnAgentSettings | undefined;
         if (!remote) {
-            if (agents.some((a) => a!.name.toLowerCase() === agent.name.toLowerCase())) throw new ProvisionFailure('conflict', 'Another Tynn agent already uses this name. Resolve the identity conflict before provisioning.');
-            const registered = await api(path, 'POST', { name: agent.name, external_id: agent.id, config: {
-                provider: agent.provider, ...(agent.model ? { model: agent.model } : {}),
-                ...(agent.instructions ? { instructions: agent.instructions } : {}), permissions: [permissions], mode: agent.mode,
-            } });
-            remote = remoteAgent(registered.agent) ?? undefined;
-            if (!remote || remote.external_id !== agent.id) throw new ProvisionFailure('conflict', 'Tynn did not confirm this agent identity.');
+            const named = agents.filter((a) => a!.name.toLowerCase() === agent.name.toLowerCase()) as RemoteAgent[];
+            const same = named.length === 1 && named[0]!.name === agent.name && named[0]!.external_id !== null ? named[0]! : undefined;
+            /*
+             * THE SHARED AGENT (Tynn #1016; the owner's ruling #1003: agents belong to the workspace, keys are minted per
+             * person on mount). Tynn's agent of exactly this name, registered by ANOTHER machine, is this agent: it gets a key
+             * of its own and the settings Tynn holds. Never when that agent is one of THIS machine's own (two local agents
+             * never share one Tynn identity), and never a name that differs only in case.
+             */
+            const local = same !== undefined && (ports.isLocalAgent?.(same.external_id!) === true || heldByAnother(same.id));
+            if (same && !local) {
+                remote = same;
+                adopted = settingsFrom(same.config, agent);
+            } else {
+                if (named.length > 0) throw new ProvisionFailure('conflict', 'Another Tynn agent already uses this name. Resolve the identity conflict before provisioning.');
+                const registered = await api(path, 'POST', { name: agent.name, external_id: agent.id, config: tynnConfigOf({ ...agent, permissions }) });
+                remote = remoteAgent(registered.agent) ?? undefined;
+                if (!remote || remote.external_id !== agent.id) throw new ProvisionFailure('conflict', 'Tynn did not confirm this agent identity.');
+            }
         }
         if (remote.status !== 'active') throw new ProvisionFailure('inactive', `This Tynn agent is ${remote.status}; it cannot receive or use a credential.`);
         if (known?.state === 'pending') throw new ProvisionFailure('pending', 'An earlier key request is unconfirmed. Review this agent’s keys in Tynn before issuing another.');
@@ -192,10 +244,29 @@ export function tynnAgentIdentities(ports: AgentCredentialPorts) {
         if (!held.ok) throw new ProvisionFailure('pending', 'The issued Tynn key could not be kept in the keychain. Review the pending key before trying again.');
         await save(key, { ...binding, state: 'ready', publicId });
         currentAccount();
-        return { status: 'minted', mcp: { url: MCP_URL, token }, remoteAgentId: remote.id };
+        return { status: 'minted', mcp: { url: MCP_URL, token }, remoteAgentId: remote.id, ...(adopted ? { adopted } : {}) };
+    }
+
+    /**
+     * A LATER SETTING CHANGE, SENT (Tynn #1001): this agent's settings to the Tynn agent this vault binds it to (the one it
+     * registered, or the shared one it mounted). Only when signed in as the binding's person and the binding is ready;
+     * `unbound` = nothing to send to (its first start registers it with its settings).
+     */
+    async function push(input: { projectId: string; agent: AgentRecord; tynn: TynnSessionPort | null }): Promise<'sent' | 'unbound' | 'failed'> {
+        const tynn = input.tynn;
+        const userId = tynn?.status().signedIn ? tynn.userId?.() : null;
+        if (!tynn || !userId) return 'failed';
+        let known: Stored | undefined;
+        try { known = (await load())[JSON.stringify([userId, input.projectId, input.agent.id])]; } catch { return 'failed'; }
+        if (!known || !object(known) || known.state !== 'ready' || typeof known.remoteAgentId !== 'string' || known.genieId !== input.agent.id) return 'unbound';
+        try {
+            const response = await tynn.request(`/api/v1/projects/${encodeURIComponent(input.projectId)}/agents/${encodeURIComponent(known.remoteAgentId)}`, { method: 'PATCH', body: { config: tynnConfigOf(input.agent) } });
+            return response.ok ? 'sent' : 'failed';
+        } catch { return 'failed'; }
     }
 
     return {
+        push,
         /** The keys an older Genie sealed with safeStorage, for the one-time move (keychain-migration.ts). Only a window can open them. */
         async legacyKeys(cipher: { decrypt(bytes: Buffer): string }): Promise<MigrationSource[]> {
             const records = await load();

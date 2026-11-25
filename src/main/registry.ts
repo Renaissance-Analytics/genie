@@ -820,6 +820,17 @@ export class Registry {
         return this.#update(agentId, ({ accessAgents: _old, ...rest }) => (accessAgents === null ? rest : { ...rest, accessAgents: [...accessAgents] }), ['accessAgents']);
     }
 
+    /**
+     * A MOUNTED AGENT TAKES TYNN'S SETTINGS (Tynn #1016), as ONE per-record change (#1007): written setter by setter, each
+     * half-applied state was sent to Tynn by the settings sync. Only what is given, and every given field is SET: it lands
+     * even when this copy is behind the files and already shows that value, as each setter's does.
+     */
+    async applyMountedSettings(agentId: AgentId, settings: { readonly permissions?: AgentPermissions; readonly mode?: AgentRecord['mode']; readonly autoApprove?: boolean; readonly accessScope?: AgentRecord['accessScope']; readonly model?: string }): Promise<AgentRecord | null> {
+        const given = (['permissions', 'mode', 'autoApprove', 'accessScope', 'model'] as const).filter((key) => settings[key] !== undefined);
+        if (given.length === 0) return this.find(agentId);
+        return this.#update(agentId, (a) => ({ ...a, ...Object.fromEntries(given.map((key) => [key, settings[key]])) }), given);
+    }
+
     async setAccessScope(agentId: AgentId, accessScope: AgentRecord['accessScope']): Promise<AgentRecord | null> {
         return this.#update(agentId, (a) => ({ ...a, accessScope }), ['accessScope']);
     }
