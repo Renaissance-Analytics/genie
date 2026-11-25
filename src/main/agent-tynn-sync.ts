@@ -23,7 +23,7 @@ export function agentTynnSync(ports: AgentTynnSyncPorts) {
 
     const pass = async (): Promise<void> => {
         const now = ports.agents();
-        const ids = new Set(now.map((a) => a.id));
+        const ids = new Set<string>(now.map((a) => a.id));
         for (const id of [...seen.keys()]) if (!ids.has(id)) { seen.delete(id); retry.delete(id); }
         for (const agent of now) {
             const sig = signature(agent);
