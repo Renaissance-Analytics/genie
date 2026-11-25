@@ -174,6 +174,7 @@ async function entryUntil(want, label, ms = 20_000) {
 
 // ---------------------------------------------------------------- processes and windows, the OS's word
 const alive = (pid) => { if (!Number.isInteger(pid) || pid <= 0) return false; try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+const settingsFile = () => { try { return readFileSync(join(GENIE_HOME, 'runtime', 'settings.json'), 'utf8').replace(/\s+/g, ' ').slice(0, 400); } catch (e) { return `(unread: ${e.code ?? e.message})`; } };
 const hostPid = () => { try { return JSON.parse(readFileSync(HOST_RECORD, 'utf8')).pid ?? null; } catch { return null; } };
 function winTable() {
     const script = 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)|$($_.ExecutablePath)|$($_.CommandLine)" }';
@@ -416,9 +417,17 @@ async function table() {
         e = readEntry('shut down + setting on: after');
         check(e.present && !existsSync(MARK), '3. shut down + setting on: the entry stays, so it starts at logon (start)', e.words);
     }
+    console.log(`  genie-host's settings file after the shut down: ${settingsFile()}`);
     s = await open('b');
     e = await entryUntil((x) => x.present, 'relaunched, setting on');
-    check(e.present, '3b. a relaunch with the setting on keeps the entry', e.words);
+    if (!check(e.present, '3b. a relaunch with the setting on keeps the entry', e.words)) {
+        // What each side holds, to say which one lost the setting: genie-host's file, and the page's view of the settings.
+        console.log(`  genie-host's settings file now: ${settingsFile()}`);
+        const page = await s.cdp.evaluate('(window.genieTest ?? window.genie).features.snapshot().then((d) => JSON.stringify({ launch_at_login: d?.settings?.values?.launch_at_login, start_minimized: d?.settings?.values?.start_minimized }))', 10_000).catch((x) => `(unread: ${x.message})`);
+        console.log(`  the page's settings: ${page}`);
+        const said = readFileSync(app.log, 'utf8').split(/\r?\n/).filter((l) => /sign-in|setting|login/i.test(l)).slice(-20);
+        console.log(`  the window's log on sign-in and settings:${said.length ? `\n    ${said.join('\n    ')}` : ' nothing'}`);
+    }
     await setSetting(s, 'launch_at_login', false);
     await entryUntil((x) => !x.present, 'shut down + setting off: before');
     if (await shutDown(s, 'shut down + setting off')) {
