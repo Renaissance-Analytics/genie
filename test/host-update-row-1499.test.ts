@@ -169,7 +169,8 @@ describe('the row: drained, swapped, restored once', () => {
         // Found by its script, whatever runs it: the provider runs under genie-host's own executable as Node, never node.exe.
         expect(ps1()).not.toMatch(/stub-codex\.mjs\*' -and \$_\.Name -eq 'node\.exe'/);
         expect(ps1()).toMatch(/if \(\$survivors\.Count -ne 0\) \{/);
-        expect(ps1()).toMatch(/if \(\$revived\.Count -ne 1\) \{ throw "the agent that was running came back \$\(\$revived\.Count\) times/);
+        // Not once: the new host's agent starts are printed (why it did not come back), and then it fails.
+        expect(ps1()).toMatch(/if \(\$revived\.Count -ne 1\) \{\s*Write-Output "--- the new host's agent starts \(lifecycle\.log\) ---"\s*Select-String -Path \$lifecycle [^\n]*\s*throw "the agent that was running came back \$\(\$revived\.Count\) times \(want exactly 1\)"\s*\}/);
         expect(ps1()).toMatch(/if \(-not \(Descends \$revived\[0\]\.ProcessId \$hostAfter\.Id\)\) \{ throw/);
         expect(sh()).toMatch(/for p in \$stubs_before; do alive "\$p" && fail "agent provider pid \$p survived the update"; done/);
         expect(sh()).toMatch(/\[ "\$revived_n" -eq 1 \] \|\| fail "the agent that was running came back \$revived_n times/);
