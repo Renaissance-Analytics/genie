@@ -16,6 +16,7 @@ import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import { mobilePageUrl } from '../../core/mobile.js';
 import { PairGuide } from './PairGuide.js';
 import { toneLabel, type ToolStatus } from '../../core/toolchain.js';
+import { DOCKER_DAEMON_WORDS } from '../../core/docker-engine.js';
 import { INSTALL_KIND, REMOVE_KIND, cardKeyOfTool, cardOfAction, defaultSelection, formatElapsed, installNote, langView, nextFix, nextInFlight, patchFor, toolchainActivity, toolchainCards, toolchainProblems, toolchainTally, type InFlight, type LangKey, type ToolCard, type ToolchainProblem } from '../toolchain-view.js';
 import { ToolLogo } from './ToolLogo.js';
 import { NAV_GROUPS, NEW_PROJECT_DEFAULTS, sectionOf, type SectionId } from '../../core/settings-nav.js';
@@ -947,8 +948,16 @@ function ServicesPanel({ services, workspaces, onAction, onNavigate }: { service
     const [confirming, setConfirming] = useState<string | null>(null);
     if (services === null) return <Skeletons />;
     const logs = services.logs ?? null;
+    // Tynn #970: a service waits on Docker; the Toolchain's Docker card says why and starts it.
+    const dockerDown = services.instances.some((s) => s.status === 'docker-not-running');
     return (
         <div className="flex flex-col">
+            {dockerDown ? (
+                <p data-services-docker-down="" className="flex items-center gap-2 border-b border-[var(--border-1)] px-5 py-2 text-sm text-[var(--warning)]">
+                    <span>Docker is not running, so these services cannot start.</span>
+                    <Button type="button" size="xs" variant="ghost" className="ml-auto" data-action="services-open-docker" onClick={() => onNavigate('genie://settings/toolchain')}>Docker in Toolchain</Button>
+                </p>
+            ) : null}
             <form
                 className="flex items-center gap-2 px-5 py-2"
                 onSubmit={(e) => { e.preventDefault(); const w = pickedWorkspace(e.currentTarget, workspaces, 'workspace'); if (w) onAction({ kind: 'services.add', workspaceId: w.id }); }}
@@ -1446,6 +1455,15 @@ export function ToolCardView({ card, selected, busy, updating, updated, refusal,
     let actions: React.ReactNode = null;
     if (t && t.tone === 'broken') {
         actions = <span data-card-primary="repair" className="contents"><CliRepairAction t={t} busy={busy} updating={updating} onAction={onAction} /></span>;
+    } else if (t && t.installed !== null && t.daemon) {
+        // Tynn #970: Docker installed and not usable says so, ahead of any version talk; Start is one password prompt.
+        const words = DOCKER_DAEMON_WORDS[t.daemon];
+        actions = (
+            <>
+                {t.daemon === 'needs-login' ? null : <Button type="button" size="sm" color="blue" data-card-primary="start" data-action="toolchain-start-docker" disabled={busy} title="Enable and start Docker; asks for your password once" onClick={() => onAction({ kind: 'toolchain.startDocker' })}>Start</Button>}
+                <Badge variant="soft" size="sm" color="amber" data-docker-daemon={t.daemon}>{words.badge}</Badge>
+            </>
+        );
     } else if (t && t.signedOut) {
         actions = (
             <>
@@ -1528,12 +1546,13 @@ export function ToolCardView({ card, selected, busy, updating, updated, refusal,
             {t?.advisory ? <span data-tool-advisory={t.tool} className="text-xs text-[var(--danger)]">{t.advisory}</span> : null}
             {/* Tynn #698: an agent CLI the health check found cannot run says why; an Update cannot fix it (the repair is its own action). */}
             {t?.problem ? <span data-tool-problem={t.tool} className="text-xs text-[var(--danger)]">{t.problem}</span> : null}
+            {t?.daemon && t.installed !== null ? <span data-docker-why={t.daemon} className="text-xs text-[var(--warning)]">{DOCKER_DAEMON_WORDS[t.daemon].why}</span> : null}
             {progress ? (
                 <CardProgress card={card} progress={progress} />
             ) : (
                 <div data-card-actions="" className="mt-auto flex flex-wrap items-center gap-1.5 [&_.ml-auto]:ml-0">{actions}</div>
             )}
-            {refusal && t && (t.installed === null || t.tone === 'broken') ? <span data-tool-refusal={t.tool} className="text-xs text-[var(--danger)]">{refusal.reason}</span> : null}
+            {refusal && t && (t.installed === null || t.tone === 'broken' || t.daemon !== undefined) ? <span data-tool-refusal={t.tool} className="text-xs text-[var(--danger)]">{refusal.reason}</span> : null}
             {refusal && !t && card.systemTool ? <span data-tool-refusal={card.systemTool} className="text-xs text-[var(--danger)]">{refusal.reason}</span> : null}
         </li>
     );

@@ -29,6 +29,7 @@ import { readBrowserManifest } from './playwright-browsers.js';
 import { probeInstalled, type CommandRunner } from './toolchain-prober.js';
 import type { Elevate } from '../core/elevation.js';
 import { pacmanDbPath, pacmanPreflight, pacmanSync, type PacmanSync } from './pacman.js';
+import type { DockerAccount } from '../core/docker-engine.js';
 
 /**
  * THE TOOLCHAIN'S ACTIONS (§6.6) — install a missing tool, check and repair — with every effect INJECTED: the runner
@@ -87,6 +88,8 @@ export interface ToolchainOpsPorts {
     readonly elevate?: Elevate;
     /** Genie's copy of Arch's sync databases (main/pacman.ts, Tynn #968). Absent = one at `<dataDir>/pacman-sync`. */
     readonly pacman?: PacmanSync;
+    /** Tynn #970: who Genie runs as on Linux, and whether the group database has them in `docker`. Absent = Docker is not offered. */
+    readonly dockerAccount?: () => Promise<DockerAccount>;
 }
 
 export type InstallOutcome =
@@ -158,7 +161,9 @@ export async function installTool(tool: string, consent: boolean, ports: Toolcha
 
     const before = await measure();
     if (before !== null) return { kind: 'already-installed', version: def ? before : null };
-    const plan = planInstall({ tool, platform: ports.platform, packageManager: await ports.packageManager() });
+    // Docker on Linux (Tynn #970): the account its install adds to the docker group, read before anything is asked.
+    const account = tool === 'docker' && ports.platform === 'linux' ? await ports.dockerAccount?.() : undefined;
+    const plan = planInstall({ tool, platform: ports.platform, packageManager: await ports.packageManager(), ...(account ? { account } : {}) });
     if ('refused' in plan) return { kind: 'refused', reason: plan.refused };
     if (plan.elevated && !ports.elevate) return { kind: 'refused', reason: `installing ${tool} needs the administrator password, and no Genie window is connected to ask for it; nothing was installed` };
     // pacman (Tynn #968): the sync rule's check, against Genie's fresh copy of the repositories, before anyone is asked.

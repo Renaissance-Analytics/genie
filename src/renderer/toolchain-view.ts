@@ -16,6 +16,7 @@
 
 import type { ToolStatus } from '../core/toolchain.js';
 import { PREREQUISITES } from '../core/toolchain.js';
+import { DOCKER_DAEMON_WORDS } from '../core/docker-engine.js';
 import { patchWithinLine } from '../core/toolchain-update.js';
 import type { FeatureAction, InstallPreview, ToolchainSection } from './features.js';
 
@@ -84,7 +85,7 @@ export function patchFor(lang: LangKey, version: string, view: View): string | n
 }
 
 const stateOfTool = (t: ToolStatus): CardState =>
-    t.tone === 'broken' || t.tone === 'security-update' || t.signedOut === true ? 'problem'
+    t.tone === 'broken' || t.tone === 'security-update' || t.signedOut === true || t.daemon !== undefined ? 'problem'
     : t.tone === 'not-installed' ? 'missing'
     : t.tone === 'update-available' ? 'update'
     : t.tone === 'up-to-date' ? 'ok'
@@ -247,6 +248,13 @@ export function toolchainProblems(tc: ToolchainSection, servicesWaiting = 0): To
         const why = `Databases, Redis and mail for your sites run on it.${servicesWaiting > 0 ? ` ${plural(servicesWaiting, 'service is', 'services are')} waiting.` : ''}`;
         out.push({ key: 'docker', card: 'docker', title: "Docker isn't installed", why, label: 'Install Docker', note: installNote(plan) ?? undefined, action: { kind: 'toolchain.install', tool: 'docker', consent: true } });
     }
+    // Tynn #970: Docker installed and not usable: off (Start), or a group this login does not have yet (a new login).
+    const daemon = docker?.tool?.installed !== null ? docker?.tool?.daemon : undefined;
+    if (daemon === 'not-running' || daemon === 'no-access') {
+        out.push({ key: 'docker', card: 'docker', title: daemon === 'not-running' ? "Docker isn't running" : 'Docker needs your account in its group', why: `${DOCKER_DAEMON_WORDS[daemon].why}${servicesWaiting > 0 ? ` ${plural(servicesWaiting, 'service is', 'services are')} waiting.` : ''}`, label: 'Start Docker', note: 'asks once', action: { kind: 'toolchain.startDocker' } });
+    } else if (daemon === 'needs-login') {
+        out.push({ key: 'docker', card: 'docker', title: 'Docker needs a new login', why: DOCKER_DAEMON_WORDS['needs-login'].why, label: 'Docker', action: null });
+    }
     // Last: a signed-out agent CLI runs; it only waits for a login.
     for (const c of cards.values()) {
         if (c.tool?.signedOut && c.tool.tone !== 'broken') out.push({ key: c.key, card: c.key, title: `${c.title} is signed out`, why: 'Its agents start once you log in.', label: 'Log in', action: { kind: 'toolchain.login', tool: c.tool.tool } });
@@ -293,6 +301,8 @@ export function cardOfAction(action: FeatureAction): string | null {
             return cardKeyOfTool(action.tool);
         case 'toolchain.installPlaywright':
             return 'playwright';
+        case 'toolchain.startDocker':
+            return 'docker';
         case 'toolchain.setDefault':
             return action.lang;
         default: {

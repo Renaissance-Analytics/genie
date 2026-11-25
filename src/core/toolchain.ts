@@ -13,6 +13,7 @@
 import { findBatchFile, type LookupPorts } from './program-lookup.js';
 import { phpAdvisoryText } from './php-advisories.js';
 import type { ElevatedStep } from './elevation.js';
+import { dockerServiceSteps, type DockerAccount, type DockerDaemon } from './docker-engine.js';
 
 export type Platform = 'win32' | 'darwin' | 'linux';
 export type PackageManager = 'winget' | 'brew' | 'apt' | 'dnf' | 'pacman';
@@ -45,11 +46,11 @@ export const HOST_TOOLS: readonly HostTool[] = [
     // Code's postinstall and leaves it a placeholder. `claude update` updates a native install; Codex's installer updates it.
     { name: 'claude-code', probe: { binary: 'claude', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'vendor', command: 'claude update' }, npmPackage: '@anthropic-ai/claude-code' },
     { name: 'codex', probe: { binary: 'codex', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'vendor', command: 'the Codex installer' }, npmPackage: '@openai/codex' },
-    // Docker Desktop: what every hosted service engine runs on. No apt/dnf row on purpose: a distro's `docker.io` is not
-    // Docker Desktop, and installing it does not put the person in the `docker` group — a row that "installs" Docker and
-    // leaves it unusable is worse than none. Arch's `docker` is the engine itself (Omarchy ships it, Tynn #968); its
-    // daemon and group are #970's.
-    { name: 'docker', probe: { binary: 'docker', args: ['--version'] }, packages: { winget: 'Docker.DockerDesktop', brew: 'docker-desktop', pacman: 'docker' } },
+    // Docker: what every hosted service engine runs on. Docker Desktop on Windows and macOS; on Linux the distro's ENGINE
+    // (Arch's `docker`, Tynn #968; apt `docker.io` and dnf `moby-engine`, Tynn #970; Genie 1 did the same), whose install
+    // also enables it and adds the person to the `docker` group in the same prompt (planInstall), because an engine that
+    // is installed and cannot be used is worse than none.
+    { name: 'docker', probe: { binary: 'docker', args: ['--version'] }, packages: { winget: 'Docker.DockerDesktop', brew: 'docker-desktop', pacman: 'docker', apt: 'docker.io', dnf: 'moby-engine' } },
 ];
 
 /**
@@ -166,6 +167,11 @@ export interface ToolStatus {
     readonly problem?: string;
     /** An agent CLI that runs and says it is signed out (Tynn #698): "Not signed in" and Log in, never Broken. */
     readonly signedOut?: boolean;
+    /**
+     * Docker on Linux (Tynn #970): its HEALTH beside its version, when it is not simply running. `not-running` and
+     * `no-access` offer Start; `needs-login` is a group just added that this session does not have yet.
+     */
+    readonly daemon?: Exclude<DockerDaemon, 'running'>;
 }
 
 /** The Toolchain row each agent provider's CLI is. */
@@ -356,7 +362,22 @@ export type InstallPlan =
 /** A package name Genie hands to a package manager as one argument; anything else is refused before anyone is asked. */
 const PACKAGE_NAME = /^[a-z0-9][a-z0-9.+-]*$/;
 
-export function planInstall(input: { tool: string; platform: Platform; packageManager: PackageManager | null }): InstallPlan {
+/**
+ * Docker on Linux (Tynn #970): the distro's engine, AND in the same prompt what makes it usable: enabled and started,
+ * and `account` added to the docker group when it is not in it (core/docker-engine.ts). The package stays `items[0]`,
+ * which the pacman preflight (#968) keys on. With no account to add, nothing is offered.
+ */
+export function planInstall(input: { tool: string; platform: Platform; packageManager: PackageManager | null; account?: DockerAccount }): InstallPlan {
+    const plan = planPackageInstall(input);
+    if (input.tool !== 'docker' || input.platform !== 'linux' || 'refused' in plan || !plan.elevated) return plan;
+    if (!input.account) return { refused: 'Genie could not tell which account to add to the docker group, so it did not install Docker' };
+    const service = dockerServiceSteps(input.account);
+    if ('refused' in service) return service;
+    const label = `${plan.label.replace(/ [(]as administrator[)]$/, '')} && ${service.steps.map((s) => [s.command, ...s.args].join(' ')).join(' && ')} (as administrator)`;
+    return { ...plan, label, items: [...plan.items, ...service.items], steps: [...plan.steps, ...service.steps] };
+}
+
+function planPackageInstall(input: { tool: string; platform: Platform; packageManager: PackageManager | null }): InstallPlan {
     const tool = HOST_TOOLS.find((t) => t.name === input.tool);
     const prereq = PREREQUISITES.find((p) => p.name === input.tool);
     if (!tool && !prereq) return { refused: `${input.tool} is not a tool Genie manages` };

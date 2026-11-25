@@ -1,6 +1,7 @@
 import { LANG_LABEL } from '../core/toolchain-defaults.js';
 import type { RepairOutcome, ToolStatus } from '../core/toolchain.js';
 import { updateRisk } from '../core/toolchain-risk.js';
+import { DOCKER_DAEMON_WORDS } from '../core/docker-engine.js';
 import type { FeatureAction, ToolchainRefusal, ToolchainSection } from '../renderer/features.js';
 import type { FeaturePorts, FeatureState } from './feature-ipc.js';
 import { sitePins, type HostingFeatureServices } from './feature-hosting.js';
@@ -339,6 +340,29 @@ export async function applyToolchainCoreFeatureAction(services: ToolchainFeature
                 next.toolchainResult = `${label} ${outcome.from ?? ''}${outcome.from ? ' → ' : ''}${outcome.to}.${notes.length > 0 ? ` ${notes.join(' ')}` : ''}${outcome.note ? ` (${outcome.note})` : ''}`;
             }
             // The snapshot shows the RE-PROBE, never the command's word; and the cache is dropped.
+            await rescanToolchain(next, tc, sitePins(services));
+            break;
+        }
+        case 'toolchain.startDocker': {
+            // Tynn #970: one elevated batch (enable and start, the group), then the row shows the RE-PROBE.
+            clearRefusal(next, 'docker');
+            const tc = ports.toolchain;
+            if (!tc?.startDocker) {
+                refuse(next, 'docker', 'starting Docker is not wired into this Genie; nothing was changed');
+                break;
+            }
+            let outcome: Awaited<ReturnType<NonNullable<typeof tc.startDocker>>>;
+            try {
+                tc.updating?.({ tool: 'docker', step: 'Starting Docker' });
+                outcome = await tc.startDocker();
+            } catch (error) {
+                outcome = { kind: 'not-started', reason: `Docker was not started: ${error instanceof Error ? error.message : String(error)}` };
+            } finally {
+                tc.updating?.(null);
+            }
+            if (outcome.kind === 'started') next.toolchainResult = 'Docker is running.';
+            else if (outcome.kind === 'needs-login') next.toolchainResult = `Docker is running. ${DOCKER_DAEMON_WORDS['needs-login'].why}`;
+            else refuse(next, 'docker', outcome.reason);
             await rescanToolchain(next, tc, sitePins(services));
             break;
         }

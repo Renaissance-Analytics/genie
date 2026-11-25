@@ -77,8 +77,9 @@ describe('the install plan — the package manager per platform, from Genie’s 
         expect(planInstall({ tool: 'rustc', platform: 'win32', packageManager: 'winget' })).toMatchObject({ refused: expect.stringContaining('rustup') });
         expect(planInstall({ tool: 'frobnicate', platform: 'linux', packageManager: 'apt' })).toEqual({ refused: 'frobnicate is not a tool Genie manages' });
         expect(planInstall({ tool: 'php', platform: 'linux', packageManager: null })).toEqual({ refused: 'no package manager found on this machine to install php with' });
-        // Docker Desktop has no apt row on purpose; the VC++ runtime is Windows-only.
-        expect(planInstall({ tool: 'docker', platform: 'linux', packageManager: 'apt' })).toEqual({ refused: 'apt cannot install docker on this machine' });
+        // Docker on Linux is the distro's engine, offered only with the account its install adds to the docker group (Tynn #970,
+        // test/toolchain-docker-970.test.ts); the VC++ runtime is Windows-only.
+        expect(planInstall({ tool: 'docker', platform: 'linux', packageManager: 'apt' })).toEqual({ refused: 'Genie could not tell which account to add to the docker group, so it did not install Docker' });
         expect(planInstall({ tool: 'vcredist', platform: 'win32', packageManager: 'winget' })).toMatchObject({ argv: ['winget', 'install', '--id', 'Microsoft.VCRedist.2015+.x64', '-e', '--silent', '--accept-source-agreements', '--accept-package-agreements'] });
         expect(planInstall({ tool: 'vcredist', platform: 'linux', packageManager: 'apt' })).toMatchObject({ refused: expect.stringContaining('only needed on win32') });
     });

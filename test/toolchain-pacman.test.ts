@@ -35,7 +35,8 @@ describe('the pacman table and plans, per tool', () => {
         expect(ids).toEqual(PACMAN_IDS);
     });
 
-    for (const [tool, pkg] of Object.entries(PACMAN_IDS)) {
+    // Docker's install batch also enables the daemon and adds the user to the docker group: test/toolchain-docker-970.test.ts.
+    for (const [tool, pkg] of Object.entries(PACMAN_IDS).filter(([tool]) => tool !== 'docker')) {
         it(`${tool}: install is ONE elevated batch, sync then \`pacman -S --needed --noconfirm ${pkgsOf(tool, pkg).join(' ')}\`, with no pkexec or sudo`, () => {
             const plan = planInstall({ tool, platform: 'linux', packageManager: 'pacman' });
             const pkgs = pkgsOf(tool, pkg);
