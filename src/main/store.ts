@@ -404,7 +404,7 @@ export class Store {
     changeWorkspaces(change: RecordChange<WorkspaceRecord>): Promise<readonly WorkspaceRecord[]> {
         return underRecordLock(this.workspacesFile, async () => {
             const rows = await readJson<unknown[]>(this.workspacesFile, []);
-            const next = applyRecordChange(rows, change);
+            const next = applyRecordChange(rows, change, WORKSPACE_RECORD_FIELDS);
             const gone = new Set(change.remove ?? []);
             const after = gone.size === 0 ? next : next.map((row) => {
                 const governs = (row as { governs?: unknown }).governs;
@@ -445,7 +445,7 @@ export class Store {
         await (this.#inboxAccessReady ??= migrateAgentInboxAccess(this.#dir));
         return underRecordLock(this.agentsFile, async () => {
             const rows = await readJson<unknown[]>(this.agentsFile, []);
-            const next = applyRecordChange(rows, change);
+            const next = applyRecordChange(rows, change, AGENT_RECORD_FIELDS);
             const gone = new Set(change.remove ?? []);
             const after = gone.size === 0 ? next : next.map((row) => {
                 const chosen = (row as { accessAgents?: unknown }).accessAgents;
@@ -477,17 +477,24 @@ export const UNPATCHABLE_FIELDS: readonly string[] = ['id', '__proto__', 'constr
 
 const idOf = (row: unknown): string | null => (typeof row === 'object' && row !== null && typeof (row as { id?: unknown }).id === 'string' ? (row as { id: string }).id : null);
 
-function applyRecordChange(rows: readonly unknown[], change: RecordChange<{ readonly id: string }>): unknown[] {
+/** What every workspace record has: without them a row is not read (readWorkspaces). */
+const WORKSPACE_RECORD_FIELDS: readonly string[] = ['id', 'path'];
+
+/**
+ * The change on the rows as they are. A field every record must have (`required`) is never taken away: a row without it
+ * is dropped by the reader as malformed, so removing it would lose the record.
+ */
+function applyRecordChange(rows: readonly unknown[], change: RecordChange<{ readonly id: string }>, required: readonly string[]): unknown[] {
     const gone = new Set(change.remove ?? []);
     let next: unknown[] = rows.filter((row) => { const id = idOf(row); return id === null || !gone.has(id); });
     for (const p of change.patch ?? []) {
         next = next.map((row) => {
             if (idOf(row) !== p.id) return row;
             const out: Record<string, unknown> = { ...(row as Record<string, unknown>) };
-            for (const key of p.unset ?? []) if (!UNPATCHABLE_FIELDS.includes(key)) delete out[key];
+            for (const key of p.unset ?? []) if (!UNPATCHABLE_FIELDS.includes(key) && !required.includes(key)) delete out[key];
             for (const [key, value] of Object.entries(p.set ?? {})) {
                 if (UNPATCHABLE_FIELDS.includes(key)) continue;
-                if (value === undefined) delete out[key];
+                if (value === undefined) { if (!required.includes(key)) delete out[key]; }
                 else Object.defineProperty(out, key, { value, enumerable: true, writable: true, configurable: true });
             }
             return out;
