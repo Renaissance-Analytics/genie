@@ -10,6 +10,7 @@ import {
     type ElevatedBatch,
     type ElevatedResult,
 } from '../core/elevation.js';
+import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
 
 /**
  * THE HOST'S HALF OF AN ELEVATION ON LINUX (Tynn #973; core/elevation.ts says why). Ask the client for the password, check
@@ -138,6 +139,30 @@ export const realSudoSpawn: SudoSpawn = (command, args, stdin, options) => new P
     child.stdin.on('error', () => {});
     child.stdin.end(stdin);
 });
+
+/**
+ * HOSTING ON LINUX (Tynn #973): the hosts write and the trust install (main/elevate.ts PrivilegedStep) as ONE batch for
+ * runElevatedWithPassword, named by what each step does. A step's env goes through `env K=V`, a program, never a shell.
+ */
+export function privilegedBatch(steps: readonly PrivilegedStep[]): ElevatedBatch {
+    return {
+        title: 'Set up Genie’s sites',
+        items: steps.map((s) => s.label),
+        steps: steps.map(({ step }) => {
+            const env = Object.entries(step.env ?? {});
+            return env.length > 0 ? { command: 'env', args: [...env.map(([k, v]) => `${k}=${v}`), step.command, ...step.args] } : { command: step.command, args: [...step.args] };
+        }),
+    };
+}
+
+/** What a hosting batch came to, as elevate.ts says it: the step that failed, by name, or nothing ran (with why). */
+export function privilegedOutcome(result: ElevatedResult, steps: readonly PrivilegedStep[]): ElevationOutcome {
+    if (result.kind === 'refused') return { ok: false, failed: null, error: result.reason };
+    if (result.exitCode === 0) return { ok: true };
+    const step = result.failedStep === null ? null : steps[result.failedStep] ?? null;
+    const words = result.output.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).join('\n');
+    return { ok: false, failed: step ? { id: step.id, label: step.label } : null, error: words || `${step ? step.label : 'the elevated step'} failed (exit ${result.exitCode})` };
+}
 
 /** ONE PROMPT AT A TIME on this host: batches run one after the other, never two prompts at once. */
 export function serialized<T>(run: (job: T) => Promise<ElevatedResult>): (job: T) => Promise<ElevatedResult> {

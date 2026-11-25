@@ -467,6 +467,16 @@ export class RemoteHost {
         return !!c && c.auth !== null && !c.stationLink && c.profile !== 'mobile' && c.outside === null && supports(c.negotiated, CAP_ELEVATION_PROMPT);
     }
 
+    /**
+     * THIS MACHINE'S OWN WINDOW THAT CAN SHOW THE PROMPT (Tynn #973), the newest: what the hosting's elevation asks (the
+     * hosts file, the trust store), which a window on this machine always asked. `null` = none is open.
+     */
+    localPromptConnection(): string | null {
+        let found: string | null = null;
+        for (const c of this.#connections.values()) if (c.local && this.canPrompt(c.id)) found = c.id;
+        return found;
+    }
+
     /** A connection left: with no authenticated connection remaining, stop hearing the host API. */
     #drop(connection: Connection): void {
         this.#featurePushes.delete(connection.id);
