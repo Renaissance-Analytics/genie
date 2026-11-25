@@ -215,8 +215,8 @@ describe('7B owned staging at real host composition startup', () => {
             const [, guarded, owner, rules = ''] = line.split(' ');
             return { protected: guarded === 'True', owner, rules: rules.split(',').filter(Boolean).map(rule => { const [ruleSid, allow, full] = rule.split(':'); return { sid: ruleSid, allow: allow === 'True', full: full === 'True' }; }) };
         }) };
-        expect(acl.sid).toMatch(/^S-1-/); expect(acl.targets).toHaveLength(3); expect(acl.targets[0].protected).toBe(true);
+        expect(acl.sid).toMatch(/^S-1-/); expect(acl.targets).toHaveLength(3); expect(acl.targets[0]!.protected).toBe(true);
         for (const [index, target] of acl.targets.slice(0, 2).entries()) { expect(target.owner, index === 0 ? 'staging root owner' : 'stage file owner').toBe(acl.sid); expect(target.rules).toEqual([{ sid: acl.sid, allow: true, full: true }]); }
-        expect(acl.targets[2].rules.some((r: { sid: string }) => r.sid !== acl.sid)).toBe(true);
+        expect(acl.targets[2]!.rules.some(r => r.sid !== acl.sid)).toBe(true);
     });
 });

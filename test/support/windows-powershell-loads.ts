@@ -17,5 +17,5 @@ export const LOADS_PROBE = ";[Console]::Error.WriteLine('GENIE_PS_LOADS ' + ((@(
 export function loadsOf(stderr: string): string[] {
     const line = /GENIE_PS_LOADS ([^\r\n]*)/.exec(stderr);
     if (!line) throw new Error(`the Windows PowerShell child did not report what it loaded: ${JSON.stringify(stderr.slice(0, 400))}`);
-    return line[1].split(',').map(name => name.trim()).filter(Boolean);
+    return (line[1] ?? "").split(',').map(name => name.trim()).filter(Boolean);
 }
