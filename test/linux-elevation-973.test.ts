@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { STEP_WRAPPER, STEP_WRAPPER_NAME, batchRefusal, checkFailure, commandLine, passwordRefusal, sudoCheckArgs, sudoStepArgs, type ElevatedBatch, type ElevationPromptEvent } from '../src/core/elevation.js';
-import { MAX_PASSWORD_TRIES, realSudoPath, realSudoSpawn, runElevatedWithPassword, serialized, type PasswordAnswer, type PasswordQuestion, type SudoSpawn } from '../src/main/linux-elevation.js';
+import { MAX_PASSWORD_TRIES, privilegedBatch, privilegedOutcome, realSudoPath, realSudoSpawn, runElevatedWithPassword, serialized, type PasswordAnswer, type PasswordQuestion, type SudoSpawn } from '../src/main/linux-elevation.js';
+import type { PrivilegedStep } from '../src/main/elevate.js';
 import { ElevationBroker, NOT_CAPABLE, NO_CLIENT } from '../src/main/elevation-broker.js';
 
 /**
@@ -271,3 +272,27 @@ describe('the real sudo and spawn', () => {
     });
 });
 
+
+describe('Hosting on Linux (Tynn #973): the hosts file and the trust store through the same mechanism', () => {
+    const trust: PrivilegedStep = { id: 'trust', label: 'install Genie’s certificate into the trust store', step: { command: '/opt/genie/caddy', args: ['trust', '--config', '/h/Caddyfile'], env: { XDG_DATA_HOME: '/h/data' } } };
+    const hosts: PrivilegedStep = { id: 'hosts', label: 'update the hosts file', step: { command: '/bin/sh', args: ['-c', 'set -e; cat -- "$1" > "$2"', 'genie-hosts', '/tmp/h', '/etc/hosts', 'abc'] } };
+
+    it('one batch, named by what each step does; env goes through `env K=V`, never a shell', () => {
+        expect(privilegedBatch([trust, hosts])).toEqual({
+            title: 'Set up Genie’s sites',
+            items: ['install Genie’s certificate into the trust store', 'update the hosts file'],
+            steps: [
+                { command: 'env', args: ['XDG_DATA_HOME=/h/data', '/opt/genie/caddy', 'trust', '--config', '/h/Caddyfile'] },
+                { command: '/bin/sh', args: ['-c', 'set -e; cat -- "$1" > "$2"', 'genie-hosts', '/tmp/h', '/etc/hosts', 'abc'] },
+            ],
+        });
+        expect(batchRefusal(privilegedBatch([trust, hosts]))).toBeNull();
+    });
+
+    it('what the batch came to, as the hosting reads it: ok; the step that failed, by name; or nothing ran, with why', () => {
+        expect(privilegedOutcome({ kind: 'ran', exitCode: 0, output: '', failedStep: null }, [trust, hosts])).toEqual({ ok: true });
+        expect(privilegedOutcome({ kind: 'ran', exitCode: 3, output: 'genie: the prepared hosts file changed\n', failedStep: 1 }, [trust, hosts])).toEqual({ ok: false, failed: { id: 'hosts', label: 'update the hosts file' }, error: 'genie: the prepared hosts file changed' });
+        expect(privilegedOutcome({ kind: 'ran', exitCode: 1, output: '', failedStep: 0 }, [trust, hosts])).toEqual({ ok: false, failed: { id: 'trust', label: 'install Genie’s certificate into the trust store' }, error: 'install Genie’s certificate into the trust store failed (exit 1)' });
+        expect(privilegedOutcome({ kind: 'refused', reason: NO_CLIENT }, [trust])).toEqual({ ok: false, failed: null, error: NO_CLIENT });
+    });
+});
