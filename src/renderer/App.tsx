@@ -1662,9 +1662,9 @@ function DesktopApp({ bridge }: AppProps) {
                             now: Date.now(),
                             onCreateKey: (name: string) => appInboxAct({ action: 'create', target: 'create' }, () => appInboxBridge.createKey(workspaceId, name), `Made ${name}: copy it now`),
                             onRevokeKey: (id: string) => appInboxAct({ action: 'revoke-key', target: `key:${id}` }, () => appInboxBridge.revokeKey(workspaceId, id), 'Key revoked: it stopped working'),
-                            onRotate: (kind: AppSourceKind, id: string) => { if (kind !== 'script') appInboxAct({ action: 'rotate', target: `${kind}:${id}` }, () => appInboxBridge.source(workspaceId, 'rotate', kind, id), 'Rotated'); },
-                            onRevoke: (kind: AppSourceKind, id: string) => { if (kind !== 'script') appInboxAct({ action: 'revoke', target: `${kind}:${id}` }, () => appInboxBridge.source(workspaceId, 'revoke', kind, id), 'Revoked'); },
-                            onAllow: (kind: AppSourceKind, id: string) => { if (kind !== 'script') appInboxAct({ action: 'allow', target: `${kind}:${id}` }, () => appInboxBridge.source(workspaceId, 'allow', kind, id), 'Allowed'); },
+                            onRotate: (kind: AppSourceKind, id: string) => { if (kind === 'site' || kind === 'process') appInboxAct({ action: 'rotate', target: `${kind}:${id}` }, () => appInboxBridge.source(workspaceId, 'rotate', kind, id), 'Rotated'); },
+                            onRevoke: (kind: AppSourceKind, id: string) => { if (kind === 'site' || kind === 'process') appInboxAct({ action: 'revoke', target: `${kind}:${id}` }, () => appInboxBridge.source(workspaceId, 'revoke', kind, id), 'Revoked'); },
+                            onAllow: (kind: AppSourceKind, id: string) => { if (kind === 'site' || kind === 'process') appInboxAct({ action: 'allow', target: `${kind}:${id}` }, () => appInboxBridge.source(workspaceId, 'allow', kind, id), 'Allowed'); },
                             onDismissReveal: () => setAppInboxView((v) => (v ? { ...v, revealed: null } : v)),
                         },
                     }
