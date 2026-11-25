@@ -28,6 +28,7 @@ import { PLAYWRIGHT_BROWSERS_ENV, playwrightDirs, playwrightEnv, readyVersions }
 import { readBrowserManifest } from './playwright-browsers.js';
 import { probeInstalled, type CommandRunner } from './toolchain-prober.js';
 import type { Elevate } from '../core/elevation.js';
+import { pacmanDbPath, pacmanPreflight, pacmanSync, type PacmanSync } from './pacman.js';
 
 /**
  * THE TOOLCHAIN'S ACTIONS (§6.6) — install a missing tool, check and repair — with every effect INJECTED: the runner
@@ -84,6 +85,8 @@ export interface ToolchainOpsPorts {
      * asked, and an elevated plan is refused with why.
      */
     readonly elevate?: Elevate;
+    /** Genie's copy of Arch's sync databases (main/pacman.ts, Tynn #968). Absent = one at `<dataDir>/pacman-sync`. */
+    readonly pacman?: PacmanSync;
 }
 
 export type InstallOutcome =
@@ -103,7 +106,8 @@ const PM_CANDIDATES: Record<Platform, readonly { pm: PackageManager; bin: string
     win32: [{ pm: 'winget', bin: 'winget' }],
     darwin: [{ pm: 'brew', bin: 'brew' }],
     // apt first: on the improbable box with both, Debian's is the one a person expects, and the choice is deterministic.
-    linux: [{ pm: 'apt', bin: 'apt-get' }, { pm: 'dnf', bin: 'dnf' }],
+    // pacman last (Tynn #968): Arch and Omarchy, where neither of the others is.
+    linux: [{ pm: 'apt', bin: 'apt-get' }, { pm: 'dnf', bin: 'dnf' }, { pm: 'pacman', bin: 'pacman' }],
 };
 
 /** The platform's package manager that actually ANSWERS here, or `null`. Never throws. */
@@ -156,8 +160,13 @@ export async function installTool(tool: string, consent: boolean, ports: Toolcha
     if (before !== null) return { kind: 'already-installed', version: def ? before : null };
     const plan = planInstall({ tool, platform: ports.platform, packageManager: await ports.packageManager() });
     if ('refused' in plan) return { kind: 'refused', reason: plan.refused };
-
     if (plan.elevated && !ports.elevate) return { kind: 'refused', reason: `installing ${tool} needs the administrator password, and no Genie window is connected to ask for it; nothing was installed` };
+    // pacman (Tynn #968): the sync rule's check, against Genie's fresh copy of the repositories, before anyone is asked.
+    if (plan.elevated && plan.manager === 'pacman') {
+        ports.progress?.(`Checking what installing ${tool} would change`);
+        const refused = await pacmanPreflight(ports.pacman ?? pacmanSync({ run: ports.run, dbPath: pacmanDbPath(ports.dataDir) }), tool, plan.items[0]!, 'install');
+        if (refused !== null) { ports.progress?.(null); return { kind: 'refused', reason: refused }; }
+    }
     try {
         ports.progress?.(`Installing ${tool}: ${plan.label}${plan.elevated ? ' — Genie will ask for your password' : ''}`);
         let exitCode: number;

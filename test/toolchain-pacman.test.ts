@@ -224,7 +224,7 @@ describe('installing with pacman', () => {
         const r = await installTool('git', true, m.ports);
         expect(r).toEqual({ kind: 'installed', version: '2.56.1' });
         expect(m.batches).toEqual([{
-            title: 'Install git with pacman',
+            title: 'Install git',
             items: ['git'],
             steps: [{ command: 'pacman', args: ['-Sy'] }, { command: 'pacman', args: ['-S', '--needed', '--noconfirm', 'git'] }],
         }]);
@@ -262,20 +262,20 @@ describe('installing with pacman', () => {
 
     it('an update with no way to ask is refused, never a hang', async () => {
         const m = arch({ tool: 'git', pkg: 'git', banner: 'git version 2.55.0' });
-        expect(await runUpdate('git', { platform: 'linux', packageManager: 'pacman', pacman: pacmanSync({ run: m.run, dbPath: '/db', now: () => 0 }) }, m.run, null)).toEqual({ kind: 'refused', reason: 'updating git needs your password, and no Genie window here can ask for it; nothing was changed' });
+        expect(await runUpdate('git', { platform: 'linux', packageManager: 'pacman', pacman: pacmanSync({ run: m.run, dbPath: '/db', now: () => 0 }) }, m.run, null)).toEqual({ kind: 'refused', reason: 'updating git needs the administrator password, and no Genie window is connected to ask for it; nothing was updated' });
     });
 
     it('a host with no way to ask for the password refuses before anything runs', async () => {
         const m = arch({ tool: 'git', pkg: 'git', banner: '' });
         const { elevate: _drop, ...ports } = m.ports;
         void _drop;
-        expect(await installTool('git', true, ports)).toEqual({ kind: 'refused', reason: 'installing git needs your password, and no Genie window here can ask for it; nothing was installed' });
+        expect(await installTool('git', true, ports)).toEqual({ kind: 'refused', reason: 'installing git needs the administrator password, and no Genie window is connected to ask for it; nothing was installed' });
     });
 
     it('the prompt refused (no client, or the password wrong three times): refused with its words', async () => {
         const m = arch({ tool: 'git', pkg: 'git', banner: '' });
         const r = await installTool('git', true, { ...m.ports, elevate: async () => ({ kind: 'refused', reason: 'the password was wrong three times' }) });
-        expect(r).toEqual({ kind: 'refused', reason: 'git was not installed: the password was wrong three times' });
+        expect(r).toEqual({ kind: 'refused', reason: 'the password was wrong three times' });
     });
 
     it('a step that failed says which, with pacman\'s own words', async () => {
@@ -295,7 +295,7 @@ describe('updating with pacman', () => {
         const sync = pacmanSync({ run, dbPath: '/db', now: () => 0 });
         const r = await runUpdate('git', { platform: 'linux', packageManager: 'pacman', pacman: sync }, run, null, undefined, elevate);
         expect(r).toEqual({ kind: 'repaired', from: '2.55.0', to: '2.56.1' });
-        expect(batches).toEqual([{ title: 'Update git with pacman', items: ['git'], steps: [{ command: 'pacman', args: ['-Sy'] }, { command: 'pacman', args: ['-S', '--needed', '--noconfirm', 'git'] }] }]);
+        expect(batches).toEqual([{ title: 'Update git', items: ['git'], steps: [{ command: 'pacman', args: ['-Sy'] }, { command: 'pacman', args: ['-S', '--needed', '--noconfirm', 'git'] }] }]);
     });
 
     it('git: an update that would upgrade another installed package is refused by name', async () => {

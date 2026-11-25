@@ -65,6 +65,11 @@ export interface ToolCard {
     readonly primary?: { readonly kind: 'patch'; readonly from: string; readonly version: string } | { readonly kind: 'install'; readonly version: string; readonly label: string } | undefined;
     /** Why a language cannot be installed here (macOS/Linux for some), said on its card instead of a button. */
     readonly refused?: string | undefined;
+    /**
+     * A side-by-side language Genie manages NO version of: its scan row's name, because the card is then the system
+     * copy's (or none): its system-package install (pacman, Tynn #968), its refusal, its `data-tool`.
+     */
+    readonly systemTool?: string | undefined;
 }
 
 type View = { readonly managed: ReadonlyArray<{ readonly version: string; readonly advisory?: string; readonly usedBy?: readonly string[] }>; readonly system: { readonly version: string; readonly advisory?: string } | null; readonly available: ReadonlyArray<{ readonly version: string; readonly installed: boolean; readonly line?: number }>; readonly installRefused?: string };
@@ -88,7 +93,7 @@ const stateOfTool = (t: ToolStatus): CardState =>
 /** Java's lines are named by number ("25 LTS"); every other language by its version. */
 const installLabel = (lang: LangKey, a: { readonly version: string; readonly line?: number }): string => (lang === 'java' && a.line !== undefined ? `Install ${a.line} LTS` : `Install ${a.version}`);
 
-function langCard(tc: ToolchainSection, lang: LangKey, view: View, tool: ToolStatus | null): Omit<ToolCard, 'group'> {
+function langCard(tc: ToolchainSection, lang: LangKey, view: View, tool: ToolStatus | null, row: ToolStatus | null = tool): Omit<ToolCard, 'group'> {
     const current = tc.defaults?.[lang] ?? null;
     const chips = view.managed.length > 0
         ? view.managed.map((m) => ({ version: m.version, isDefault: m.version === current }))
@@ -122,6 +127,7 @@ function langCard(tc: ToolchainSection, lang: LangKey, view: View, tool: ToolSta
         state,
         ...(primary ? { primary } : {}),
         ...(sideBySide && view.managed.length === 0 && view.installRefused ? { refused: view.installRefused } : {}),
+        ...(sideBySide && view.managed.length === 0 && row !== null ? { systemTool: row.tool } : {}),
     };
 }
 
@@ -137,7 +143,7 @@ export function toolchainCards(tc: ToolchainSection): Array<{ group: CardGroupId
         const lang = (LANGS as readonly string[]).includes(key) ? (key as LangKey) : null;
         const view = lang ? langView(tc, lang) : undefined;
         if (lang && view) {
-            cards.push(langCard(tc, lang, view, (SIDE_BY_SIDE_LANGS as readonly string[]).includes(lang) ? null : t));
+            cards.push(langCard(tc, lang, view, (SIDE_BY_SIDE_LANGS as readonly string[]).includes(lang) ? null : t, t));
         } else {
             cards.push({ key, title: toolTitle(key), tool: t, lang: null, version: t.installed, chips: [], state: stateOfTool(t) });
         }

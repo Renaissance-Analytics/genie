@@ -65,7 +65,9 @@ describe('holding git back', () => {
 
     it('wired: the row reads the listing through this, and an archive that cannot be read is BLOCKED by archive, not a FAIL', () => {
         const row = readFileSync(join(root, 'scripts', 'toolchain-real-cdp.mjs'), 'utf8');
-        expect(row).toMatch(/import \{ archiveBase, heldBackOf, holdBackCheck, holdBackLog, holdGitBack, readListing \} from '\.\/toolchain-hold-back\.mjs';/);
+        expect(row).toMatch(/import \{ archiveBase, heldBackOf, holdBackCheck, holdBackLog, holdGitBack, readListing, repoVersion \} from '\.\/toolchain-hold-back\.mjs';/);
+        // Held below the repositories' version (Tynn #968), never the archive's second newest alone.
+        expect(row).toMatch(/const plan = listing === null \|\| repoGit === null \? null : heldBackOf\(listing, repoGit\);/);
         expect(row).toMatch(/const listing = await readListing\(fetch, `\$\{archiveBase\(process\.env\)\}\/packages\/g\/git\/`\);/);
         expect(row).toMatch(/track\('git-update', 'BLOCKED', 'archive', /);
         expect(row).not.toMatch(/fetch\('https:\/\/archive\.archlinux\.org/);

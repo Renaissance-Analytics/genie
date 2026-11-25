@@ -2,6 +2,7 @@ import { adoptWindowEnv } from './session-engine-server.js';
 import { runCliRepair, runCliUpdate } from './cli-repair.js';
 import { execFileRunner, probeToolLive, probeToolsLive, execFileText } from './toolchain-runner.js';
 import { latestIndex, runUpdate, type CommandRunner, type LanguageUpdatePorts } from './toolchain-prober.js';
+import { pacmanDbPath, pacmanSync, withPacmanLatest } from './pacman.js';
 import { planInstall, withProviderHealth, type PackageManager, type Platform } from '../core/toolchain.js';
 import { applyPlaywrightEnv, checkAndRepair, detectPackageManager, ensurePhpCaBundle, installTool, nodeToolchainFs, phpCaBundleNow, phpWorkerEnv, preferGenieNode, processEnv, refreshPersistedPath, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
 import { listDefaults, nodeLinkFs, restoreDefaultsEnv, setDefault } from './toolchain-defaults.js';
@@ -30,9 +31,11 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
     const { providerHealth } = deps;
     const toolchainDataDir = () => join(deps.home, 'genie2-toolchain');
     const httpFetch = httpFetchOver(url => deps.download(url));
-    const latestFor = latestIndex({ run: execFileRunner, fetchJson: async url => (await deps.download(url)).json(), platform: process.platform as Platform });
     let detectedPackageManager: Promise<PackageManager | null> | null = null;
     const packageManager = () => (detectedPackageManager ??= detectPackageManager(process.platform as Platform, execFileRunner));
+    // Arch's sync databases, Genie's own copy (Tynn #968): one for the cards' "latest" and the installs' check.
+    const pacman = pacmanSync({ run: (binary, args, options) => execFileRunner(binary, args, { timeoutMs: 120_000, ...(options?.env ? { env: options.env } : {}) }), dbPath: pacmanDbPath(toolchainDataDir()) });
+    const latestFor = withPacmanLatest(latestIndex({ run: execFileRunner, fetchJson: async url => (await deps.download(url)).json(), platform: process.platform as Platform }), { packageManager, sync: pacman });
     const longRunner: CommandRunner = (binary, args, options) => execFileRunner(binary, args, { timeoutMs: 30 * 60_000, ...(options?.env ? { env: options.env } : {}) });
     const phpCaPorts = () => ({ platform: process.platform as Platform, fs: nodeToolchainFs(), dataDir: toolchainDataDir(), run: ((binary, args) => execFileRunner(binary, args, { timeoutMs: 120_000 })) as CommandRunner });
     const phpCa: PhpCaPort = { current: () => phpCaBundleNow(phpCaPorts()), ensure: () => ensurePhpCaBundle(phpCaPorts()) };
@@ -45,6 +48,7 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
         dataDir: toolchainDataDir(),
         systemRoot: process.env.SystemRoot ?? 'C:\\Windows',
         packageManager,
+        pacman,
         progress: (step) => deps.busy(step),
         now: Date.now,
         // Genie's own Node, newest first (main/node-versions.ts): Check and repair makes it the node and npm Genie runs.
@@ -195,7 +199,7 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
             },
             update: async (tool, version, progress, elevate) => AGENT_CLI_PROVIDER[tool] !== undefined
                 ? runCliUpdate(AGENT_CLI_PROVIDER[tool]!, cliPorts((step) => { busyLine(step); if (step) progress?.(step); }))
-                : runUpdate(tool, { platform: process.platform as Platform, packageManager: await packageManager() }, longRunner, version ?? null, languageUpdates(progress), elevate),
+                : runUpdate(tool, { platform: process.platform as Platform, packageManager: await packageManager(), pacman }, longRunner, version ?? null, languageUpdates(progress), elevate),
             // The row's in-progress state, pushed: which update, and its step (genie#1306).
             now: Date.now,
             // THE UPDATE GUARD's input, read at the moment of the click: running sessions with their provider, Genie-run

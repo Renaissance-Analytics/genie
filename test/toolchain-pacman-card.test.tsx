@@ -25,9 +25,9 @@ describe('PHP on Arch: the system package beside Genie’s own build', () => {
     it('a missing PHP card offers BOTH: Genie’s build (no password) and the system package (asks once), each said', () => {
         const c = card(render(missingPhp), 'php');
         expect(c).toContain('data-tool="php"');
-        expect(c).toMatch(/<button[^>]*data-action="toolchain-install"[^>]*data-install-system="php"[^>]*title="pacman -S --needed --noconfirm php \(as administrator\)"[^>]*>Install<\/button>/);
+        expect(c).toMatch(/<button[^>]*data-action="toolchain-install"[^>]*data-install-system="php"[^>]*title="pacman -S --needed --noconfirm php \(as administrator\)"[^>]*>(?:<span[^>]*>)?Install(?:<\/span>)?<\/button>/);
         expect(c).toMatch(/data-install-note="php"[^>]*>system package, asks once</);
-        expect(c).toMatch(/data-card-primary="install"[^>]*data-version="8\.5\.12"[^>]*>Install 8\.5\.12</);
+        expect(c).toMatch(/data-card-primary="install"[^>]*data-version="8\.5\.12"[^>]*>(?:<span[^>]*>)?Install 8\.5\.12</);
     });
 
     it('once the system PHP is there, its card is still the system copy (data-tool) and offers no second install', () => {
