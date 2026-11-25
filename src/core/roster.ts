@@ -4,7 +4,7 @@ import type { CommsLink } from './comms.js';
 import type { Approval } from './approval.js';
 import type { AgentRow, Delivery } from './dashboard-view.js';
 import type { AgentRecord } from './identity.js';
-import type { TurnState } from './session.js';
+import type { OverloadRetryState, TurnState } from './session.js';
 import type { ProviderExtensions } from './provider-commands.js';
 import type { ProviderStopState } from './provider-stops.js';
 import { isSleeping } from './agent-status.js';
@@ -44,6 +44,10 @@ export interface LiveSession {
      * details, kept apart for a quote (Tynn #921). Absent / `null` = none.
      */
     providerStop?: ProviderStopState | null | undefined;
+    /**
+     * An overloaded provider's retry waiting (Tynn #1060): `Provider busy, retrying in N s`, with Stop. Absent / `null` = none.
+     */
+    overloadRetry?: OverloadRetryState | null | undefined;
     /**
      * The provider login's rate-limit gate as this agent sees it (Tynn #793/#794): `open`, or paused until a reset,
      * retrying on a stated backoff, or waiting for the person. Absent = not reported (an older snapshot).

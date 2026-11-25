@@ -53,16 +53,17 @@ async function open(reenter = false) {
 }
 
 describe('the published folded outcome settles its joined turn only (Tynn #692)', () => {
-    it('pins exactly 0.47.0 and its registry integrity in both manifests', () => {
+    it('pins exactly 0.48.0 and its registry integrity in both manifests', () => {
         const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
         const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
-        expect(pkg.dependencies['@particle-academy/prism-acp']).toBe('0.47.0');
-        expect(lock.packages[''].dependencies['@particle-academy/prism-acp']).toBe('0.47.0');
+        expect(pkg.dependencies['@particle-academy/prism-acp']).toBe('0.48.0');
+        expect(lock.packages[''].dependencies['@particle-academy/prism-acp']).toBe('0.48.0');
         // 0.44.0 (Tynn #926): G-313's unsolicited turn end and G-314's ping / lastFrameAt / Codex running; kept through 0.47.0
         // (Tynn #1011: claudeAccounts, prepare's shared session store, Remote Control forced off, and 0.47.0's browser
-        // login()/logout()). The integrity is npm's own for the 0.47.0 tarball (npm view @particle-academy/prism-acp@0.47.0 dist.integrity).
-        expect(lock.packages['node_modules/@particle-academy/prism-acp']).toMatchObject({ version: '0.47.0',
-            integrity: 'sha512-LPmj5xQQ8tWM+uzostD0IV397H3rYso0h0OT75Z35NL5Db2/b7tbMACU7OvkyzIVX58LA4ncJVsoaUxrV5E1cg==' });
+        // login()/logout()) and 0.48.0 (Tynn #1060: retryable/resumable turn failures, "Step: " plan titles). The integrity is npm's
+        // own for the 0.48.0 tarball (npm view @particle-academy/prism-acp@0.48.0 dist.integrity).
+        expect(lock.packages['node_modules/@particle-academy/prism-acp']).toMatchObject({ version: '0.48.0',
+            integrity: 'sha512-RonztKb/DBvJxT8aYbIVvK1ie7fTvfgU31+BVmv75iOhtTg8nF/Hf4NlYYmo31L2yDTdLe/a0E6RFQZ8BYigow==' });
     });
     it('has no usage-result fallback or owed-end counting after adopting typed outcomes', () => {
         const source = readFileSync('src/core/session.ts', 'utf8');
