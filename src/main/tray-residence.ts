@@ -15,6 +15,8 @@ export interface ResidenceSettings {
     snapshot(): Record<string, Value>;
     set(key: string, value: unknown): Promise<void>;
     onChange(listener: (key: string, value: Value, workspaceId?: string) => void): () => void;
+    /** The settings said whole (the window's replica: genie-host's first answer, and each after a reconnect). The store has none. */
+    onView?(listener: () => void): () => void;
 }
 
 /** The main window, as much of it as a close needs. */
@@ -105,5 +107,8 @@ export async function wireLoginItem(settings: ResidenceSettings, port: LoginItem
         if (workspaceId !== undefined || (key !== 'launch_at_login' && key !== 'start_minimized')) return;
         safely('applying the change', () => applyLoginItem(port, planFor(env, settings.snapshot(), left())));
     });
+    // SAID LATE (P6-3): a genie-host slower than the boot deadline says its settings after the boot applied the defaults, as a
+    // whole view that changes no key. Measured on both platforms: a relaunch with the setting on removed the entry for good.
+    settings.onView?.(() => safely('applying the settings genie-host said', () => applyLoginItem(port, planFor(env, settings.snapshot(), left()))));
     leftRunning?.onChange(() => safely('applying the mark', () => applyLoginItem(port, planFor(env, settings.snapshot(), left()))));
 }

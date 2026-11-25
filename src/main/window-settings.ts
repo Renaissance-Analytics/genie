@@ -11,6 +11,11 @@ export interface WindowSettings {
     snapshot(): Record<string, SettingValue>;
     snapshotFor(workspaceId: string): Record<string, SettingValue>;
     onChange(listener: (key: string, value: SettingValue, workspaceId?: string) => void): () => void;
+    /**
+     * A WHOLE view: genie-host saying all of its settings (its first answer, and each after a reconnect), after the data. No
+     * key changed, so onChange hears nothing; a reader that read the defaults at the boot deadline reads them again here (P6-3).
+     */
+    onView(listener: () => void): () => void;
     set(key: string, value: unknown): Promise<void>;
     setFor(workspaceId: string, key: string, value: unknown): Promise<void>;
     /** Settles once genie-host has said its settings, or at the deadline: what the boot reads (start minimized, the login item). */
@@ -24,6 +29,7 @@ export function windowSettings(own: { call(method: 'features.act' | 'workspaces.
     let said = false;
     const waiting = new Set<() => void>();
     const listeners = new Set<(key: string, value: SettingValue, workspaceId?: string) => void>();
+    const viewers = new Set<() => void>();
     let started = false;
     const start = (): void => {
         if (started) return;
@@ -31,7 +37,7 @@ export function windowSettings(own: { call(method: 'features.act' | 'workspaces.
         own.watchSettings((view) => {
             data = view.data;
             if (!said) { said = true; for (const w of [...waiting]) w(); waiting.clear(); }
-            if (view.key === null) return;
+            if (view.key === null) { for (const v of [...viewers]) v(); return; }
             for (const l of [...listeners]) {
                 if (view.workspaceId === null) l(view.key, view.value as SettingValue); else l(view.key, view.value as SettingValue, view.workspaceId);
             }
@@ -46,6 +52,7 @@ export function windowSettings(own: { call(method: 'features.act' | 'workspaces.
         snapshot: () => snapshotOf(data),
         snapshotFor: (workspaceId) => snapshotForOf(data, workspaceId),
         onChange: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+        onView: (listener) => { viewers.add(listener); return () => { viewers.delete(listener); }; },
         set: (key, value) => done(own.call('features.act', [{ kind: 'settings.set', key, value }])),
         setFor: (workspaceId, key, value) => done(own.call('workspaces.setSetting', [workspaceId, key, value])),
         ready: (deadlineMs) => (said ? Promise.resolve() : new Promise<void>((resolve) => {
