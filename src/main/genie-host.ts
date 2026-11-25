@@ -140,7 +140,7 @@ import { runV1FlowImport } from './v1-flows.js';
 import { moveScheduledTasksOutOfFlows } from './scheduled-tasks-move.js';
 import { startForWork } from './start-on-demand.js';
 import { missingFolderRefusal, startRefusal } from './workspace-ops-host.js';
-import { agentCapFrom, HUMAN } from '../core/inbox.js';
+import { agentCapFrom, HUMAN, inboxAgentPaused } from '../core/inbox.js';
 import { limitOf } from '../core/shell-limits.js';
 import { resolveAddress as resolveOnRoster } from '../core/inbox.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
@@ -219,6 +219,9 @@ import { testReadyDelayMs } from './host-wait-window.js';
 import { RemoteBrowsers } from './remote-browsers.js';
 import { siteDoor } from './relay-site.js';
 import { DeviceLinkService } from './device-link-service.js';
+import { CrossStationHost } from './cross-station-host.js';
+import { stationLinkOver } from './cross-station-link.js';
+import { CAP_CROSS_STATION, CROSS_STATION_MAIL, sharedWorkspaceId } from '../core/cross-station.js';
 import { deviceSocket } from './device-socket.js';
 import { configWriter, writeWorkspaceConfig } from './workspace-config-sync.js';
 import { deviceTokenStore } from './device-tokens.js';
@@ -1257,10 +1260,60 @@ async function main(): Promise<void> {
     /** The account book as every client asks it (Tynn #895): set once its parts are composed, below. */
     let accountsPortNow: AccountsPort | null = null;
     const phoneReady = new Set<() => void>();
+    /*
+     * MAIL BETWEEN THE OWNER'S OWN WORKSTATIONS (P9, Tynn #424; the owner, 2026-11-25: "agents can stay connected even if
+     * clients aren't"): this host sends to another of the owner's workstations over a short-lived relay link of its own
+     * (its Tynn account mints the grant, Tynn names this machine in it as `src_ws`), and takes mail from them through its
+     * RemoteHost, which admits `xstation.*` only from the owner's own workstations. BUILT BEFORE THE REMOTE HOST and handed
+     * to it as it is made (the review of #2180, finding 1): the relay host registers long before the sessions are up, and
+     * a host that answered "carries no mail" in between had the other workstation settle the message as refused.
+     */
+    let crossStationPersons: ((station: string) => boolean) | null = null;
+    const tynnRequest = (path: string, init: Parameters<NonNullable<typeof tynnAccountNow>['request']>[1] & {}) => {
+        if (!tynnAccountNow || tynnAccountNow.status().signedIn !== true) return Promise.reject(new Error('this workstation is signed out of Tynn'));
+        return tynnAccountNow.request(path, init);
+    };
+    const crossStation = new CrossStationHost({
+        inbox: own.inbox,
+        roster: () => hostRegistry.listAgents(),
+        slugs: () => hostRegistry.workspaceSlugs(),
+        // The same workspace on another station is the same SHARED one, its Tynn project, never a matching slug.
+        sharedIdOf: (workspaceId) => sharedWorkspaceId(workspaceTynnProject(workspaceId)),
+        // listAgents leaves out a hibernated workspace's agents already.
+        asleep: () => new Set(),
+        // Received only when the agent can take it (the owner's rule on #2180): paused by its provider, it waits.
+        cannotReceive: (agentId) => (inboxAgentPaused(sessionsForInbox?.probe(agentId as AgentId) ?? null) ? 'its provider has it paused' : null),
+        recipientRefusal: (address) => hostRegistry.mailRefusal(address),
+        self: () => { const w = relayHostService.status().workstation; return w?.registered ? w.workstationId : null; },
+        stations: async () => {
+            const self = (() => { const w = relayHostService.status().workstation; return w?.registered ? w.workstationId : null; })();
+            const listed = await connectableWorkstations(tynnRequest, new Set());
+            // `mine`: this account registered it (the review of #2180, finding 7): the host dials no other.
+            return listed.ok ? listed.workstations.filter((w) => w.id === self || w.mine).map((w) => ({ id: w.id, name: w.name, online: w.online, mine: w.id === self || w.mine })) : null;
+        },
+        link: async (station) => {
+            const pop = PopKeypair.generate();
+            const grant = await mintConnectGrant(tynnRequest, station, pop.publicJwk);
+            if (!grant.ok) { pop.discard(); throw new Error(grant.reason); }
+            const opened = await openRelayMember({ socket: (url) => deviceSocket(url), relayUrl: grant.relayEndpoint, workstationId: station, grant: grant.token, hostPublicKey: grant.hostPublicKey, pop });
+            if (!opened.ok) throw new Error(opened.reason);
+            return stationLinkOver(opened.transport, { label: hostname(), build });
+        },
+        mode: () => CROSS_STATION_MAIL,
+        // Read through `crossStationPersons`: the device links and the remote host it reads are made after this host.
+        personConnected: (station) => crossStationPersons?.(station) ?? false,
+        log: (line) => { say(line); lifecycleLog(line); },
+    });
     bootStep('marketplace and gapps', stepAt);
+    // THE SETTINGS, AS MAIN'S OWN CLIENT WATCHES THEM (Tynn #998, 2g-4b1): the whole data, then each change, on settings.watch.
+    // Said from this host's start, as the registry and the front door are (P6-3, Tynn #1501): it rode on the host's own
+    // answers, which hostRemoteApi never carried, so settings.watch answered null and the window's boot read the defaults.
+    const settingsWatch = settingsWatchFeed({ data: () => settings.data(), onChange: (listener) => settings.onChange(listener) });
     const remoteAccessHost = await RemoteAccessHost.open({
         home,
         hostName: hostname(),
+        // Mail between the owner's workstations: here from the first call (the review of #2180, finding 1).
+        crossStation,
         transport: remoteHub,
         build,
         // What a local connection uploads (Tynn #898 step 2d-3b) is staged under this host's runtime, per process.
@@ -1270,7 +1323,7 @@ async function main(): Promise<void> {
         // THE HOST'S OFFER (Tynn #894), read at each hello: its track and build, the wire's schema and the fixed window's
         // floor, and the catalog's elements as capabilities, so a client sees which elements this host has. `host.update`
         // answers with RemoteHost's stub until the launcher step wires it.
-        protocol: () => remoteOffer('host', build, catalogCapabilities(catalogService.snapshot().definitions)),
+        protocol: () => remoteOffer('host', build, [...catalogCapabilities(catalogService.snapshot().definitions), `${CAP_CROSS_STATION}@1`]),
         api: hostRemoteApi({
             hostName: hostname(),
             // What this host answers itself, window or not. The phone's set comes here next (Tynn #551).
@@ -1285,6 +1338,15 @@ async function main(): Promise<void> {
             registry: registryAnswers.registry,
             // main's browser, from this host's start (Tynn #1046): its front door.
             frontdoor: frontDoorWatch,
+            // main's settings, from this host's start (P6-3): the window's boot reads start minimised and the login item.
+            settings: settingsWatch,
+            // main's tray, quit and Tynn account, from this host's start (P6-3 follow-up): summary.watch answered null until
+            // the answers below were built, and nothing changed it again until something ran or stopped.
+            summary: hostSummary,
+            // main's notifications, from this host's start (P6-3 follow-up): who is connected and who asks to pair. remote.watch
+            // answered null, as settings did. The feed reads this RemoteAccessHost, so it is made the moment `open` returns
+            // (below, with no wait between); RemoteHost asks its api only once a connection has said hello, which is after.
+            remote: { now: () => remoteWatch.now(), subscribe: (listener) => remoteWatch.subscribe(listener) },
             onAloneReady: listener => { phoneReady.add(listener); return () => { phoneReady.delete(listener); }; },
             workspaceOfAgent: (agentId) => hostRegistry.listAgents().find((a) => a.id === agentId)?.workspaceId ?? null,
             // A workspace share's terminals and folders (Tynn #691): from this host's own terminal host and registry.
@@ -1292,16 +1354,15 @@ async function main(): Promise<void> {
             workspacePaths: workspaceFolders(() => hostRegistry.listWorkspaces()),
         }),
     });
+    /*
+     * WHO IS AT THIS MACHINE, AS MAIN'S OWN CLIENT WATCHES IT (Tynn #997, 2g-4a): who is connected and who asks to, for its
+     * desktop notifications, said on remote.watch when it changes (its pin and devices are not in it). hostRemoteApi's
+     * `remote` port above reads it.
+     */
+    const remoteWatch = remoteWatchFeed({ read: () => remoteWatchOf(remoteAccessHost.status()), onChange: (listener) => remoteAccessHost.onChange(listener) });
     // OFF BY DEFAULT (Tynn #820): the listener runs only while `remote_access` is on, applied at boot and on every change.
     let remoteAccessService: RemoteAccessService | null = null;
     const remoteSwitch = remoteAccess({ listener: remoteListen, enabled: () => settings.snapshot().remote_access === true, onChange: () => { remoteAccessService?.pushStatus(); void relayHostService.apply(); } });
-    /*
-     * WHO IS AT THIS MACHINE, AS MAIN'S OWN CLIENT WATCHES IT (Tynn #997, 2g-4a): who is connected and who asks to, for its
-     * desktop notifications, said on remote.watch when it changes (its pin and devices are not in it).
-     */
-    // THE SETTINGS, AS MAIN'S OWN CLIENT WATCHES THEM (Tynn #998, 2g-4b1): the whole data, then each change, on settings.watch.
-    const settingsWatch = settingsWatchFeed({ data: () => settings.data(), onChange: (listener) => settings.onChange(listener) });
-    const remoteWatch = remoteWatchFeed({ read: () => remoteWatchOf(remoteAccessHost.status()), onChange: (listener) => remoteAccessHost.onChange(listener) });
     remoteAccessService = new RemoteAccessService(remoteAccessHost, {
         switch: { ...remoteSwitch, stop: () => remoteListen.stop() },
         send: (owner, event) => engineRef?.remoteAccessEvent(owner, event),
@@ -1518,6 +1579,7 @@ async function main(): Promise<void> {
         },
         browsers: new RemoteBrowsers(siteDoor),
     });
+    crossStationPersons = (station) => deviceLinkService.connectedTo(station) || remoteAccessHost.remote.personFrom(station);
     /*
      * A REMOTE WINDOW'S TRANSPORT TO ANOTHER MACHINE, ON THE ONE PROTOCOL (Tynn #941, 2f-2): the window asks over its own
      * connection, which owns what it opens. The role gates no dial (Tynn #423); Tynn's refusal of a grant is said in Tynn's
@@ -2197,12 +2259,8 @@ async function main(): Promise<void> {
         hostShell: hostShellFor({ absolute: (ws, path) => phoneFiles.absolute(ws, path), windowOp: (op, args) => (engineRef ? engineRef.windowOp(null, op, args) : Promise.reject(new Error('Genie is still starting; try again in a moment'))), hostName: () => hostname() }),
         // A remote window's transport to another machine, owned by its connection (Tynn #941, 2f-2).
         deviceLinkProtocol: deviceProtocol,
-        // What this host runs, for this machine's tray and quit (Tynn #953, 2g-2).
-        hostSummary,
-        // Who is at this machine, for this machine's notifications (Tynn #997, 2g-4a).
-        remoteWatch,
-        // This host's settings, for what this machine's window reads (Tynn #998, 2g-4b1).
-        settingsWatch,
+        // This host's settings, what it runs and who is at it are said by hostRemoteApi from the host's start (P6-3), not
+        // here: a change would be said twice.
         // This host's registry, read and written by this machine's window registry over the protocol (Tynn #1007, 2g-4e):
         // the same store calls the engine link carried, which keep the host's model following and its writes in order.
         registryFiles: registryAnswers.files,
@@ -2622,7 +2680,13 @@ async function main(): Promise<void> {
     clocks.push(planKeepalive);
     wireHostMailWake({ inbox: own.inbox, host, registry: hostRegistry, settings, osaDir: osaHome, log: (line) => { say(line); lifecycleLog(line); }, issueWatch: issueWatch.delivery, safeMode: safeNow });
     bootStep('sessions', stepAt);
+    // Its queue is picked up once the sessions are up (the host itself was built before the remote host, below).
+    crossStation.start();
     mcp = startHostMcp({
+        crossStation: {
+            peers: (caller) => crossStation.peers(caller),
+            send: (caller, to, text) => crossStation.send(caller, to, text),
+        },
         toolCalls,
         stores: stores.stores,
         settings,

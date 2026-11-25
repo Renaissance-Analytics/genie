@@ -15,7 +15,7 @@ import { formatSize, type InboxCompose } from './FeatureSurfaces.js';
 import { readAppSender, type AppSourceKind } from '../../core/app-inbox.js';
 
 /** An app's icon by kind (genie#1345): a site, a background process, a script key. Icons over words. */
-export const APP_KIND_ICON: Readonly<Record<AppSourceKind, string>> = { site: 'globe', process: 'cog', script: 'key-round' };
+export const APP_KIND_ICON: Readonly<Record<AppSourceKind, string>> = { site: 'globe', process: 'cog', script: 'key-round', genie: 'sparkles' };
 const APP_LEVEL_ICON: Readonly<Record<'info' | 'success' | 'failure', string>> = { info: 'info', success: 'circle-check', failure: 'circle-x' };
 const APP_LEVEL_TONE: Readonly<Record<'info' | 'success' | 'failure', string>> = { info: 'text-[var(--fg-3)]', success: 'text-[var(--success)]', failure: 'text-[var(--danger)]' };
 

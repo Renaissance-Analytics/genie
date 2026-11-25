@@ -86,7 +86,6 @@ import { scheduleScratchSweep } from './scratch-area.js';
 import { callRefusal, ownProtocolClient } from './own-protocol-client.js';
 import { ActivityFeeds } from './activity-feeds.js';
 import { PauseAlerts } from '../core/account-pause.js';
-import { Store } from './store.js';
 import { featureWindow } from './feature-window.js';
 import { QuestionWindow } from './question-window.js';
 import { RemoteQuestions } from './remote-questions.js';
@@ -141,7 +140,7 @@ import { hostOnly, windowToolRunner } from './window-tools.js';
 import type { TerminalsPort } from './mcp-tools-more.js';
 import { EMPTY_HOST_SUMMARY, type HostSummary } from '../core/host-summary.js';
 import { workspaceNameFor } from './workspace-names.js';
-import { openWindowRegistryStore, registryChanges } from './window-registry-store.js';
+import { openWindowRegistryStore, registryChanges, unopenedRegistryStore } from './window-registry-store.js';
 import { watchRegistryRefresh } from './registry-refresh.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
 import type { McpToolResult } from '@particle-academy/prism-mcp';
@@ -1145,13 +1144,13 @@ async function boot(): Promise<void> {
         console.error('[genie] could not give managed PHP a CA bundle', error);
     }
     // Genie's data root is ~/.genie on every version (paths.ts); `userData` stays Chromium's.
-    const store = new Store(genieRoot());
     // Doctor mode reads this: that normal Genie is running, and which agents it has started (none yet) — doctor starts
     // an agent beside it only in an awake workspace where none of those is running (core/genie-running.ts).
     markGenieRunning(genieRoot(), []);
     // A local binding as well as the module-level one, so the callback below closes over a
     // Registry rather than a `Registry | null` that TypeScript cannot narrow inside a closure.
-    const theRegistry = new Registry(store);
+    // It writes nothing of its own (Tynn #1007): genie-host's registry, over the protocol, once it can be asked (below).
+    const theRegistry = new Registry(unopenedRegistryStore());
     registry = theRegistry;
     theRegistry.setWorkspaceNamer(workspaceNameFor);
     // WORKSPACE COLOURS (genie#1300): every workspace has one — its project.json's `appearance.color`, or a palette colour

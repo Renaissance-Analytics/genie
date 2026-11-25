@@ -208,7 +208,7 @@ describe('genie-host as its own process', () => {
         const first = await window();
         const firstOwn = ownOver(first.client);
         // genie-host reads its own registry for records (Tynn #954, 2g-3): main writes it over the protocol's registry.write.
-        expect(await ask(firstOwn.own, 'registry.write', ['writeAgents', [[agent]]])).toMatchObject({ ok: true });
+        expect(await ask(firstOwn.own, 'registry.write', ['changeAgents', [{ add: [agent] }]])).toMatchObject({ ok: true });
         // A Take Over terminal's agent: genie-host starts its TUI and mints the id it calls Genie's tools by over HTTP. No
         // window says whose terminal it is (Tynn #1044: the window view carries no callers).
         expect(await first.client.takeOvers().start(agent.id)).toMatchObject({ ok: true });
@@ -350,7 +350,7 @@ describe('genie-host as its own process', () => {
         // Main's add, as its window registry writes it: registry.write over its own client (window-registry-store.ts). The add
         // is answered before the workspace is shown, so the click to start comes after it: at once, as here. (A start that
         // reaches genie-host while the write is still in flight waits for it: host-tynn-recovery.test.ts pins that race.)
-        expect(await ask(firstOwn.own, 'registry.write', ['writeWorkspaces', [[{ id: 'ws', path: workspace }, { id: 'added', path: added }]]])).toMatchObject({ ok: true });
+        expect(await ask(firstOwn.own, 'registry.write', ['changeWorkspaces', [{ add: [{ id: 'ws', path: workspace }, { id: 'added', path: added }] }]])).toMatchObject({ ok: true });
         firstOwn.dispose();
         const agent = agentRecord({ id: mintAgentId(), workspaceId: 'added', provider: 'codex', name: 'newcomer' });
         expect(await first.client.start(agent, added)).toEqual({ ok: true });

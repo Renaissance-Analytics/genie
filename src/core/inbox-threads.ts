@@ -29,7 +29,7 @@ export interface ThreadMail {
     readonly sentAt: string;
     readonly readAt: string | null;
     /** An APP sent it (genie#1345): what it reported beside the text, and how it is labelled. Absent otherwise. */
-    readonly app?: { readonly label: string; readonly subject: string; readonly level: 'info' | 'success' | 'failure'; readonly link?: string; readonly source: { readonly kind: 'site' | 'process' | 'script'; readonly name: string } };
+    readonly app?: { readonly label: string; readonly subject: string; readonly level: 'info' | 'success' | 'failure'; readonly link?: string; readonly source: { readonly kind: 'site' | 'process' | 'script' | 'genie'; readonly name: string } };
 }
 
 export interface ThreadSummary {

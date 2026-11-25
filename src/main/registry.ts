@@ -6,13 +6,15 @@ import type { IssueWatchSetting } from '../core/issue-watch.js';
 import { agentRowFor, type LiveSession } from '../core/roster.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
 import type { GenieSnapshot } from '../renderer/bridge.js';
-import { Store, type WorkspaceRecord } from './store.js';
+import { Store, type RecordChange, type RecordPatch, type WorkspaceRecord } from './store.js';
 
 /**
  * Where a Registry's files are read and written (the host split, P3.2): the Store itself (genie-host), or a window's
- * HostRegistryStore — the same calls, answered by the host, the files' one writer.
+ * HostRegistryStore — the same calls, answered by the host, the files' one writer. A Registry writes RECORDS, never a
+ * whole list (Tynn #1007): `changeWorkspaces` / `changeAgents` name only the records and fields it changed, and the
+ * host applies them to the files as they are then, so a stale copy here cannot clobber another writer's change.
  */
-export type RegistryStore = Pick<Store, 'readWorkspaces' | 'readAgents' | 'readRunningAtQuit' | 'readInterruptedAtQuit' | 'beginRestore' | 'restoreStarted' | 'writeWorkspaces' | 'writeAgents' | 'writeRunningAtQuit' | 'writeInterruptedAtQuit' | 'dropped'>;
+export type RegistryStore = Pick<Store, 'readWorkspaces' | 'readAgents' | 'readRunningAtQuit' | 'readInterruptedAtQuit' | 'beginRestore' | 'restoreStarted' | 'changeWorkspaces' | 'changeAgents' | 'writeRunningAtQuit' | 'writeInterruptedAtQuit' | 'dropped'>;
 import { withMcpSeen, withWorkspaceMcpServer } from '../core/agent-mcp.js';
 import { isOsAgent, OS_WORKSPACE, withOsAgentPolicy } from '../core/os-agent.js';
 import { folderName } from '../core/workspace-name.js';
@@ -151,8 +153,7 @@ export class Registry {
         if (existing) {
             const normalized = withOsAgentPolicy(existing);
             if (normalized !== existing) {
-                this.#agents = this.#agents.map((a) => a.id === existing.id ? normalized : a);
-                await this.#store.writeAgents(this.#agents);
+                await this.#commitAgents(this.#agents.map((a) => a.id === existing.id ? normalized : a));
             }
             return;
         }
@@ -163,8 +164,7 @@ export class Registry {
             provider: 'claude',
             name: OS_AGENT_NAME,
         }));
-        this.#agents = [...this.#agents, record];
-        await this.#store.writeAgents(this.#agents);
+        await this.#commitAgents([...this.#agents, record]);
     }
 
     /** How a workspace is NAMED in every surface: project.json's name, else the folder — never the id (beta.7 showed 26 ULIDs). */
@@ -449,8 +449,7 @@ export class Registry {
     async addWorkspace(workspace: WorkspaceRecord): Promise<void> {
         if (workspace.id === OS_WORKSPACE) throw new Error('The built-in Genie workspace is reserved; choose a regular workspace');
         if (this.#workspaces.some((w) => w.id === workspace.id)) return;
-        this.#workspaces = [...this.#workspaces, workspace];
-        await this.#store.writeWorkspaces(this.#workspaces);
+        await this.#commitWorkspaces([...this.#workspaces, workspace]);
         this.#emit();
     }
 
@@ -464,12 +463,9 @@ export class Registry {
     async register(input: { workspaceId: string; provider: AgentRecord['provider']; name: string; instructions?: string | null }): Promise<AgentRecord> {
         if (input.workspaceId === OS_WORKSPACE) throw new Error('The built-in Genie identity is reserved; agents belong to a regular workspace');
         const record = agentRecord({ id: mintAgentId(), ...input });
-        this.#agents = [...this.#agents, record];
         // THE FIRST AGENT IS THE DEFAULT (Tynn #1015): a workspace with none gets this one, automatically.
         const first = this.#workspaces.some((w) => w.id === input.workspaceId && w.defaultAgentId === undefined);
-        if (first) this.#workspaces = this.#withDefault(this.#workspaces, input.workspaceId, record.id, true);
-        const workspaces = this.#workspaces;
-        const writing = this.#store.writeAgents(this.#agents).then(() => (first ? this.#store.writeWorkspaces(workspaces) : undefined));
+        const writing = this.#commitAgents([...this.#agents, record]).then(() => (first ? this.#commitWorkspaces(this.#withDefault(this.#workspaces, input.workspaceId, record.id, true)) : undefined));
         // Refresh also waits for an already-started creation: its in-memory rows precede durable storage.
         // A failed write still rejects register(), while refresh must remain able to read the actual store.
         this.#registrations = Promise.allSettled([this.#registrations, writing]).then(() => {});
@@ -509,8 +505,7 @@ export class Registry {
         if (!existing) return { ok: false, reason: `No agent ${agentId} to record a thread for.` };
         if (existing.threadId === threadId) return { ok: true }; // Already written; no disk churn.
 
-        this.#agents = this.#agents.map((a) => (a.id === agentId ? { ...a, threadId } : a));
-        await this.#store.writeAgents(this.#agents);
+        await this.#commitAgents(this.#agents.map((a) => (a.id === agentId ? { ...a, threadId } : a)));
         this.#changed(existing.id);
         return { ok: true };
     }
@@ -529,8 +524,7 @@ export class Registry {
     async setGoverns(opsId: string, childIds: readonly string[]): Promise<{ ok: true; governs: string[] } | { ok: false; reason: string }> {
         if (!this.#workspaces.some((w) => w.id === opsId)) return { ok: false, reason: `no workspace "${opsId}"` };
         const governs = [...new Set(childIds)].filter((id) => id !== opsId && this.#workspaces.some((w) => w.id === id));
-        this.#workspaces = this.#workspaces.map((w) => (w.id === opsId ? { ...w, governs } : w));
-        await this.#store.writeWorkspaces(this.#workspaces);
+        await this.#commitWorkspaces(this.#workspaces.map((w) => (w.id === opsId ? { ...w, governs } : w)));
         this.#emit();
         return { ok: true, governs };
     }
@@ -578,8 +572,7 @@ export class Registry {
             given.push(w.id);
         }
         if (given.length === 0) return given;
-        this.#workspaces = next;
-        await this.#store.writeWorkspaces(this.#workspaces);
+        await this.#commitWorkspaces(next);
         this.#emit();
         return given;
     }
@@ -608,10 +601,9 @@ export class Registry {
         // A CHOSEN default: an automatic one never replaces it (Tynn #1015). `null` is no choice: back to the first agent,
         // automatically, or none when the workspace has no agents.
         const first = this.#agents.find((a) => a.workspaceId === workspaceId)?.id ?? null;
-        this.#workspaces = agentId === null
+        await this.#commitWorkspaces(agentId === null
             ? this.#withDefault(this.#workspaces, workspaceId, first, true)
-            : this.#withDefault(this.#workspaces, workspaceId, agentId, false);
-        await this.#store.writeWorkspaces(this.#workspaces);
+            : this.#withDefault(this.#workspaces, workspaceId, agentId, false));
         this.#emit();
         return { ok: true };
     }
@@ -623,12 +615,11 @@ export class Registry {
     async setWorkspaceEnvFile(workspaceId: string, file: string | null): Promise<{ ok: true } | { ok: false; reason: string }> {
         if (!this.#workspaces.some((w) => w.id === workspaceId)) return { ok: false, reason: `no workspace ${workspaceId}` };
         if (file !== null && (file.trim() === '' || envFileName(file) === null)) return { ok: false, reason: `"${file}" is not a file name: an env file is a plain name inside each site's folder, like .env.local` };
-        this.#workspaces = this.#workspaces.map((w) => {
+        await this.#commitWorkspaces(this.#workspaces.map((w) => {
             if (w.id !== workspaceId) return w;
             const { envFile: _previous, ...rest } = w;
             return file === null ? rest : { ...rest, envFile: file.trim() };
-        });
-        await this.#store.writeWorkspaces(this.#workspaces);
+        }));
         this.#emit();
         return { ok: true };
     }
@@ -644,12 +635,11 @@ export class Registry {
         if (!workspace) return { ok: false, reason: `no workspace ${workspaceId}` };
         const changed = withWorkspaceMcpServer(workspace.mcpOff, name, on);
         if (!changed.ok) return changed;
-        this.#workspaces = this.#workspaces.map((w) => {
+        await this.#commitWorkspaces(this.#workspaces.map((w) => {
             if (w.id !== workspaceId) return w;
             const { mcpOff: _previous, ...rest } = w;
             return changed.mcpOff.length > 0 ? { ...rest, mcpOff: changed.mcpOff } : rest;
-        });
-        await this.#store.writeWorkspaces(this.#workspaces);
+        }));
         this.#emit();
         return { ok: true };
     }
@@ -666,13 +656,11 @@ export class Registry {
         if (workspace.asleep === true && !asleep) {
             // Persist first, before any consumer can see the workspace as awake and start its agents.
             const redockAt = new Date().toISOString();
-            this.#agents = this.#agents.map((record) => record.workspaceId === workspaceId ? { ...record, redockAt } : record);
-            await this.#store.writeAgents(this.#agents);
+            await this.#commitAgents(this.#agents.map((record) => record.workspaceId === workspaceId ? { ...record, redockAt } : record));
         }
         const hibernatedName = asleep && workspace.asleep !== true ? this.#namer(workspace.path) : workspace.hibernatedName;
-        const workspaces = this.#workspaces.map((w) => (w.id === workspaceId ? { ...w, asleep, ...(hibernatedName ? { hibernatedName } : {}) } : w));
-        await this.#store.writeWorkspaces(workspaces);
-        this.#workspaces = workspaces;
+        // Persisted before this model shows it (persistFirst): nothing here sees a workspace awake that is not, on disk.
+        await this.#commitWorkspaces(this.#workspaces.map((w) => (w.id === workspaceId ? { ...w, asleep, ...(hibernatedName ? { hibernatedName } : {}) } : w)), { persistFirst: true });
         this.#emit();
         return true;
     }
@@ -681,12 +669,11 @@ export class Registry {
     async clearRedock(agentId: AgentId, at: string): Promise<void> {
         const record = this.#agents.find((candidate) => candidate.id === agentId);
         if (!record || record.redockAt !== at) return;
-        this.#agents = this.#agents.map((candidate) => {
+        await this.#commitAgents(this.#agents.map((candidate) => {
             if (candidate.id !== agentId) return candidate;
             const { redockAt: _redockAt, ...rest } = candidate;
             return rest;
-        });
-        await this.#store.writeAgents(this.#agents);
+        }));
         this.#changed(agentId);
     }
 
@@ -695,11 +682,9 @@ export class Registry {
         if (!this.#workspaces.some((w) => w.id === workspaceId)) return null;
         const agentsForgotten = this.#agents.filter((a) => a.workspaceId === workspaceId).length;
         // A removed workspace leaves every governor's list.
-        this.#workspaces = this.#workspaces.filter((w) => w.id !== workspaceId).map((w) => (w.governs?.includes(workspaceId) ? { ...w, governs: w.governs.filter((id) => id !== workspaceId) } : w));
         const gone = new Set<string>(this.#agents.filter((a) => a.workspaceId === workspaceId).map((a) => a.id));
-        this.#agents = dropChosen(this.#agents.filter((a) => a.workspaceId !== workspaceId), gone);
-        await this.#store.writeWorkspaces(this.#workspaces);
-        await this.#store.writeAgents(this.#agents);
+        await this.#commitWorkspaces(this.#workspaces.filter((w) => w.id !== workspaceId).map((w) => (w.governs?.includes(workspaceId) ? { ...w, governs: w.governs.filter((id) => id !== workspaceId) } : w)));
+        await this.#commitAgents(dropChosen(this.#agents.filter((a) => a.workspaceId !== workspaceId), gone));
         this.#emit();
         return { agentsForgotten };
     }
@@ -707,15 +692,13 @@ export class Registry {
     /** Unmount or delete (§6.2): the record goes; the persona folder is the caller's decision. */
     async forget(agentId: AgentId): Promise<boolean> {
         if (!this.#agents.some((a) => a.id === agentId)) return false;
-        this.#agents = dropChosen(this.#agents.filter((a) => a.id !== agentId), new Set([agentId]));
-        await this.#store.writeAgents(this.#agents);
+        await this.#commitAgents(dropChosen(this.#agents.filter((a) => a.id !== agentId), new Set([agentId])));
         // A designation never points at nothing: the forgotten default's workspace takes its first agent left,
         // automatically (Tynn #1015), or none when it has no agents left.
         const owning = this.#workspaces.find((w) => w.defaultAgentId === agentId);
         if (owning) {
             const first = this.#agents.find((a) => a.workspaceId === owning.id);
-            this.#workspaces = this.#withDefault(this.#workspaces, owning.id, first?.id ?? null, true);
-            await this.#store.writeWorkspaces(this.#workspaces);
+            await this.#commitWorkspaces(this.#withDefault(this.#workspaces, owning.id, first?.id ?? null, true));
         }
         this.#emit();
         return true;
@@ -727,10 +710,9 @@ export class Registry {
         if (!existing) return null;
         const { genieWordsInThread: _words, ...rest } = existing;
         const cleared: AgentRecord = { ...rest, threadId: null };
-        this.#agents = this.#agents.map((a) => (a.id === agentId ? cleared : a));
-        await this.#store.writeAgents(this.#agents);
+        await this.#commitAgents(this.#agents.map((a) => (a.id === agentId ? cleared : a)));
         this.#changed(cleared.id);
-        return cleared;
+        return this.#agents.find((a) => a.id === agentId) ?? null;
     }
 
     /**
@@ -764,32 +746,32 @@ export class Registry {
             leftAt,
             ...(options.carryOver ? { carryOver: options.carryOver } : {}),
         };
-        this.#agents = this.#agents.map((a) => (a.id === agentId ? record : a));
-        await this.#store.writeAgents(this.#agents);
+        await this.#commitAgents(this.#agents.map((a) => (a.id === agentId ? record : a)));
         this.#changed(record.id);
-        return { ok: true, record };
+        const written = this.#agents.find((a) => a.id === agentId);
+        return written ? { ok: true, record: written } : { ok: false, reason: `No agent ${agentId}.` };
     }
 
     /** The carry-over went with a prompt (Tynn story #380): it is not carried again. */
     async clearCarryOver(agentId: AgentId): Promise<AgentRecord | null> {
         const existing = this.#agents.find((a) => a.id === agentId);
         if (!existing || existing.carryOver === undefined) return existing ?? null;
-        return this.#update(agentId, ({ carryOver: _sent, ...rest }) => rest);
+        return this.#update(agentId, ({ carryOver: _sent, ...rest }) => rest, ['carryOver']);
     }
 
     /** Mode is WORDING for the agent (§6.2) — automated or manual — not a permission boundary. */
     async setMode(agentId: AgentId, mode: AgentRecord['mode']): Promise<AgentRecord | null> {
-        return this.#update(agentId, (a) => ({ ...a, mode }));
+        return this.#update(agentId, (a) => ({ ...a, mode }), ['mode']);
     }
 
     /** What a Claude agent may do: all tools, ask before shell commands, or edits only (shell refused). Read when its session starts. */
     /** Genie's own words are in this agent's thread now. */
     async markGenieWords(agentId: AgentId): Promise<AgentRecord | null> {
-        return this.#update(agentId, (a) => ({ ...a, genieWordsInThread: true }));
+        return this.#update(agentId, (a) => ({ ...a, genieWordsInThread: true }), ['genieWordsInThread']);
     }
 
     async setPermissions(agentId: AgentId, permissions: AgentPermissions): Promise<AgentRecord | null> {
-        return this.#update(agentId, (a) => ({ ...a, permissions }));
+        return this.#update(agentId, (a) => ({ ...a, permissions }), ['permissions']);
     }
 
     /** The model the agent's provider starts with; `null` clears it — back to the provider's default. Read when its session starts. */
@@ -797,28 +779,28 @@ export class Registry {
         return this.#update(agentId, (a) => {
             const { model: _previous, ...rest } = a;
             return model === null ? rest : { ...rest, model };
-        });
+        }, ['model']);
     }
 
     /** The agent's own half of who may message it (§6.4). */
     /** Autonomous or asked (Tynn #801); kept on the record like every other setting of the agent. */
     async setAutoApprove(agentId: AgentId, autoApprove: boolean): Promise<AgentRecord | null> {
-        return this.#update(agentId, (a) => ({ ...a, autoApprove }));
+        return this.#update(agentId, (a) => ({ ...a, autoApprove }), ['autoApprove']);
     }
 
     /** May manage the workspace's tabs (beta.35 item 36): the `workspaceTabs` tool appears in its next tools/list. */
     async setManageTabs(agentId: AgentId, manageTabs: boolean): Promise<AgentRecord | null> {
-        return this.#update(agentId, (a) => ({ ...a, manageTabs }));
+        return this.#update(agentId, (a) => ({ ...a, manageTabs }), ['manageTabs']);
     }
 
     /** May drive pages (browser rebuild step 7): the page tool appears in its next tools/list. */
     async setDrivePages(agentId: AgentId, drivePages: boolean): Promise<AgentRecord | null> {
-        return this.#update(agentId, (a) => ({ ...a, drivePages }));
+        return this.#update(agentId, (a) => ({ ...a, drivePages }), ['drivePages']);
     }
 
     /** The MCP servers switched off for this agent (Tynn #628); read when its next session starts. */
     async setMcpOff(agentId: AgentId, mcpOff: readonly string[], mcpOn: readonly string[] = []): Promise<AgentRecord | null> {
-        return this.#update(agentId, (a) => ({ ...a, mcpOff: [...mcpOff], mcpOn: [...mcpOn] }));
+        return this.#update(agentId, (a) => ({ ...a, mcpOff: [...mcpOff], mcpOn: [...mcpOn] }), ['mcpOff', 'mcpOn']);
     }
 
     /** What one of its sessions reported, added to what its Settings can list. Writes only when it adds a name. */
@@ -830,12 +812,12 @@ export class Registry {
 
     /** What it hears from IssueWatch (Tynn #806); kept on the record like every other setting of the agent. */
     async setIssueWatch(agentId: AgentId, issueWatch: IssueWatchSetting): Promise<AgentRecord | null> {
-        return this.#update(agentId, (a) => ({ ...a, issueWatch }));
+        return this.#update(agentId, (a) => ({ ...a, issueWatch }), ['issueWatch']);
     }
 
     /** Chosen agents (Tynn #526); `null` turns the choice off. */
     async setAccessAgents(agentId: AgentId, accessAgents: readonly string[] | null): Promise<AgentRecord | null> {
-        return this.#update(agentId, ({ accessAgents: _old, ...rest }) => (accessAgents === null ? rest : { ...rest, accessAgents: [...accessAgents] }));
+        return this.#update(agentId, ({ accessAgents: _old, ...rest }) => (accessAgents === null ? rest : { ...rest, accessAgents: [...accessAgents] }), ['accessAgents']);
     }
 
     /**
@@ -854,26 +836,53 @@ export class Registry {
     }
 
     async setAccessScope(agentId: AgentId, accessScope: AgentRecord['accessScope']): Promise<AgentRecord | null> {
-        return this.#update(agentId, (a) => ({ ...a, accessScope }));
+        return this.#update(agentId, (a) => ({ ...a, accessScope }), ['accessScope']);
     }
 
-    async #update(agentId: AgentId, change: (a: AgentRecord) => AgentRecord): Promise<AgentRecord | null> {
+    /**
+     * One agent's record changed. `sets` names the fields the caller SETS: they are written even when this model already
+     * holds that value, because this model can be behind the files (a setting put back to what a stale copy shows must
+     * still land). Every other field is written only when it changed.
+     */
+    async #update(agentId: AgentId, change: (a: AgentRecord) => AgentRecord, sets: readonly (keyof AgentRecord)[] = []): Promise<AgentRecord | null> {
         const existing = this.#agents.find((a) => a.id === agentId);
         if (!existing) return null;
         const record = withOsAgentPolicy(change(existing));
-        this.#agents = this.#agents.map((a) => (a.id === agentId ? record : a));
-        await this.#store.writeAgents(this.#agents);
+        await this.#commitAgents(this.#agents.map((a) => (a.id === agentId ? record : a)), { sets: { id: agentId, fields: sets } });
         this.#changed(record.id);
-        return record;
+        return this.#agents.find((a) => a.id === agentId) ?? null;
+    }
+
+    /**
+     * THE ONE WAY THIS MODEL WRITES (Tynn #1007). `next` is the list as this model would have it; only what differs from
+     * its list now crosses — the records added and removed, and each changed record's changed fields — and genie-host
+     * applies that to the files as they are then, one record at a time under its lock. Then the records it touched are
+     * taken back as the host has them, so this model holds what was written, other writers' fields included. A whole
+     * list never crosses: the last whole-list writer won, and a stale replica clobbered the field another had just written.
+     */
+    async #commitAgents(next: readonly AgentRecord[], options: { persistFirst?: boolean; sets?: { id: string; fields: readonly string[] } } = {}): Promise<void> {
+        const change = recordChange(this.#agents, next, options.sets);
+        if (change === null) return;
+        if (!options.persistFirst) this.#agents = next;
+        const written = await this.#store.changeAgents(change);
+        this.#agents = adopt(this.#agents, written, change);
+    }
+
+    async #commitWorkspaces(next: readonly WorkspaceRecord[], options: { persistFirst?: boolean } = {}): Promise<void> {
+        const change = recordChange(this.#workspaces, next);
+        if (change === null) return;
+        if (!options.persistFirst) this.#workspaces = next;
+        const written = await this.#store.changeWorkspaces(change);
+        this.#workspaces = adopt(this.#workspaces, written, change);
     }
 
     async setBudget(agentId: AgentId, dailyBudgetUsd: number | null): Promise<AgentRecord | null> {
-        return this.#update(agentId, (a) => ({ ...a, dailyBudgetUsd }));
+        return this.#update(agentId, (a) => ({ ...a, dailyBudgetUsd }), ['dailyBudgetUsd']);
     }
 
     /** Its app wake cap (Tynn #1053): a number of wakes an hour, or the word `unlimited`. Read by the mail wake each time. */
     async setAppWakeCap(agentId: AgentId, appWakeCap: number | 'unlimited'): Promise<AgentRecord | null> {
-        return this.#update(agentId, (a) => ({ ...a, appWakeCap }));
+        return this.#update(agentId, (a) => ({ ...a, appWakeCap }), ['appWakeCap']);
     }
 
     /** The agent's last turn number (identity.ts `lastTurn`): what its next session numbers on from. */
@@ -908,9 +917,7 @@ export class Registry {
      */
     async setWorkspacePath(workspaceId: string, path: string): Promise<boolean> {
         if (!this.#workspaces.some((w) => w.id === workspaceId)) return false;
-        const workspaces = this.#workspaces.map((w) => (w.id === workspaceId ? { ...w, path } : w));
-        await this.#store.writeWorkspaces(workspaces);
-        this.#workspaces = workspaces;
+        await this.#commitWorkspaces(this.#workspaces.map((w) => (w.id === workspaceId ? { ...w, path } : w)), { persistFirst: true });
         this.#emit();
         return true;
     }
@@ -966,6 +973,57 @@ export class Registry {
         this.#emit();
         for (const listener of this.#recordListeners) listener(agentId);
     }
+}
+
+/**
+ * What differs between two copies of a list, by record (Tynn #1007): the records added, the ids removed, and for each
+ * record in both, only the fields that changed (`undefined` is no field). `null` when nothing did.
+ */
+function recordChange<T extends { readonly id: string }>(before: readonly T[], after: readonly T[], sets?: { id: string; fields: readonly string[] }): RecordChange<T> | null {
+    const was = new Map(before.map((r) => [r.id, r] as const));
+    const now = new Set(after.map((r) => r.id));
+    const add: T[] = [], patch: RecordPatch[] = [];
+    for (const record of after) {
+        const old = was.get(record.id);
+        if (!old) { add.push(record); continue; }
+        const forced = sets?.id === record.id ? sets.fields.filter((key) => key !== 'id') : [];
+        if (old === record && forced.length === 0) continue;
+        const o = old as unknown as Record<string, unknown>, n = record as unknown as Record<string, unknown>;
+        const set: Record<string, unknown> = {};
+        const unset: string[] = [];
+        for (const key of Object.keys(n)) {
+            if (key === 'id') continue;
+            if (n[key] === undefined) { if (o[key] !== undefined) unset.push(key); continue; }
+            if (JSON.stringify(n[key]) !== JSON.stringify(o[key])) set[key] = n[key];
+        }
+        for (const key of Object.keys(o)) if (key !== 'id' && !(key in n) && o[key] !== undefined) unset.push(key);
+        // A field the caller sets is written whatever this copy held (see #update).
+        for (const key of forced) {
+            if (n[key] === undefined) { if (!unset.includes(key)) unset.push(key); } else set[key] = n[key];
+        }
+        if (Object.keys(set).length > 0 || unset.length > 0) patch.push({ id: record.id, ...(Object.keys(set).length > 0 ? { set } : {}), ...(unset.length > 0 ? { unset } : {}) });
+    }
+    const remove = before.filter((r) => !now.has(r.id)).map((r) => r.id);
+    if (add.length === 0 && patch.length === 0 && remove.length === 0) return null;
+    return { ...(add.length > 0 ? { add } : {}), ...(patch.length > 0 ? { patch } : {}), ...(remove.length > 0 ? { remove } : {}) };
+}
+
+/**
+ * This model's list, with the records a change touched taken back as the host wrote them (a record the host no longer
+ * has leaves). A removal can change other records (a chosen-agents list, a governor's list), so then the host's whole
+ * answer is taken.
+ */
+function adopt<T extends { readonly id: string }>(local: readonly T[], written: readonly T[], change: RecordChange<T>): T[] {
+    if ((change.remove?.length ?? 0) > 0) return [...written];
+    const host = new Map(written.map((r) => [r.id, r] as const));
+    const touched = new Set<string>([...(change.add ?? []).map((r) => r.id), ...(change.patch ?? []).map((p) => p.id)]);
+    const out: T[] = [];
+    for (const record of local) {
+        if (!touched.has(record.id)) out.push(record);
+        else if (host.has(record.id)) out.push(host.get(record.id)!);
+    }
+    for (const id of touched) if (host.has(id) && !out.some((r) => r.id === id)) out.push(host.get(id)!);
+    return out;
 }
 
 /** A deleted agent leaves every chosen-agents list it was on (Tynn #526); a list it was not on is the same object. */

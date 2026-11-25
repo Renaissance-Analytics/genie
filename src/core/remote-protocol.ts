@@ -1,3 +1,4 @@
+import { CROSS_STATION_METHODS } from './cross-station.js';
 import { BLOB_METHODS } from './local-blobs.js';
 import { LOCAL_TERMINAL_METHODS, type LocalTerminalMethod } from './local-terminals.js';
 import { LOCAL_CONTENT_METHODS } from './local-content.js';
@@ -234,10 +235,15 @@ export type RemoteMethod = (typeof REMOTE_METHODS)[number];
  * `blob.*`, `localUpload.*`, `page.*`: connection-owned local content resources, gated before any source is opened.
  */
 /**
+ * `xstation.roster`, `xstation.deliver`, `xstation.read` (P9, core/cross-station.ts): mail between the owner's own
+ * workstations, said by one host to another. Taken only from the owner's own workstation (the grant's `src_ws`), never
+ * on the baton.
+ */
+/**
  * `host.version` and `host.update` (Tynn #894): the host's version and window, read at any time, and the client's request
  * that the host update. The two calls a connection outside the support window may still make; neither takes the baton.
  */
-export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'deck.watch', 'summary.watch', 'remote.watch', 'settings.watch', 'registry.watch', 'registry.read', 'frontdoor.watch', 'host.lock', 'host.unlock', 'host.version', 'host.update', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS, ...TYNN_WATCH_METHODS] as const;
+export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'deck.watch', 'summary.watch', 'remote.watch', 'settings.watch', 'registry.watch', 'registry.read', 'frontdoor.watch', 'host.lock', 'host.unlock', 'host.version', 'host.update', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS, ...TYNN_WATCH_METHODS, ...CROSS_STATION_METHODS] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
 /** Moved native pushes have separate local channels; existing remote subscriptions keep their channels. */
@@ -516,6 +522,11 @@ export interface PreAuth {
     readonly workspaceId: string | null;
     /** Reads only: every change is refused. */
     readonly readonly: boolean;
+    /**
+     * WHICH OF THE OWNER'S WORKSTATIONS this is (P9): the grant's `src_ws`, Tynn's word from its device binding, set only on
+     * the owner's own grant. What a host takes agent mail by (core/cross-station.ts `deliveryAdmission`). Absent otherwise.
+     */
+    readonly station?: string;
     /** Only with `kind: 'local'`: which window the door admitted. Absent = not known to be this machine's own (Tynn #578). */
     readonly window?: 'main' | 'remote';
 }
@@ -590,12 +601,15 @@ export type WireMessage =
     /**
      * `code` (Tynn #894): `unsupported`, the other side does not know the method (the call settles, nothing hangs);
      * `version`, the connection is outside the support window and may only read the version and ask for the update.
+     * `no-address`, `scope` (P9, core/cross-station.ts `DefiniteRefusal`): another workstation's mail was refused for good,
+     * for nobody at that address or for the recipient's scope. A refusal with no code is not definite.
      */
     | { kind: 'result'; id: number; ok: false; reason: string; code?: ResultCode }
     | { kind: 'event'; channel: string; payload: unknown };
 
 export type RefusalCode = 'version';
-export type ResultCode = 'unsupported' | 'version';
+export type ResultCode = 'unsupported' | 'version' | 'no-address' | 'scope';
+const RESULT_CODES: readonly ResultCode[] = ['unsupported', 'version', 'no-address', 'scope'];
 
 /** Why a frame was not parsed. A CALL to a method this side does not know keeps its `id`, so the answer can carry it. */
 export type FrameRefusal = { ok: false; reason: string; id?: number; method?: string; code?: 'unsupported' };
@@ -652,7 +666,7 @@ export function parseFrame<M extends string>(text: string, isMethodOf: (m: unkno
         case 'result': {
             if (typeof raw.id !== 'number' || typeof raw.ok !== 'boolean') return { ok: false, reason: 'a result needs a numeric id and ok' };
             if (raw.ok) return { ok: true, message: { kind: 'result', id: raw.id, ok: true, value: raw.value } };
-            return { ok: true, message: { kind: 'result', id: raw.id, ok: false, reason: typeof raw.reason === 'string' ? raw.reason : 'refused', ...(raw.code === 'unsupported' || raw.code === 'version' ? { code: raw.code } : {}) } };
+            return { ok: true, message: { kind: 'result', id: raw.id, ok: false, reason: typeof raw.reason === 'string' ? raw.reason : 'refused', ...((RESULT_CODES as readonly unknown[]).includes(raw.code) ? { code: raw.code as ResultCode } : {}) } };
         }
         case 'event':
             if (typeof raw.channel !== 'string') return { ok: false, reason: 'an event needs a channel' };

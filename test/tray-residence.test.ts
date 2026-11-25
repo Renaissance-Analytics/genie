@@ -179,6 +179,25 @@ describe('wireLoginItem', () => {
         expect(files.size).toBe(0);
     });
 
+    it('SETTINGS SAID AFTER THE BOOT READ THEM (genie-host slower than the boot deadline): the entry follows them when they are said (P6-3, gates 1125-025900-274bb7 3b on both platforms: a relaunch with the setting on removed the entry)', async () => {
+        // The window's replica (main/window-settings.ts): the defaults until genie-host says its settings, which is a whole view
+        // (no key changed), so no onChange; the boot's read came first, at the deadline.
+        let values: Record<string, boolean | string> = {};
+        const views = new Set<() => void>();
+        const replica: ResidenceSettings = {
+            snapshot: () => values,
+            set: async () => {},
+            onChange: () => () => {},
+            onView: (listener) => { views.add(listener); return () => { views.delete(listener); }; },
+        };
+        const { port, set } = fakePort();
+        await wireLoginItem(replica, port, WIN);
+        expect(set).toEqual([{ openAtLogin: false, path: WIN.execPath, args: [] }]);
+        values = { launch_at_login: true, start_minimized: true };
+        for (const v of [...views]) v();
+        expect(set.at(-1)).toEqual({ openAtLogin: true, path: WIN.execPath, args: ['--hidden'] });
+    });
+
     it('a development run never touches the OS', async () => {
         const store = await SettingsStore.open(dir);
         const { port, set } = fakePort({ loginItem: true });
