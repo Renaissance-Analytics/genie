@@ -223,6 +223,7 @@ A flow is a graph Genie runs: a trigger, then steps. One command or one prompt o
 - \`schedule_trigger\` (cron, timezone).
 - \`manual_trigger\`: run by hand, or with \`runNow\`.
 - \`genie/file_added\` (workspace, folder, extensions, minSizeBytes) runs when a matching file lands in the workspace, never under .git, node_modules or vendor. It hands on the file's path, name, extension and size.
+- \`genie/station_mail\` (workspace, direction: any, in or out, station) runs when an agent of the workspace sends mail to, or gets mail from, another of the person's workstations. It hands on the direction, the other agent's full address and the workstation.
 - There is no webhook trigger. For a request from outside, see \`genie-automation\`.
 
 ## Steps

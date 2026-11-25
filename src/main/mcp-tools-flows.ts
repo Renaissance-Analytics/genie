@@ -60,7 +60,7 @@ const NOT_HERE = 'this Genie keeps no flows (doctor mode runs none); nothing was
 const ACTIONS = 'list, get, create, update, arm, disarm, runNow, stop, remove';
 /** Genie's step kinds that act in a workspace, by their `workspace` config (flow-kinds.ts). */
 // genie#1204: the file trigger WATCHES a workspace and the move CHANGES one — held to the same own-workspace rule.
-const WORKSPACE_STEPS = new Set(['genie/terminal_run', 'genie/knowledge_add', 'genie/file_added', 'genie/file_move']);
+const WORKSPACE_STEPS = new Set(['genie/terminal_run', 'genie/knowledge_add', 'genie/file_added', 'genie/station_mail', 'genie/file_move']);
 
 const byName = (by: Actor): string => (by.kind === 'agent' ? by.name : 'the person');
 
@@ -205,7 +205,7 @@ export function flowTools(deps: FlowToolsDeps): Registration[] {
 export const FLOWS_TOOL: BuiltinTool = declareBuiltinTool(
     'flows',
     'Your workspace’s flows — scheduled and repeating work Genie runs for you: a watcher (“every 30 minutes run this check; if it exits 10, prompt an agent”), a nightly job. '
-        + 'A flow is a fancy-flow document `{ version: 1, graph: { nodes, edges } }`: triggers `schedule_trigger` {cron, timezone?}, `manual_trigger`, or `genie/file_added` {workspace, folder?, extensions? ("png, jpg"), minSizeBytes?} — runs when a matching file lands in the workspace (never .git, node_modules or vendor) and hands on {path, relPath, name, extension, sizeBytes}; steps `genie/terminal_run` {workspace, command, cwd?, allowFailure?} (its output is {exitCode, output, ok}), '
+        + 'A flow is a fancy-flow document `{ version: 1, graph: { nodes, edges } }`: triggers `schedule_trigger` {cron, timezone?}, `manual_trigger`, or `genie/file_added` {workspace, folder?, extensions? ("png, jpg"), minSizeBytes?} — runs when a matching file lands in the workspace (never .git, node_modules or vendor) and hands on {path, relPath, name, extension, sizeBytes}, or `genie/station_mail` {workspace, direction? (any | in | out), station?} — runs when an agent of the workspace sends mail to, or gets mail from, another of the person's workstations and hands on {direction, address, station, stationName, agentId, messageId}; steps `genie/terminal_run` {workspace, command, cwd?, allowFailure?} (its output is {exitCode, output, ok}), '
         + '`genie/agent_prompt` {agent (an inbox address), prompt}, `genie/knowledge_add` {workspace, title, body?}, `genie/file_move` {workspace, from: "{{in.path}}", to (a folder in the workspace)} — no shell, never overwrites. In a flow a file starts, a command never templates a value (a file name can carry shell syntax): move files with genie/file_move. `branch` {conditions: [{left: "{{in.exitCode}}", operator: "eq", right: "10"}]} routes on its `true`/`false` port (an edge’s sourceHandle). '
         + 'A flow you create is created DISARMED and does not run: the person arms it in Genie’s Flows tab — an agent can never arm one, and `arm` only records that you asked. '
         + 'Actions: `list` — this workspace’s flows, armed or not, with their schedules and last runs. '

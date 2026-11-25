@@ -30,6 +30,7 @@ const STEPS: ReadonlyArray<readonly [string, string]> = [
     ['@particle-academy/manual_trigger', 'Run by hand'],
     ['@particle-academy/schedule_trigger', 'On a schedule'],
     ['genie/file_added', 'When a file is added'],
+    ['genie/station_mail', 'When mail crosses workstations'],
     ['genie/agent_prompt', 'Prompt an agent'],
     ['genie/terminal_run', 'Run a command'],
     ['genie/knowledge_add', 'Add to knowledge'],

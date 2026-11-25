@@ -87,6 +87,11 @@ export class FlowsService {
         return (this.#store as unknown as Record<string, (...a: unknown[]) => unknown>)[method]!(...args);
     }
 
+    /** Mail crossed to or from another of the owner's workstations (P9): the armed flows it matches start. genie-host's own call. */
+    stationMail(event: import('../core/station-mail-trigger.js').StationMailProps): boolean {
+        return this.#scheduler?.stationMail(event) ?? false;
+    }
+
     /** Stop a run as `by` — the host's own callers (the agents' `flows` tool decides who may, Tynn #833). */
     async stopRun(id: string, by: Actor): Promise<StopAnswer> {
         if (!this.#scheduler) return { ok: false, reason: 'the flows are still opening; nothing was stopped' };

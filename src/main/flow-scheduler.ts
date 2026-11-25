@@ -1,9 +1,10 @@
+import { matchesStationMailTrigger, type StationMailProps } from '../core/station-mail-trigger.js';
 import { nextCronAfter } from '../core/cron.js';
 import { matchesFileTrigger, type FileAddedProps, type FileTriggerConfig } from '../core/file-trigger.js';
 import type { NodeOutcome } from '../core/flow-canvas.js';
 import type { RunObserver, RunResume } from './flow-runner.js';
 import { mergeStep, type FlowRunStepDetail } from '../core/flow-run-review.js';
-import type { Actor, FileFired, FlowRecord, FlowRun, FlowRunStep, FlowStore, RunOutcome, Schedule } from './flow-store.js';
+import type { Actor, FileFired, FlowRecord, StationFired, FlowRun, FlowRunStep, FlowStore, RunOutcome, Schedule } from './flow-store.js';
 
 /**
  * FLOWS (§6.6) — the scheduler. ONE timer, set to the nearest due among the ARMED flows'
@@ -82,7 +83,7 @@ export interface FlowSchedulerDeps {
      * Execute one run of a flow. `trigger` is the schedule that fired, or the flow's first schedule for a
      * Run now (`null` when it has none). Answers the outcome; resolving with nothing means it ran.
      */
-    readonly run: (flow: FlowRecord, trigger: Schedule | FileFired | null, observer?: RunObserver, resume?: RunResume, control?: RunControl) => Promise<RunResult | void>;
+    readonly run: (flow: FlowRecord, trigger: Schedule | FileFired | StationFired | null, observer?: RunObserver, resume?: RunResume, control?: RunControl) => Promise<RunResult | void>;
     /** SAFE MODE (Tynn #386): while on, no schedule is armed, no file starts a flow and no interrupted run resumes. */
     readonly safeMode?: () => boolean;
     /**
@@ -213,7 +214,8 @@ export class FlowScheduler {
             if (this.#running.has(flow.id) || this.#untrusted(flow.workspaceId)) continue;
             const entry = going.entry;
             const schedule = entry ? this.#deps.store.schedules(flow.id).find((s) => s.nodeId === entry) ?? null : null;
-            const trigger: Schedule | FileFired | null = schedule ?? (entry && going.trigger === 'file' ? { nodeId: entry, file: { workspaceId: flow.workspaceId, path: '', relPath: going.file ?? '', name: '', extension: '', sizeBytes: 0 } } : null);
+            const trigger: Schedule | FileFired | StationFired | null = schedule ?? (entry && going.trigger === 'file' ? { nodeId: entry, file: { workspaceId: flow.workspaceId, path: '', relPath: going.file ?? '', name: '', extension: '', sizeBytes: 0 } }
+                : entry && going.trigger === 'station' ? { nodeId: entry, station: { direction: 'in', station: '', stationName: '', agentId: '', workspaceId: flow.workspaceId, address: '', messageId: '' } } : null);
             const startedAt = Date.parse(going.at) || this.#deps.now();
             const run = this.#execute(flow, trigger, going.trigger, startedAt, { outputs: going.outputs ?? {} }).finally(() => {
                 if (this.#running.get(flow.id) === run) this.#running.delete(flow.id);
@@ -264,6 +266,24 @@ export class FlowScheduler {
         return taken;
     }
 
+    /**
+     * Mail crossed to or from another of the owner's workstations (P9, cross-station-host.ts `crossed`): every ARMED flow of
+     * that agent's workspace with a `genie/station_mail` trigger it matches runs once, from that trigger, recorded as a
+     * `station` run. Answers whether any flow took it.
+     */
+    stationMail(event: StationMailProps): boolean {
+        if (this.#deps.safeMode?.() === true) return false;
+        let taken = false;
+        for (const flow of this.#deps.store.list()) {
+            if (!flow.armed || flow.workspaceId !== event.workspaceId || this.#untrusted(flow.workspaceId)) continue;
+            const hit = this.#deps.store.stationTriggers(flow.id).find((t) => matchesStationMailTrigger(t.config, event));
+            if (!hit) continue;
+            taken = true;
+            this.#startReported(flow, { nodeId: hit.nodeId, station: event }, 'station');
+        }
+        return taken;
+    }
+
     #fire(due: Planned): void {
         this.#cancel = null;
         // This slot is spent for every flow it fires, BEFORE the re-plan: the timer can wake while the wall clock still
@@ -286,13 +306,13 @@ export class FlowScheduler {
     }
 
     /** Start a run nobody awaits (a fire, a file): a record that cannot be written is reported, never an unhandled rejection. */
-    #startReported(flow: FlowRecord, trigger: Schedule | FileFired, kind: FlowRun['trigger']): void {
+    #startReported(flow: FlowRecord, trigger: Schedule | FileFired | StationFired, kind: FlowRun['trigger']): void {
         this.#start(flow, trigger, kind).catch((error: unknown) => {
             console.error(`[flows] "${flow.name}": the run could not be recorded: ${error instanceof Error ? error.message : String(error)}`);
         });
     }
 
-    #start(flow: FlowRecord, trigger: Schedule | FileFired | null, kind: FlowRun['trigger'], by?: Actor): Promise<FlowRun | null> {
+    #start(flow: FlowRecord, trigger: Schedule | FileFired | StationFired | null, kind: FlowRun['trigger'], by?: Actor): Promise<FlowRun | null> {
         const startedBy = by ? { startedBy: by } : {};
         const startedAt = this.#deps.now();
         const file = trigger !== null && 'file' in trigger ? { file: trigger.file.relPath } : {};
@@ -322,7 +342,7 @@ export class FlowScheduler {
         return run;
     }
 
-    async #execute(flow: FlowRecord, trigger: Schedule | FileFired | null, kind: FlowRun['trigger'], startedAt: number, resume?: RunResume, by?: Actor): Promise<FlowRun | null> {
+    async #execute(flow: FlowRecord, trigger: Schedule | FileFired | StationFired | null, kind: FlowRun['trigger'], startedAt: number, resume?: RunResume, by?: Actor): Promise<FlowRun | null> {
         let result: { outcome: RunOutcome; reason?: string; steps?: readonly FlowRunStep[]; stoppedBy?: string };
         // THE RUN'S STOP (Tynn #833): what `stopRun` aborts, and who pressed it.
         const own = { controller: new AbortController(), by: null as string | null };

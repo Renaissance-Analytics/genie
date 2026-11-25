@@ -7,7 +7,7 @@ import type { Resolution } from '../core/inbox.js';
 import { genieExecutors, type FlowPorts, type PromptDelivery, type PromptHooks, type PromptOptions } from './flow-executors.js';
 import { importFlowDocument } from './flow-kinds.js';
 import type { RunControl, RunResult } from './flow-scheduler.js';
-import type { FileFired, FlowRecord, FlowRunStep, Schedule } from './flow-store.js';
+import type { FileFired, FlowRecord, FlowRunStep, Schedule, StationFired } from './flow-store.js';
 import type { ProcessStatus, ProcessSupervisor } from './process-supervisor.js';
 
 /**
@@ -93,7 +93,7 @@ class StoppedRun extends Error {
     override readonly name = 'StoppedRun';
 }
 
-export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigger: Schedule | FileFired | null, observer?: RunObserver, resume?: RunResume, control?: RunControl) => Promise<RunResult> {
+export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigger: Schedule | FileFired | StationFired | null, observer?: RunObserver, resume?: RunResume, control?: RunControl) => Promise<RunResult> {
     const now = deps.now ?? Date.now;
     return async (flow, trigger, observer, resume, control) => {
         if (deps.asleep(flow.workspaceId)) {
@@ -163,6 +163,9 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
         // A file run (genie#1204): its trigger hands the steps after it the file that landed — {{in.path}} and the rest.
         const file = trigger !== null && 'file' in trigger ? trigger.file : null;
         const fileTrig = () => ({ ...(file ?? {}), firedAt });
+        // A station run (P9): its trigger hands on the mail that crossed — {{in.direction}}, {{in.address}} and the rest.
+        const crossed = trigger !== null && 'station' in trigger ? trigger.station : null;
+        const stationTrig = () => ({ ...(crossed ?? {}), firedAt });
         // WHAT EACH STEP DID (Tynn #839), told as it goes: the ports a step calls are that step's own, so the command it ran
         // (exit code, this run's output, its process) and the prompt it sent (text, recipient, delivery, reply) are its.
         const tell = (nodeId: string, patch: Partial<FlowRunStepDetail>): void => { observer?.step?.(nodeId, patch); };
@@ -187,7 +190,7 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
                 return reply;
             },
         });
-        const ownWith = (p: FlowPorts): Record<string, NodeExecutor> => ({ ...genieExecutors(p), '@particle-academy/schedule_trigger': trig, '@particle-academy/manual_trigger': trig, 'genie/file_added': fileTrig });
+        const ownWith = (p: FlowPorts): Record<string, NodeExecutor> => ({ ...genieExecutors(p), '@particle-academy/schedule_trigger': trig, '@particle-academy/manual_trigger': trig, 'genie/file_added': fileTrig, 'genie/station_mail': stationTrig });
         const own = ownWith(ports);
         // Every step's output is told as it finishes (genie#1204) — fancy-flow's own logic steps too, through their kinds'
         // executors — so the run in flight holds what a resume hands on. Keyed by every id a node's kind answers to.
@@ -259,7 +262,7 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
         const stepsOf = (): FlowRunStep[] =>
             graph.nodes
                 .map((n) => ({ id: n.id, data: (n.data ?? {}) as { kind?: unknown; config?: Record<string, unknown> } }))
-                .filter(({ data }) => typeof data.kind === 'string' && !/trigger$/.test(data.kind) && data.kind !== 'genie/file_added')
+                .filter(({ data }) => typeof data.kind === 'string' && !/trigger$/.test(data.kind) && data.kind !== 'genie/file_added' && data.kind !== 'genie/station_mail')
                 .map(({ id, data }) => {
                     const status = statuses.get(id);
                     const outcome: FlowRunStep['outcome'] = status === 'done' ? 'ran' : status === 'error' || status === 'running' ? (step.held !== null ? 'held' : 'failed') : 'not reached';

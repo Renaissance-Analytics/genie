@@ -94,6 +94,22 @@ export const GENIE_NODE_KINDS: readonly NodeKindDefinition[] = [
             { type: 'number', key: 'minSizeBytes', label: 'Minimum size (bytes)', min: 0, description: 'Inclusive; empty = any size.' },
         ],
     },
+    // P9 (the owner, 2026-11-25: outside communications get their own event "for sounds and flows"): each message that
+    // crossed to or from another of your workstations, for an agent of this workspace (core/station-mail-trigger.ts).
+    {
+        name: 'genie/station_mail',
+        category: 'trigger',
+        label: 'Mail crosses workstations',
+        description: 'Starts the flow when an agent of this workspace sends mail to, or gets mail from, another of your workstations.',
+        icon: '🛰️',
+        inputs: [],
+        outputs: [{ id: 'out', label: 'mail' }],
+        configSchema: [
+            { type: 'text', key: 'workspace', label: 'Workspace', required: true },
+            { type: 'select', key: 'direction', label: 'Which way', options: [{ value: 'any', label: 'either way' }, { value: 'in', label: 'arriving here' }, { value: 'out', label: 'going out' }], default: 'any' },
+            { type: 'text', key: 'station', label: 'Workstation', description: 'Its name or id; empty = any of yours.' },
+        ],
+    },
     {
         name: 'genie/file_move',
         category: 'io',
@@ -219,7 +235,7 @@ export function paletteKindFilter({ kind }: { kind: { name: string } }): boolean
     return OFFERED.has(kind.name);
 }
 
-const TRIGGERS = new Set(['@particle-academy/manual_trigger', '@particle-academy/schedule_trigger', 'genie/file_added']);
+const TRIGGERS = new Set(['@particle-academy/manual_trigger', '@particle-academy/schedule_trigger', 'genie/file_added', 'genie/station_mail']);
 export function isTriggerKind(kind: string): boolean {
     return TRIGGERS.has(canonicalKind(kind));
 }
@@ -324,7 +340,7 @@ export interface SaveContext {
     readonly agentProblem: (address: string) => string | null;
 }
 
-const WORKSPACE_KINDS = new Set(['genie/terminal_run', 'genie/knowledge_add', 'genie/file_added', 'genie/file_move']);
+const WORKSPACE_KINDS = new Set(['genie/terminal_run', 'genie/knowledge_add', 'genie/file_added', 'genie/station_mail', 'genie/file_move']);
 
 /**
  * Everything a person's save refuses (the canvas, genie#1204 (d)): the structural problems, plus a flow with nothing to
@@ -412,6 +428,7 @@ export function flowSummary(document: unknown, nowMs: number): { trigger: string
     const words = triggers.map((t) => {
         const kind = canonicalKind(String(t.kind));
         if (kind === 'genie/file_added') return `When ${reach.file ?? 'a file is added'}`;
+        if (kind === 'genie/station_mail') return 'When mail crosses workstations';
         if (kind === '@particle-academy/schedule_trigger') {
             const cron = typeof t.config?.cron === 'string' ? t.config.cron.trim() : '';
             const preset = SCHEDULE_PRESETS.find((p) => p.cron === cron);

@@ -2624,6 +2624,11 @@ async function main(): Promise<void> {
     stationExchanges.onChange(() => phoneRegistry.touch());
     const crossStation = new CrossStationHost({
         exchanges: stationExchanges,
+        // Each message that crossed starts the armed flows of its agent's workspace it matches (genie/station_mail, P9).
+        crossed: (c) => {
+            const workspaceId = hostRegistry.find(c.agentId)?.workspaceId;
+            if (workspaceId) flowsService.stationMail({ direction: c.direction, station: c.station, stationName: c.stationName, agentId: c.agentId, workspaceId, address: c.address, messageId: c.messageId });
+        },
         inbox: own.inbox,
         roster: () => hostRegistry.listAgents(),
         slugs: () => hostRegistry.workspaceSlugs(),

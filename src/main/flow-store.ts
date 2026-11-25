@@ -1,3 +1,4 @@
+import type { StationMailProps } from '../core/station-mail-trigger.js';
 import type { FileAddedProps } from '../core/file-trigger.js';
 import { safeToRerun, type NodeOutcome } from '../core/flow-canvas.js';
 import { boundStepDetail, type FlowRunStepDetail } from '../core/flow-run-review.js';
@@ -51,6 +52,12 @@ export interface Schedule {
     readonly timezone: string | undefined;
 }
 
+/** A station run (P9): the `genie/station_mail` node that fired, and the mail that crossed (core/station-mail-trigger.ts). */
+export interface StationFired {
+    readonly nodeId: string;
+    readonly station: StationMailProps;
+}
+
 /** A file run: the `genie/file_added` node that fired, and the file that landed (core/file-trigger.ts). */
 export interface FileFired {
     readonly nodeId: string;
@@ -74,7 +81,8 @@ export interface FlowRun {
     /** When it ended (ISO). A held-back run ends where it starts. */
     readonly endedAt: string;
     /** `schedule` = its timer fired; `manual` = the person's Run now. */
-    readonly trigger: 'schedule' | 'manual' | 'file';
+    /** `station`: mail crossed to or from another of the owner's workstations (P9). */
+    readonly trigger: 'schedule' | 'manual' | 'file' | 'station';
     /** A `file` run: the file that started it, relative to its workspace (genie#1204). */
     readonly file?: string;
     readonly outcome: RunOutcome;
@@ -271,6 +279,15 @@ export class FlowStore {
     }
 
     /** The schedule triggers in a flow's document, as written. */
+    /** The flow's `genie/station_mail` triggers (P9): each node's id and its config, as the document holds it. */
+    stationTriggers(id: string): { nodeId: string; config: Record<string, unknown> }[] {
+        const flow = this.get(id);
+        if (!flow) return [];
+        return flowNodes(flow.document)
+            .filter((n) => n.kind === 'genie/station_mail')
+            .map((n) => ({ nodeId: String(n.id), config: { ...((n.config ?? {}) as Record<string, unknown>) } }));
+    }
+
     /** The flow's `genie/file_added` triggers (genie#1204): each node's id and its config, as the document holds it. */
     fileTriggers(id: string): { nodeId: string; config: Record<string, unknown> }[] {
         const flow = this.get(id);
