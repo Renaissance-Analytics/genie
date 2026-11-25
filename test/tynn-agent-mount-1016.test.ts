@@ -161,11 +161,24 @@ describe('later setting changes go to Tynn (Tynn #1001)', () => {
         expect(t.agents[0]?.config).toMatchObject({ access_scope: 'all' });
     });
 
-    it('an agent with no binding on this machine sends nothing', async () => {
+    it('an agent Tynn does not have sends nothing (Tynn is only asked whether it has it)', async () => {
         const t = fakeTynn();
         const a = atlas();
         expect(await machine('A', [a]).vault.push({ projectId: PROJECT, agent: a, tynn: t.tynn as never })).toBe('unbound');
-        expect(t.calls).toHaveLength(0);
+        expect(t.calls.filter((c) => c.method !== 'GET')).toHaveLength(0);
+    });
+
+    it('an agent registered at create and never started (no key, no binding) still sends its changes to the agent it registered (#1001)', async () => {
+        const t = fakeTynn();
+        const a = atlas(); const onA = machine('A', [a]);
+        expect(await onA.vault.register({ projectId: PROJECT, agent: a, tynn: t.tynn as never })).toBe('registered');
+        expect(await onA.vault.push({ projectId: PROJECT, agent: { ...a, permissions: 'edits', accessScope: 'all' }, tynn: t.tynn as never })).toBe('sent');
+        expect(t.agents[0]?.config).toMatchObject({ permissions: ['edits'], access_scope: 'all' });
+        expect(t.state.minted).toBe(0);
+        // Never another machine's agent of the same name: only the one whose Genie id is this agent's.
+        const b = atlas();
+        expect(await machine('B', [b]).vault.push({ projectId: PROJECT, agent: { ...b, accessScope: 'none' }, tynn: t.tynn as never })).toBe('unbound');
+        expect(t.agents[0]?.config).toMatchObject({ access_scope: 'all' });
     });
 });
 
