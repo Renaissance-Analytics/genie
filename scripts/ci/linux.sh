@@ -58,9 +58,8 @@ ROWS=(
 # RED reason not listed, a FAIL check, no TRACK line, a timeout, a row that could not run, and (STRICT) a listed reason
 # that no check is red or blocked for any more. The PR that turns a reason green deletes it here; the last one deletes
 # the row's entry.
-declare -A TRACKED_RED=(
-    [toolchain]="pacman:#968 docker:#970"
-)
+# Empty (Tynn #968, #970, #973): the toolchain row's pacman, docker and elevation are green, so it is an ordinary row.
+declare -A TRACKED_RED=()
 # ENVIRONMENT BLOCKERS (Tynn #968): what a tracked row's check may be BLOCKED by that is outside Genie (the Arch Linux
 # Archive the toolchain row holds git back from). A check blocked by one keeps the row TRACKED and is named in its note;
 # it is never required to stay red (STRICT applies to TRACKED_RED only). RED or FAIL for one is judged as any other.

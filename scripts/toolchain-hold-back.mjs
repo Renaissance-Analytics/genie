@@ -7,11 +7,34 @@ export function archiveBase(env) {
     return (typeof env?.GENIE_ARCH_ARCHIVE === 'string' && env.GENIE_ARCH_ARCHIVE.trim() !== '' ? env.GENIE_ARCH_ARCHIVE.trim() : 'https://archive.archlinux.org').replace(/\/+$/, '');
 }
 
-/** From the archive's listing of git: the version to hold back to (the second newest) and the newest; null with fewer than two. */
-export function heldBackOf(listing) {
-    const versions = [...new Set([...String(listing ?? '').matchAll(/href="git-(\d[^"]*?)-x86_64\.pkg\.tar\.zst"/g)].map((m) => m[1]))]
-        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+/**
+ * From the archive's listing of git: the version to hold back to and the newest; null when there is none to hold to.
+ * With `upTo`, the version THIS MACHINE'S repositories have (Tynn #968): the newest is that, and git is held at the newest
+ * archive version whose pkgver is lower. Omarchy's stable mirror lags the archive (job 1125-191913-5de173: repos 2.56.0-1,
+ * archive 2.56.1-1), so the archive's second newest (2.56.0-2) was newer than anything pacman could install, and a
+ * pkgrel alone is a change `git --version` never shows. Without `upTo`: the archive's second newest and newest.
+ */
+export function heldBackOf(listing, upTo) {
+    const byNumber = (a, b) => a.localeCompare(b, undefined, { numeric: true });
+    const versions = [...new Set([...String(listing ?? '').matchAll(/href="git-(\d[^"]*?)-x86_64\.pkg\.tar\.zst"/g)].map((m) => m[1]))].sort(byNumber);
+    if (typeof upTo === 'string' && upTo !== '') {
+        const pkgver = (v) => v.replace(/^\d+:/, '').replace(/-[^-]+$/, '');
+        const below = versions.filter((v) => byNumber(pkgver(v), pkgver(upTo)) < 0);
+        return below.length > 0 ? { held: below[below.length - 1], newest: upTo } : null;
+    }
     return versions.length >= 2 ? { held: versions[versions.length - 2], newest: versions[versions.length - 1] } : null;
+}
+
+/**
+ * The version of a package this machine's repositories have now, read as Genie reads it (Tynn #968): `checkupdates`
+ * refreshes a copy of the sync databases with no root, and `pacman -Si --dbpath` reads it. The system's own databases
+ * are not touched. `run(cmd, args, options)` returns { status, stdout }. null when it cannot be read.
+ */
+export function repoVersion(run, pkg, dbPath) {
+    const refreshed = run('checkupdates', ['--nocolor'], { env: { ...process.env, CHECKUPDATES_DB: dbPath } });
+    if (refreshed.status !== 0 && refreshed.status !== 2) return null;
+    const si = run('pacman', ['-Si', '--dbpath', dbPath, pkg], { env: { ...process.env, LC_ALL: 'C' } });
+    return /^Version\s*:\s*(\S+)/m.exec(String(si.stdout ?? ''))?.[1] ?? null;
 }
 
 /** The listing, read with a deadline and one more try; null when it could not be read. */

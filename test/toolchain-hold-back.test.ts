@@ -25,6 +25,17 @@ describe('holding git back', () => {
         expect(heldBackOf('')).toBeNull();
     });
 
+    it("held back BELOW the version this machine's repositories have (Tynn #968): a newer pkgver than the repos' is no update Genie can offer", () => {
+        // Measured on omarchy-genie (job 1125-191913-5de173): Omarchy's stable mirror has git 2.56.0-1 while the archive's
+        // newest is 2.56.1-1. Held at 2.56.0-2 (the second newest), git was NEWER than anything pacman could install.
+        const listing = ['2.53.0-1', '2.54.0-1', '2.55.0-1', '2.56.0-1', '2.56.0-2', '2.56.1-1'].map((v) => `<a href="git-${v}-x86_64.pkg.tar.zst">x</a>`).join('\n');
+        expect(heldBackOf(listing, '2.56.0-1')).toEqual({ held: '2.55.0-1', newest: '2.56.0-1' });
+        // The epoch is not part of the archive's file name; the pkgrel never makes an update `git --version` can see.
+        expect(heldBackOf(listing, '1:2.56.0-3')).toEqual({ held: '2.55.0-1', newest: '1:2.56.0-3' });
+        expect(heldBackOf(listing, '2.53.0-1')).toBeNull();
+        expect(heldBackOf(listing)).toEqual({ held: '2.56.0-2', newest: '2.56.1-1' });
+    });
+
     it('the archive is the Arch Linux Archive unless a job names a mirror', () => {
         expect(archiveBase({})).toBe('https://archive.archlinux.org');
         expect(archiveBase({ GENIE_ARCH_ARCHIVE: 'https://mirror.example/archive/' })).toBe('https://mirror.example/archive');
@@ -54,7 +65,9 @@ describe('holding git back', () => {
 
     it('wired: the row reads the listing through this, and an archive that cannot be read is BLOCKED by archive, not a FAIL', () => {
         const row = readFileSync(join(root, 'scripts', 'toolchain-real-cdp.mjs'), 'utf8');
-        expect(row).toMatch(/import \{ archiveBase, heldBackOf, holdBackCheck, holdBackLog, holdGitBack, readListing \} from '\.\/toolchain-hold-back\.mjs';/);
+        expect(row).toMatch(/import \{ archiveBase, heldBackOf, holdBackCheck, holdBackLog, holdGitBack, readListing, repoVersion \} from '\.\/toolchain-hold-back\.mjs';/);
+        // Held below the repositories' version (Tynn #968), never the archive's second newest alone.
+        expect(row).toMatch(/const plan = listing === null \|\| repoGit === null \? null : heldBackOf\(listing, repoGit\);/);
         expect(row).toMatch(/const listing = await readListing\(fetch, `\$\{archiveBase\(process\.env\)\}\/packages\/g\/git\/`\);/);
         expect(row).toMatch(/track\('git-update', 'BLOCKED', 'archive', /);
         expect(row).not.toMatch(/fetch\('https:\/\/archive\.archlinux\.org/);

@@ -37,7 +37,7 @@ import { mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, statSync, 
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { mainWindow } from './cdp-main-window.mjs';
-import { archiveBase, heldBackOf, holdBackCheck, holdBackLog, holdGitBack, readListing } from './toolchain-hold-back.mjs';
+import { archiveBase, heldBackOf, holdBackCheck, holdBackLog, holdGitBack, readListing, repoVersion } from './toolchain-hold-back.mjs';
 import { closeWhatsNew } from './cdp-whats-new.mjs';
 
 if (process.env.GENIE_TEST_MACHINE !== '1' && userInfo().username !== 'genie') {
@@ -248,6 +248,12 @@ let wrongTried = false;
  * An action that needs root, as a person meets it: start it, wait for Genie's password prompt in this client, answer it
  * (the first time with a wrong password, which must ask again), and wait for `done`. Returns what happened.
  */
+/**
+ * A card that shows a VERSION (Tynn #968): a card with none reads "not here", and a language card (PHP's) has no
+ * data-tone, so any text counting judged php's card while pacman was still installing, before Genie's rescan.
+ */
+const shows = (c) => Boolean(c?.version && /\d/.test(c.version));
+
 async function elevated(name, start, done, names, waitMs = 600_000) {
     const r = { prompted: false, promptText: '', reasked: null, refused: null, done: false };
     if (!(await start())) { r.refused = 'its button was not there to press'; return r; }
@@ -402,7 +408,7 @@ try {
             track(`${tool}-install-progress`, 'BLOCKED', 'pacman', 'not reached');
             continue;
         }
-        const r = await elevated(tool, () => press(tool, '^Install$'), async () => { if (!pkgVersion(pkg)) return null; const c = await card(tool); return c && c.tone !== 'not-installed' && c.version ? c : null; }, pkg);
+        const r = await elevated(tool, () => press(tool, '^Install$'), async () => { if (!pkgVersion(pkg)) return null; const c = await card(tool); return c && c.tone !== 'not-installed' && shows(c) ? c : null; }, pkg);
         const prompted = elevationVerdict(`${tool}-elevation`, r, pkg);
         const after = await card(tool);
         const have = pkgVersion(pkg);
@@ -435,7 +441,11 @@ try {
         // not set up, so the check is BLOCKED by `archive` (linux.sh TRACKED_ENV), never a failure of Genie's.
         const base = archiveBase(process.env);
         const listing = await readListing(fetch, `${archiveBase(process.env)}/packages/g/git/`);
-        const plan = listing === null ? null : heldBackOf(listing);
+        // Held below what THIS machine's repositories have (Tynn #968: Omarchy's mirror lags the archive), read without root
+        // and without touching the system's sync databases, as Genie reads them.
+        const repoGit = repoVersion(run, 'git', join(mkdtempSync(join(tmpdir(), 'tc968-')), 'db'));
+        say(`git in this machine's repositories: ${repoGit ?? 'could not be read'}`);
+        const plan = listing === null || repoGit === null ? null : heldBackOf(listing, repoGit);
         const held = plan?.held ?? null;
         const newest = plan?.newest ?? null;
         const url = held ? `${base}/packages/g/git/git-${held}-x86_64.pkg.tar.zst` : null;
@@ -445,7 +455,7 @@ try {
         if (heldRun) for (const line of holdBackLog(url, heldRun)) console.log(line.replaceAll(PW, '<password>'));
         const heldOk = heldRun?.ok === true;
         if (!plan) {
-            track('git-update', 'BLOCKED', 'archive', `CONTROL not set up: ${listing === null ? `the Arch archive (${base}) could not be read` : 'the Arch archive lists fewer than two versions of git'}`);
+            track('git-update', 'BLOCKED', 'archive', `CONTROL not set up: ${listing === null ? `the Arch archive (${base}) could not be read` : repoGit === null ? "this machine's repositories could not be read (checkupdates)" : `the Arch archive lists no git older than the repositories' ${repoGit}`}`);
         } else if (!heldOk) {
             // Still not set up: a control the harness could not make says nothing about Genie, so it BLOCKS (by `control`,
             // linux.sh TRACKED_ENV) with pacman's own words. The checks below, which measure Genie, are not reached.

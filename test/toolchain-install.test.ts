@@ -85,13 +85,15 @@ describe('the install plan — the package manager per platform, from Genie’s 
 });
 
 describe('which package manager is here — the one that ANSWERS', () => {
-    it('Linux: apt-get when it answers, else dnf, else none; Windows asks winget only', async () => {
+    it('Linux: apt-get when it answers, else dnf, else pacman, else none; Windows asks winget only', async () => {
         const asked: string[] = [];
         const only = (bin: string): CommandRunner => async (b) => { asked.push(b); if (b === bin) return { stdout: `${bin} 1.0`, exitCode: 0 }; throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); };
         expect(await detectPackageManager('linux', only('dnf'))).toBe('dnf');
         expect(asked).toEqual(['apt-get', 'dnf']);
         expect(await detectPackageManager('linux', only('apt-get'))).toBe('apt');
-        expect(await detectPackageManager('linux', only('pacman'))).toBeNull();
+        // Arch / Omarchy (Tynn #968): pacman, after the other two; a manager Genie has no plans for is none.
+        expect(await detectPackageManager('linux', only('pacman'))).toBe('pacman');
+        expect(await detectPackageManager('linux', only('zypper'))).toBeNull();
         asked.length = 0;
         expect(await detectPackageManager('win32', only('winget'))).toBe('winget');
         expect(asked).toEqual(['winget']);

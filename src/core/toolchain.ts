@@ -15,7 +15,7 @@ import { phpAdvisoryText } from './php-advisories.js';
 import type { ElevatedStep } from './elevation.js';
 
 export type Platform = 'win32' | 'darwin' | 'linux';
-export type PackageManager = 'winget' | 'brew' | 'apt' | 'dnf';
+export type PackageManager = 'winget' | 'brew' | 'apt' | 'dnf' | 'pacman';
 
 export interface HostTool {
     readonly name: string;
@@ -32,23 +32,24 @@ export interface HostTool {
 }
 
 export const HOST_TOOLS: readonly HostTool[] = [
-    { name: 'php', probe: { binary: 'php', args: ['--version'] }, packages: { winget: 'PHP.PHP.8.4', brew: 'php', apt: 'php', dnf: 'php' } },
-    { name: 'composer', probe: { binary: 'composer', args: ['--version'] }, packages: { winget: 'Composer.Composer', brew: 'composer', apt: 'composer', dnf: 'composer' }, ownUpdater: { manager: 'composer', command: 'composer self-update' } },
-    { name: 'node', probe: { binary: 'node', args: ['--version'] }, packages: { winget: 'OpenJS.NodeJS.LTS', brew: 'node', apt: 'nodejs', dnf: 'nodejs' } },
+    { name: 'php', probe: { binary: 'php', args: ['--version'] }, packages: { winget: 'PHP.PHP.8.4', brew: 'php', apt: 'php', dnf: 'php', pacman: 'php' } },
+    { name: 'composer', probe: { binary: 'composer', args: ['--version'] }, packages: { winget: 'Composer.Composer', brew: 'composer', apt: 'composer', dnf: 'composer', pacman: 'composer' }, ownUpdater: { manager: 'composer', command: 'composer self-update' } },
+    { name: 'node', probe: { binary: 'node', args: ['--version'] }, packages: { winget: 'OpenJS.NodeJS.LTS', brew: 'node', apt: 'nodejs', dnf: 'nodejs', pacman: 'nodejs' } },
     { name: 'npm', probe: { binary: 'npm', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'npm', command: 'npm install -g npm@latest' } },
-    { name: 'python', probe: { binary: 'python', args: ['--version'] }, packages: { winget: 'Python.Python.3.13', brew: 'python', apt: 'python3', dnf: 'python3' } },
-    { name: 'go', probe: { binary: 'go', args: ['version', '--version'] }, packages: { winget: 'GoLang.Go', brew: 'go', apt: 'golang-go', dnf: 'golang' } },
+    { name: 'python', probe: { binary: 'python', args: ['--version'] }, packages: { winget: 'Python.Python.3.13', brew: 'python', apt: 'python3', dnf: 'python3', pacman: 'python' } },
+    { name: 'go', probe: { binary: 'go', args: ['version', '--version'] }, packages: { winget: 'GoLang.Go', brew: 'go', apt: 'golang-go', dnf: 'golang', pacman: 'go' } },
     { name: 'rustc', probe: { binary: 'rustc', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'rustup', command: 'rustup update stable' } },
     { name: 'cargo', probe: { binary: 'cargo', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'rustup', command: 'rustup update stable' } },
-    { name: 'git', probe: { binary: 'git', args: ['--version'] }, packages: { winget: 'Git.Git', brew: 'git', apt: 'git', dnf: 'git' } },
+    { name: 'git', probe: { binary: 'git', args: ['--version'] }, packages: { winget: 'Git.Git', brew: 'git', apt: 'git', dnf: 'git', pacman: 'git' } },
     // The agent CLIs install and update the way their vendors document (Tynn #698): `npm install -g` on npm 12 skips Claude
     // Code's postinstall and leaves it a placeholder. `claude update` updates a native install; Codex's installer updates it.
     { name: 'claude-code', probe: { binary: 'claude', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'vendor', command: 'claude update' }, npmPackage: '@anthropic-ai/claude-code' },
     { name: 'codex', probe: { binary: 'codex', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'vendor', command: 'the Codex installer' }, npmPackage: '@openai/codex' },
     // Docker Desktop: what every hosted service engine runs on. No apt/dnf row on purpose: a distro's `docker.io` is not
     // Docker Desktop, and installing it does not put the person in the `docker` group — a row that "installs" Docker and
-    // leaves it unusable is worse than none.
-    { name: 'docker', probe: { binary: 'docker', args: ['--version'] }, packages: { winget: 'Docker.DockerDesktop', brew: 'docker-desktop' } },
+    // leaves it unusable is worse than none. Arch's `docker` is the engine itself (Omarchy ships it, Tynn #968); its
+    // daemon and group are #970's.
+    { name: 'docker', probe: { binary: 'docker', args: ['--version'] }, packages: { winget: 'Docker.DockerDesktop', brew: 'docker-desktop', pacman: 'docker' } },
 ];
 
 /**
@@ -257,6 +258,37 @@ export function vendorInstaller(tool: string, platform: Platform): { readonly ar
     return { argv: v[platform], label: `${v.name}’s installer: ${v.urls[platform]}` };
 }
 
+/**
+ * An Arch package name, as pacman's makepkg allows it (lowercase letters, digits, `@._+-`, not starting with `-` or
+ * `.`), and short. Anything else never reaches a step: no option, no shell, no path.
+ */
+const ARCH_PACKAGE_NAME = /^[a-z0-9@_+][a-z0-9@._+-]{0,99}$/;
+
+/**
+ * THE PACMAN BATCH (Tynn #968): the sync, then the install of exactly these packages, `--needed` so a package already
+ * current is left alone. The sync is safe only because the caller first checked, against a fresh copy of the same
+ * databases (main/pacman.ts), that the transaction upgrades nothing else installed: no partial upgrade.
+ */
+export function pacmanSteps(pkgs: readonly string[]): { readonly steps: readonly ElevatedStep[] } | { readonly refused: string } {
+    if (pkgs.length === 0) return { refused: 'nothing to install' };
+    const bad = pkgs.find((p) => !ARCH_PACKAGE_NAME.test(p));
+    if (bad !== undefined) return { refused: `${JSON.stringify(bad)} is not an Arch package name Genie will hand to pacman` };
+    return { steps: [{ command: 'pacman', args: ['-Sy'] }, { command: 'pacman', args: ['-S', '--needed', '--noconfirm', ...pkgs] }] };
+}
+
+/**
+ * What pacman installs for a tool: its package, and what Arch splits out that Genie needs with it. PHP: `php-cgi`, what
+ * Genie runs a site with and how it finds the system PHP (main/php-versions.ts asks `php-cgi -v`); the toolchain row
+ * 1125-195556-df6ca9 installed `php` alone and the card still read "not here".
+ */
+const PACMAN_ALSO: Readonly<Record<string, readonly string[]>> = { php: ['php-cgi'] };
+export const pacmanPackages = (tool: string, pkg: string): string[] => [pkg, ...(PACMAN_ALSO[tool] ?? [])];
+
+/** The packages a batch's `pacman -S` steps install: what the partial-upgrade check reads (main/pacman.ts). */
+export function pacmanInstalls(steps: readonly ElevatedStep[]): string[] {
+    return steps.filter((s) => s.command === 'pacman' && s.args[0] === '-S').flatMap((s) => s.args.slice(1).filter((a) => !a.startsWith('-')));
+}
+
 export type UpdatePlan =
     | { readonly command: string; readonly manager: PackageManager | 'rustup' | 'npm' | 'vendor' | 'composer'; readonly argv?: readonly string[] }
     /**
@@ -297,6 +329,13 @@ export function planUpdate(input: { tool: string; platform: Platform; packageMan
             if (!PACKAGE_NAME.test(pkg)) return { refused: `${pkg} is not a package name Genie will run as administrator` };
             const steps: ElevatedStep[] = pm === 'apt' ? [{ command: 'apt-get', args: ['install', '--only-upgrade', '-y', pkg] }] : [{ command: 'dnf', args: ['upgrade', '-y', pkg] }];
             return { command: asAdministrator(steps), manager: pm, elevated: true, items: [pkg], steps };
+        }
+        // pacman (Tynn #968): the same batch as an install; `--needed` leaves a current package alone.
+        case 'pacman': {
+            const pkgs = pacmanPackages(input.tool, pkg);
+            const batch = pacmanSteps(pkgs);
+            if ('refused' in batch) return batch;
+            return { command: `pacman ${batch.steps[1]!.args.join(' ')}`, manager: pm, elevated: true, items: pkgs, steps: batch.steps };
         }
     }
 }
@@ -345,6 +384,13 @@ export function planInstall(input: { tool: string; platform: Platform; packageMa
             if (!PACKAGE_NAME.test(pkg)) return { refused: `${pkg} is not a package name Genie will run as administrator` };
             const steps: ElevatedStep[] = pm === 'apt' ? [{ command: 'apt-get', args: ['update'] }, { command: 'apt-get', args: ['install', '-y', pkg] }] : [{ command: 'dnf', args: ['install', '-y', pkg] }];
             return { steps, items: [pkg], label: asAdministrator(steps), manager: pm, elevated: true };
+        }
+        // pacman (Tynn #968): the sync and the install in one prompt, only after main/pacman.ts's partial-upgrade check.
+        case 'pacman': {
+            const pkgs = pacmanPackages(input.tool, pkg);
+            const batch = pacmanSteps(pkgs);
+            if ('refused' in batch) return batch;
+            return { steps: batch.steps, items: pkgs, label: `pacman ${batch.steps[1]!.args.join(' ')} (as administrator)`, manager: pm, elevated: true };
         }
     }
 }
