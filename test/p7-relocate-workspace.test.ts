@@ -70,10 +70,10 @@ async function estate() {
     await registry.register({ workspaceId: 'moic', provider: 'claude', name: 'atlas' });
     await registry.register({ workspaceId: 'fancy', provider: 'claude', name: 'bolt' });
 
-    const writes = vi.spyOn(store, 'writeWorkspaces');
-    const agentWrites = vi.spyOn(store, 'writeAgents');
+    const writes = vi.spyOn(store, 'changeWorkspaces');
+    const agentWrites = vi.spyOn(store, 'changeAgents');
     const order: string[] = [];
-    writes.mockImplementation(async (workspaces) => { order.push('write'); await Store.prototype.writeWorkspaces.call(store, workspaces); });
+    writes.mockImplementation(async (change) => { order.push('write'); return Store.prototype.changeWorkspaces.call(store, change); });
     const read: string[] = [];
     const real = nodeRelocateFs();
     const fs: RelocatePorts['fs'] = { isDirectory: (path) => real.isDirectory(path), readText: (path) => { read.push(path); return real.readText(path); } };

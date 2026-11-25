@@ -27,14 +27,14 @@ it('story394: genie-host’s inbox (what every window’s inbox and Deck are rea
         await own.inbox.send({ from: ghost, to: 'human', text: 'Older hidden mail' });
         await own.inbox.send({ from: active, to: 'human', text: 'Newer visible mail' });
         const before = replica.all(); expect(before).toHaveLength(2);
-        await service.call('registry', 'writeWorkspaces', [[{ id: 'ghost', path: join(dir, 'ghost'), asleep: true }]]);
+        await service.call('registry', 'changeWorkspaces', [{ add: [{ id: 'ghost', path: join(dir, 'ghost'), asleep: true }] }]);
         expect(replica.all().map((m) => m.text)).toEqual(['Newer visible mail']);
         expect(heard).toContain('delta');
         heard.length = 0;
         await own.inbox.receive({ participant: 'human' });
         expect(replica.unread('human')).toEqual([]);
         expect(replica.involving('human')).toEqual(replica.all());
-        await service.call('registry', 'writeWorkspaces', [[{ id: 'ghost', path: join(dir, 'ghost'), asleep: false }]]);
+        await service.call('registry', 'changeWorkspaces', [{ patch: [{ id: 'ghost', set: { asleep: false } }] }]);
         expect(heard).toContain('delta');
         expect(replica.all().map((m) => m.id)).toEqual(before.map((m) => m.id));
         expect(replica.involving('human').map((m) => m.id)).toEqual(before.map((m) => m.id));

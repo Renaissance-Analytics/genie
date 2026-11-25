@@ -121,6 +121,19 @@ describe('the measured lost write (Tynn #1007)', () => {
         expect(await r.onDisk(bolt.id)).toMatchObject({ permissions: 'edits', mode: 'automated', autoApprove: true, accessScope: 'all', threadId: 'thread-1', lastTurn: 3, plan: [{ content: 'build', status: 'pending' }] });
     });
 
+    it('a setting a stale window puts back to the value it still shows lands all the same (only changed fields cross, but a set field always does)', async () => {
+        const r = await rig();
+        const bolt = await r.phone.register({ workspaceId: 'ws', provider: 'claude', name: 'bolt' });
+        await r.phone.setPermissions(bolt.id, 'all');
+        const window = await r.window(); // shows 'all'
+        await r.phone.setPermissions(bolt.id, 'edits');
+        await r.stores.registrySettled();
+        await window.setPermissions(bolt.id, 'all');
+        expect((await r.onDisk(bolt.id)).permissions).toBe('all');
+        // And this window now holds what was written.
+        expect(window.find(bolt.id)?.permissions).toBe('all');
+    });
+
     it('a stale replica cannot resurrect a field another writer removed, nor drop an agent another writer added', async () => {
         const r = await rig();
         const bolt = await r.phone.register({ workspaceId: 'ws', provider: 'claude', name: 'bolt' });

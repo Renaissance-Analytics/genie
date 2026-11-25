@@ -526,8 +526,8 @@ describe('A WORKSPACE A WINDOW HAS JUST ADDED IS NEVER REFUSED', () => {
         const store = new Store(dir);
         let release = (): void => {};
         const gate = new Promise<void>((r) => { release = r; });
-        const write = store.writeWorkspaces.bind(store);
-        store.writeWorkspaces = async (workspaces) => { await gate; await write(workspaces); };
+        const change = store.changeWorkspaces.bind(store);
+        store.changeWorkspaces = async (c) => { await gate; return change(c); };
         return { store, release };
     }
 
@@ -559,7 +559,7 @@ describe('A WORKSPACE A WINDOW HAS JUST ADDED IS NEVER REFUSED', () => {
         const { client, host, handed, release, model, stores } = await linked();
         const agent = record({ workspaceId: 'added' });
         // The registry's write as genie-host answers registry.write (registry-protocol.ts hostRegistryAnswers: stores.call).
-        const write = stores.call('registry', 'writeWorkspaces', [[{ id: 'added', path: workspace }]]);
+        const write = stores.call('registry', 'changeWorkspaces', [{ add: [{ id: 'added', path: workspace }] }]);
         const started = client.start(agent, workspace);
         await new Promise((r) => setTimeout(r, 30));
         // CONTROL: the race is really on: the host does not know this workspace yet.
