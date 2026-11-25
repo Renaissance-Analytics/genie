@@ -578,7 +578,9 @@ try {
             // Not awaited: the button's action answers once the install is done, which waits on the prompt this step answers.
             const r = await elevated('keyring', async () => { void act({ kind: 'keyring.fix' }).catch(() => {}); return true; }, async () => (pkgVersion(keyringPkgs) ? true : null), keyringPkgs);
             elevationVerdict('keyring-elevation', r, keyringPkgs);
-            track('keyring-install', r.done && pkgVersion(keyringPkgs) ? 'PASS' : r.prompted ? 'FAIL' : 'BLOCKED', r.prompted ? 'none' : 'elevation', `pacman -Q gnome-keyring ${pkgVersion(keyringPkgs) || 'not installed'}${r.refused ? `; Genie said "${r.refused}"` : ''}`);
+            // What the card said, when the install did not land: its failure in Genie's words (pacman's last line among them).
+            const card = await snapshot(['integrations', 'keyring']).catch(() => null);
+            track('keyring-install', r.done && pkgVersion(keyringPkgs) ? 'PASS' : r.prompted ? 'FAIL' : 'BLOCKED', r.prompted ? 'none' : 'elevation', `pacman -Q gnome-keyring ${pkgVersion(keyringPkgs) || 'not installed'}${r.refused ? `; Genie said "${r.refused}"` : ''}${card ? `; the card: ${JSON.stringify(card).slice(0, 300)}` : ''}`);
         }
         if (hadKeyring && !pkgVersion(keyringPkgs)) sudoP('pacman', '-S', '--needed', '--noconfirm', keyringPkgs);
     }
