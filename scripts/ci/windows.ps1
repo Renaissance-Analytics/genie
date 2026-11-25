@@ -337,7 +337,7 @@ function Row-launcher-unit {
     try {
         $lockedArgs = @()
         if (Test-Path 'Cargo.lock') { $lockedArgs = @('--locked') }
-        Run 'cargo test' { cargo test @lockedArgs --features test-keys }
+        Run 'cargo test' { cargo test @lockedArgs --no-fail-fast --features test-keys }
         Run 'cargo build --release' { cargo build @lockedArgs --release --bin genie }
         Copy-Item 'Cargo.lock' (Join-Path $Out 'launcher-Cargo.lock') -ErrorAction SilentlyContinue
         Write-Output "LAUNCHER SIZE win32 $((Get-Item 'target\release\genie.exe').Length) bytes"

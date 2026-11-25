@@ -130,7 +130,7 @@ fn stage(roots: &Roots, options: &InstallOptions, keys: &[VerifyingKey], current
         arch: this_arch(),
         channel: &options.channel,
         current: current.track(track.as_str()).and_then(|t| t.current.as_deref()),
-        launcher: &options.launcher_build,
+        launcher: Some(&options.launcher_build),
     };
     let manifest = check(&manifest_bytes, &sig, keys, &wanted).map_err(|r| r.to_string())?;
     if manifest.build != build {

@@ -42,7 +42,25 @@ pub fn temp_dir(name: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
+    #[cfg(windows)]
+    make_private_windows(&dir);
     dir
+}
+
+/// A protected DACL, this user and SYSTEM only, inherited by everything below: what %LOCALAPPDATA% gives a real code
+/// root. The system's temp folder may not (the Azure VM's D:\genie\tmp inherits BUILTIN\Users' create rights from the
+/// drive's root, and the launcher rightly refuses a code root there: run 1125-060418-1c2da8).
+#[cfg(windows)]
+fn make_private_windows(dir: &Path) {
+    let sid = genie_launcher::win::current_user_sid().expect("this user's SID");
+    let out = Command::new(r"C:\Windows\System32\icacls.exe")
+        .arg(dir)
+        .args(["/inheritance:r", "/grant:r", &format!("*{sid}:(OI)(CI)F"), "/grant:r", "*S-1-5-18:(OI)(CI)F"])
+        .output()
+        .expect("icacls ran");
+    assert!(out.status.success(), "icacls: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let others = genie_launcher::win::other_writers(dir).expect("the DACL reads back");
+    assert!(others.is_empty(), "the test folder is private: {others:?}");
 }
 
 pub fn roots(base: &Path) -> Roots {

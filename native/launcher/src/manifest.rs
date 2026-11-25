@@ -49,8 +49,9 @@ pub struct Wanted<'a> {
     pub channel: &'a str,
     /// The installed `current` build of the track, if any: the manifest's must be strictly newer.
     pub current: Option<&'a str>,
-    /// The running launcher's build, for `minLauncher`.
-    pub launcher: &'a str,
+    /// The running launcher's build, for `minLauncher`; `None` when the reader is not the launcher (nothing to compare,
+    /// as `ManifestExpect.launcher: null` on the TypeScript side).
+    pub launcher: Option<&'a str>,
 }
 
 /// Why a manifest is refused, by the check that refused it (in the order they run).
@@ -73,6 +74,21 @@ impl fmt::Display for Refusal {
             Refusal::NotNewer(why) => write!(f, "This package is not newer than the one installed ({why}). Nothing was installed."),
             Refusal::LauncherTooOld(why) => write!(f, "This package needs a newer launcher ({why}). Nothing was installed."),
             Refusal::Files(why) => write!(f, "This package's files do not match its signed manifest ({why}). Nothing was installed."),
+        }
+    }
+}
+
+impl Refusal {
+    /// The check that refused, by the code `verifyManifest` gives it in src/core/track-manifest.ts (held by the shared
+    /// table, test/fixtures/track-manifest-cases.json).
+    pub fn code(&self) -> &'static str {
+        match self {
+            Refusal::Signature(_) => "signature",
+            Refusal::Shape(_) => "format",
+            Refusal::Wrong(_) => "wrong",
+            Refusal::NotNewer(_) => "downgrade",
+            Refusal::LauncherTooOld(_) => "launcher-too-old",
+            Refusal::Files(_) => "files",
         }
     }
 }
@@ -253,9 +269,9 @@ pub fn check(bytes: &[u8], sig_text: &[u8], keys: &[VerifyingKey], wanted: &Want
             return Err(Refusal::NotNewer(format!("{} is not newer than {}", m.build, current)));
         }
     }
-    if let Some(min) = &m.min_launcher {
-        if compare_track_builds(min, wanted.launcher) == Ordering::Greater {
-            return Err(Refusal::LauncherTooOld(format!("it needs launcher {min}, this is {}", wanted.launcher)));
+    if let (Some(min), Some(launcher)) = (&m.min_launcher, wanted.launcher) {
+        if compare_track_builds(min, launcher) == Ordering::Greater {
+            return Err(Refusal::LauncherTooOld(format!("it needs launcher {min}, this is {launcher}")));
         }
     }
     Ok(m)

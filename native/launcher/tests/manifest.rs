@@ -6,7 +6,7 @@ use genie_launcher::manifest::{check, parse_manifest, parse_public_key, safe_pat
 use serde_json::Value;
 
 fn wanted<'a>(track: &'a str, channel: &'a str, current: Option<&'a str>) -> Wanted<'a> {
-    Wanted { track, platform: this_platform(), arch: this_arch(), channel, current, launcher: "2026.11.25-1" }
+    Wanted { track, platform: this_platform(), arch: this_arch(), channel, current, launcher: Some("2026.11.25-1") }
 }
 
 fn pkg(build: &str) -> Package<'_> {
@@ -77,21 +77,21 @@ fn the_wrong_track_platform_arch_or_channel_refuses() {
     let keys = [verifying(&key)];
     let bytes = manifest_bytes(&pkg("2026.11.25-1"));
     let sig = sign_b64(&key, &bytes);
-    assert!(matches!(check(&bytes, sig.as_bytes(), &keys, &wanted("client", "stable", None)), Err(Refusal::Wrong(_))));
+    assert!(matches!(check(&bytes, sig.as_bytes(), &keys, &wanted("client", "stable", None)), Err(Refusal::Wrong(..))));
     let mut w = wanted("host", "stable", None);
     let other_platform = if this_platform() == "win32" { "linux" } else { "win32" };
     w.platform = other_platform;
-    assert!(matches!(check(&bytes, sig.as_bytes(), &keys, &w), Err(Refusal::Wrong(_))));
+    assert!(matches!(check(&bytes, sig.as_bytes(), &keys, &w), Err(Refusal::Wrong(..))));
     let mut w = wanted("host", "stable", None);
     let other_arch = if this_arch() == "x64" { "arm64" } else { "x64" };
     w.arch = other_arch;
-    assert!(matches!(check(&bytes, sig.as_bytes(), &keys, &w), Err(Refusal::Wrong(_))));
+    assert!(matches!(check(&bytes, sig.as_bytes(), &keys, &w), Err(Refusal::Wrong(..))));
     // stable takes stable only; dev takes dev and stable.
     let mut dev = pkg("2026.11.25-1");
     dev.channel = "dev";
     let dev_bytes = manifest_bytes(&dev);
     let dev_sig = sign_b64(&key, &dev_bytes);
-    assert!(matches!(check(&dev_bytes, dev_sig.as_bytes(), &keys, &wanted("host", "stable", None)), Err(Refusal::Wrong(_))));
+    assert!(matches!(check(&dev_bytes, dev_sig.as_bytes(), &keys, &wanted("host", "stable", None)), Err(Refusal::Wrong(..))));
     assert!(check(&dev_bytes, dev_sig.as_bytes(), &keys, &wanted("host", "dev", None)).is_ok());
     assert!(check(&bytes, sig.as_bytes(), &keys, &wanted("host", "dev", None)).is_ok());
 }

@@ -75,36 +75,58 @@ pub fn verify_build(roots: &Roots, track: Track, build: &str, keys: &[VerifyingK
     if m.track != track.as_str() || m.build != build || m.platform != this_platform() || m.arch != this_arch() {
         return Err(format!("{}: its manifest names {} {} {} {}", dir.display(), m.track, m.build, m.platform, m.arch));
     }
+    verify_tree(&m, &dir, scope).map_err(|r| format!("{}: {}", dir.display(), r.reason))?;
+    Ok(m)
+}
+
+/// Why a build folder does not hold what its manifest lists, by the code `verifyTree` gives it in
+/// src/core/track-manifest.ts (held by the shared table, test/fixtures/track-manifest-cases.json).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeRefusal {
+    /// `missing-file`, `unlisted-file`, `not-a-file`, `size` or `sha256`.
+    pub code: &'static str,
+    pub path: String,
+    pub reason: String,
+}
+
+fn tree_refusal(code: &'static str, path: &str, reason: String) -> TreeRefusal {
+    TreeRefusal { code, path: path.to_string(), reason }
+}
+
+/// Every file `m` lists is in `dir` at its size (and, in `scope`, its sha256), and nothing else is but the folder's own
+/// manifest, signature and marker.
+pub fn verify_tree(m: &Manifest, dir: &Path, scope: HashScope) -> Result<(), TreeRefusal> {
     let listed: BTreeMap<String, &crate::manifest::ManifestFile> = m.files.iter().map(|f| (name_key(&f.path), f)).collect();
     let own = [name_key(MANIFEST), name_key(SIGNATURE), name_key(COMPLETE)];
     let mut found = std::collections::BTreeSet::new();
-    for rel in walk(&dir)? {
+    let all = walk(dir).map_err(|why| tree_refusal("not-a-file", "", why))?;
+    for rel in all {
         let key = name_key(&rel);
         if own.contains(&key) {
             continue;
         }
         if !listed.contains_key(&key) {
-            return Err(format!("{}: {rel} is not in its signed manifest, so this build is not run", dir.display()));
+            return Err(tree_refusal("unlisted-file", &rel, format!("{rel} is not in its signed manifest, so this build is not run")));
         }
         found.insert(key);
     }
     for (key, f) in &listed {
         if !found.contains(key) {
-            return Err(format!("{}: {} is missing", dir.display(), f.path));
+            return Err(tree_refusal("missing-file", &f.path, format!("{} is missing", f.path)));
         }
         let path = dir.join(&f.path);
-        let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
+        let size = std::fs::metadata(&path).map_err(|e| tree_refusal("missing-file", &f.path, e.to_string()))?.len();
         if size != f.size {
-            return Err(format!("{}: {} is {size} bytes, its manifest says {}", dir.display(), f.path, f.size));
+            return Err(tree_refusal("size", &f.path, format!("{} is {size} bytes, its manifest says {}", f.path, f.size)));
         }
         if scope == HashScope::All || is_executable(&f.path) {
-            let data = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let data = std::fs::read(&path).map_err(|e| tree_refusal("missing-file", &f.path, format!("{}: {e}", path.display())))?;
             if sha256_hex(&data) != f.sha256 {
-                return Err(format!("{}: {} is not the file its signed manifest names", dir.display(), f.path));
+                return Err(tree_refusal("sha256", &f.path, format!("{} is not the file its signed manifest names", f.path)));
             }
         }
     }
-    Ok(m)
+    Ok(())
 }
 
 /// Every `<build>.partial` and every build folder with no `.complete` is deleted. What was deleted.

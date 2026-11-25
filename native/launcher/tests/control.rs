@@ -55,11 +55,18 @@ fn kill(pid: u32) {
 }
 
 fn start(r: &Roots, key: &ed25519_dalek::SigningKey) -> Launcher {
-    let child = genie_in(r, key).arg("serve").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().expect("the launcher starts");
+    // Its stderr goes to a file, so a launcher that refuses at start says why here (in 1125-060418-1c2da8 every test
+    // waited 20 s and read only "launcher.json never appeared").
+    let err_path = r.data.join(format!("launcher-stderr-{}.log", std::process::id()));
+    let err = std::fs::File::create(&err_path).expect("a stderr file");
+    let mut child = genie_in(r, key).arg("serve").stdin(Stdio::null()).stdout(Stdio::null()).stderr(err).spawn().expect("the launcher starts");
     let record = r.runtime_dir().join("launcher.json");
     let t = Instant::now();
     while !record.exists() {
-        assert!(t.elapsed() < Duration::from_secs(20), "launcher.json never appeared");
+        if let Ok(Some(status)) = child.try_wait() {
+            panic!("the launcher exited ({status}) before launcher.json: {}", std::fs::read_to_string(&err_path).unwrap_or_default());
+        }
+        assert!(t.elapsed() < Duration::from_secs(20), "launcher.json never appeared: {}", std::fs::read_to_string(&err_path).unwrap_or_default());
         std::thread::sleep(Duration::from_millis(50));
     }
     Launcher { child, roots: r.clone() }

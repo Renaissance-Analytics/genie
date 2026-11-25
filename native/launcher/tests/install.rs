@@ -136,6 +136,9 @@ fn a_tampered_file_refuses_and_leaves_nothing() {
     let r = roots(&base);
     let key = throwaway_key();
     let from = base.join("from");
+    // A good client beside it: the profile installs both, and the host's refusal must leave neither (the run
+    // 1125-060418-1c2da8 refused with "no client package" instead, which is not the check this names).
+    write_package(&from, &key, &Package::new("client", "2026.11.25-1", client_files()));
     let p = Package::new("host", "2026.11.25-1", host_files());
     let manifest = manifest_bytes(&p);
     let mut archived = host_files();
@@ -144,6 +147,7 @@ fn a_tampered_file_refuses_and_leaves_nothing() {
     let why = install_from(&r, &options(&from, Profile::Both, "stable"), &[verifying(&key)]).unwrap_err();
     assert!(why.contains("do not match its signed manifest"), "{why}");
     assert_nothing_landed(&r, Track::Host);
+    assert_nothing_landed(&r, Track::Client);
 }
 
 #[test]
@@ -156,11 +160,13 @@ fn an_unlisted_or_missing_file_refuses() {
         let base = temp_dir(name);
         let r = roots(&base);
         let from = base.join("from");
+        write_package(&from, &key, &Package::new("client", "2026.11.25-1", client_files()));
         let p = Package::new("host", "2026.11.25-1", host_files());
         write_package_with(&from, &key, &p, &manifest_bytes(&p), &archived);
         let why = install_from(&r, &options(&from, Profile::Both, "stable"), &[verifying(&key)]).unwrap_err();
         assert!(why.contains("do not match its signed manifest"), "{name}: {why}");
         assert_nothing_landed(&r, Track::Host);
+        assert_nothing_landed(&r, Track::Client);
     }
 }
 

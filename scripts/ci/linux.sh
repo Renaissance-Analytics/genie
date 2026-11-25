@@ -680,7 +680,7 @@ row_launcher-unit() {
     echo "--- $(cargo --version), $(rustc --version), linker $(command -v cc)"
     local locked=''
     [ -f native/launcher/Cargo.lock ] && locked=--locked
-    ( cd native/launcher && cargo test $locked --features test-keys ) || return 1
+    ( cd native/launcher && cargo test $locked --no-fail-fast --features test-keys ) || return 1
     ( cd native/launcher && cargo build $locked --release --bin genie ) || return 1
     cp native/launcher/Cargo.lock "$OUT/launcher-Cargo.lock" 2>/dev/null || true
     echo "LAUNCHER SIZE linux $(stat -c %s native/launcher/target/release/genie) bytes"
