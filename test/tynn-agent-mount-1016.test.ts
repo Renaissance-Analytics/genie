@@ -243,8 +243,10 @@ describe('a mounted agent’s settings are one registry write', () => {
         await wf(join(home, 'runtime', 'agents.json'), JSON.stringify([b]));
         const store = new Store(home);
         let writes = 0;
-        const counted = new Proxy(store, { get: (t, p, r) => (p === 'writeAgents' ? (...args: unknown[]) => { writes++; return (t.writeAgents as (...a: unknown[]) => Promise<void>)(...args); } : Reflect.get(t, p, r)) });
-        const registry = new Registry(counted as never);
+        // Counted on the store itself (a Proxy cannot reach its private fields).
+        const write = store.writeAgents.bind(store);
+        store.writeAgents = async (records) => { writes++; await write(records); };
+        const registry = new Registry(store);
         await registry.load({ name: 'fixture', healthy: true });
         writes = 0;
         const after = await registry.applyMountedSettings(b.id, { permissions: 'edits', mode: 'automated', autoApprove: true, accessScope: 'all', model: 'opus' });
