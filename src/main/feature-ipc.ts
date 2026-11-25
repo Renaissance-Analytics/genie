@@ -18,6 +18,7 @@ import type { ToolStatus } from '../core/toolchain.js';
 import type { RepairReport } from '../core/toolchain-repair.js';
 import type { ToolchainActivity } from '../core/toolchain-risk.js';
 import type { InstallOutcome } from './toolchain-ops.js';
+import type { DockerStartOutcome } from './docker-engine.js';
 import type { Elevate } from '../core/elevation.js';
 import type { GoInstallOutcome, GoRemoveOutcome, GoVersionsView } from './go-versions.js';
 import type { PythonInstallOutcome, PythonRemoveOutcome, PythonVersionsView } from './python-versions.js';
@@ -145,6 +146,11 @@ export interface FeaturePorts {
         now(): number;
         /** What is running right now — the update guard's input. An update is refused while this is not wired. */
         activity?(): Promise<ToolchainActivity>;
+        /**
+         * Tynn #970: Docker on Linux, Start: enable and start it, and add the account to the docker group, as ONE elevated
+         * batch; judged by `docker info` afterwards. Absent = not wired. `elevate`: the host's, for the client that clicked.
+         */
+        startDocker?(elevate?: Elevate): Promise<DockerStartOutcome>;
         /** T1: install one missing tool. The consent is the person's; the installer checks it too. */
         install?(tool: string, consent: boolean, elevate?: Elevate): Promise<InstallOutcome>;
         /** How a missing tool would be installed here, shown before anything runs. */
