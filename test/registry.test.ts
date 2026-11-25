@@ -297,8 +297,8 @@ describe('writing down the provider’s thread id', () => {
     });
 
     it('leaves every other agent exactly as it was', async () => {
-        // POSITIVE CONTROL on the write itself: `writeAgents` rewrites the whole file, so a
-        // bad update is a bad update to everybody. One agent gains a thread id; the other must
+        // POSITIVE CONTROL on the write itself: the registry writes one record at a time (Tynn #1007), and
+        // a bad update must still be a bad update to nobody else. One agent gains a thread id; the other must
         // be byte-identical afterwards.
         await registry.load(WORKSTATION);
         await registry.addWorkspace({ id: 'tynn', path: dir });

@@ -45,6 +45,7 @@ ROWS=(
     trust-step accounts-popover claude-accounts sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash quit-keeps-host rebuilt-machine
     flows zip64 host-plain-node mailpit
     package package-fuse
+    logon
     toolchain
     client-only-update
     host-update
@@ -651,6 +652,10 @@ row_package-fuse() {
 # provider pids after, and every tick streamed while there was no window in the agent's ledger, in order. It builds and
 # packages twice and replaces ~/.genie, ~/Applications/Genie.AppImage and dist/: last in the list, after every row that reads them.
 row_client-only-update() { need_install && need_electron && need_display && timeout 2300 bash scripts/vm-client-only-update-linux.sh; }
+# LOGON START, READ AT THE OS (Tynn #1036 P6-3): the packaged AppImage (the package row's) in a home of its own; its
+# autostart file read back (Exec, Hidden, and what systemd's xdg-autostart generator makes of it), the setting switched
+# live with no restart, and the four logon cases. Before client-only-update, which replaces dist/ and release/.
+row_logon() { need_install && need_electron && need_display && timeout 840 bash scripts/vm-logon-linux.sh table; }
 # A host update drains and swaps (Tynn #1036 P6-2): last, as it replaces the install, the home and the build once more.
 row_host-update() { need_install && need_electron && need_display && timeout 2300 bash scripts/vm-host-update-linux.sh; }
 row_toolchain() {
@@ -710,6 +715,7 @@ ceiling() {
         flows|zip64) echo 1200 ;;
         package) echo 1500 ;;
         toolchain) echo 2700 ;;
+        logon) echo 900 ;;
         client-only-update) echo 2400 ;;
         host-update) echo 2400 ;;
         *) echo 600 ;;
@@ -899,7 +905,7 @@ run_rows() {
     for name in "${selected[@]}"; do
         echo "=== $name"
         machine_line "$name"
-        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover trust-step accounts-popover claude-accounts sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash quit-keeps-host host-late-ready package-fuse toolchain client-only-update host-update " in
+        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover trust-step accounts-popover claude-accounts sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash quit-keeps-host host-late-ready package-fuse logon toolchain client-only-update host-update " in
             *" $name "*) reap_leftovers "$name" ;;
         esac
         from="$(now_ms)"

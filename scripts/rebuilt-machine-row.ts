@@ -241,7 +241,7 @@ async function main(): Promise<void> {
     step('1.3 starting genie-host on the root');
     const first = await startHost();
     const w1 = await windowOn(first);
-    check((await ask(w1.own, 'registry.write', ['writeWorkspaces', [[{ id: 'ws', path: workspace }]]])).ok && (await ask(w1.own, 'registry.write', ['writeAgents', [agents]])).ok, '2-registry-written');
+    check((await ask(w1.own, 'registry.write', ['changeWorkspaces', [{ add: [{ id: 'ws', path: workspace }] }]])).ok && (await ask(w1.own, 'registry.write', ['changeAgents', [{ add: agents }]])).ok, '2-registry-written');
 
     step('1.4 two agents, each mid-conversation');
     for (const a of agents) await startWorking(w1, a);
@@ -249,8 +249,9 @@ async function main(): Promise<void> {
     for (const p of pidsBefore) everPids.add(p);
     check(pidsBefore.every(pidAlive), '3-two-providers-running', `pids ${pidsBefore.join(', ')}`);
     await until('the host to name each agent’s thread', 60_000, () => agents.every((a) => threadHeard.has(a.id))).catch(() => null);
-    const withThreads = registryOnDisk().map((r) => (threadHeard.has(r.id) ? { ...r, threadId: threadHeard.get(r.id)! } : r));
-    const wrote = agents.every((a) => threadHeard.has(a.id)) && (await ask(w1.own, 'registry.write', ['writeAgents', [withThreads]])).ok;
+    // One record at a time (Tynn #1007): each agent's thread id, as main's window records it.
+    const withThreads = { patch: agents.filter((a) => threadHeard.has(a.id)).map((a) => ({ id: a.id, set: { threadId: threadHeard.get(a.id)! } })) };
+    const wrote = agents.every((a) => threadHeard.has(a.id)) && (await ask(w1.own, 'registry.write', ['changeAgents', [withThreads]])).ok;
     const recorded = wrote ? await until('each agent’s thread on record', 30_000, () => { const r = registryOnDisk().filter((x) => agents.some((a) => a.id === x.id)); return r.length === 2 && r.every((x) => typeof x.threadId === 'string' && x.threadId.length > 0) ? r : null; }).catch(() => null) : null;
     check(recorded !== null, '4-each-agent-has-a-thread-on-record', recorded ? recorded.map((r) => r.threadId).join(', ') : `heard ${threadHeard.size} of 2; agents.json says ${JSON.stringify(registryOnDisk().map((r) => r.threadId))}`);
     const growing = threads();

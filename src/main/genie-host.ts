@@ -1292,6 +1292,10 @@ async function main(): Promise<void> {
         log: (line) => { say(line); lifecycleLog(line); },
     });
     bootStep('marketplace and gapps', stepAt);
+    // THE SETTINGS, AS MAIN'S OWN CLIENT WATCHES THEM (Tynn #998, 2g-4b1): the whole data, then each change, on settings.watch.
+    // Said from this host's start, as the registry and the front door are (P6-3, Tynn #1501): it rode on the host's own
+    // answers, which hostRemoteApi never carried, so settings.watch answered null and the window's boot read the defaults.
+    const settingsWatch = settingsWatchFeed({ data: () => settings.data(), onChange: (listener) => settings.onChange(listener) });
     const remoteAccessHost = await RemoteAccessHost.open({
         home,
         hostName: hostname(),
@@ -1321,6 +1325,15 @@ async function main(): Promise<void> {
             registry: registryAnswers.registry,
             // main's browser, from this host's start (Tynn #1046): its front door.
             frontdoor: frontDoorWatch,
+            // main's settings, from this host's start (P6-3): the window's boot reads start minimised and the login item.
+            settings: settingsWatch,
+            // main's tray, quit and Tynn account, from this host's start (P6-3 follow-up): summary.watch answered null until
+            // the answers below were built, and nothing changed it again until something ran or stopped.
+            summary: hostSummary,
+            // main's notifications, from this host's start (P6-3 follow-up): who is connected and who asks to pair. remote.watch
+            // answered null, as settings did. The feed reads this RemoteAccessHost, so it is made the moment `open` returns
+            // (below, with no wait between); RemoteHost asks its api only once a connection has said hello, which is after.
+            remote: { now: () => remoteWatch.now(), subscribe: (listener) => remoteWatch.subscribe(listener) },
             onAloneReady: listener => { phoneReady.add(listener); return () => { phoneReady.delete(listener); }; },
             workspaceOfAgent: (agentId) => hostRegistry.listAgents().find((a) => a.id === agentId)?.workspaceId ?? null,
             // A workspace share's terminals and folders (Tynn #691): from this host's own terminal host and registry.
@@ -1328,16 +1341,15 @@ async function main(): Promise<void> {
             workspacePaths: workspaceFolders(() => hostRegistry.listWorkspaces()),
         }),
     });
+    /*
+     * WHO IS AT THIS MACHINE, AS MAIN'S OWN CLIENT WATCHES IT (Tynn #997, 2g-4a): who is connected and who asks to, for its
+     * desktop notifications, said on remote.watch when it changes (its pin and devices are not in it). hostRemoteApi's
+     * `remote` port above reads it.
+     */
+    const remoteWatch = remoteWatchFeed({ read: () => remoteWatchOf(remoteAccessHost.status()), onChange: (listener) => remoteAccessHost.onChange(listener) });
     // OFF BY DEFAULT (Tynn #820): the listener runs only while `remote_access` is on, applied at boot and on every change.
     let remoteAccessService: RemoteAccessService | null = null;
     const remoteSwitch = remoteAccess({ listener: remoteListen, enabled: () => settings.snapshot().remote_access === true, onChange: () => { remoteAccessService?.pushStatus(); void relayHostService.apply(); } });
-    /*
-     * WHO IS AT THIS MACHINE, AS MAIN'S OWN CLIENT WATCHES IT (Tynn #997, 2g-4a): who is connected and who asks to, for its
-     * desktop notifications, said on remote.watch when it changes (its pin and devices are not in it).
-     */
-    // THE SETTINGS, AS MAIN'S OWN CLIENT WATCHES THEM (Tynn #998, 2g-4b1): the whole data, then each change, on settings.watch.
-    const settingsWatch = settingsWatchFeed({ data: () => settings.data(), onChange: (listener) => settings.onChange(listener) });
-    const remoteWatch = remoteWatchFeed({ read: () => remoteWatchOf(remoteAccessHost.status()), onChange: (listener) => remoteAccessHost.onChange(listener) });
     remoteAccessService = new RemoteAccessService(remoteAccessHost, {
         switch: { ...remoteSwitch, stop: () => remoteListen.stop() },
         send: (owner, event) => engineRef?.remoteAccessEvent(owner, event),
@@ -2229,12 +2241,8 @@ async function main(): Promise<void> {
         hostShell: hostShellFor({ absolute: (ws, path) => phoneFiles.absolute(ws, path), windowOp: (op, args) => (engineRef ? engineRef.windowOp(null, op, args) : Promise.reject(new Error('Genie is still starting; try again in a moment'))), hostName: () => hostname() }),
         // A remote window's transport to another machine, owned by its connection (Tynn #941, 2f-2).
         deviceLinkProtocol: deviceProtocol,
-        // What this host runs, for this machine's tray and quit (Tynn #953, 2g-2).
-        hostSummary,
-        // Who is at this machine, for this machine's notifications (Tynn #997, 2g-4a).
-        remoteWatch,
-        // This host's settings, for what this machine's window reads (Tynn #998, 2g-4b1).
-        settingsWatch,
+        // This host's settings, what it runs and who is at it are said by hostRemoteApi from the host's start (P6-3), not
+        // here: a change would be said twice.
         // This host's registry, read and written by this machine's window registry over the protocol (Tynn #1007, 2g-4e):
         // the same store calls the engine link carried, which keep the host's model following and its writes in order.
         registryFiles: registryAnswers.files,

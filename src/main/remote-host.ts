@@ -779,7 +779,12 @@ export class RemoteHost {
         }
         if (message.kind === 'hello') return this.#refuse(connection, 'this connection has already said hello', false);
         if (message.kind !== 'call') return; // A client sends calls; anything else is noise, not an error worth a frame.
-        this.#send(connection, await this.#call(connection, message.id, message.method, message.args));
+        // A CALL IS ALWAYS ANSWERED (P6-3 follow-up): a control whose answer threw (deck.watch read the snapshot while
+        // genie-host's own answers were still being built) was left unanswered, so main's own client waited on it for good
+        // and the window's Deck stayed empty. Refused instead, with why, as a method's own throw is: the caller asks again.
+        let answer: WireMessage;
+        try { answer = await this.#call(connection, message.id, message.method, message.args); } catch (error) { answer = { kind: 'result', id: message.id, ok: false, reason: error instanceof Error ? error.message : String(error) }; }
+        this.#send(connection, answer);
     }
 
     async #hello(connection: Connection, message: Extract<WireMessage, { kind: 'hello' }>): Promise<void> {
