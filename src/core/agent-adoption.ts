@@ -47,6 +47,16 @@ export interface ImportedAgent {
     readonly refusal: string | null;
     /** How its config says it hears IssueWatch (v0.5.0), applied when it is adopted. Absent: never chosen. A capability grant is never part of an offer. */
     readonly issueWatch?: IssueWatchSetting;
+    /** Tynn has it for the project and this clone has no `.agents/<name>/AGENT.md` for it (Tynn #1016): adopting writes one. */
+    readonly fromTynn?: true;
+}
+
+/** An agent Tynn has for the workspace's project (GET /api/v1/projects/{p}/agents), as the offer reads it (Tynn #1016). */
+export interface TynnProjectAgent {
+    readonly name: string;
+    readonly provider: string | null;
+    readonly instructions: string | null;
+    readonly purpose?: string | null;
 }
 
 /** Why `.agents/<folder>` cannot be adopted under its name, or `null`. `sacredName`: the workspace's one granted term. */
@@ -74,16 +84,26 @@ function providerOf(config: AgentConfig | undefined, fallback: AcpProvider): Acp
  * The agents a workspace brought and has not registered, alphabetically — each with its reason when it cannot be adopted,
  * so a refused file is said rather than silently missing. A name already registered in the workspace (any case) is left out.
  */
-export function importedAgents(input: { files: readonly AgentFile[]; registered: readonly { name: string }[]; configs?: Readonly<Record<string, AgentConfig>>; sacredName?: string | null; defaultProvider?: AcpProvider }): ImportedAgent[] {
+export function importedAgents(input: { files: readonly AgentFile[]; registered: readonly { name: string }[]; configs?: Readonly<Record<string, AgentConfig>>; sacredName?: string | null; defaultProvider?: AcpProvider; tynn?: readonly TynnProjectAgent[] | null }): ImportedAgent[] {
     const have = new Set(input.registered.map((a) => a.name.trim().toLowerCase()));
-    return [...input.files]
+    const onDisk = new Set(input.files.map((f) => f.folder.toLowerCase()));
+    const tynnOf = new Map((input.tynn ?? []).map((t) => [t.name, t]));
+    /*
+     * TYNN'S AGENTS FOR THE PROJECT (Tynn #1016): an agent Tynn has and this clone has no folder for is offered too — a
+     * workspace moves by Tynn, not only by what was committed. Only a name Genie could register under its own name: a Tynn
+     * agent named otherwise (made on the website, say) is left to the person, never offered under a name it does not have.
+     */
+    const fromTynn: AgentFile[] = [...tynnOf.keys()].filter((name) => AGENT_NAME.test(name) && !onDisk.has(name.toLowerCase())).map((folder) => ({ folder }));
+    return [...input.files, ...fromTynn]
         .filter((f) => !have.has(f.folder.toLowerCase()))
         .sort((a, b) => a.folder.localeCompare(b.folder))
         .map((f) => {
             const named = adoptionRefusal(f.folder, input.sacredName ?? null);
             const config = input.configs && Object.hasOwn(input.configs, f.folder) ? input.configs[f.folder] : undefined;
-            const provider = providerOf(config, input.defaultProvider ?? ADOPTION_DEFAULT_PROVIDER);
-            return { name: f.folder, provider, instructions: `.agents/${f.folder}/AGENT.md`, refusal: named, ...(config?.issueWatch ? { issueWatch: config.issueWatch } : {}) };
+            const remote = tynnOf.get(f.folder);
+            const tynnOnly = !onDisk.has(f.folder.toLowerCase());
+            const provider = config === undefined && remote?.provider && isAcpProvider(remote.provider) ? remote.provider : providerOf(config, input.defaultProvider ?? ADOPTION_DEFAULT_PROVIDER);
+            return { name: f.folder, provider, instructions: `.agents/${f.folder}/AGENT.md`, refusal: named, ...(config?.issueWatch ? { issueWatch: config.issueWatch } : {}), ...(tynnOnly ? { fromTynn: true as const } : {}) };
         });
 }
 

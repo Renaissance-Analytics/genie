@@ -225,6 +225,8 @@ export interface HostApiDeps {
         /** "It came with agents" (Add workspace parity item 6); optional, refused where absent. */
         importedAgents?(workspaceId: string): Promise<unknown>;
         adoptAgent?(workspaceId: string, name: string): Promise<unknown>;
+        /** Every offered agent but those opted out, in one step, each mounted (Tynn #1016). */
+        adoptAgents?(workspaceId: string, except: readonly string[]): Promise<unknown>;
         previewAddFromTynn?(projectId: string, parent: string): Promise<unknown>;
         locateRepo?(workspaceId: string, slug: string, path: string): Promise<unknown>;
         /** "Locate folder" (host split P7): where the workspace's folder is now; only its record's path changes. */
@@ -665,6 +667,12 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 if (typeof args[0] !== 'string' || typeof args[1] !== 'string' || args[1] === '') return { ok: false, reason: 'name a workspace and an agent' };
                 if (!deps.workspaceOps.adoptAgent) throw new Error('this host cannot adopt agents');
                 return deps.workspaceOps.adoptAgent(args[0], args[1]);
+            case 'workspaces.adoptAgents': {
+                const except = args[1] === undefined ? [] : args[1];
+                if (typeof args[0] !== 'string' || !Array.isArray(except) || except.some((n) => typeof n !== 'string')) return { ok: false, reason: 'name a workspace, and the agents not to adopt' };
+                if (!deps.workspaceOps.adoptAgents) throw new Error('this host cannot adopt agents');
+                return deps.workspaceOps.adoptAgents(args[0], except as string[]);
+            }
             case 'workspaces.tynnProjects':
                 if (!deps.workspaceOps.tynnProjects) throw new Error('this host cannot list Tynn projects');
                 return deps.workspaceOps.tynnProjects();

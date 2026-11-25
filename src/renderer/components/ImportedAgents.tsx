@@ -1,4 +1,4 @@
-import { Button, Icon, Modal } from '@particle-academy/react-fancy';
+import { Button, Icon, Modal, Switch } from '@particle-academy/react-fancy';
 import { useState } from 'react';
 import { Flash } from './Flash.js';
 import { importedAgentsOffer, type ImportedAgent } from '../../core/agent-adoption.js';
@@ -20,7 +20,7 @@ const muted = 'text-xs text-[var(--fg-3)]';
  * each with its button, or the reason Genie will not take it and no button. `verb` is the screen's word for it. Called as a
  * function, not mounted as a component: the views stay one hook-free tree a test can walk and press.
  */
-function unregisteredAgentList({ agents, busy, verb, onAct }: { agents: readonly ImportedAgent[]; busy: string | null; verb: { action: string; label: string; busyLabel: string }; onAct: (name: string) => void }) {
+function unregisteredAgentList({ agents, busy, verb, onAct, keep }: { agents: readonly ImportedAgent[]; busy: string | null; verb: { action: string; label: string; busyLabel: string }; onAct: (name: string) => void; keep?: { skipped: readonly string[]; onSkip: (name: string, skip: boolean) => void } | undefined }) {
     if (agents.length === 0) return null;
     return (
         <ul className="flex flex-col gap-1.5">
@@ -28,10 +28,12 @@ function unregisteredAgentList({ agents, busy, verb, onAct }: { agents: readonly
                 <li key={a.name} data-imported-agent={a.name} className="flex items-start justify-between gap-3 rounded-md border border-[var(--border-1)] px-2.5 py-1.5">
                     <div className="flex min-w-0 flex-col">
                         <span className="font-mono text-xs font-semibold">{a.name}{a.provider ? <ProviderLogo provider={a.provider} size="xs" className="ml-2 align-middle" /> : null}</span>
-                        <span className={`${muted} font-mono`}>{a.instructions}</span>
+                        <span className={`${muted} font-mono`}>{a.instructions}{a.fromTynn ? <span data-from-tynn="" className="ml-2 font-sans">from Tynn</span> : null}</span>
                         {a.refusal ? <span data-adopt-refusal="" className="text-xs text-[var(--danger)]">{a.refusal}</span> : null}
                     </div>
-                    {a.refusal === null ? (
+                    {a.refusal === null && keep ? (
+                        <Switch data-adopt-keep={a.name} checked={!keep.skipped.includes(a.name)} disabled={busy !== null} aria-label={`Adopt ${a.name}`} onCheckedChange={(on) => keep.onSkip(a.name, !on)} />
+                    ) : a.refusal === null ? (
                         <Button type="button" size="xs" data-action={verb.action} data-agent={a.name} loading={busy === a.name} disabled={busy !== null} onClick={() => onAct(a.name)}>{busy === a.name ? verb.busyLabel : verb.label}</Button>
                     ) : null}
                 </li>
@@ -51,10 +53,18 @@ export interface ImportedAgentsViewProps {
     readonly error: string | null;
     readonly onAdopt: (name: string) => void;
     readonly onOpen: () => void;
+    /**
+     * ADOPT THEM ALL (Tynn #1016): each agent has a switch, on unless the person opted it out (`skipped`), and one button
+     * adopts every one left on. Absent: one Adopt per agent, as before.
+     */
+    readonly skipped?: readonly string[];
+    readonly onSkip?: (name: string, skip: boolean) => void;
+    readonly onAdoptAll?: (names: readonly string[]) => void;
 }
 
-export function ImportedAgentsView({ workspaceName, path, agents, busy, notice, error, onAdopt, onOpen }: ImportedAgentsViewProps) {
+export function ImportedAgentsView({ workspaceName, path, agents, busy, notice, error, onAdopt, onOpen, skipped = [], onSkip, onAdoptAll }: ImportedAgentsViewProps) {
     const offer = importedAgentsOffer(agents);
+    const all = onAdoptAll && onSkip ? agents.filter((a) => a.refusal === null && !skipped.includes(a.name)).map((a) => a.name) : null;
     return (
         <div data-imported-agents="" className="flex flex-col gap-3 text-sm">
             <div>
@@ -73,8 +83,11 @@ export function ImportedAgentsView({ workspaceName, path, agents, busy, notice, 
             {error ? <p data-imported-agents-error="" className="rounded-md border border-[var(--danger)] bg-[var(--danger)]/10 px-2.5 py-1.5 text-xs">{error}</p> : null}
             {/* The notice is a Flash, never a line on the page (the owner, 2026-11-16). */}
             <Flash note={notice} />
-            {unregisteredAgentList({ agents, busy, verb: { action: 'adopt-agent', label: 'Adopt', busyLabel: 'Adopting…' }, onAct: onAdopt })}
+            {unregisteredAgentList({ agents, busy, verb: { action: 'adopt-agent', label: 'Adopt', busyLabel: 'Adopting…' }, onAct: onAdopt, keep: all && onSkip ? { skipped, onSkip } : undefined })}
             <div className="flex items-center justify-end gap-2">
+                {all && onAdoptAll && agents.length > 0 ? (
+                    <Button type="button" size="xs" icon="users" data-action="adopt-all" loading={busy !== null} disabled={busy !== null || all.length === 0} onClick={() => onAdoptAll(all)}>{busy !== null ? 'Adopting…' : `Adopt ${all.length} agent${all.length === 1 ? '' : 's'}`}</Button>
+                ) : null}
                 <Button type="button" size="xs" color="violet" icon="check" data-action="open-workspace" disabled={busy !== null} onClick={onOpen}>Open workspace</Button>
             </div>
         </div>
@@ -138,6 +151,8 @@ export function AgentRosterView({ registered, onDisk, busy, notice, error, onRea
 
 export interface ImportedAgentsApi {
     adopt(workspaceId: string, name: string): Promise<{ ok: true; id: string; name: string } | { ok: false; reason: string }>;
+    /** All of them in one step, but the ones opted out (Tynn #1016). Absent: one at a time. */
+    adoptAll?(workspaceId: string, except: readonly string[]): Promise<{ ok: true; adopted: Array<{ name: string; id: string; mount?: string }>; refused: Array<{ name: string; reason: string }> } | { ok: false; reason: string }>;
 }
 
 /** The screen after an add, over the workspace it opened: adopt as many as wanted, then Open workspace (or close). */
@@ -147,9 +162,11 @@ export function ImportedAgentsModal({ shown, api, onClose }: { shown: { workspac
     const [notice, setNotice] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [forWorkspace, setForWorkspace] = useState<string | null>(null);
+    const [skipped, setSkipped] = useState<readonly string[]>([]);
     if (!shown) return null;
     // A new workspace's screen starts clean.
-    if (forWorkspace !== shown.workspaceId) { setForWorkspace(shown.workspaceId); setAdopted([]); setNotice(null); setError(null); setBusy(null); }
+    if (forWorkspace !== shown.workspaceId) { setForWorkspace(shown.workspaceId); setAdopted([]); setNotice(null); setError(null); setBusy(null); setSkipped([]); }
+    const adoptAll = api.adoptAll;
     const left = shown.agents.filter((a) => !adopted.includes(a.name));
     const close = () => { if (busy === null) onClose(); };
     return (
@@ -164,6 +181,24 @@ export function ImportedAgentsModal({ shown, api, onClose }: { shown: { workspac
                     notice={notice}
                     error={error}
                     onOpen={close}
+                    {...(adoptAll ? {
+                        skipped,
+                        onSkip: (name: string, skip: boolean) => setSkipped((s) => (skip ? [...s.filter((n) => n !== name), name] : s.filter((n) => n !== name))),
+                        onAdoptAll: () => {
+                            setBusy('*');
+                            setError(null);
+                            setNotice(null);
+                            void adoptAll(shown.workspaceId, skipped)
+                                .then((r) => {
+                                    if (!r.ok) { setError(r.reason); return; }
+                                    setAdopted((a) => [...a, ...r.adopted.map((x) => x.name)]);
+                                    const unmounted = r.adopted.filter((x) => x.mount !== undefined);
+                                    setNotice(`${r.adopted.length} agent${r.adopted.length === 1 ? '' : 's'} adopted${unmounted.length > 0 ? `; ${unmounted.map((x) => x.name).join(', ')} get their Tynn key when they start` : ''}.`);
+                                    if (r.refused.length > 0) setError(r.refused.map((x) => `${x.name}: ${x.reason}`).join(' '));
+                                }, (e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+                                .finally(() => setBusy(null));
+                        },
+                    } : {})}
                     onAdopt={(name) => {
                         setBusy(name);
                         setError(null);

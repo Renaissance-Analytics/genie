@@ -1,11 +1,11 @@
-import { readFile, readdir } from 'node:fs/promises';
+import { mkdir, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { sacredNameOf } from '../core/agent-adoption.js';
+import { sacredNameOf, type TynnProjectAgent } from '../core/agent-adoption.js';
 import { parseRemoteChoice, type RemoteChoice } from '../core/agi-remote.js';
 import { parseEnvelopePlan } from '../core/envelope-plan.js';
 import { tynnProjectIdOf } from '../core/issue-watch.js';
 import { parseTynnProjectInput } from '../core/tynn.js';
-import { adoptAgent, readImportedAgents, type AgentAdoptionPorts } from './agent-adoption-host.js';
+import { adoptAgent, adoptAgents, readImportedAgents, type AgentAdoptionPorts } from './agent-adoption-host.js';
 import { nodeAgentConfigFs } from './agent-config-host.js';
 import type { AgentEngine } from './agent-engine.js';
 import { nodeEnvelopePorts } from './envelope-fs.js';
@@ -43,6 +43,12 @@ export interface WorkspaceLifecycleWiring {
     readonly stagingDirectory: () => string;
     /** Look at the workspaces' folders again (missing-workspaces.ts), after "Locate folder". Absent: this process keeps no missing flag. */
     readonly recheckMissing?: (() => Promise<void>) | undefined;
+    /**
+     * TYNN'S AGENTS FOR A PROJECT, and MOUNTING ONE (Tynn #1016): what the import offers beside the repo's `.agents/`, and an
+     * adopted agent's own key and Tynn's settings at once. Absent: the repo's agents only, mounted at their first start.
+     */
+    readonly tynnAgents?: ((projectId: string) => Promise<readonly TynnProjectAgent[] | null>) | undefined;
+    readonly mountAgent?: ((agentId: string) => Promise<unknown>) | undefined;
 }
 
 export interface WorkspaceLifecycle {
@@ -125,6 +131,13 @@ export function workspaceLifecyclePorts(w: WorkspaceLifecycleWiring): WorkspaceL
         readText: async (path) => { try { return await readFile(path, 'utf8'); } catch { return null; } },
         // The one write: the move of old AGENT.md front matter into project.json (Tynn #694), temp + rename.
         writeTextAtomic: nodeAgentConfigFs().writeTextAtomic,
+        mkdirp: async (dir) => { await mkdir(dir, { recursive: true }); },
+        tynnAgents: async (workspaceId) => {
+            const folder = w.registry()?.workspace(workspaceId)?.path;
+            const projectId = tynnProjectIdOf(folder ? await readFile(join(folder, 'project.json'), 'utf8').catch(() => null) : null);
+            return projectId === null || !w.tynnAgents ? null : w.tynnAgents(projectId);
+        },
+        ...(w.mountAgent ? { mount: w.mountAgent } : {}),
         register: async (input) => { const record = await registry().register(input); return { id: record.id, name: record.name }; },
         // What project.json says of an adopted agent (Tynn #756, PR8): its IssueWatch, and whether it is the workspace's default.
         setIssueWatch: async (id, setting) => { await registry().setIssueWatch(id as AgentId, setting); },
@@ -141,7 +154,7 @@ export function workspaceLifecyclePorts(w: WorkspaceLifecycleWiring): WorkspaceL
     return { workspaceOps, envelopePorts, adoptionPorts, repoOps: repoOpsPorts((id) => w.registry()?.workspace(id) ?? null) };
 }
 
-type LifecycleKeys = 'previewAdd' | 'previewAddFromGit' | 'tynnProjects' | 'tynnOwnerOptions' | 'createTynnProject' | 'importedAgents' | 'adoptAgent' | 'previewAddFromTynn' | 'locateRepo' | 'relocate' | 'confirmAdd' | 'create'
+type LifecycleKeys = 'previewAdd' | 'previewAddFromGit' | 'tynnProjects' | 'tynnOwnerOptions' | 'createTynnProject' | 'importedAgents' | 'adoptAgent' | 'adoptAgents' | 'previewAddFromTynn' | 'locateRepo' | 'relocate' | 'confirmAdd' | 'create'
     | 'confirmAddFromGit' | 'readSource' | 'stageFromGit' | 'registerExisting' | 'buildEnvelope' | 'discardStaged' | 'githubRepos' | 'confirmAddFromTynn' | 'hibernate' | 'wake' | 'remove' | 'listRepos' | 'addRepo'
     | 'removeRepo' | 'removeRepoLock' | 'commitsSince' | 'setGoverns' | 'setDefaultAgent' | 'setColor' | 'setMcpServer' | 'savePreview' | 'save' | 'cloneOffers' | 'applyOffer';
 
@@ -179,6 +192,7 @@ export function workspaceLifecycleApi(
         createTynnProject: (raw) => { const input = parseTynnProjectInput(raw); return input ? createTynnProject(workspaceOps, input) : Promise.resolve({ ok: false, reason: 'give the project a name' }); },
         importedAgents: (id) => readImportedAgents(adoptionPorts, id),
         adoptAgent: (id, name) => adoptAgent(adoptionPorts, id, name),
+        adoptAgents: (id, except) => adoptAgents(adoptionPorts, id, { except }),
         previewAddFromTynn: (projectId, parent) => previewAddFromTynn(workspaceOps, parent, projectId),
         locateRepo: (id, slug, path) => relocateRepoIn(repoOps, id, slug, path),
         // "Locate folder" (host split P7): only the record's path changes; the missing look runs again at once.

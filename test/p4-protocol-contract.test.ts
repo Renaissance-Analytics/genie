@@ -55,7 +55,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'workspaces.buildEnvelope': [{ path: ROOT }, null], 'workspaces.discardStaged': [ROOT],
     'workspaces.githubRepos': [], 'workspaces.tynnProjects': [], 'workspaces.tynnOwnerOptions': [],
     'workspaces.createTynnProject': [{ name: 'contract' }], 'workspaces.importedAgents': ['work'],
-    'workspaces.adoptAgent': ['work', 'atlas'], 'workspaces.previewAddFromTynn': ['project_1', ROOT],
+    'workspaces.adoptAgent': ['work', 'atlas'], 'workspaces.adoptAgents': ['work', []], 'workspaces.previewAddFromTynn': ['project_1', ROOT],
     'workspaces.confirmAddFromTynn': [ROOT, 'project_1'], 'workspaces.hibernate': ['work'],
     'workspaces.wake': ['work'], 'workspaces.remove': ['work'], 'workspaces.listRepos': ['work'],
     'workspaces.tynnBoard': ['work', 'all'], 'workspaces.tynnBoardAction': ['work', { kind: 'refresh' }],

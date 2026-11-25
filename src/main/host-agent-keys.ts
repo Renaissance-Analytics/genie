@@ -35,6 +35,8 @@ export type HostAgentKeys = ((agent: AgentRecord, cwd: string, signal?: AbortSig
     readonly lostKeys: { ids(): Promise<string[]>; forget(): Promise<number> };
     /** A later setting change of this agent, sent to its Tynn agent (Tynn #1001). */
     push(agent: AgentRecord): Promise<'sent' | 'unbound' | 'failed' | 'unlinked'>;
+    /** Registered in Tynn when it is created (Tynn #1001). */
+    register(agent: AgentRecord): Promise<'registered' | 'shared' | 'conflict' | 'failed' | 'unlinked'>;
 };
 
 export function hostAgentKeys(options: HostAgentKeysOptions): HostAgentKeys {
@@ -54,5 +56,5 @@ export function hostAgentKeys(options: HostAgentKeysOptions): HostAgentKeys {
         options.onPrepared?.();
         return { servers, note: prep.note(agent.id) };
     };
-    return Object.assign(read, { recovery: prep.recovery, waiting: prep.waiting, lostKeys: prep.lostKeys, push: prep.push });
+    return Object.assign(read, { recovery: prep.recovery, waiting: prep.waiting, lostKeys: prep.lostKeys, push: prep.push, register: prep.register });
 }

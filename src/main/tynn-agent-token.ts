@@ -55,6 +55,13 @@ export function tynnAgentTokens(credentials?: AgentCredentialPorts) {
     return {
         legacyKeys: async (cipher: { decrypt(bytes: Buffer): string }) => identities?.legacyKeys(cipher) ?? [],
         /** The keys the keychain lost (tynn-agent-identities.ts `lostKeys`). */
+        /** Registered in Tynn when it is created (Tynn #1001): `identities.register`. */
+        async register(input: { workspacePath: string; fs: SyncFs; agent: AgentRecord; tynn: TynnSessionPort | null }): Promise<'registered' | 'shared' | 'conflict' | 'failed' | 'unlinked'> {
+            if (!identities) return 'failed';
+            let projectId: string | null;
+            try { projectId = tynnProjectIdOf(await input.fs.read(join(input.workspacePath, 'project.json').replace(/\\/g, '/'))); } catch { return 'failed'; }
+            return projectId ? identities.register({ projectId, agent: input.agent, tynn: input.tynn }) : 'unlinked';
+        },
         /** A later setting change, sent to the Tynn agent this agent is bound to (Tynn #1001). */
         async push(input: { workspacePath: string; fs: SyncFs; agent: AgentRecord; tynn: TynnSessionPort | null }): Promise<'sent' | 'unbound' | 'failed' | 'unlinked'> {
             if (!identities) return 'failed';

@@ -90,6 +90,7 @@ const CALLS: Array<[RemoteMethod, () => unknown[]]> = [
     ['workspaces.createTynnProject', () => [{}]],
     ['workspaces.importedAgents', () => ['tynn']],
     ['workspaces.adoptAgent', () => ['tynn', 'nobody']],
+    ['workspaces.adoptAgents', () => [1, 'not a list']],
     ['workspaces.previewAddFromTynn', () => ['', '']],
     ['workspaces.confirmAddFromTynn', () => [1, 2]],
     ['workspaces.hibernate', () => ['nowhere']],

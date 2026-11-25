@@ -12,23 +12,35 @@ import { tynnConfigOf } from './tynn-agent-identities.js';
 export interface AgentTynnSyncPorts {
     agents(): readonly AgentRecord[];
     push(agent: AgentRecord): Promise<'sent' | 'unbound' | 'failed' | 'unlinked'>;
+    /** An agent seen for the first time since `prime`: just created (or adopted). Registered in Tynn now (Tynn #1001). */
+    register?(agent: AgentRecord): Promise<'registered' | 'shared' | 'conflict' | 'failed' | 'unlinked'>;
     log?(line: string): void;
 }
 
 export function agentTynnSync(ports: AgentTynnSyncPorts) {
     const seen = new Map<string, string>();
     const retry = new Set<string>();
+    /** Seen first since `prime`, and not yet registered (a failed registration is tried again). */
+    const unregistered = new Set<string>();
+    let primed = false;
     let running: Promise<void> = Promise.resolve();
     const signature = (agent: AgentRecord) => JSON.stringify(tynnConfigOf(agent));
 
     const pass = async (): Promise<void> => {
         const now = ports.agents();
         const ids = new Set<string>(now.map((a) => a.id));
-        for (const id of [...seen.keys()]) if (!ids.has(id)) { seen.delete(id); retry.delete(id); }
+        for (const id of [...seen.keys()]) if (!ids.has(id)) { seen.delete(id); retry.delete(id); unregistered.delete(id); }
         for (const agent of now) {
             const sig = signature(agent);
             const before = seen.get(agent.id);
             seen.set(agent.id, sig);
+            if ((before === undefined && primed) || unregistered.has(agent.id)) {
+                if (!ports.register) continue;
+                const result = await ports.register(agent).catch(() => 'failed' as const);
+                if (result === 'failed') unregistered.add(agent.id); else unregistered.delete(agent.id);
+                ports.log?.(`tynn agent registration agent=${agent.id} ${result}`);
+                continue;
+            }
             if (before === undefined && !retry.has(agent.id)) continue;
             if (before === sig && !retry.has(agent.id)) continue;
             const result = await ports.push(agent).catch(() => 'failed' as const);
@@ -39,7 +51,7 @@ export function agentTynnSync(ports: AgentTynnSyncPorts) {
 
     return {
         /** What each agent's settings are now, sending nothing: the starting point. */
-        prime(): void { for (const agent of ports.agents()) seen.set(agent.id, signature(agent)); },
+        prime(): void { for (const agent of ports.agents()) seen.set(agent.id, signature(agent)); primed = true; },
         /** Look again (after a registry write, a sign-in): send what changed, and what failed before. One look at a time. */
         changed(): Promise<void> { const work = running.then(pass, pass); running = work.catch(() => {}); return work; },
     };

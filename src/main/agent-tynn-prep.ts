@@ -164,5 +164,16 @@ export function agentTynnPrep(options: AgentTynnPrepOptions) {
         return tokens.push({ workspacePath: workspace.path, agent, tynn: options.tynn() ?? null, fs: { read: async () => text, write: async () => { throw new Error('Private agent credentials never enter a workspace'); } } });
     };
 
-    return { prepare, note, recovery, waiting, push, legacyKeys: tokens.legacyKeys, lostKeys: tokens.lostKeys };
+    /** Registered in Tynn when it is created (Tynn #1001). Nothing for an agent with no Tynn-linked workspace. */
+    const register = async (agent: AgentRecord): Promise<'registered' | 'shared' | 'conflict' | 'failed' | 'unlinked'> => {
+        const workspace = options.workspaces()?.find((w) => w.id === agent.workspaceId);
+        if (agent.workspaceId === OS_WORKSPACE || !workspace || workspace.asleep) return 'unlinked';
+        let text: string | null;
+        try { text = await projectText(workspace.path); } catch { return 'failed'; }
+        if (tynnProjectIdOf(text) === null) return 'unlinked';
+        await options.ready?.();
+        return tokens.register({ workspacePath: workspace.path, agent, tynn: options.tynn() ?? null, fs: { read: async () => text, write: async () => { throw new Error('Private agent credentials never enter a workspace'); } } });
+    };
+
+    return { prepare, note, recovery, waiting, push, register, legacyKeys: tokens.legacyKeys, lostKeys: tokens.lostKeys };
 }

@@ -389,6 +389,8 @@ export interface GenieBridge {
         importedAgents?(workspaceId: string): Promise<{ ok: true; agents: ImportedAgent[] } | { ok: false; reason: string }>;
         /** Adopt one: registered from its AGENT.md, which is read and never rewritten. */
         adoptAgent?(workspaceId: string, name: string): Promise<{ ok: true; id: string; name: string } | { ok: false; reason: string }>;
+        /** Every offered agent but those opted out, in one step, each mounted (Tynn #1016). */
+        adoptAgents?(workspaceId: string, except: readonly string[]): Promise<{ ok: true; adopted: Array<{ name: string; id: string; mount?: string }>; refused: Array<{ name: string; reason: string }> } | { ok: false; reason: string }>;
         /** The CHOSEN project: the parent picked on the host, then the plan before anything is written. */
         previewAddFromTynn(projectId: string, parent: string): Promise<{ ok: true; source: 'tynn'; project: TynnProject; host: string; parent: string; path: string; kind: FolderKind; content?: TynnContent; steps: PlanStep[] } | { ok: false; reason: string; workspaceId?: string }>;
         confirmAddFromTynn(parent: string, projectId: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;

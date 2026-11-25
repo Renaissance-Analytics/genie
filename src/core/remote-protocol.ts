@@ -102,6 +102,7 @@ export const REMOTE_METHODS = [
     'workspaces.createTynnProject',
     'workspaces.importedAgents',
     'workspaces.adoptAgent',
+    'workspaces.adoptAgents',
     'workspaces.previewAddFromTynn',
     'workspaces.confirmAddFromTynn',
     'workspaces.hibernate',
@@ -359,6 +360,7 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     // "It came with agents" (Add workspace parity item 6): the unregistered `.agents/*` is a read; adopting one registers it.
     'workspaces.importedAgents': 'read',
     'workspaces.adoptAgent': 'write',
+    'workspaces.adoptAgents': 'write',
     'workspaces.previewAddFromTynn': 'read',
     'workspaces.confirmAddFromTynn': 'write',
     'workspaces.hibernate': 'write',

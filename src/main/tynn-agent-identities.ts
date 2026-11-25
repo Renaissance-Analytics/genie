@@ -94,7 +94,7 @@ export function tynnAgentIdentities(ports: AgentCredentialPorts) {
     let prepared = false;
     let writes: Promise<unknown> = Promise.resolve();
     const inFlight = new Map<string, Promise<TynnAgentToken>>();
-    const projects = new Map<string, Promise<TynnAgentToken>>();
+    const projects = new Map<string, Promise<unknown>>();
 
     const load = async (): Promise<Record<string, Stored>> => {
         let text: string;
@@ -265,8 +265,55 @@ export function tynnAgentIdentities(ports: AgentCredentialPorts) {
         } catch { return 'failed'; }
     }
 
+    /**
+     * REGISTERED WHEN IT IS CREATED (Tynn #1001; the P8 measurement: A's agents reached Tynn only at their first start). The
+     * agent with its settings, and no key: its key is minted when it is mounted or first starts. `shared`: Tynn's agent of
+     * this name was registered by another machine, and this one mounts it when it starts; `conflict`: the name is a local
+     * twin's, or differs only in case. Serialized with `ensure` per project (Tynn upserts by name).
+     */
+    function register(input: { projectId: string; agent: AgentRecord; tynn: TynnSessionPort | null }): Promise<'registered' | 'shared' | 'conflict' | 'failed'> {
+        const tynn = input.tynn;
+        const userId = tynn?.status().signedIn ? tynn.userId?.() : null;
+        if (!tynn || !userId) return Promise.resolve('failed');
+        const { agent, projectId } = input;
+        if (!isAcpProvider(agent.provider) || !agent.name.trim() || agent.name !== agent.name.trim() || agent.name.length > 255 || /[\x00-\x1f]/.test(agent.name)) return Promise.resolve('conflict');
+        const run = async (): Promise<'registered' | 'shared' | 'conflict' | 'failed'> => {
+            const path = `/api/v1/projects/${encodeURIComponent(projectId)}/agents`;
+            const call = async (method: 'GET' | 'POST', body?: unknown): Promise<Record<string, unknown> | null> => {
+                try {
+                    const response = await tynn.request(path, { method, ...(body === undefined ? {} : { body }) });
+                    return response.ok ? object(await response.json()) : null;
+                } catch { return null; }
+            };
+            const list = await call('GET');
+            if (!list || list.project_id !== projectId || !Array.isArray(list.agents)) return 'failed';
+            const agents = list.agents.map(remoteAgent);
+            if (agents.some((a) => a === null)) return 'failed';
+            if (agents.some((a) => a!.external_id === agent.id)) return 'registered';
+            const named = agents.filter((a) => a!.name.toLowerCase() === agent.name.toLowerCase()) as RemoteAgent[];
+            if (named.length > 0) {
+                const same = named.length === 1 && named[0]!.name === agent.name && named[0]!.external_id !== null ? named[0]! : undefined;
+                let records: Record<string, Stored> = {};
+                try { records = await load(); } catch { return 'failed'; }
+                const local = same !== undefined && (ports.isLocalAgent?.(same.external_id!) === true
+                    || Object.values(records).some((r) => object(r) && r.remoteAgentId === same.id && r.userId === userId && r.projectId === projectId && r.genieId !== agent.id));
+                return same && !local ? 'shared' : 'conflict';
+            }
+            const registered = await call('POST', { name: agent.name, external_id: agent.id, config: tynnConfigOf(agent) });
+            return remoteAgent(registered?.agent)?.external_id === agent.id ? 'registered' : 'failed';
+        };
+        const project = JSON.stringify([userId, projectId]);
+        const before = projects.get(project) ?? Promise.resolve();
+        const work = before.then(run, run);
+        const held = work.catch(() => {});
+        projects.set(project, held);
+        void held.finally(() => { if (projects.get(project) === held) projects.delete(project); });
+        return work;
+    }
+
     return {
         push,
+        register,
         /** The keys an older Genie sealed with safeStorage, for the one-time move (keychain-migration.ts). Only a window can open them. */
         async legacyKeys(cipher: { decrypt(bytes: Buffer): string }): Promise<MigrationSource[]> {
             const records = await load();

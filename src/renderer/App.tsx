@@ -2534,7 +2534,7 @@ function DesktopApp({ bridge }: AppProps) {
         {resolvedBridge?.workspaces.adoptAgent ? (
             <ImportedAgentsModal
                 shown={cameWith ? { workspaceId: cameWith.workspaceId, name: workspaceLabel(snapshot.workspaces, cameWith.workspaceId), path: snapshot.workspaces?.find((w) => w.id === cameWith.workspaceId)?.path ?? null, agents: cameWith.agents } : null}
-                api={{ adopt: (workspaceId, name) => resolvedBridge.workspaces.adoptAgent!(workspaceId, name) }}
+                api={{ adopt: (workspaceId, name) => resolvedBridge.workspaces.adoptAgent!(workspaceId, name), ...(resolvedBridge.workspaces.adoptAgents ? { adoptAll: (workspaceId: string, except: readonly string[]) => resolvedBridge.workspaces.adoptAgents!(workspaceId, except) } : {}) }}
                 onClose={() => setCameWith(null)}
             />
         ) : null}

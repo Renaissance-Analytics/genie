@@ -1919,7 +1919,7 @@ async function main(): Promise<void> {
     await phoneRegistry.load({ name: hostname(), healthy: true });
     await phoneRegistry.assignMissingDefaults();
     // AN AGENT'S SETTINGS FOLLOW IT TO TYNN (Tynn #1001): after each registry write, and when the account signs in again.
-    const agentSettingsSync = agentTynnSync({ agents: () => hostRegistry.listAgents(), push: (agent) => agentKeys.push(agent), log: lifecycleLog });
+    const agentSettingsSync = agentTynnSync({ agents: () => hostRegistry.listAgents(), push: (agent) => agentKeys.push(agent), register: (agent) => agentKeys.register(agent), log: lifecycleLog });
     agentSettingsSync.prime();
     stores.onEvent((event) => { if (event.store === 'registry') void agentSettingsSync.changed(); });
     void tynnOpening.then((account) => { account.onChange(() => { if (account.status().signedIn) void agentSettingsSync.changed(); }); }, () => {});
@@ -2254,6 +2254,27 @@ async function main(): Promise<void> {
             defaultEnvFile: () => { const v = settings.snapshot().default_env_file; return typeof v === 'string' ? v : ''; },
             stagingDirectory: () => hostScratch.directory(),
             recheckMissing: () => missingWorkspaces.check(),
+            // TYNN'S AGENTS FOR AN IMPORTED PROJECT, and MOUNTING ONE (Tynn #1016): the active ones Tynn lists; signed out, none.
+            tynnAgents: async (projectId) => {
+                const account = tynnAccountNow;
+                if (!account?.status().signedIn) return null;
+                const response = await account.request(`/api/v1/projects/${encodeURIComponent(projectId)}/agents`, { method: 'GET' }).catch(() => null);
+                const body = response?.ok ? await response.json().catch(() => null) as { project_id?: unknown; agents?: unknown } | null : null;
+                if (!body || body.project_id !== projectId || !Array.isArray(body.agents)) return null;
+                return body.agents.flatMap((row: unknown) => {
+                    const a = row as { name?: unknown; status?: unknown; purpose?: unknown; config?: { provider?: unknown; instructions?: unknown } | null };
+                    if (typeof a?.name !== 'string' || a.status !== 'active') return [];
+                    return [{ name: a.name, provider: typeof a.config?.provider === 'string' ? a.config.provider : null, instructions: typeof a.config?.instructions === 'string' ? a.config.instructions : null, purpose: typeof a.purpose === 'string' ? a.purpose : null }];
+                });
+            },
+            // Its own key and Tynn's settings now, before anyone starts it (the owner's ruling #1003: keys are minted on mount).
+            mountAgent: async (agentId) => {
+                await stores.registrySettled();
+                const record = hostRegistry.listAgents().find((a) => a.id === agentId);
+                if (!record) throw new Error('the adopted agent is not in the registry yet');
+                const held = await agentKeys(record, hostRegistry.workspace(record.workspaceId)?.path ?? '');
+                if (held.servers.length === 0 && held.note) throw new Error(held.note);
+            },
         },
         colors: workspaceColors,
         cloneOffers: { cloneOffers: (id) => cloneOffersService.call('list', [id]), applyOffer: (id, offerId) => cloneOffersService.call('apply', [id, offerId]) },

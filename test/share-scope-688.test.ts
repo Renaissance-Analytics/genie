@@ -109,6 +109,7 @@ const FAMILIES: Record<string, readonly Row[]> = {
         row('workspaces.createTynnProject', 'refuse', [{}]),
         row('workspaces.importedAgents', 'refuse', ['tynn']),
         row('workspaces.adoptAgent', 'refuse', ['tynn', 'x']),
+        row('workspaces.adoptAgents', 'refuse', ['tynn', []]),
         row('workspaces.previewAddFromTynn', 'refuse', ['p', '/w']),
         row('workspaces.confirmAddFromTynn', 'refuse', ['/w', 'p']),
         // Hibernating, waking or removing a workspace changes the workstation's roster: its own workspace included.

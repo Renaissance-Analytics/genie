@@ -9,7 +9,7 @@ export type WorkspaceProtocolKey = 'listRepos' | 'addRepo' | 'removeRepo' | 'rem
     | 'settings' | 'setSetting' | 'resetSetting' | 'setGoverns' | 'setDefaultAgent' | 'setColor' | 'savePreview' | 'save' | 'cloneOffers' | 'applyOffer' | 'setMcpServer' | 'onSettingsChanged'
     | 'previewAdd' | 'confirmAdd' | 'create' | 'previewAddFromGit' | 'confirmAddFromGit' | 'readSource'
     | 'stageFromGit' | 'registerExisting' | 'buildEnvelope' | 'discardStaged' | 'githubRepos' | 'tynnProjects'
-    | 'tynnOwnerOptions' | 'createTynnProject' | 'importedAgents' | 'adoptAgent' | 'previewAddFromTynn' | 'confirmAddFromTynn'
+    | 'tynnOwnerOptions' | 'createTynnProject' | 'importedAgents' | 'adoptAgent' | 'adoptAgents' | 'previewAddFromTynn' | 'confirmAddFromTynn'
     // P4 family 12 (Tynn #561): the Tynn tab.
     | 'tynnBoard' | 'tynnBoardAction' | 'tynnPage' | 'tynnPageAction' | 'tynnBoardChanges' | 'tynnBoardWatch'
     | 'tynnIssues' | 'tynnIssueAction' | 'tynnIssueChanges' | 'tynnIssuesWatch' | 'tynnFeaturesWatch'
@@ -387,6 +387,7 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             createTynnProject: (input) => request((ws) => ws.createTynnProject!(input)),
             importedAgents: (id) => request((ws) => ws.importedAgents!(id)),
             adoptAgent: (id, name) => request((ws) => ws.adoptAgent!(id, name)),
+            adoptAgents: (id, except) => request((ws) => ws.adoptAgents!(id, except)),
             previewAddFromTynn: (project, parent) => request((ws) => ws.previewAddFromTynn(project, parent)),
             confirmAddFromTynn: (parent, project) => request((ws) => ws.confirmAddFromTynn(parent, project)),
             listRepos: (id) => request((ws) => ws.listRepos(id)),
