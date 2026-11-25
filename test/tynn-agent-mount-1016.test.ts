@@ -233,27 +233,52 @@ describe('the host applies a mounted agent’s settings and sends later changes'
  * more chance for a stale whole-registry write from the window to land between them. They are written as one change.
  */
 describe('a mounted agent’s settings are one registry write', () => {
-    it('applyMountedSettings writes permissions, mode, autoApprove, accessScope and model together, once', async () => {
+    /** One registry over a Store on disk; every change it sends is counted on the store itself (Tynn #1007: the only write). */
+    async function rig(seed: AgentRecord) {
         const { mkdir: mk, writeFile: wf } = await import('node:fs/promises');
         const { Registry } = await import('../src/main/registry.js');
         const { Store } = await import('../src/main/store.js');
         const home = join(dir, 'home'); await mk(join(home, 'runtime'), { recursive: true });
         await wf(join(home, 'runtime', 'workspaces.json'), JSON.stringify([{ id: 'ws', path: home }]));
-        const b = atlas();
-        await wf(join(home, 'runtime', 'agents.json'), JSON.stringify([b]));
+        await wf(join(home, 'runtime', 'agents.json'), JSON.stringify([seed]));
         const store = new Store(home);
-        let writes = 0;
+        const changes: Array<Parameters<typeof store.changeAgents>[0]> = [];
         // Counted on the store itself (a Proxy cannot reach its private fields).
-        const write = store.writeAgents.bind(store);
-        store.writeAgents = async (records) => { writes++; await write(records); };
-        const registry = new Registry(store);
-        await registry.load({ name: 'fixture', healthy: true });
-        writes = 0;
+        const change = store.changeAgents.bind(store);
+        store.changeAgents = async (c) => { changes.push(c); return change(c); };
+        const open = async () => { const r = new Registry(store); await r.load({ name: 'fixture', healthy: true }); return r; };
+        return { store, changes, open };
+    }
+
+    it('applyMountedSettings sends permissions, mode, autoApprove, accessScope and model as ONE per-record change, never a whole list', async () => {
+        const b = atlas();
+        const { store, changes, open } = await rig(b);
+        const registry = await open();
+        changes.length = 0;
         const after = await registry.applyMountedSettings(b.id, { permissions: 'edits', mode: 'automated', autoApprove: true, accessScope: 'all', model: 'opus' });
-        expect(writes).toBe(1);
+        expect(changes).toHaveLength(1);
+        expect(changes[0]).toEqual({ patch: [{ id: b.id, set: { permissions: 'edits', mode: 'automated', autoApprove: true, accessScope: 'all', model: 'opus' } }] });
         expect(after).toMatchObject({ permissions: 'edits', mode: 'automated', autoApprove: true, accessScope: 'all', model: 'opus' });
-        // Nothing Tynn holds: nothing changes.
+        expect((await store.readAgents()).find((a) => a.id === b.id)).toMatchObject({ permissions: 'edits', mode: 'automated', autoApprove: true, accessScope: 'all', model: 'opus' });
+        // Nothing Tynn holds: nothing is written, nothing changes.
+        changes.length = 0;
         const c = await registry.applyMountedSettings(b.id, {});
+        expect(changes).toHaveLength(0);
         expect(c).toMatchObject({ permissions: 'edits' });
+    });
+
+    it('a setting Tynn holds lands even when this copy is behind and already shows that value (a set field always crosses, #1007)', async () => {
+        const b = atlas({ mode: 'manual', autoApprove: false });
+        const { store, changes, open } = await rig(b);
+        const stale = await open(); // shows manual, autoApprove false
+        const other = await open();
+        await other.setMode(b.id, 'automated');
+        await other.setAutoApprove(b.id, true);
+        changes.length = 0;
+        // Tynn holds manual and autoApprove false: this copy already shows exactly that, and is behind the files.
+        await stale.applyMountedSettings(b.id, { mode: 'manual', autoApprove: false });
+        expect(changes).toEqual([{ patch: [{ id: b.id, set: { mode: 'manual', autoApprove: false } }] }]);
+        expect((await store.readAgents()).find((a) => a.id === b.id)).toMatchObject({ mode: 'manual', autoApprove: false });
+        expect(stale.find(b.id)).toMatchObject({ mode: 'manual', autoApprove: false });
     });
 });
