@@ -49,7 +49,8 @@ describe('source', () => {
         expect(main).toMatch(/ownProtocol\.watchSummary\(/);
         // The relay host's replica left main in 2g-3b (Tynn #959), the stores' in 2g-4d E (#955); main opens genie-host's safe mode.
         expect(main).toMatch(/WindowSafeMode\.open\(\{ link: agentEngineLink\.client \}\)/);
-        expect(compose).toMatch(/input\.agentStores/);
+        // compose opens what it holds only through the test's own helper (`input.alone`, P6-4).
+        expect(compose).toMatch(/input\.alone\.openStores\(/);
         expect(code('src/main/genie-host.ts')).toMatch(/ProcessBook\.open\(/);
     });
 });
