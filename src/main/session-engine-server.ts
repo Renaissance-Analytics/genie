@@ -185,6 +185,11 @@ export interface EngineServerOptions {
     readonly hosting?: HostingService;
     /** The host's app door and its keys (P5a.2). Absent = `engine.appInbox` is refused. Local windows only, like the hosting. */
     readonly appInbox?: AppInboxHost;
+    /**
+     * A workspace's service variables (DB_*, REDIS_URL…), from genie-host's OWN engines (Tynn #1044): what every agent, kept
+     * process, scheduled task and flow command this host starts gets, window or no window. Absent = none.
+     */
+    readonly serviceEnvFor?: (workspaceId: string) => Readonly<Record<string, string>>;
     /** Takes the window's environment into this host's (`engine.windowEnv`, and with each start); `adoptWindowEnv` on `process.env` by default. */
     readonly adoptWindowEnv?: (env: Readonly<Record<string, string>>) => void;
     /** The host's process book and scheduler (P3.3c: processes-host.ts). Absent = `engine.processes` is refused. */
@@ -289,7 +294,6 @@ export class SessionEngineServer {
     readonly #marketplaceReviews = new WeakMap<Connection, MarketplaceSession>();
     readonly #gappSessionOwners = new WeakMap<Connection, GAppSessionOwner>();
     readonly #records = new Map<string, AgentRecord>();
-    readonly #env = new Map<string, Readonly<Record<string, string>>>();
     readonly #connections = new Set<Connection>();
     /** The updater helper's links (P5b), apart from the windows': nothing a window is sent or counted for reaches them. */
     readonly #helpers = new Set<Connection>();
@@ -371,8 +375,8 @@ export class SessionEngineServer {
     hostOptions(): EngineHostOptions {
         return {
             currentRecord: (id) => this.#records.get(id) ?? null,
-            // Handed over with each start (the window's engines know the workspace's variables); read inside `start`.
-            serviceEnvFor: (workspaceId) => this.#env.get(workspaceId) ?? {},
+            // The host's own engines, read inside each start (Tynn #1044); never a copy a window handed over.
+            serviceEnvFor: (workspaceId) => this.serviceEnvFor(workspaceId),
             // The host's Genie entry first (P3.1: it owns the MCP server and the caller book), then the agent's own Tynn server, which the
             // host prepares, window or no window (host-agent-keys.ts). What it could not hand out, it says why in the agent's chat.
             prepareMcpServers: async (record, cwd, signal) => {
@@ -398,9 +402,13 @@ export class SessionEngineServer {
         host.subscribe((agentId) => this.#markDirty(agentId));
     }
 
-    /** The workspace variables (DB_*, REDIS_URL…) the last window handed over with a start, for what the host starts itself. */
+    /**
+     * The workspace variables (DB_*, REDIS_URL…) for what this host starts, from its own engines, read fresh every time
+     * (Tynn #1044). They were the copy a window handed over with an agent's start, so after a host restart every kept
+     * process, scheduled task and flow command ran without them until a window started an agent of that workspace.
+     */
     serviceEnvFor(workspaceId: string): Readonly<Record<string, string>> {
-        return this.#env.get(workspaceId) ?? {};
+        return this.#options.serviceEnvFor?.(workspaceId) ?? {};
     }
 
     /** Whether a window is connected now (the MCP server forwards window tools only then). The browser's link is none. */
@@ -698,8 +706,8 @@ export class SessionEngineServer {
                 const record = args[0] as AgentRecord;
                 if (!record || typeof record.id !== 'string') throw new Error('engine.start needs a record');
                 this.#records.set(record.id, record);
-                const env = args[2];
-                this.#env.set(record.workspaceId, env && typeof env === 'object' ? (env as Record<string, string>) : {});
+                // args[2] is a window's copy of the service env (sent by every window up to beta.65): not read. The host's
+                // own engines answer it (`serviceEnvFor`), so a stale or empty copy can never stand in for them (Tynn #1044).
                 const windowEnv = args[3];
                 if (windowEnv && typeof windowEnv === 'object') (this.#options.adoptWindowEnv ?? ((e) => adoptWindowEnv(process.env, e)))(windowEnv as Record<string, string>);
                 return host.start(record, str(1));

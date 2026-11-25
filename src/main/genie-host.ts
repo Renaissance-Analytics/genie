@@ -1250,6 +1250,9 @@ async function main(): Promise<void> {
         browsers: new RemoteBrowsers(siteDoor),
     });
     const engine = new SessionEngineServer({
+        // AN AGENT'S, A KEPT PROCESS'S AND A FLOW'S SERVICE VARIABLES ARE THIS HOST'S (Tynn #1044): from its own engines,
+        // window or no window. They came from the window's engine.start before, so after a host restart nothing got DB_*.
+        serviceEnvFor: (workspaceId) => hostingStack?.engines.envFor(workspaceId) ?? {},
         features: featureCallers,
         protocol: protocolTunnels,
         adoptWindowEnv: env => adoptFeatureEnvironment(home, env),
@@ -2115,7 +2118,7 @@ async function main(): Promise<void> {
         bookOpening ??= (async () => {
             const deps = {
                 supervisor: processSupervisor,
-                // The workspace's service variables the last window handed over (its engines are the window's until P5).
+                // The workspace's service variables, from this host's own engines (Tynn #1044).
                 envFor: (workspaceId: string) => engine.serviceEnvFor(workspaceId),
                 // Each kept process's OWN app credential, minted here (P5a.2), window or no window.
                 appEnv: (p: { readonly kind: 'process'; readonly id: string; readonly name: string; readonly workspaceId: string }) => appInboxDoor.envFor(p),
