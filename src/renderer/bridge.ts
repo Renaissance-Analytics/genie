@@ -167,6 +167,8 @@ export interface ActivityBridge {
 }
 
 export interface GenieBridge {
+    /** The host's password prompt for an elevated step this client clicked (Tynn #973). Absent = this client is never asked. */
+    elevation?: import('../core/elevation.js').ElevationBridge;
     /** The admitted local window's Marketplace; absent on a remote bridge. */
     marketplace?: MarketplaceApi;
     /** The admitted local window's GApp store actions; absent on a remote bridge. */
@@ -734,7 +736,7 @@ export const NO_TERMINALS: GenieBridge['terminals'] = {
  */
 export type SignInResult = { ok: true; terminalId?: string; route?: string; ticket?: string } | { ok: false; reason: string };
 
-export type PreloadBridge = Omit<GenieBridge, 'snapshot' | 'subscribe' | 'agentDetail' | 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'host' | 'features' | 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'takeOver' | 'providerLogin' | 'switchAccount' | 'designLogin' | 'designSignIn' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'accounts' | 'accountsAct' | 'dismissSwitchOffer' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals' | 'marketplace' | 'gapps' | 'chooseProviderProgram' | 'scratchTerminal'> & {
+export type PreloadBridge = Omit<GenieBridge, 'snapshot' | 'subscribe' | 'agentDetail' | 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'host' | 'features' | 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'takeOver' | 'providerLogin' | 'switchAccount' | 'designLogin' | 'designSignIn' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'accounts' | 'accountsAct' | 'dismissSwitchOffer' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals' | 'marketplace' | 'gapps' | 'chooseProviderProgram' | 'scratchTerminal' | 'elevation'> & {
     files: Omit<GenieBridge['files'], import('./local-files-client.js').FilesProtocolKey>;
     features: Omit<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>;
     tynnNetwork?: Omit<TynnNetworkBridge, keyof LocalOwnerBridge['tynnNetwork']>;
@@ -813,7 +815,7 @@ export function pageBridge(preload: PreloadBridge): GenieBridge {
         files: { ...preload.files, ...local.files }, repo: local.repo, chatDrafts: local.chatDrafts, artboard: local.artboard,
         ...local.agentCommands,
         ...local.reads,
-        terminals: local.terminals, host: local.host, features: { ...preload.features, ...local.features },
+        terminals: local.terminals, host: local.host, features: { ...preload.features, ...local.features }, elevation: local.elevation,
         subscribeAgent: (agentId, onChange) => views.subscribe(agentId, onChange) };
     pageBridges.set(preload, bridge);
     if (typeof window !== 'undefined' && window.genieTestMode === true) window.genieTest = bridge;

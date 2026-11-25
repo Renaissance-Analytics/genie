@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { UNLOCK_WORDS, type UnlockOutcome } from '../core/keyring-unlock.js';
 import { parseBusAddress, unlockDefaultCollection } from './secret-service-bus.js';
+import type { Elevate } from '../core/elevation.js';
 
 /**
  * A LINUX SESSION WITH NO KEYRING (the owner, 2026-11-01: "Genie needs to install this if it's not already on the
@@ -11,8 +12,8 @@ import { parseBusAddress, unlockDefaultCollection } from './secret-service-bus.j
  * Four states a Linux session can be in, each with one action the person can take from Genie's card:
  *
  *  - `not-installed`   nothing serves the Secret Service and no keyring is installed → Install keyring: the distro's
- *                      package (gnome-keyring + libsecret) through `pkexec`, so the SYSTEM asks for the password —
- *                      Genie never does. No pkexec, or no polkit agent to ask: the exact command to run instead.
+ *                      package (gnome-keyring + libsecret) as an elevated step the host runs, after the window that
+ *                      pressed Install asks for the password (Tynn #973). No window to ask: the exact command instead.
  *  - `not-running`     installed, but nothing owns `org.freedesktop.secrets` → Start keyring: D-Bus activation (the
  *                      activation file the package installs, the same path libsecret takes), then
  *                      `gnome-keyring-daemon --start --components=secrets` if that fails.
@@ -65,7 +66,11 @@ export interface KeyringView {
     readonly packages: string;
 }
 
-/** How to install the keyring here: `run` is the pkexec argv (null = Genie cannot run it), `manual` the command to type. */
+/**
+ * How to install the keyring here: `run` is the package manager's argv, run as administrator by the host after the client
+ * that pressed Install asks for the password (Tynn #973; null = Genie does not know this system's package manager), and
+ * `manual` the command to type.
+ */
 export interface InstallPlan {
     readonly run: readonly string[] | null;
     readonly manual: string | null;
@@ -135,11 +140,14 @@ export function installArgv(pm: PackageManager): string[] {
     }
 }
 
-/** PURE: run it through pkexec (the system's own password prompt) when there is one; always show the command to type. */
-export function installPlan(pm: PackageManager | null, pkexec: string | null): InstallPlan {
+/**
+ * PURE: the install as an elevated step the host runs (Tynn #973: not pkexec, which had no polkit agent to ask on
+ * omarchy-genie); always the command to type too.
+ */
+export function installPlan(pm: PackageManager | null): InstallPlan {
     if (pm === null) return { run: null, manual: null, packages: KEYRING_PACKAGES.pacman };
     const argv = installArgv(pm);
-    return { run: pkexec ? [pkexec, ...argv] : null, manual: `sudo ${argv.join(' ')}`, packages: KEYRING_PACKAGES[pm] };
+    return { run: argv, manual: `sudo ${argv.join(' ')}`, packages: KEYRING_PACKAGES[pm] };
 }
 
 /** Ask the session bus to activate the Secret Service — what libsecret itself does on first use. */
@@ -150,17 +158,13 @@ export const START_SECRET_SERVICE_ARGV: readonly string[] = [
 /** The fallback when activation fails: start (or connect to) gnome-keyring's secrets component for this session. */
 export const START_DAEMON_ARGV: readonly string[] = ['gnome-keyring-daemon', '--start', '--components=secrets'];
 
-/** pkexec's documented exit codes: 126 = the person dismissed the prompt / not authorised; 127 = could not authenticate (no agent). */
-const PKEXEC_DISMISSED = 126;
-const PKEXEC_NO_AGENT = 127;
-const INSTALL_TIMEOUT_MS = 10 * 60_000;
 const START_TIMEOUT_MS = 10_000;
 
 export interface KeyringPorts {
     readonly platform: NodeJS.Platform;
     /** Read the session now (bus, filesystem, this process's backend). */
     facts(): Promise<Omit<KeyringFacts, 'platform'>>;
-    /** How to install here (package manager, pkexec). */
+    /** How to install here (the package manager). */
     plan(): Promise<InstallPlan>;
     /** Run a command; never a shell. A spawn failure is a non-zero code, not a throw. */
     exec(argv: readonly string[], opts?: { timeoutMs?: number }): Promise<{ code: number; stderr: string }>;
@@ -203,8 +207,8 @@ export class LinuxKeyring {
      * THE CARD'S BUTTON, as a window presses it: `fix`, answered once it is DONE or the keyring's own dialog is UP — the
      * dialog waits on the person, and nothing should wait on the dialog (the card shows "asking" meanwhile, and Cancel).
      */
-    press(): Promise<void> {
-        const work = this.fix();
+    press(elevate?: Elevate): Promise<void> {
+        const work = this.fix(elevate);
         if (this.#step === 'unlocking') return Promise.resolve();
         return new Promise<void>((resolve) => {
             const off = this.onChange(() => { if (this.#step === 'unlocking') { off(); resolve(); } });
@@ -261,40 +265,50 @@ export class LinuxKeyring {
         return work;
     }
 
-    /** The card's button: the next step for the state the session is in. A click while one runs joins it. */
-    fix(): Promise<void> {
+    /**
+     * The card's button: the next step for the state the session is in. A click while one runs joins it. `elevate` is the
+     * host's elevation for the window that pressed it (Tynn #973): an install asks THAT window for the password.
+     */
+    fix(elevate?: Elevate): Promise<void> {
         if (this.#work) return this.#work;
-        const work = this.#fix().finally(() => { this.#work = null; });
+        const work = this.#fix(elevate).finally(() => { this.#work = null; });
         this.#work = work;
         return work;
     }
 
-    async #fix(): Promise<void> {
+    async #fix(elevate: Elevate | undefined): Promise<void> {
         await this.#reread();
         switch (this.state()) {
             case 'ready': this.#set(null); return;
-            case 'not-installed': if (!(await this.#install())) return; await this.#start(); return;
+            case 'not-installed': if (!(await this.#install(elevate))) return; await this.#start(); return;
             case 'not-running': await this.#start(); return;
             case 'restart-needed': this.#set('restarting'); this.#ports.relaunch(); return;
             case 'refused': await this.#unlock(); return;
         }
     }
 
-    async #install(): Promise<boolean> {
+    async #install(elevate: Elevate | undefined): Promise<boolean> {
         const plan = this.#plan ?? (this.#plan = await this.#ports.plan());
         if (!plan.run) {
-            this.#set(null, plan.manual
-                ? 'Genie cannot ask for your password here (pkexec is not installed). Run this in a terminal, then Check again.'
-                : `Genie does not know this system’s package manager. Install ${plan.packages.join(' and ')} with it, then Check again.`, plan.manual);
+            this.#set(null, `Genie does not know this system’s package manager. Install ${plan.packages.join(' and ')} with it, then Check again.`, plan.manual);
+            return false;
+        }
+        // No client to ask (Tynn #973): said at once, never a wait on a prompt nobody can see.
+        if (!elevate) {
+            this.#set(null, 'Installing the keyring needs your password, and no Genie window is connected to ask for it. Press Install in Genie, or run this in a terminal, then Check again.', plan.manual);
             return false;
         }
         this.#set('installing');
-        const r = await this.#ports.exec(plan.run, { timeoutMs: INSTALL_TIMEOUT_MS });
-        if (r.code === PKEXEC_DISMISSED) { this.#set(null, 'Cancelled: nothing was installed.'); return false; }
-        if (r.code === PKEXEC_NO_AGENT) { this.#set(null, 'Your system could not ask for your password (no authentication agent is running). Run this in a terminal instead, then Check again.', plan.manual); return false; }
-        if (r.code !== 0) {
-            const said = lastLine(r.stderr);
-            this.#set(null, `The install failed (exit ${r.code})${said ? `: ${said}` : ''}.`, plan.manual);
+        const r = await elevate({ title: 'Install the keyring', items: plan.packages, steps: [{ command: plan.run[0]!, args: plan.run.slice(1) }] });
+        if (r.kind === 'refused') {
+            if (/cancelled/i.test(r.reason)) this.#set(null, 'Cancelled: nothing was installed.');
+            else this.#set(null, `${r.reason.charAt(0).toUpperCase()}${r.reason.slice(1)}.`, plan.manual);
+            return false;
+        }
+        if (r.exitCode !== 0) {
+            const said = lastLine(r.output);
+            const code = r.exitCode;
+            this.#set(null, `The install failed (exit ${code})${said ? `: ${said}` : ''}.`, plan.manual);
             return false;
         }
         await this.#reread();
@@ -369,7 +383,7 @@ export function realKeyringPorts(deps: RealKeyringDeps): KeyringPorts {
     return {
         platform: 'linux',
         facts: async () => ({ installed: onPath('gnome-keyring-daemon') !== null, ...(await secretService()), ...deps.storage() }),
-        plan: async () => installPlan(detectPackageManager(readFile('/etc/os-release') ?? '', (bin) => onPath(bin) !== null), onPath('pkexec')),
+        plan: async () => installPlan(detectPackageManager(readFile('/etc/os-release') ?? '', (bin) => onPath(bin) !== null)),
         exec: async (argv, opts) => {
             try {
                 const r = await deps.run(argv[0]!, argv.slice(1), opts?.timeoutMs);

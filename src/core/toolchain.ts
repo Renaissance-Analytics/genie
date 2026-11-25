@@ -12,6 +12,7 @@
 
 import { findBatchFile, type LookupPorts } from './program-lookup.js';
 import { phpAdvisoryText } from './php-advisories.js';
+import type { ElevatedStep } from './elevation.js';
 
 export type Platform = 'win32' | 'darwin' | 'linux';
 export type PackageManager = 'winget' | 'brew' | 'apt' | 'dnf';
@@ -258,7 +259,16 @@ export function vendorInstaller(tool: string, platform: Platform): { readonly ar
 
 export type UpdatePlan =
     | { readonly command: string; readonly manager: PackageManager | 'rustup' | 'npm' | 'vendor' | 'composer'; readonly argv?: readonly string[] }
+    /**
+     * Tynn #973: run as administrator by the HOST (main/linux-elevation.ts), after the client the person clicked from asks
+     * for the password naming `items`. `steps` are programs and their arguments; no pkexec, sudo or shell. `command` is
+     * what the row shows.
+     */
+    | { readonly command: string; readonly manager: PackageManager; readonly elevated: true; readonly items: readonly string[]; readonly steps: readonly ElevatedStep[] }
     | { readonly refused: string };
+
+/** A Linux plan's elevated steps, said as the row shows them. */
+const asAdministrator = (steps: readonly ElevatedStep[]): string => `${steps.map((s) => [s.command, ...s.args].join(' ')).join(' && ')} (as administrator)`;
 
 /** The update command for THIS platform, from Genie's own tables — never a guess. */
 export function planUpdate(input: { tool: string; platform: Platform; packageManager: PackageManager | null }): UpdatePlan {
@@ -280,27 +290,31 @@ export function planUpdate(input: { tool: string; platform: Platform; packageMan
             return { command: `winget upgrade --id ${pkg} --silent --accept-package-agreements --accept-source-agreements`, manager: pm };
         case 'brew':
             return { command: `brew upgrade ${pkg}`, manager: pm };
-        // `pkexec`, not `sudo`: Genie runs commands with no terminal, so `sudo` could never ask for the password and a
-        // Linux update failed before it started. pkexec asks through the desktop's own polkit prompt.
+        // Tynn #973: not pkexec (omarchy-genie has polkitd and NO polkit agent, so it failed with no prompt anywhere), and
+        // not a sudo of our own here: the host runs these steps after the person's password, asked in their client.
         case 'apt':
-            return { command: `pkexec apt-get install --only-upgrade -y ${pkg}`, manager: pm };
-        case 'dnf':
-            return { command: `pkexec dnf upgrade -y ${pkg}`, manager: pm };
+        case 'dnf': {
+            if (!PACKAGE_NAME.test(pkg)) return { refused: `${pkg} is not a package name Genie will run as administrator` };
+            const steps: ElevatedStep[] = pm === 'apt' ? [{ command: 'apt-get', args: ['install', '--only-upgrade', '-y', pkg] }] : [{ command: 'dnf', args: ['upgrade', '-y', pkg] }];
+            return { command: asAdministrator(steps), manager: pm, elevated: true, items: [pkg], steps };
+        }
     }
 }
 
 /**
  * HOW A MISSING TOOL WOULD BE INSTALLED HERE — the exact argv, shown to the person BEFORE anything runs (their click on
  * it is the consent), from Genie's own tables and never a guess. The package manager Genie 1 used per platform: winget
- * on Windows, Homebrew on macOS, apt or dnf on Linux through `pkexec` (one polkit prompt; `apt-get update` rides in the
- * same prompt, because installing against a stale index is the classic "no installation candidate"). npm-distributed
- * agent CLIs install with npm. `elevated` says a system prompt will appear — never a surprise.
+ * on Windows, Homebrew on macOS, apt or dnf on Linux as elevated steps the host runs after Genie asks for the password in
+ * the client the person clicked from (Tynn #973; `apt-get update` rides in the same prompt). npm-distributed
+ * agent CLIs install with npm. `elevated` says a password will be asked for — never a surprise.
  */
 export type InstallPlan =
-    | { readonly argv: readonly string[]; readonly label: string; readonly manager: PackageManager | 'npm' | 'vendor'; readonly elevated: boolean }
+    | { readonly argv: readonly string[]; readonly label: string; readonly manager: PackageManager | 'npm' | 'vendor'; readonly elevated: false }
+    /** Tynn #973: run as administrator by the HOST, after the person's password is asked in their client naming `items`. */
+    | { readonly steps: readonly ElevatedStep[]; readonly items: readonly string[]; readonly label: string; readonly manager: PackageManager; readonly elevated: true }
     | { readonly refused: string };
 
-/** A Debian package name; anything else never reaches `sh -c`. */
+/** A package name Genie hands to a package manager as one argument; anything else is refused before anyone is asked. */
 const PACKAGE_NAME = /^[a-z0-9][a-z0-9.+-]*$/;
 
 export function planInstall(input: { tool: string; platform: Platform; packageManager: PackageManager | null }): InstallPlan {
@@ -324,11 +338,14 @@ export function planInstall(input: { tool: string; platform: Platform; packageMa
         }
         case 'brew':
             return { argv: ['brew', 'install', pkg], label: `brew install ${pkg}`, manager: pm, elevated: false };
+        // Tynn #973: elevated steps the host runs (no pkexec, no shell); apt's index refresh rides in the same prompt, because
+        // installing against a stale index is the classic "no installation candidate".
         case 'apt':
-            if (!PACKAGE_NAME.test(pkg)) return { refused: `${pkg} is not a package name Genie will hand to a shell` };
-            return { argv: ['pkexec', 'sh', '-c', `apt-get update && apt-get install -y ${pkg}`], label: `apt-get update && apt-get install -y ${pkg} (as administrator)`, manager: pm, elevated: true };
-        case 'dnf':
-            return { argv: ['pkexec', 'dnf', 'install', '-y', pkg], label: `dnf install -y ${pkg} (as administrator)`, manager: pm, elevated: true };
+        case 'dnf': {
+            if (!PACKAGE_NAME.test(pkg)) return { refused: `${pkg} is not a package name Genie will run as administrator` };
+            const steps: ElevatedStep[] = pm === 'apt' ? [{ command: 'apt-get', args: ['update'] }, { command: 'apt-get', args: ['install', '-y', pkg] }] : [{ command: 'dnf', args: ['install', '-y', pkg] }];
+            return { steps, items: [pkg], label: asAdministrator(steps), manager: pm, elevated: true };
+        }
     }
 }
 

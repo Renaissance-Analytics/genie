@@ -75,6 +75,8 @@ import { endChildTrees } from './end-child-trees.js';
 import { LinkGate } from './linked-stream.js';
 import { composeHosting, type HostingStack } from './hosting-compose.js';
 import { WindowElevation } from './hosting-host.js';
+import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
+import type { RemoteHost } from './remote-host.js';
 import { AppInboxHost } from './app-inbox-host.js';
 import { shutDownHosted } from './host-shutdown.js';
 import { startBeat } from './safe-mode-beat.js';
@@ -160,6 +162,9 @@ import { hostAgentKeys } from './host-agent-keys.js';
 import { chmod, mkdir, readFile as readFileText, stat as statFile } from 'node:fs/promises';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 import { LOCAL_EVENTS, transportHub, type CallContext, type RemoteMethod } from '../core/remote-protocol.js';
+import { CAP_ELEVATION_PROMPT, ELEVATION_EVENT, type ElevatedBatch, type Elevate } from '../core/elevation.js';
+import { ElevationBroker } from './elevation-broker.js';
+import { privilegedBatch, privilegedOutcome, realSudoPath, realSudoSpawn, runElevatedWithPassword, serialized, type AskPassword } from './linux-elevation.js';
 import { deviceLinkProtocol } from './device-link-protocol.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { remoteListener } from './remote-listen.js';
@@ -570,9 +575,33 @@ async function main(): Promise<void> {
      * frontdoor.watch and drive the sites and services over the protocol (features.snapshot/act). This host never raises an
      * OS prompt itself: an elevation is asked of a connected window, and with none it waits (WindowElevation).
      */
+    /*
+     * ELEVATION ON LINUX, ASKED IN THE CLIENT THAT CLICKED (Tynn #973): the password prompt goes to that one connection
+     * (RemoteHost.promptTo), its answer counts from it alone, and the host runs the batch with `sudo -S -k` and the password
+     * on stdin, one batch at a time (main/linux-elevation.ts). Not pkexec: omarchy-genie has no polkit agent to ask. Made
+     * before the hosting, whose hosts write and trust install go through it too; the RemoteHost it sends through is opened
+     * later, and until then nobody is connected to ask.
+     */
+    let promptHost: RemoteHost | null = null;
+    const elevationBroker = new ElevationBroker({
+        send: (connectionId, event) => promptHost?.promptTo(connectionId, ELEVATION_EVENT, event) ?? false,
+        capable: (connectionId) => promptHost?.canPrompt(connectionId) ?? false,
+    });
+    const elevationRun = serialized((job: { batch: ElevatedBatch; ask: AskPassword }) => runElevatedWithPassword(job.batch, { ask: job.ask, spawn: realSudoSpawn, sudo: realSudoPath(), log: lifecycleLog }));
+    const hostElevation = {
+        elevateFor: (context: CallContext): Elevate | undefined => (process.platform === 'linux' ? (batch) => elevationRun({ batch, ask: elevationBroker.askerFor(context) }) : undefined),
+        answer: (connectionId: string, id: unknown, password: unknown) => elevationBroker.answer(connectionId, id, password),
+        dropConnection: (connectionId: string) => elevationBroker.dropConnection(connectionId),
+    };
+    /** Linux: the hosting's elevation asks this machine's own window, as it always did, now in Genie's prompt (Tynn #973). */
+    const linuxHostingElevate = async (steps: readonly PrivilegedStep[]): Promise<ElevationOutcome> => {
+        const connectionId = promptHost?.localPromptConnection() ?? null;
+        const result = await elevationRun({ batch: privilegedBatch(steps), ask: elevationBroker.askerFor(connectionId === null ? null : { connectionId, isOwner: true, readonly: false }) });
+        return privilegedOutcome(result, steps);
+    };
     const hostingElevation = new WindowElevation({
-        connected: () => engineRef?.localWindowConnected() ?? false,
-        ask: (steps) => (engineRef ? engineRef.elevate(steps) : Promise.reject(new Error('no Genie window is connected'))),
+        connected: () => (process.platform === 'linux' ? promptHost?.localPromptConnection() != null : engineRef?.localWindowConnected() ?? false),
+        ask: (steps) => (process.platform === 'linux' ? linuxHostingElevate(steps) : engineRef ? engineRef.elevate(steps) : Promise.reject(new Error('no Genie window is connected'))),
         elevation: capabilities.elevation,
     });
     /*
@@ -1310,7 +1339,7 @@ async function main(): Promise<void> {
         // THE HOST'S OFFER (Tynn #894), read at each hello: its track and build, the wire's schema and the fixed window's
         // floor, and the catalog's elements as capabilities, so a client sees which elements this host has. `host.update`
         // answers with RemoteHost's stub until the launcher step wires it.
-        protocol: () => remoteOffer('host', build, [...catalogCapabilities(catalogService.snapshot().definitions), `${CAP_CROSS_STATION}@1`]),
+        protocol: () => remoteOffer('host', build, [...catalogCapabilities(catalogService.snapshot().definitions), `${CAP_CROSS_STATION}@1`, `${CAP_ELEVATION_PROMPT}@1`]),
         api: hostRemoteApi({
             hostName: hostname(),
             // What this host answers itself, window or not. The phone's set comes here next (Tynn #551).
@@ -1341,6 +1370,8 @@ async function main(): Promise<void> {
             workspacePaths: workspaceFolders(() => hostRegistry.listWorkspaces()),
         }),
     });
+    // The password prompt's way to a window (Tynn #973), from the moment there can be one.
+    promptHost = remoteAccessHost.remote;
     /*
      * WHO IS AT THIS MACHINE, AS MAIN'S OWN CLIENT WATCHES IT (Tynn #997, 2g-4a): who is connected and who asks to, for its
      * desktop notifications, said on remote.watch when it changes (its pin and devices are not in it). hostRemoteApi's
@@ -2122,7 +2153,7 @@ async function main(): Promise<void> {
             onChange: listener => featureGithub.onEvent(listener),
         },
         keyring: { view: () => featureKeyring.dump().view, notice: () => featureKeyring.dump().notice ?? null,
-            fix: async () => { await featureKeyring.call('fix', []); }, cancel: async () => { await featureKeyring.call('cancel', []); } },
+            fix: async (elevate) => { await featureKeyring.call('fix', [elevate]); }, cancel: async () => { await featureKeyring.call('cancel', []); } },
         issueWatch: () => featureIssueWatch.panels(hostRegistry.listWorkspaces(), workspaceTynnProject, Date.now()),
         issueWatchRefresh: id => issueWatch.call('refresh', [id]), issueWatchSetRepo: (id, owner, repo, change) => issueWatch.call('setRepo', [id, owner, repo, change]),
         toolchain: featureNative,
@@ -2141,7 +2172,7 @@ async function main(): Promise<void> {
             own.attention.onChange(listener), limitNotices.onChange(listener), playwrightInstaller.onChange(listener), stalledTurns.onChange(listener), attachHost.onChange(listener), approvals.onChange(listener), stores.onEvent(listener)];
         return () => { featureChanges.delete(listener); for (const off of offs) off(); };
     };
-    hostFeatures = new HostFeatures({ lifecycleLog, signIn: (provider, context) => signIns.loginFor(provider, context), slowPart: { ms: 1_000, log: (part, ms) => lifecycleLog(`features slow part=${part} ms=${ms}`) }, settings, knowledge: own.knowledge, inbox: own.inbox, attention: own.attention, flows: hostFlows,
+    hostFeatures = new HostFeatures({ lifecycleLog, signIn: (provider, context) => signIns.loginFor(provider, context), elevation: hostElevation, slowPart: { ms: 1_000, log: (part, ms) => lifecycleLog(`features slow part=${part} ms=${ms}`) }, settings, knowledge: own.knowledge, inbox: own.inbox, attention: own.attention, flows: hostFlows,
         roster: () => hostRegistry.listAgents(), workspaceSlugs: () => hostRegistry.workspaceSlugs(), resolveAddress: address => resolveOnRoster(address, hostRegistry.listAgents(), hostRegistry.workspaceSlugs()),
         mailRefusal: address => hostRegistry.mailRefusal(address), workspaceIds: () => hostRegistry.listWorkspaces().map(w => w.id),
         runFlow: id => hostFlows.runNow(id), stopFlow: id => hostFlows.stopRun(id), resumeAgentLimit: id => { const record = hostRegistry.find(id); if (record) host.resumeLimit(record.provider); }, refreshPlugins: async () => { await pluginsService.call('refresh', []); }, applyRemote: () => remoteSwitch.apply(),

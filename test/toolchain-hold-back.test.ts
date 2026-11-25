@@ -74,7 +74,8 @@ describe('holding git back', () => {
 const FAILED = { status: 1, signal: null, stdout: ':: Retrieving packages...\n git-2.56.0-2-x86_64 downloading...\n', stderr: 'error: failed retrieving file \'git-2.56.0-2-x86_64.pkg.tar.zst\' from archive.example : Operation too slow\nwarning: failed to retrieve some files\nerror: failed to commit transaction (download library error)\n' };
 const INSTALLED = { status: 0, signal: null, stdout: ':: Processing package changes...\ninstalling git...\n', stderr: '' };
 /** The row's other harness controls that are a FAIL with no reason when they cannot be set up: untouched by this. */
-const FAIL_NONE_ELSEWHERE = 15;
+// 16 since Tynn #973: the keyring-elevation step's own control (gnome-keyring could not be removed) is one.
+const FAIL_NONE_ELSEWHERE = 16;
 const URL_HELD = 'https://archive.example/packages/g/git/git-2.56.0-2-x86_64.pkg.tar.zst';
 
 describe('the held-back install: tried once more, its words kept, and never a FAIL of Genie\'s', () => {

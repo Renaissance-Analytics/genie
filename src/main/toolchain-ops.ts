@@ -27,6 +27,7 @@ import { SYSTEM_CA_BUNDLES } from '../core/php-trust.js';
 import { PLAYWRIGHT_BROWSERS_ENV, playwrightDirs, playwrightEnv, readyVersions } from '../core/playwright-managed.js';
 import { readBrowserManifest } from './playwright-browsers.js';
 import { probeInstalled, type CommandRunner } from './toolchain-prober.js';
+import type { Elevate } from '../core/elevation.js';
 
 /**
  * THE TOOLCHAIN'S ACTIONS (§6.6) — install a missing tool, check and repair — with every effect INJECTED: the runner
@@ -77,6 +78,12 @@ export interface ToolchainOpsPorts {
      * otherwise move a newer Herd node back in front of Genie's).
      */
     readonly genieNode?: () => { readonly version: string; readonly dir: string } | null;
+    /**
+     * Tynn #973: run an elevated plan as administrator. The host's, bound to the client the person clicked from: it asks
+     * that client for the password and runs the steps once with it (main/linux-elevation.ts). Absent = nobody can be
+     * asked, and an elevated plan is refused with why.
+     */
+    readonly elevate?: Elevate;
 }
 
 export type InstallOutcome =
@@ -150,17 +157,26 @@ export async function installTool(tool: string, consent: boolean, ports: Toolcha
     const plan = planInstall({ tool, platform: ports.platform, packageManager: await ports.packageManager() });
     if ('refused' in plan) return { kind: 'refused', reason: plan.refused };
 
+    if (plan.elevated && !ports.elevate) return { kind: 'refused', reason: `installing ${tool} needs the administrator password, and no Genie window is connected to ask for it; nothing was installed` };
     try {
-        ports.progress?.(`Installing ${tool}: ${plan.label}${plan.elevated ? ' — your system will ask for permission' : ''}`);
+        ports.progress?.(`Installing ${tool}: ${plan.label}${plan.elevated ? ' — Genie will ask for your password' : ''}`);
         let exitCode: number;
         let output = '';
-        try {
-            const r = await ports.run(plan.argv[0]!, plan.argv.slice(1));
+        if (plan.elevated) {
+            // ONE prompt in the client that clicked, naming the package; the host runs the steps with it (Tynn #973).
+            const r = await ports.elevate!({ title: `Install ${tool}`, items: plan.items, steps: plan.steps });
+            if (r.kind === 'refused') return { kind: 'refused', reason: r.reason };
             exitCode = r.exitCode;
-            output = r.stdout;
-        } catch (error) {
-            exitCode = -1;
-            output = error instanceof Error ? error.message : String(error);
+            output = r.output;
+        } else {
+            try {
+                const r = await ports.run(plan.argv[0]!, plan.argv.slice(1));
+                exitCode = r.exitCode;
+                output = r.stdout;
+            } catch (error) {
+                exitCode = -1;
+                output = error instanceof Error ? error.message : String(error);
+            }
         }
         ports.progress?.(`Checking that ${tool} answers`);
         await refreshPersistedPath(ports);

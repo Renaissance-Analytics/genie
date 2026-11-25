@@ -198,6 +198,8 @@ const FAMILIES: Record<string, readonly Row[]> = {
         row('features.snapshot', 'refuse'),
         row('features.act', 'refuse', [{ kind: 'settings.set', key: 'theme', value: 'dark' }]),
         row('features.setBrowserBounds', 'host-only', [{}]),
+        // Tynn #973: the password prompt is the host owner's; a share-link guest's answer is refused at the door.
+        row('elevation.answer', 'refuse', ['p1', null]),
     ],
     updates: [
         row('updates.state', 'refuse'),

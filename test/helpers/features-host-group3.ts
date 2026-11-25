@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { vi } from 'vitest';
 import { signedOutGithubView } from '../../src/core/github.js';
 import { planInstall } from '../../src/core/toolchain.js';
+import type { ElevatedBatch, Elevate } from '../../src/core/elevation.js';
 import type { ToolchainActivity } from '../../src/core/toolchain-risk.js';
 import type { FeatureAction, FeatureData } from '../../src/renderer/features.js';
 import type { HostFeatureMachinePorts } from '../../src/main/features-host.js';
@@ -64,23 +65,30 @@ export async function groupThreeFixture() {
     const missing = new Set<string>();
     const run: CommandRunner = async (binary, args) => {
         commands.push({ binary, args });
-        if (binary === 'pkexec') { missing.delete('git'); versions.git = '2.51.0'; return { stdout: '', exitCode: 0 }; }
+        if (binary === 'pkexec' || binary === 'sudo') throw new Error('an elevated step went through the plain runner (Tynn #973)');
         if (binary === 'which') return { stdout: '', exitCode: 1 };
         if (binary === 'php' && args[0] === '-r') return { stdout: '', exitCode: 0 };
         if (missing.has(binary)) return { stdout: '', exitCode: 127 };
         return { stdout: versions[binary] ?? '', exitCode: 0 };
     };
     const versions: Record<string, string> = { git: '2.50.0', node: '22.1.0', php: '8.4.0', claude: '2.1.0', codex: '0.1.0' };
+    // Tynn #973: what the host's elevation was asked to run (the real one asks the client for the password; this one only records).
+    const batches: ElevatedBatch[] = [];
+    const elevateBatch: Elevate = async (batch) => {
+        batches.push(batch);
+        if (batch.steps.some((s) => s.args.includes('git'))) { missing.delete('git'); versions.git = '2.51.0'; }
+        return { kind: 'ran', exitCode: 0, output: '', failedStep: null };
+    };
     const files = new Map<string, string>(), directories = new Set<string>(), env = new Map<string, string>();
     const progress: Array<unknown> = [];
-    const ops: ToolchainOpsPorts = { platform: 'linux', run, dataDir: dir, systemRoot: '/fixture', packageManager: async () => 'apt', now: () => 7_000,
+    const ops: ToolchainOpsPorts = { platform: 'linux', run, elevate: elevateBatch, dataDir: dir, systemRoot: '/fixture', packageManager: async () => 'apt', now: () => 7_000,
         env: { get: name => env.get(name), set: (name, value) => { env.set(name, value); } },
         fs: { exists: path => files.has(path) || directories.has(path), readText: path => files.get(path) ?? null, writeText: (path, value) => { files.set(path, value); },
             mkdirp: path => { directories.add(path); }, remove: path => { files.delete(path); directories.delete(path); } }, progress: step => { progress.push(step); changed(); } };
     let activity: ToolchainActivity = { sessions: [], processes: [], engines: [] };
     const toolchain: NonNullable<HostFeatureMachinePorts['effects']['toolchain']> = {
         probe: () => probeTools(run, async () => ({ version: '2.51.0', source: 'fixture' }), 'linux'), now: () => 7_000,
-        activity: async () => activity, update: (tool, version) => runUpdate(tool, { platform: 'linux', packageManager: 'apt' }, run, version ?? '2.51.0'),
+        activity: async () => activity, update: (tool, version) => runUpdate(tool, { platform: 'linux', packageManager: 'apt' }, run, version ?? '2.51.0', undefined, elevateBatch),
         updating: row => { progress.push(row); changed(); }, install: (tool, consent) => installTool(tool, consent, ops),
         preview: async tool => planInstall({ tool, platform: 'linux', packageManager: 'apt' }), repair: () => checkAndRepair(ops),
     };
@@ -152,7 +160,7 @@ export async function groupThreeFixture() {
         return result.ok ? result.value as FeatureData : Promise.reject(new Error(result.reason));
     };
     const close = async () => { await base.close(); offPlugins(); offRemote(); await access.close(); await rm(dir, { recursive: true, force: true }); };
-    return { ...base, machine, plugins, access, accountCalls, keyring, issueCalls, toolchain, ops, run, commands, missing, versions, progress, legacyAct, legacySnapshot,
+    return { ...base, machine, plugins, access, accountCalls, keyring, issueCalls, toolchain, ops, run, commands, batches, missing, versions, progress, legacyAct, legacySnapshot,
         firewall, firewallState, elevations, tailscale, tailCalls, listener, listenerUp: () => listenerUp, act, changed, close,
         signedIn: () => { tynnStatus = { signedIn: true, host: 'https://tynn.example.com', user: { name: 'Someone', email: 'someone@example.com' } }; changed(); },
         githubChange: () => { githubView = { ...githubView, message: 'fixture account changed' }; changed(); },

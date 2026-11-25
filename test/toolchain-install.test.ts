@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { planInstall, type PackageManager, type Platform } from '../src/core/toolchain.js';
 import { detectPackageManager, installTool, type EnvPort, type ToolchainFs, type ToolchainOpsPorts } from '../src/main/toolchain-ops.js';
 import type { CommandRunner } from '../src/main/toolchain-prober.js';
+import type { ElevatedBatch, Elevate } from '../src/core/elevation.js';
 
 /**
  * T1 — INSTALL A MISSING TOOL (§6.6). Through the package manager Genie 1 used on each platform (winget; Homebrew; apt
@@ -47,7 +48,7 @@ beforeEach(() => { vi.stubEnv('PATH', ''); });
 afterEach(() => { vi.unstubAllEnvs(); });
 
 describe('the install plan — the package manager per platform, from Genie’s own tables', () => {
-    it('winget on Windows, brew on macOS, apt and dnf on Linux behind pkexec; each with its exact argv', () => {
+    it('winget on Windows, brew on macOS, apt and dnf on Linux as ELEVATED STEPS (Tynn #973: no pkexec, no shell); each with its exact argv', () => {
         expect(planInstall({ tool: 'php', platform: 'win32', packageManager: 'winget' })).toEqual({
             argv: ['winget', 'install', '--id', 'PHP.PHP.8.4', '-e', '--silent', '--accept-source-agreements', '--accept-package-agreements'],
             label: 'winget install --id PHP.PHP.8.4 -e --silent --accept-source-agreements --accept-package-agreements',
@@ -55,9 +56,18 @@ describe('the install plan — the package manager per platform, from Genie’s 
             elevated: false,
         });
         expect(planInstall({ tool: 'php', platform: 'darwin', packageManager: 'brew' })).toMatchObject({ argv: ['brew', 'install', 'php'], manager: 'brew', elevated: false });
-        // apt: the index refresh rides in the SAME prompt — one pkexec, not two.
-        expect(planInstall({ tool: 'php', platform: 'linux', packageManager: 'apt' })).toMatchObject({ argv: ['pkexec', 'sh', '-c', 'apt-get update && apt-get install -y php'], manager: 'apt', elevated: true });
-        expect(planInstall({ tool: 'node', platform: 'linux', packageManager: 'dnf' })).toMatchObject({ argv: ['pkexec', 'dnf', 'install', '-y', 'nodejs'], manager: 'dnf', elevated: true });
+        // apt: the index refresh rides in the SAME prompt — two steps under one password, each a program and its argv.
+        expect(planInstall({ tool: 'php', platform: 'linux', packageManager: 'apt' })).toEqual({
+            steps: [{ command: 'apt-get', args: ['update'] }, { command: 'apt-get', args: ['install', '-y', 'php'] }],
+            items: ['php'], label: 'apt-get update && apt-get install -y php (as administrator)', manager: 'apt', elevated: true,
+        });
+        expect(planInstall({ tool: 'node', platform: 'linux', packageManager: 'dnf' })).toEqual({
+            steps: [{ command: 'dnf', args: ['install', '-y', 'nodejs'] }], items: ['nodejs'], label: 'dnf install -y nodejs (as administrator)', manager: 'dnf', elevated: true,
+        });
+        // Tynn #973: no plan Genie makes on Linux carries pkexec or sudo; the elevation is the host's (main/linux-elevation.ts).
+        for (const pm of ['apt', 'dnf'] as const) for (const tool of ['php', 'node', 'git', 'composer', 'python', 'go']) {
+            expect(JSON.stringify(planInstall({ tool, platform: 'linux', packageManager: pm }))).not.toMatch(/pkexec|sudo/);
+        }
     });
 
     it('agent CLIs install with their vendor\'s installer (Tynn #698); npm, rustc and an unknown tool are refused with the reason', () => {
@@ -89,7 +99,7 @@ describe('which package manager is here — the one that ANSWERS', () => {
 });
 
 describe('installing — consent, the right manager, and the re-probe', () => {
-    for (const [platform, pm, manager] of [['win32', 'winget', 'winget'], ['darwin', 'brew', 'brew'], ['linux', 'apt', 'pkexec'], ['linux', 'dnf', 'pkexec']] as const) {
+    for (const [platform, pm, manager] of [['win32', 'winget', 'winget'], ['darwin', 'brew', 'brew']] as const) {
         it(`${platform}/${pm}: probes once, runs ONE install through ${manager}, re-probes, and reports the version it MEASURED`, async () => {
             const m = machine({ platform, tool: 'php', pm, banner: 'PHP 8.4.13 (cli)', installedBy: (b) => b === manager });
             const r = await installTool('php', true, m.ports);
@@ -104,6 +114,38 @@ describe('installing — consent, the right manager, and the re-probe', () => {
             expect(m.steps.at(-1)).toBeNull(); // the progress line is cleared
         });
     }
+
+    it('linux/apt (Tynn #973): ONE elevated batch through ports.elevate, naming the package; nothing elevated runs through the plain runner', async () => {
+        const m = machine({ platform: 'linux', tool: 'php', pm: 'apt', banner: 'PHP 8.4.13 (cli)', installedBy: () => false });
+        const batches: ElevatedBatch[] = [];
+        let installed = false;
+        const run: CommandRunner = async (b, a) => {
+            m.calls.push([b, a]);
+            if (installed && a.includes('--version')) return { stdout: 'PHP 8.4.13 (cli)', exitCode: 0 };
+            throw Object.assign(new Error(`spawn ${b} ENOENT`), { code: 'ENOENT' });
+        };
+        const elevate: Elevate = async (batch) => { batches.push(batch); installed = true; return { kind: 'ran', exitCode: 0, output: '', failedStep: null }; };
+        const r = await installTool('php', true, { ...m.ports, run, elevate });
+        expect(r).toEqual({ kind: 'installed', version: '8.4.13' });
+        expect(batches).toEqual([{ title: 'Install php', items: ['php'], steps: [{ command: 'apt-get', args: ['update'] }, { command: 'apt-get', args: ['install', '-y', 'php'] }] }]);
+        expect(m.calls.map(([b]) => b)).toEqual(['php', 'php']); // probe, (the batch), probe: nothing else spawned here
+        expect(m.steps).toContain('Installing php: apt-get update && apt-get install -y php (as administrator) — Genie will ask for your password');
+    });
+
+    it('linux/dnf (Tynn #973): with NO elevation port (no client to ask), refused with the reason — never a hang, nothing run', async () => {
+        const m = machine({ platform: 'linux', tool: 'php', pm: 'dnf', banner: 'PHP 8.4.13 (cli)', installedBy: () => false });
+        const r = await installTool('php', true, m.ports);
+        expect(r).toEqual({ kind: 'refused', reason: 'installing php needs the administrator password, and no Genie window is connected to ask for it; nothing was installed' });
+        expect(m.calls.map(([b]) => b)).toEqual(['php']); // the probe only
+    });
+
+    it('linux (Tynn #973): an elevation refused or cancelled is the refusal, in its own words; a failed step is not-installed with its output', async () => {
+        const m = machine({ platform: 'linux', tool: 'php', pm: 'apt', banner: 'PHP 8.4.13 (cli)', installedBy: () => false });
+        const refused = await installTool('php', true, { ...m.ports, elevate: async () => ({ kind: 'refused', reason: 'you cancelled the password prompt; nothing was run' }) });
+        expect(refused).toEqual({ kind: 'refused', reason: 'you cancelled the password prompt; nothing was run' });
+        const failed = await installTool('php', true, { ...m.ports, elevate: async () => ({ kind: 'ran', exitCode: 100, output: 'E: Unable to locate package php', failedStep: 1 }) });
+        expect(failed).toMatchObject({ kind: 'not-installed', reason: expect.stringContaining('E: Unable to locate package php') });
+    });
 
     it('WITHOUT consent nothing is asked of the machine — zero calls — and the refusal says so', async () => {
         const m = machine({ platform: 'win32', tool: 'php', banner: 'PHP 8.4.13', installedBy: (b) => b === 'winget' });

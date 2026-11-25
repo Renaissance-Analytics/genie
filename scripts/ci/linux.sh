@@ -59,7 +59,7 @@ ROWS=(
 # that no check is red or blocked for any more. The PR that turns a reason green deletes it here; the last one deletes
 # the row's entry.
 declare -A TRACKED_RED=(
-    [toolchain]="pacman:#968 elevation:#973 docker:#970"
+    [toolchain]="pacman:#968 docker:#970"
 )
 # ENVIRONMENT BLOCKERS (Tynn #968): what a tracked row's check may be BLOCKED by that is outside Genie (the Arch Linux
 # Archive the toolchain row holds git back from). A check blocked by one keeps the row TRACKED and is named in its note;
@@ -643,7 +643,7 @@ row_package-fuse() {
 
 # THE TOOLCHAIN AS A PERSON GETS IT (Tynn #967): scripts/toolchain-real-cdp.mjs drives the real app and genie-host
 # through Settings → Toolchain with real pacman installs and updates, Docker, and the in-client password prompt, under
-# a real password with NOPASSWD moved aside. It is a TRACKED RED row (TRACKED_RED above) until #968, #970 and #973
+# a real password with NOPASSWD moved aside. It is a TRACKED RED row (TRACKED_RED above) until #968 and #970 (#973, the in-client password prompt, is in)
 # land. It must meet the machine before this harness changed it, so it refuses once any need_cmd has installed
 # something with pacman, or say_docker has started Docker. The gate runs it alone, as its own shard on its own VM.
 # It removes git and docker and leaves what it installed; a run that wants other rows after it uses a fresh machine.

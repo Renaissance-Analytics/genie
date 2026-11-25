@@ -1,6 +1,7 @@
 import { HOST_TOOLS, parseVersionOutput, planUpdate, platformArgv, repairOutcome, toolStatus, type PackageManager, type Platform, type RepairOutcome, type ToolStatus } from '../core/toolchain.js';
 import { LANGUAGE_LABEL, genieUpdates, installableVersions, updateChoices, type LanguageTool } from '../core/toolchain-update.js';
 import { latestFromBrewOutdated, latestFromNodeIndex, latestFromNpmOutdated, latestFromWingetUpgrade, phpLatestFromReleases } from '../core/toolchain-indexes.js';
+import type { Elevate } from '../core/elevation.js';
 
 /**
  * THE MANAGED TOOLCHAIN (§6.6) — the main-side half, with the process runner INJECTED.
@@ -135,12 +136,21 @@ export async function runUpdate(
     run: CommandRunner,
     wanted: string | null,
     languages?: LanguageUpdatePorts,
+    /** Tynn #973: the host's elevation, bound to the client that clicked; absent = an elevated plan is refused with why. */
+    elevate?: Elevate,
 ): Promise<RepairOutcome | { kind: 'refused'; reason: string }> {
     if (languages && genieUpdates(tool, where.platform)) return updateLanguage(tool, where.platform, run, wanted, languages);
     const plan = planUpdate({ tool, ...where });
     if ('refused' in plan) return { kind: 'refused', reason: plan.refused };
+    if ('elevated' in plan && !elevate) return { kind: 'refused', reason: `updating ${tool} needs the administrator password, and no Genie window is connected to ask for it; nothing was updated` };
     const def = HOST_TOOLS.find((t) => t.name === tool)!;
     const before = await probeInstalled(def, run, where.platform);
+    if ('elevated' in plan) {
+        const r = await elevate!({ title: `Update ${tool}`, items: plan.items, steps: plan.steps });
+        if (r.kind === 'refused') return { kind: 'refused', reason: r.reason };
+        const after = await probeInstalled(def, run, where.platform);
+        return repairOutcome({ tool, wanted, before, after, exitCode: r.exitCode });
+    }
     // A vendor installer is one argv of constants (its pipe is its shell's); every other plan is a plain command line.
     const [binary, args] = plan.argv ? [plan.argv[0]!, [...plan.argv.slice(1)]] : argv(plan.command, where.platform);
     let exitCode: number;
