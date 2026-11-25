@@ -203,7 +203,11 @@ function genieProcesses() {
 }
 /** The window process: the packaged exe itself, not one of its helpers (--type=). */
 const windowProcess = (procs) => procs.find((p) => !/--type=/.test(p.cmd) && (WIN ? p.exe.toLowerCase() === APP.toLowerCase() : !p.exe.startsWith(join(GENIE_HOME, 'host')) && /\/(genie|Genie)$/.test(p.exe)));
-/** The visible top-level windows of these pids, as the desktop shows them (Windows: EnumWindows; Linux: Hyprland's clients). */
+/**
+ * The visible top-level windows of these pids, as the desktop shows them (Windows: EnumWindows; Linux: Hyprland's clients).
+ * Windows: what the callback writes is collected, never written: a script block run as a delegate has no pipeline, so its
+ * Write-Output went nowhere and the control read the shown window as none (item 1125-025900-274bb7, 1c).
+ */
 function shownWindows(pids) {
     if (pids.length === 0) return [];
     if (WIN) {
@@ -218,7 +222,9 @@ public static class GenieWins {
 }
 "@
 $want = @(${pids.join(',')})
-[GenieWins]::EnumWindows({ param($h, $l) $p = 0; [void][GenieWins]::GetWindowThreadProcessId($h, [ref]$p); if ($want -contains [int]$p -and [GenieWins]::IsWindowVisible($h)) { $s = New-Object System.Text.StringBuilder 256; [void][GenieWins]::GetWindowText($h, $s, 256); if ($s.Length -gt 0) { Write-Output "$p|$s" } }; $true }, [IntPtr]::Zero) | Out-Null`;
+$found = New-Object System.Collections.Generic.List[string]
+[void][GenieWins]::EnumWindows({ param($h, $l) $p = 0; [void][GenieWins]::GetWindowThreadProcessId($h, [ref]$p); if ($want -contains [int]$p -and [GenieWins]::IsWindowVisible($h)) { $s = New-Object System.Text.StringBuilder 256; [void][GenieWins]::GetWindowText($h, $s, 256); if ($s.Length -gt 0) { $found.Add("$p|$s") } }; $true }, [IntPtr]::Zero)
+$found`;
         try {
             const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps], { encoding: 'utf8', timeout: 60_000, windowsHide: true });
             return out.split(/\r?\n/).filter((l) => l.includes('|')).map((l) => ({ pid: Number(l.slice(0, l.indexOf('|'))), title: l.slice(l.indexOf('|') + 1) }));
