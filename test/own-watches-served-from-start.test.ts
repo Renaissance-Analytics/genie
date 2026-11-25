@@ -67,7 +67,7 @@ function genieHostApi() {
     const ready = new Set<() => void>();
     const api = hostRemoteApi({
         hostName: 'alphar', own: {}, alone: () => alone,
-        onAloneReady: (l) => { ready.add(l); return () => { ready.delete(l); }; },
+        onAloneReady: (l: () => void) => { ready.add(l); return () => { ready.delete(l); }; },
         ...ports,
     } as unknown as HostRemoteApiPorts);
     const build = () => {
