@@ -258,9 +258,22 @@ export function tynnAgentIdentities(ports: AgentCredentialPorts) {
         if (!tynn || !userId) return 'failed';
         let known: Stored | undefined;
         try { known = (await load())[JSON.stringify([userId, input.projectId, input.agent.id])]; } catch { return 'failed'; }
-        if (!known || !object(known) || known.state !== 'ready' || typeof known.remoteAgentId !== 'string' || known.genieId !== input.agent.id) return 'unbound';
+        let remoteId: string | null = known && object(known) && known.state === 'ready' && typeof known.remoteAgentId === 'string' && known.genieId === input.agent.id ? known.remoteAgentId : null;
+        if (remoteId === null) {
+            // REGISTERED AT CREATE, NEVER STARTED (Tynn #1001): no key and no binding yet, but Tynn has the agent this machine
+            // registered under this agent's own Genie id. Only that one: never another machine's agent of the same name.
+            try {
+                const response = await tynn.request(`/api/v1/projects/${encodeURIComponent(input.projectId)}/agents`, { method: 'GET' });
+                if (!response.ok) return 'failed';
+                const list = object(await response.json());
+                if (!list || list.project_id !== input.projectId || !Array.isArray(list.agents)) return 'failed';
+                const mine = list.agents.map(remoteAgent).filter((a) => a?.external_id === input.agent.id);
+                if (mine.length !== 1) return 'unbound';
+                remoteId = mine[0]!.id;
+            } catch { return 'failed'; }
+        }
         try {
-            const response = await tynn.request(`/api/v1/projects/${encodeURIComponent(input.projectId)}/agents/${encodeURIComponent(known.remoteAgentId)}`, { method: 'PATCH', body: { config: tynnConfigOf(input.agent) } });
+            const response = await tynn.request(`/api/v1/projects/${encodeURIComponent(input.projectId)}/agents/${encodeURIComponent(remoteId)}`, { method: 'PATCH', body: { config: tynnConfigOf(input.agent) } });
             return response.ok ? 'sent' : 'failed';
         } catch { return 'failed'; }
     }
