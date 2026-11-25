@@ -22,6 +22,12 @@ import { runUpdate, type CommandRunner } from '../src/main/toolchain-prober.js';
  */
 
 const PACMAN_IDS = { php: 'php', composer: 'composer', node: 'nodejs', python: 'python', go: 'go', git: 'git', docker: 'docker' } as const;
+/**
+ * What pacman installs for a tool: its package, and for PHP also `php-cgi`. Arch splits it out, and php-cgi is what Genie
+ * runs a site with and how it finds the system PHP (main/php-versions.ts asks `php-cgi -v`). The toolchain row
+ * 1125-195556-df6ca9 installed `php` alone: `php --version` answered, the card still read "not here".
+ */
+const pkgsOf = (tool: string, pkg: string): string[] => (tool === 'php' ? ['php', 'php-cgi'] : [pkg]);
 
 describe('the pacman table and plans, per tool', () => {
     it('maps every tool Arch packages to its official package, and only those', () => {
@@ -30,26 +36,28 @@ describe('the pacman table and plans, per tool', () => {
     });
 
     for (const [tool, pkg] of Object.entries(PACMAN_IDS)) {
-        it(`${tool}: install is ONE elevated batch, sync then \`pacman -S --needed --noconfirm ${pkg}\`, with no pkexec or sudo`, () => {
+        it(`${tool}: install is ONE elevated batch, sync then \`pacman -S --needed --noconfirm ${pkgsOf(tool, pkg).join(' ')}\`, with no pkexec or sudo`, () => {
             const plan = planInstall({ tool, platform: 'linux', packageManager: 'pacman' });
+            const pkgs = pkgsOf(tool, pkg);
             expect(plan).toEqual({
-                label: `pacman -S --needed --noconfirm ${pkg} (as administrator)`,
+                label: `pacman -S --needed --noconfirm ${pkgs.join(' ')} (as administrator)`,
                 manager: 'pacman',
                 elevated: true,
-                items: [pkg],
-                steps: [{ command: 'pacman', args: ['-Sy'] }, { command: 'pacman', args: ['-S', '--needed', '--noconfirm', pkg] }],
+                items: pkgs,
+                steps: [{ command: 'pacman', args: ['-Sy'] }, { command: 'pacman', args: ['-S', '--needed', '--noconfirm', ...pkgs] }],
             });
         });
     }
 
     it('update: git and docker through the same batch; tools with their own updater keep it', () => {
         for (const [tool, pkg] of [['git', 'git'], ['docker', 'docker'], ['php', 'php'], ['node', 'nodejs'], ['python', 'python'], ['go', 'go']] as const) {
+            const pkgs = pkgsOf(tool, pkg);
             expect(planUpdate({ tool, platform: 'linux', packageManager: 'pacman' })).toEqual({
-                command: `pacman -S --needed --noconfirm ${pkg}`,
+                command: `pacman -S --needed --noconfirm ${pkgs.join(' ')}`,
                 manager: 'pacman',
                 elevated: true,
-                items: [pkg],
-                steps: [{ command: 'pacman', args: ['-Sy'] }, { command: 'pacman', args: ['-S', '--needed', '--noconfirm', pkg] }],
+                items: pkgs,
+                steps: [{ command: 'pacman', args: ['-Sy'] }, { command: 'pacman', args: ['-S', '--needed', '--noconfirm', ...pkgs] }],
             });
         }
         expect(planUpdate({ tool: 'composer', platform: 'linux', packageManager: 'pacman' })).toEqual({ command: 'composer self-update', manager: 'composer' });
@@ -237,6 +245,21 @@ describe('installing with pacman', () => {
         const m = arch({ tool: 'php', pkg: 'php', banner: 'PHP 8.5.12 (cli)', sp: 'php 8.5.12-1\nicu 78.1-1\n', si: 'Repository      : extra\nName            : php\nVersion         : 8.5.12-1\n' });
         const r = await installTool('php', true, m.ports);
         expect(r).toEqual({ kind: 'refused', reason: 'installing php with pacman would also upgrade icu 77.1-1 → 78.1-1, a partial upgrade Arch does not support; update the whole system first (omarchy-update, or pacman -Syu), then install php' });
+        expect(m.batches).toEqual([]);
+    });
+
+    it('PHP: php and php-cgi, each checked in the official repositories and in the transaction, under ONE prompt', async () => {
+        const si = 'Repository      : extra\nName            : php\nVersion         : 8.5.12-1\n\nRepository      : extra\nName            : php-cgi\nVersion         : 8.5.12-1\n';
+        const m = arch({ tool: 'php', pkg: 'php', banner: 'PHP 8.5.12 (cli)', si, sp: 'php 8.5.12-1\nphp-cgi 8.5.12-1\n' });
+        expect(await installTool('php', true, m.ports)).toEqual({ kind: 'installed', version: '8.5.12' });
+        expect(m.calls.find((c) => c.args[0] === '-Si')!.args.slice(-2)).toEqual(['php', 'php-cgi']);
+        expect(m.calls.find((c) => c.args[0] === '-Sp')!.args.slice(-2)).toEqual(['php', 'php-cgi']);
+        expect(m.batches).toEqual([{ title: 'Install php', items: ['php', 'php-cgi'], steps: [{ command: 'pacman', args: ['-Sy'] }, { command: 'pacman', args: ['-S', '--needed', '--noconfirm', 'php', 'php-cgi'] }] }]);
+    });
+
+    it('PHP: php-cgi missing from the repositories refuses the whole install, by name', async () => {
+        const m = arch({ tool: 'php', pkg: 'php', banner: '', si: 'Repository      : extra\nName            : php\nVersion         : 8.5.12-1\n' });
+        expect(await installTool('php', true, m.ports)).toEqual({ kind: 'refused', reason: "php-cgi is not in Arch's official repositories here (core, extra, multilib); Genie does not install from the AUR, so yay is not used" });
         expect(m.batches).toEqual([]);
     });
 
