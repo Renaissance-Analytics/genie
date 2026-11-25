@@ -58,6 +58,17 @@ export interface HostRemoteApiPorts {
      * open long before the host's own answers are built, and the window's boot reads start minimised and the login item from it.
      */
     readonly settings?: { now(): import('./settings-watch.js').SettingsWatchView; subscribe(listener: (view: import('./settings-watch.js').SettingsWatchView) => void): () => void };
+    /**
+     * WHAT GENIE-HOST RUNS, FROM ITS START (Tynn #953; P6-3 follow-up): what main's own client says summary.watch for, and the
+     * local-summary event. Its feed is open before the host's own answers are built, and the window's tray, its quit and its
+     * Tynn account read it at boot. Absent = the built answers' (null until they are).
+     */
+    readonly summary?: { now(): import('../core/host-summary.js').HostSummary; subscribe(listener: (summary: import('../core/host-summary.js').HostSummary) => void): () => void };
+    /**
+     * WHO IS AT THIS MACHINE, FROM ITS START (Tynn #997; P6-3 follow-up): what main's own client says remote.watch for, and the
+     * local-remote event: who is connected and who asks to pair, which the window's notifications read at boot. Absent = null.
+     */
+    readonly remote?: { now(): import('../core/remote-watch.js').RemoteWatchView; subscribe(listener: (view: import('../core/remote-watch.js').RemoteWatchView) => void): () => void };
 }
 
 export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
@@ -66,8 +77,9 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
     const api: HostApi = {
         get ownsFeatures() { return alone()?.ownsFeatures === true; },
         releaseCaller: context => alone()?.releaseCaller?.(context),
-        // What this host runs, for this machine's tray and quit (Tynn #953): genie-host's own, once its answers are built.
-        hostSummary: () => alone()?.hostSummary?.() ?? null,
+        // What this host runs, for this machine's tray and quit (Tynn #953): from this host's start when it gives the feed (P6-3
+        // follow-up: summary.watch answered null until the answers were built, and the window read nothing running).
+        hostSummary: () => (ports.summary ? ports.summary.now() : alone()?.hostSummary?.() ?? null),
         // THE PORTS RemoteHost READS OFF THE API (Tynn #898 step 2d-3a): genie-host's own, once its answers are built.
         marketplace: () => alone()?.marketplace?.() ?? null,
         gapps: (context) => alone()?.gapps?.(context) ?? null,
@@ -94,12 +106,17 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
             const offFrontDoor = ports.frontdoor?.subscribe((view) => listener(LOCAL_EVENTS.frontdoor, view));
             // genie-host's settings too, from the start (P6-3).
             const offSettings = ports.settings?.subscribe((view) => listener(LOCAL_EVENTS.settings, view));
-            return () => { offReady?.(); offAlone?.(); offRegistry?.(); offFrontDoor?.(); offSettings?.(); };
+            // What it runs, and who is at it, too (P6-3 follow-up).
+            const offSummary = ports.summary?.subscribe((view) => listener(LOCAL_EVENTS.summary, view));
+            const offRemote = ports.remote?.subscribe((view) => listener(LOCAL_EVENTS.remote, view));
+            return () => { offReady?.(); offAlone?.(); offRegistry?.(); offFrontDoor?.(); offSettings?.(); offSummary?.(); offRemote?.(); };
         },
         workspaceOfAgent: (agentId) => ports.workspaceOfAgent?.(agentId) ?? null,
         ...(ports.registry ? { registryRead: (method: string) => ports.registry!.read(method as import('./registry-protocol.js').RegistryRead), registryWatch: () => ports.registry!.watch.now() } : {}),
         ...(ports.frontdoor ? { frontDoorWatch: () => ports.frontdoor!.now() } : {}),
         ...(ports.settings ? { settingsWatch: () => ports.settings!.now() } : {}),
+        // remote.watch answered null: hostRemoteApi never carried remoteWatch (P6-3 follow-up), so the window's boot heard nobody.
+        ...(ports.remote ? { remoteWatch: () => ports.remote!.now() } : {}),
         ...(ports.workspaceOfTerminal ? { workspaceOfTerminal: ports.workspaceOfTerminal } : {}),
         ...(ports.workspacePaths ? { workspacePaths: ports.workspacePaths } : {}),
         ...(ports.takeOverEnded ? { takeOverEnded: ports.takeOverEnded } : {}),

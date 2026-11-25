@@ -195,7 +195,8 @@ describe('wired: genie-host says the watch and prunes; main reads the watch and 
     it('genie-host feeds remote.watch from its remote access and prunes the drafts on its registry’s writes', () => {
         const host = code(src('src/main/genie-host.ts'));
         expect(host).toMatch(/remoteWatchFeed\(\{/);
-        expect(host).toMatch(/remoteWatch,/);
+        // Given to hostRemoteApi and said from the host's start (P6-3 follow-up, own-watches-served-from-start.test.ts).
+        expect(host).toMatch(/\n\s*remote: \{ now: \(\) => remoteWatch\.now\(\), subscribe: \(listener\) => remoteWatch\.subscribe\(listener\) \},/);
         expect(host).toMatch(/hostDraftPrune\(\{/);
         const api = code(src('src/main/host-api.ts'));
         expect(api).toMatch(/deps\.remoteWatch\?\.subscribe\(\(view\) => listener\(LOCAL_EVENTS\.remote, view\)\)/);
