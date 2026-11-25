@@ -69,6 +69,8 @@ export interface HostMcpPorts {
      * this host runs none, and the tools say so.
      */
     readonly issueWatch?: import('./issue-watch-tools.js').HostIssueWatchTools;
+    /** Mail between the owner's workstations (P9, main/cross-station-host.ts): `agentinbox` list and send. */
+    readonly crossStation?: import('./mcp-tools.js').GenieToolsDeps['crossStation'];
     /** A flow calling Genie's tools as a step is a caller too (genie#1204): its own key, its workspace. */
     readonly flowCallers?: { callerFor(key: string): Caller | null };
     /** A Take Over TUI's caller: known here, so it works with no window to tell the host (Tynn #553). */
@@ -171,6 +173,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             readPlan: (agentId) => ports.records().find((r) => r.id === agentId)?.plan ?? null,
             // checkIssues and imDone's count line read this host's own IssueWatch (Tynn #934 task #1474).
             ...(ports.issueWatch ? { issueWatch: ports.issueWatch } : {}),
+            ...(ports.crossStation ? { crossStation: ports.crossStation } : {}),
             // THE WINDOW'S: these tools are forwarded whole (mcp-host-tools.ts); here they only give the tools their shape.
             openFile: unavailable('openFileForUser'),
             terminals: ports.terminals ?? { list: unavailable('manageTerminals'), open: unavailable('manageTerminals'), write: unavailable('manageTerminals'), scrollback: unavailable('manageTerminals'), finished: unavailable('manageTerminals'), scrollbackCap: 1_000_000 },

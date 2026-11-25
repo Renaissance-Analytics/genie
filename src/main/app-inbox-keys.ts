@@ -32,7 +32,7 @@ interface ScriptKeyRecord {
 }
 
 interface RevokedRecord {
-    readonly kind: Exclude<AppSourceKind, 'script'>;
+    readonly kind: Exclude<AppSourceKind, 'script' | 'genie'>;
     readonly id: string;
     readonly workspaceId: string;
     readonly name?: string;
@@ -97,6 +97,7 @@ export class AppInboxKeys {
      */
     tokenFor(source: AppSource): string | null {
         if (source.kind === 'script') throw new Error('a script key is created by the person (createScriptKey), never minted for a source');
+        if (source.kind === 'genie') throw new Error('Genie itself holds no app key: no door sends as it');
         if (this.#isRevoked(source.kind, source.id)) return null;
         const key = sourceKey(source.kind, source.id);
         const issued = this.#issued.get(key);
@@ -118,6 +119,7 @@ export class AppInboxKeys {
     /** Dead at once, and no token on any later start — across restarts — until `allowSource`. */
     async revokeSource(source: { readonly kind: AppSourceKind; readonly id: string; readonly workspaceId: string; readonly name?: string }): Promise<void> {
         if (source.kind === 'script') throw new Error('a script key is revoked with revokeScriptKey');
+        if (source.kind === 'genie') throw new Error('Genie itself holds no app key to revoke');
         const issued = this.#issued.get(sourceKey(source.kind, source.id));
         this.#drop(sourceKey(source.kind, source.id));
         if (!this.#isRevoked(source.kind, source.id)) {

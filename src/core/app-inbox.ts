@@ -20,8 +20,13 @@ import { isOsAgent } from './os-agent.js';
  * - Apps cannot be replied to: no agent can write to an `app:` address.
  */
 
-export type AppSourceKind = 'site' | 'process' | 'script';
-export const APP_SOURCE_KINDS: readonly AppSourceKind[] = ['site', 'process', 'script'];
+/**
+ * `genie`: Genie itself, telling an agent what became of its own mail (P9: mail another workstation refused, or that
+ * expired unsent; the review of #2180, finding 4). It carries words another host wrote, so it is an app's message, read
+ * as data, and never the person's. No key is minted for it and no door sends as it.
+ */
+export type AppSourceKind = 'site' | 'process' | 'script' | 'genie';
+export const APP_SOURCE_KINDS: readonly AppSourceKind[] = ['site', 'process', 'script', 'genie'];
 
 /** What sent a message: decided by Genie from the credential it presented. */
 export interface AppSource {
@@ -57,7 +62,7 @@ export function isAppSender(from: string): boolean {
     return readAppSender(from) !== null;
 }
 
-const KIND_WORD: Readonly<Record<AppSourceKind, string>> = { site: 'site', process: 'proc', script: 'script' };
+const KIND_WORD: Readonly<Record<AppSourceKind, string>> = { site: 'site', process: 'proc', script: 'script', genie: 'genie' };
 
 /** `site:flabs@fancy`, `proc:queue@fancy`, `script:nightly@fancy` — how a person and an agent read the sender. */
 export function appSenderLabel(source: Pick<AppSource, 'kind' | 'name'>, workspaceWord: string): string {

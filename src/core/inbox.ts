@@ -30,10 +30,11 @@ export class WorkspaceMailVisibility {
  */
 
 /**
- * A party to a message: an agent by its one id, the person, or — as a SENDER only — an app (`app:<kind>:<id>`,
+ * A party to a message: an agent by its one id, the person, an agent on another of the owner's workstations
+ * (`peer:<station>:<name>@<workspace>`, core/cross-station.ts), or — as a SENDER only — an app (`app:<kind>:<id>`,
  * core/app-inbox.ts): a Genie-hosted site, a kept process or a script key. An app is never a recipient.
  */
-export type Participant = AgentId | typeof HUMAN | `app:${string}`;
+export type Participant = AgentId | typeof HUMAN | `app:${string}` | `peer:${string}`;
 
 /**
  * The human's address. A constant rather than a minted id because there is exactly one person

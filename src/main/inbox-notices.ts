@@ -3,6 +3,13 @@ import { HUMAN, UNNAMED_AGENT } from '../core/inbox.js';
 import type { ReminderBook } from '../core/inbox-reminders.js';
 import type { NoticeMail } from '../core/stream-event.js';
 import type { InboxMessage } from './inbox-store.js';
+import { readPeer } from '../core/cross-station.js';
+
+/** An agent on another of the owner's workstations (P9): `name@workspace@<that station's name>`, its reply address in `from`. */
+function peerName(m: InboxMessage): string | null {
+    const p = readPeer(m.from);
+    return p ? `${p.name}@${p.workspace}@${m.origin?.stationName ?? p.station}` : null;
+}
 
 /** How much of each message a notice's row keeps: enough to read it in the chat; the whole message stays in the inbox. */
 export const NOTICE_MAIL_CHARS = 4_000;
@@ -31,7 +38,7 @@ export function inboxNotices(input: {
         // JSON keeps names, body text and hostile app bytes inside their own fields. Only the card preview is shortened.
         const messages = unread.map((m) => ({
             id: m.id, from: m.from,
-            fromName: m.from === HUMAN ? 'you' : m.app?.label ?? input.agents.get(m.from)?.name ?? UNNAMED_AGENT,
+            fromName: m.from === HUMAN ? 'you' : m.app?.label ?? input.agents.get(m.from)?.name ?? peerName(m) ?? UNNAMED_AGENT,
             sentAt: m.sentAt, text: m.text,
             attachments: m.attachments.map(({ id, name }) => ({ id, name })),
             ...(isAppSender(m.from) ? { app: { ...m.app, note: appMailNote(m.app?.label ?? m.from) } } : {}),
@@ -42,7 +49,7 @@ export function inboxNotices(input: {
         const mail = unread.map((m): NoticeMail => ({
             id: m.id,
             from: m.from,
-            fromName: m.from === HUMAN ? null : m.app ? m.app.label : input.agents.get(m.from)?.name ?? null,
+            fromName: m.from === HUMAN ? null : m.app ? m.app.label : input.agents.get(m.from)?.name ?? peerName(m),
             text: m.text.length > NOTICE_MAIL_CHARS ? `${m.text.slice(0, NOTICE_MAIL_CHARS - 1)}…` : m.text,
             sentAt: m.sentAt,
         }));
