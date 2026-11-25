@@ -140,7 +140,7 @@ import { runV1FlowImport } from './v1-flows.js';
 import { moveScheduledTasksOutOfFlows } from './scheduled-tasks-move.js';
 import { startForWork } from './start-on-demand.js';
 import { missingFolderRefusal, startRefusal } from './workspace-ops-host.js';
-import { agentCapFrom, HUMAN } from '../core/inbox.js';
+import { agentCapFrom, HUMAN, inboxAgentPaused } from '../core/inbox.js';
 import { limitOf } from '../core/shell-limits.js';
 import { resolveAddress as resolveOnRoster } from '../core/inbox.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
@@ -1268,6 +1268,9 @@ async function main(): Promise<void> {
         sharedIdOf: (workspaceId) => sharedWorkspaceId(workspaceTynnProject(workspaceId)),
         // listAgents leaves out a hibernated workspace's agents already.
         asleep: () => new Set(),
+        // Received only when the agent can take it (the owner's rule on #2180): paused by its provider, it waits.
+        cannotReceive: (agentId) => (inboxAgentPaused(sessionsForInbox?.probe(agentId as AgentId) ?? null) ? 'its provider has it paused' : null),
+        recipientRefusal: (address) => hostRegistry.mailRefusal(address),
         self: () => { const w = relayHostService.status().workstation; return w?.registered ? w.workstationId : null; },
         stations: async () => {
             const self = (() => { const w = relayHostService.status().workstation; return w?.registered ? w.workstationId : null; })();

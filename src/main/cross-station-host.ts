@@ -18,7 +18,8 @@ import type { InboxMessage, InboxStore, StationArrivalLimits } from './inbox-sto
  *   expires the same way. A station Tynn does not list as this account's own is never dialled.
  * - RECEIVING: `xstation.*` calls the receiving host's RemoteHost let through only from its owner's own workstations
  *   (core/cross-station.ts `deliveryAdmission`), with the station the GRANT proved. Mail is stored once per origin, for
- *   an agent in the roster the recipient's own scope opens to the sender's SHARED workspace, or that already wrote to it.
+ *   an agent in the roster the recipient's own scope opens to the sender's SHARED workspace, or that already wrote to it,
+ *   and only while that agent is CAPABLE OF RECEIVING (not hibernated, not paused): "delivered" means it can take it.
  * - RECEIPTS: when a recipient here reads mail from another station, the read is owed back to that station (durably,
  *   `origin.receiptSent`), and sent a moment later, every read of the moment in one link.
  *
@@ -52,6 +53,14 @@ export interface CrossStationPorts {
     readonly sharedIdOf: (workspaceId: string) => string | null;
     /** Workspaces that are hibernated: their agents are in no roster. */
     readonly asleep: () => ReadonlySet<string>;
+    /**
+     * CAPABLE OF RECEIVING (the owner, 2026-11-25: "mail sent should get a message received response only when the agent
+     * is capable of receiving messages"): why this agent here cannot take mail right now (its provider paused it), or
+     * `null`. Such mail is not taken, so the sender keeps it queued and is never told it was received.
+     */
+    readonly cannotReceive?: (agentId: string) => string | null;
+    /** Why an address here that resolves to nobody awake cannot be mailed (a hibernated workspace), in words; else `null`. */
+    readonly recipientRefusal?: (address: string) => string | null;
     /** This workstation's Tynn id; `null` when it is not registered (then it neither sends nor is named). */
     readonly self: () => string | null;
     /** Every workstation of the owner, this one included, as Tynn lists them; `null` when Tynn cannot say. */
@@ -429,11 +438,17 @@ export class CrossStationHost {
         const records = this.#p.roster();
         const target = resolveAddress(d.to, records.filter((r) => !asleep.has(r.workspaceId)), this.#p.slugs());
         // DEFINITE (finding 1): the sender settles these; anything else thrown here it keeps and retries.
-        if (target.kind !== 'one') throw new DefiniteRefusal('no-address', `nobody at ${d.to} on ${myWord}`);
+        if (target.kind !== 'one') {
+            const why = this.#p.recipientRefusal?.(d.to) ?? null;
+            throw new DefiniteRefusal('no-address', why ? `${d.to} on ${myWord}: ${why}` : `nobody at ${d.to} on ${myWord}`);
+        }
         const record = records.find((r) => r.id === target.id)!;
         const entry = rosterOf([record], this.#p.slugs(), asleep, this.#p.sharedIdOf)[0];
         const answered = this.#p.inbox.hasWritten(record.id, sender);
         if (!answered && (!entry || !opensFrom(entry, d.from.shared))) throw new DefiniteRefusal('scope', `${d.to} on ${myWord} is not reachable from ${d.from.name}@${d.from.workspace}: its agent scope does not allow it (permission, not liveness)`);
+        // Not capable of receiving now (the owner's rule): not taken, and NOT definite, so the sender keeps it and tries again.
+        const cannot = this.#p.cannotReceive?.(record.id) ?? null;
+        if (cannot) throw new Error(`${d.to} on ${myWord} cannot take mail right now: ${cannot}`);
         const stored = await this.#p.inbox.receiveFromStation({ station, stationName: fromRow?.name ?? station, id: d.id, from: sender, to: record.id as Participant, text: d.text, sentAt: d.sentAt }, this.#p.arrivalLimits);
         return { messageId: stored.message.id };
     }
