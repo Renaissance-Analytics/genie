@@ -622,9 +622,9 @@ probe "localStorage-only-after-the-read-back" src/renderer/remote-session.ts \
     "        if (moved) tokens.forget(url);" "        if (moved || !moved) tokens.forget(url);" \
     test/device-link-window.test.ts "a token the host did not read back stays"
 
-probe "a-drone-stops-before-the-host" src/main/device-link-gate.ts \
-    "    if (outboundDialRefusal(ports.role(), url)) return { ok: false, reason: connectOutRefusal({ role: ports.role(), said: ports.said(), why: ports.why?.() ?? null })! };" "" \
-    test/device-link-window.test.ts "a drone is refused and the host is asked nothing"
+probe "any-machine-dials-through-its-host" src/main/device-link-protocol.ts \
+    "                    return ports.link.open(owner, url);" "                    return { ok: false, reason: 'refused before the host' };" \
+    test/device-link-window.test.ts "a socket to another machine is opened by the host"
 
 probe "the-desktop-hook-holds-no-token" src/renderer/App.tsx \
     "                const auth = deviceAuth(pin, label, pairedNow.current, url.url);" "                const auth = deviceAuth(pin, label, pairedNow.current, url.url); rememberedTokens(window.localStorage).tokenFor(url.url);" \
