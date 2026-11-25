@@ -48,7 +48,7 @@ beforeEach(() => { vi.stubEnv('PATH', ''); });
 afterEach(() => { vi.unstubAllEnvs(); });
 
 describe('the install plan — the package manager per platform, from Genie’s own tables', () => {
-    it('winget on Windows, brew on macOS, apt and dnf on Linux behind pkexec; each with its exact argv', () => {
+    it('winget on Windows, brew on macOS, apt and dnf on Linux as ELEVATED STEPS (Tynn #973: no pkexec, no shell); each with its exact argv', () => {
         expect(planInstall({ tool: 'php', platform: 'win32', packageManager: 'winget' })).toEqual({
             argv: ['winget', 'install', '--id', 'PHP.PHP.8.4', '-e', '--silent', '--accept-source-agreements', '--accept-package-agreements'],
             label: 'winget install --id PHP.PHP.8.4 -e --silent --accept-source-agreements --accept-package-agreements',
