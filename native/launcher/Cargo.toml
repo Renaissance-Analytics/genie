@@ -1,0 +1,62 @@
+# THE LAUNCHER (Tynn #1058, slice L2): one small native program per user that installs, verifies, starts and stops
+# Genie's programs. Spec: the envelope's .ai/plans/genie-2-host-split-2026-10-31.md, "Launcher build spec".
+# Built and tested in the test VMs only (`launcher-unit` in scripts/ci/linux.sh and windows.ps1), never on a desktop.
+[package]
+name = "genie-launcher"
+version = "0.0.0"
+edition = "2021"
+publish = false
+rust-version = "1.80"
+
+[[bin]]
+name = "genie"
+path = "src/main.rs"
+
+# The stand-in host and client of the tests (tests/support/fake_host.rs): built only for cargo test.
+[[bin]]
+name = "genie-fake-host"
+path = "tests/support/fake_host.rs"
+required-features = ["test-keys"]
+
+[lib]
+name = "genie_launcher"
+path = "src/lib.rs"
+
+[features]
+# Lets cargo test name a throwaway public key in GENIE_LAUNCHER_TEST_PUBLIC_KEY. A release build never has it
+# (scripts/build-win-launcher.mjs builds without features, and tests/source_guard.rs holds that).
+test-keys = []
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+ed25519-dalek = "2"
+base64 = "0.22"
+getrandom = "0.2"
+miniz_oxide = "0.8"
+ruzstd = "0.8"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_IO",
+    "Win32_System_JobObjects",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

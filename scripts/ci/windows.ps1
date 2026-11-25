@@ -60,6 +60,7 @@ $Rows = @(
     'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash', 'quit-keeps-host', 'rebuilt-machine',
     'package', 'sign-plan', 'packed-tree', 'update-metadata', 'package-fuse', 'packaged-launcher',
     'logon',
+    'launcher-unit',
     'client-only-update',
     'host-update'
 )
@@ -95,7 +96,7 @@ if ($Only -or $From) {
     # $prereq, not $setup: PowerShell's names ignore case, and $setup IS $Setup, the ci-out\setup folder (the Azure run of
     # -Only unit on 101287c4: the folder became this list, ci-out was never made, every row read as timed out).
     $prereq = @('deps', 'electron-binary')
-    if (@($selected | Where-Object { @('deps', 'electron-binary', 'unit-build', 'unit') -notcontains $_ }).Count -gt 0) { $prereq += 'build' }
+    if (@($selected | Where-Object { @('deps', 'electron-binary', 'unit-build', 'unit', 'launcher-unit') -notcontains $_ }).Count -gt 0) { $prereq += 'build' }
     $selected = @($prereq | Where-Object { $selected -notcontains $_ }) + $selected
 }
 
@@ -163,12 +164,40 @@ function Need-Electron {
     $script:Electron = 'ok'
 }
 
+# RUST, FOR THE LAUNCHER (Tynn #1058 L2): `npm run build:main` builds genie-launch.exe from native/launcher with cargo.
+# rustup's own per-user install (no administrator), minimal profile, stable, on the MSVC Build Tools the image has; the
+# installer is checked against the sha256 rustup publishes beside it. Only when cargo is missing.
+$script:Rust = ''
+function Need-Rust {
+    if ($script:Rust -eq 'ok') { return }
+    if ($script:Rust) { Block $script:Rust }
+    $script:Rust = 'rustup could not install Rust (see ci-out\setup\rustup.log)'
+    $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
+    if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+        if (-not (Test-Path (Join-Path $cargoBin 'cargo.exe'))) {
+            $ProgressPreference = 'SilentlyContinue'
+            $rustupUrl = 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe'
+            $rustupInit = Join-Path $Setup 'rustup-init.exe'
+            Invoke-WebRequest -UseBasicParsing -Uri $rustupUrl -OutFile $rustupInit
+            $rustupSum = ([string](Invoke-WebRequest -UseBasicParsing -Uri "$rustupUrl.sha256").Content).Trim().Split(' ')[0].ToLowerInvariant()
+            $rustupHash = (Get-FileHash -Algorithm SHA256 $rustupInit).Hash.ToLowerInvariant()
+            if ($rustupSum -ne $rustupHash) { $script:Rust = "rustup-init.exe is not the one rustup published (sha256 $rustupHash, published $rustupSum)"; Block $script:Rust }
+            & $rustupInit -y --profile minimal --default-toolchain stable --no-modify-path *> (Join-Path $Setup 'rustup.log')
+            if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $Setup 'rustup.log') -Tail 30; Block $script:Rust }
+        }
+        $env:Path = "$cargoBin;$env:Path"
+    }
+    Write-Output "--- $(cargo --version), $(rustc --version)"
+    $script:Rust = 'ok'
+}
+
 $script:Built = ''
 function Need-Build {
     if ($script:Built -eq 'ok') { return }
     if ($script:Built) { Block $script:Built }
     Need-Install
     Need-Electron
+    Need-Rust
     $script:Built = 'the build failed'
     npm run build *> (Join-Path $Setup 'build.log')
     if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $Setup 'build.log') -Tail 40; Block $script:Built }
@@ -295,7 +324,24 @@ function Stop-App {
 
 function Row-deps { Need-Install }
 function Row-electron-binary { Need-Electron }
-function Row-unit-build { Need-Install; Need-Electron; Run 'npm run build:main' { npm run build:main } }
+function Row-unit-build { Need-Install; Need-Electron; Need-Rust; Run 'npm run build:main' { npm run build:main } }
+
+# THE LAUNCHER (Tynn #1058 L2, native/launcher): its cargo test (the test-only throwaway keys and stand-in host), then its
+# release build, whose size is said. Cargo.lock is copied to ci-out so a run can be read against the crates it built.
+function Row-launcher-unit {
+    Need-Rust
+    Push-Location (Join-Path $Repo 'native\launcher')
+    try {
+        $lockedArgs = @()
+        if (Test-Path 'Cargo.lock') { $lockedArgs = @('--locked') }
+        Run 'cargo test' { cargo test @lockedArgs --features test-keys }
+        Run 'cargo build --release' { cargo build @lockedArgs --release --bin genie }
+        Copy-Item 'Cargo.lock' (Join-Path $Out 'launcher-Cargo.lock') -ErrorAction SilentlyContinue
+        Write-Output "LAUNCHER SIZE win32 $((Get-Item 'target\release\genie.exe').Length) bytes"
+    } finally {
+        Pop-Location
+    }
+}
 
 # The Windows suite, with its sampler beside it and the 30 s per-test budget ci.yml gives it (the Windows runner is
 # slower to start processes); the slow-test table after it, observe only. The hooks get the same 30 s (Tynn #660): in the
@@ -505,7 +551,8 @@ function Ceiling([string]$name) {
     switch ($name) {
         { $_ -in 'deps', 'packaged-launcher' } { return 900 }
         { $_ -in 'electron-binary', 'package-fuse', 'sign-plan', 'packed-tree', 'update-metadata', 'host-late-ready', 'seed' } { return 300 }
-        { $_ -in 'unit-build', 'build' } { return 600 }
+        { $_ -in 'unit-build', 'build' } { return 900 }
+        'launcher-unit' { return 1500 }
         'unit' { return 1800 }
         { $_ -in 'spawn-host', 'app-stopped' } { return 120 }
         { $_ -in 'no-pty', 'smoke', 'layout', 'local-door-break', 'local-door', 'gapp-open', 'trust-step' } { return 360 }
@@ -594,7 +641,7 @@ Warm-Git
 # What stall.mjs found, or that it found nothing in N samples, is printed under the failure.
 $script:RowResults = [ordered]@{}
 $script:Infra = @()
-$script:NeedStates = @('Installed', 'Electron', 'Built', 'Machine', 'AppState')
+$script:NeedStates = @('Installed', 'Electron', 'Rust', 'Built', 'Machine', 'AppState')
 function Now-Ms { [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
 function Get-Needs { $h = @{}; foreach ($n in $script:NeedStates) { $h[$n] = [string](Get-Variable -Scope Script -Name $n -ValueOnly -ErrorAction SilentlyContinue) }; return $h }
 # A need that FAILED during a row is asked again by its rerun, never read from that failure (a half-started app is ended).

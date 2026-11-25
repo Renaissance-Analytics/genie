@@ -43,7 +43,7 @@ ROWS=(
     typecheck unit build bundles sounds
     seed no-pty smoke layout local-door-break local-door host-late-ready files-watch chat-drafts gapp-open artboard ui-lag plan-popover
     trust-step accounts-popover claude-accounts sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash quit-keeps-host rebuilt-machine
-    flows zip64 host-plain-node mailpit
+    flows zip64 host-plain-node mailpit launcher-unit
     package package-fuse
     logon
     toolchain
@@ -102,7 +102,7 @@ fi
 if [ -n "$only$from" ]; then
     setup=(deps electron-binary)
     for r in "${selected[@]}"; do
-        case " deps electron-binary typecheck unit flows zip64 host-plain-node mailpit " in *" $r "*) ;; *) setup+=(build); break ;; esac
+        case " deps electron-binary typecheck unit flows zip64 host-plain-node mailpit launcher-unit " in *" $r "*) ;; *) setup+=(build); break ;; esac
     done
     rest=()
     for r in "${selected[@]}"; do case " ${setup[*]} " in *" $r "*) ;; *) rest+=("$r") ;; esac; done
@@ -651,6 +651,19 @@ row_package-fuse() {
 # the base one installed and updated to the other through the real updater while an agent streams; the same host and
 # provider pids after, and every tick streamed while there was no window in the agent's ledger, in order. It builds and
 # packages twice and replaces ~/.genie, ~/Applications/Genie.AppImage and dist/: last in the list, after every row that reads them.
+# THE LAUNCHER (Tynn #1058 L2, native/launcher): its cargo test (with the test-only throwaway keys and stand-in host), then
+# its release build, whose size is said. Rust is Arch's `rust` package, installed by pacman only when cargo is missing.
+# Cargo.lock is copied to ci-out so a run can be read against the exact crates it built.
+row_launcher-unit() {
+    need_cmd cargo rust || return 1
+    echo "--- $(cargo --version), $(rustc --version)"
+    local locked=''
+    [ -f native/launcher/Cargo.lock ] && locked=--locked
+    ( cd native/launcher && cargo test $locked --features test-keys ) || return 1
+    ( cd native/launcher && cargo build $locked --release --bin genie ) || return 1
+    cp native/launcher/Cargo.lock "$OUT/launcher-Cargo.lock" 2>/dev/null || true
+    echo "LAUNCHER SIZE linux $(stat -c %s native/launcher/target/release/genie) bytes"
+}
 row_client-only-update() { need_install && need_electron && need_display && timeout 2300 bash scripts/vm-client-only-update-linux.sh; }
 # LOGON START, READ AT THE OS (Tynn #1036 P6-3): the packaged AppImage (the package row's) in a home of its own; its
 # autostart file read back (Exec, Hidden, and what systemd's xdg-autostart generator makes of it), the setting switched
@@ -716,6 +729,7 @@ ceiling() {
         package) echo 1500 ;;
         toolchain) echo 2700 ;;
         logon) echo 900 ;;
+        launcher-unit) echo 1500 ;;
         client-only-update) echo 2400 ;;
         host-update) echo 2400 ;;
         *) echo 600 ;;
