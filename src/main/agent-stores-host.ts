@@ -66,8 +66,12 @@ export const WINDOW_CALLS: Readonly<Record<StoreName, readonly string[]>> = {
     approvals: ['resolve', 'gate'],
     settings: ['set', 'setFor', 'resetFor', 'reset'],
     drafts: ['all', 'save', 'putFile', 'readFile', 'release', 'prune'],
-    registry: ['readWorkspaces', 'readAgents', 'readRunningAtQuit', 'readInterruptedAtQuit', 'beginRestore', 'restoreStarted', 'writeWorkspaces', 'writeAgents', 'writeRunningAtQuit', 'writeInterruptedAtQuit'],
+    // The registry's lists change one record at a time (Tynn #1007): no caller writes a whole list.
+    registry: ['readWorkspaces', 'readAgents', 'readRunningAtQuit', 'readInterruptedAtQuit', 'beginRestore', 'restoreStarted', 'changeWorkspaces', 'changeAgents', 'writeRunningAtQuit', 'writeInterruptedAtQuit'],
 };
+
+/** A registry call that writes its files: its model follows, and every window re-reads. */
+const writes = (method: string): boolean => method.startsWith('write') || method.startsWith('change');
 
 export class AgentStoresService {
     /** The registry writes in flight, in the order they came. */
@@ -167,7 +171,7 @@ export class AgentStoresService {
                 if (!reg) throw new Error('this host keeps no registry');
                 const run = async (): Promise<unknown> => {
                     const result = await (reg.store as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[method]!(...args);
-                    if (method.startsWith('write')) {
+                    if (writes(method)) {
                         // The host's own model follows the files (its tools and approvals read it with no window), then every
                         // window re-reads: two windows, one registry.
                         await reg.model.refresh();
@@ -176,7 +180,7 @@ export class AgentStoresService {
                     }
                     return result;
                 };
-                if (!method.startsWith('write')) return run();
+                if (!writes(method)) return run();
                 // Counted before the first await: a start right behind this on the same socket must find it.
                 const written = run();
                 this.#registryWrites = Promise.allSettled([this.#registryWrites, written]);

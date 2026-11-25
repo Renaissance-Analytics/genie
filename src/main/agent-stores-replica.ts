@@ -1,6 +1,6 @@
 import type { StoreName } from './agent-stores-host.js';
 import type { AgentRecord } from '../core/identity.js';
-import type { WorkspaceRecord } from './store.js';
+import type { RecordChange, WorkspaceRecord } from './store.js';
 
 /**
  * GENIE-HOST'S REGISTRY STORE (the host split, P3.2). The window's replicas of the host's stores that lived here (inbox,
@@ -38,8 +38,9 @@ export class HostRegistryStore {
     async readInterruptedAtQuit(): Promise<readonly string[]> { return (await this.#call('registry', 'readInterruptedAtQuit', [])) as string[]; }
     async beginRestore(): Promise<{ running: readonly string[]; interrupted: readonly string[] }> { return (await this.#call('registry', 'beginRestore', [])) as { running: string[]; interrupted: string[] }; }
     async restoreStarted(id: string): Promise<boolean> { return (await this.#call('registry', 'restoreStarted', [id])) === true; }
-    async writeWorkspaces(workspaces: readonly WorkspaceRecord[]): Promise<void> { await this.#call('registry', 'writeWorkspaces', [workspaces]); }
-    async writeAgents(records: readonly AgentRecord[]): Promise<void> { await this.#call('registry', 'writeAgents', [records]); }
+    /** One record at a time (Tynn #1007): the store applies the change to the files as they are, under its lock. */
+    async changeWorkspaces(change: RecordChange<WorkspaceRecord>): Promise<readonly WorkspaceRecord[]> { return (await this.#call('registry', 'changeWorkspaces', [change])) as WorkspaceRecord[]; }
+    async changeAgents(change: RecordChange<AgentRecord>): Promise<readonly AgentRecord[]> { return (await this.#call('registry', 'changeAgents', [change])) as AgentRecord[]; }
     async writeRunningAtQuit(ids: readonly string[]): Promise<void> { await this.#call('registry', 'writeRunningAtQuit', [ids]); }
     async writeInterruptedAtQuit(ids: readonly string[]): Promise<void> { await this.#call('registry', 'writeInterruptedAtQuit', [ids]); }
 }

@@ -12,14 +12,35 @@ type Refusal = { ok: false; reason: string };
 export const REGISTRY_READS = ['readWorkspaces', 'readAgents', 'readRunningAtQuit', 'readInterruptedAtQuit', 'dropped'] as const;
 export type RegistryRead = (typeof REGISTRY_READS)[number];
 
-/** What main writes: the files, and the restore's two steps (which write the saved lists). */
-export const REGISTRY_WRITES = ['writeWorkspaces', 'writeAgents', 'writeRunningAtQuit', 'writeInterruptedAtQuit', 'beginRestore', 'restoreStarted'] as const;
+/**
+ * What main writes: the registry's lists ONE RECORD AT A TIME (Tynn #1007: a whole list from a stale window clobbered the
+ * field genie-host had just written), the saved lists, and the restore's two steps (which write them).
+ */
+export const REGISTRY_WRITES = ['changeWorkspaces', 'changeAgents', 'writeRunningAtQuit', 'writeInterruptedAtQuit', 'beginRestore', 'restoreStarted'] as const;
 export type RegistryWrite = (typeof REGISTRY_WRITES)[number];
 
 const rec = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
 const records = (v: unknown): boolean => Array.isArray(v) && v.every(rec);
 const ids = (v: unknown): boolean => Array.isArray(v) && v.every((x) => typeof x === 'string');
 const refuse = (reason: string): Refusal => ({ ok: false, reason });
+/** Field names a patch may not name: the record's id, and what reaches a prototype (store.ts UNPATCHABLE_FIELDS). */
+const UNPATCHABLE = new Set(['id', '__proto__', 'constructor', 'prototype']);
+const fieldName = (v: unknown): boolean => typeof v === 'string' && v !== '' && !UNPATCHABLE.has(v);
+const patchOf = (v: unknown): boolean => {
+    if (!rec(v) || typeof v.id !== 'string' || v.id === '') return false;
+    if (Object.keys(v).some((k) => k !== 'id' && k !== 'set' && k !== 'unset')) return false;
+    if (v.set !== undefined && (!rec(v.set) || !Object.keys(v.set).every(fieldName))) return false;
+    if (v.unset !== undefined && (!Array.isArray(v.unset) || !v.unset.every(fieldName))) return false;
+    return true;
+};
+/** A per-record change (store.ts RecordChange): records to add, patches by id, ids to remove; nothing else. */
+const recordChange = (v: unknown): boolean => {
+    if (!rec(v) || Object.keys(v).some((k) => k !== 'add' && k !== 'patch' && k !== 'remove')) return false;
+    if (v.add !== undefined && !(records(v.add) && (v.add as Record<string, unknown>[]).every((r) => typeof r.id === 'string' && r.id !== ''))) return false;
+    if (v.patch !== undefined && !(Array.isArray(v.patch) && v.patch.every(patchOf))) return false;
+    if (v.remove !== undefined && !ids(v.remove)) return false;
+    return true;
+};
 
 /** `registry.read`'s arguments: one read, alone. */
 export function readRegistryRead(args: unknown[]): RegistryRead | Refusal {
@@ -29,8 +50,8 @@ export function readRegistryRead(args: unknown[]): RegistryRead | Refusal {
 
 /** Each write's own arguments. */
 const WRITE_ARGS: Readonly<Record<RegistryWrite, (args: unknown[]) => boolean>> = {
-    writeWorkspaces: (a) => a.length === 1 && records(a[0]),
-    writeAgents: (a) => a.length === 1 && records(a[0]),
+    changeWorkspaces: (a) => a.length === 1 && recordChange(a[0]),
+    changeAgents: (a) => a.length === 1 && recordChange(a[0]),
     writeRunningAtQuit: (a) => a.length === 1 && ids(a[0]),
     writeInterruptedAtQuit: (a) => a.length === 1 && ids(a[0]),
     beginRestore: (a) => a.length === 0,
