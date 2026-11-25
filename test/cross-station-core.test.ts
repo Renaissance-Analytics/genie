@@ -58,25 +58,36 @@ describe('the roster another of the owner’s stations may reach', () => {
     const rec = (workspaceId: string, name: string, accessScope: AgentRecord['accessScope']): AgentRecord =>
         agentRecord({ id: mintAgentId(), workspaceId, provider: 'claude', name, accessScope });
 
-    // `specific` names workspaces by THIS host's ids, which mean nothing on another station: it opens to its own workspace only.
-    it('holds every awake workspace’s agents except those whose scope is none, each with the workspaces that may open to it', () => {
-        const roster = rosterOf([rec(W1, 'bolt', 'self'), rec(W1, 'atlas', 'all'), rec(W1, 'shy', 'none'), rec(W1, 'picky', 'specific'), rec(W2, 'sleepy', 'all')], slugs, new Set([W2]));
+    /*
+     * THE SAME WORKSPACE ON ANOTHER STATION (the review of #2180, finding 5; the coordinator's ruling): it is the same
+     * workspace only when it is the same SHARED workspace, its Tynn project, never because its slug matches. A `self` or
+     * `specific` scope opens to its own workspace's shared identity; a workspace linked to no Tynn project opens to nothing
+     * across stations.
+     */
+    const W3 = 'ws_three';
+    const shared = (ws: string): string | null => (ws === W1 ? 'tynn:proj_1' : null);
+    it('holds every awake workspace’s agents except those whose scope is none, each with the SHARED workspaces that may open to it', () => {
+        const roster = rosterOf([rec(W1, 'bolt', 'self'), rec(W1, 'atlas', 'all'), rec(W1, 'shy', 'none'), rec(W1, 'picky', 'specific'), rec(W2, 'sleepy', 'all'), rec(W3, 'loner', 'self')], new Map([...slugs, [W3, 'three']]), new Set([W2]), shared);
         expect(roster).toEqual([
-            { name: 'bolt', workspace: 'p8x', opensFrom: ['p8x'] },
+            { name: 'bolt', workspace: 'p8x', opensFrom: ['tynn:proj_1'] },
             { name: 'atlas', workspace: 'p8x', opensFrom: 'all' },
-            { name: 'picky', workspace: 'p8x', opensFrom: ['p8x'] },
+            { name: 'picky', workspace: 'p8x', opensFrom: ['tynn:proj_1'] },
+            { name: 'loner', workspace: 'three', opensFrom: [] },
         ]);
     });
 
     it('the OS agent is genie@system there too, as its address says (run 1125-0504 listed genie@__genie__)', () => {
         const os = agentRecord({ id: mintAgentId(), workspaceId: OS_WORKSPACE, provider: 'claude', name: OS_AGENT_NAME, accessScope: 'all' });
-        expect(rosterOf([os], slugs, new Set())).toEqual([{ name: OS_AGENT_NAME, workspace: 'system', opensFrom: 'all' }]);
+        expect(rosterOf([os], slugs, new Set(), shared)).toEqual([{ name: OS_AGENT_NAME, workspace: 'system', opensFrom: 'all' }]);
     });
 
-    it('a remote sender opens to an entry only from a workspace it allows', () => {
-        expect(opensFrom({ name: 'bolt', workspace: 'p8x', opensFrom: ['p8x'] }, 'p8x')).toBe(true);
-        expect(opensFrom({ name: 'bolt', workspace: 'p8x', opensFrom: ['p8x'] }, 'other')).toBe(false);
-        expect(opensFrom({ name: 'atlas', workspace: 'p8x', opensFrom: 'all' }, 'anything')).toBe(true);
+    it('a remote sender opens to an entry only from a shared workspace it allows: a matching slug is not one, and no link matches nothing', () => {
+        expect(opensFrom({ name: 'bolt', workspace: 'p8x', opensFrom: ['tynn:proj_1'] }, 'tynn:proj_1')).toBe(true);
+        expect(opensFrom({ name: 'bolt', workspace: 'p8x', opensFrom: ['tynn:proj_1'] }, 'tynn:proj_2')).toBe(false);
+        expect(opensFrom({ name: 'bolt', workspace: 'p8x', opensFrom: ['tynn:proj_1'] }, 'p8x')).toBe(false); // the slug
+        expect(opensFrom({ name: 'bolt', workspace: 'p8x', opensFrom: ['tynn:proj_1'] }, null)).toBe(false);
+        expect(opensFrom({ name: 'loner', workspace: 'three', opensFrom: [] }, null)).toBe(false);
+        expect(opensFrom({ name: 'atlas', workspace: 'p8x', opensFrom: 'all' }, null)).toBe(true);
     });
 });
 

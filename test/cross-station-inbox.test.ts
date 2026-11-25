@@ -85,6 +85,43 @@ describe('mail another station sent here', () => {
         expect(reopened.receiptsOwed(A)).toEqual([]);
     });
 
+    /*
+     * THE REVIEW OF #2180, finding 3: a repeat is found by an INDEX of origins, not by scanning the mailbox, so a repeat of
+     * mail whose thread was deleted since is still a repeat (a scan finds nothing there and would store it again); and each
+     * station is capped, per minute and per day, so one station cannot flood this host.
+     */
+    it('a repeat is known by its origin even after its thread was deleted: it is not stored again', async () => {
+        const first = await inbox.receiveFromStation({ station: A, stationName: 'desk', id: 'msg_origin_9', from, to: bolt, text: 'once', sentAt: '2026-11-25T12:00:00.000Z' });
+        expect(await inbox.deleteThread(from, bolt)).toBe(1);
+        const again = await inbox.receiveFromStation({ station: A, stationName: 'desk', id: 'msg_origin_9', from, to: bolt, text: 'once', sentAt: '2026-11-25T12:00:00.000Z' });
+        expect(again).toMatchObject({ repeat: true });
+        expect(again.message.id).toBe(first.message.id);
+        expect(inbox.unread(bolt)).toEqual([]);
+        const reopened = await InboxStore.open(dir, now); // the index is rebuilt from what is on disk
+        const third = await reopened.receiveFromStation({ station: A, stationName: 'desk', id: 'msg_origin_10', from, to: bolt, text: 'new', sentAt: '2026-11-25T12:00:00.000Z' });
+        expect(third.repeat).toBe(false);
+        expect((await reopened.receiveFromStation({ station: A, stationName: 'desk', id: 'msg_origin_10', from, to: bolt, text: 'new', sentAt: '2026-11-25T12:00:00.000Z' })).repeat).toBe(true);
+    });
+
+    it('a station past its cap per minute is refused, in words, and another station is not; a minute later it is taken again', async () => {
+        const limits = { perMinute: 2, perDay: 100 };
+        const arrive = (station: string, id: string) => inbox.receiveFromStation({ station, stationName: 'x', id, from: peerParticipant(station, 'atlas', 'p8x'), to: bolt, text: id, sentAt: '2026-11-25T12:00:00.000Z' }, limits);
+        await arrive(A, 'r1');
+        await arrive(A, 'r2');
+        await expect(arrive(A, 'r3')).rejects.toThrow(/too much mail from that workstation/);
+        await expect(arrive(B, 'r4')).resolves.toMatchObject({ repeat: false });
+        clock += 120;
+        await expect(arrive(A, 'r3')).resolves.toMatchObject({ repeat: false });
+        expect(inbox.unread(bolt).map((m) => m.text)).toEqual(['r1', 'r2', 'r4', 'r3']);
+    });
+
+    it('a station past its cap per day is refused too', async () => {
+        const limits = { perMinute: 1_000, perDay: 3 };
+        const arrive = (id: string) => inbox.receiveFromStation({ station: A, stationName: 'x', id, from, to: bolt, text: id, sentAt: '2026-11-25T12:00:00.000Z' }, limits);
+        for (const id of ['d1', 'd2', 'd3']) await arrive(id);
+        await expect(arrive('d4')).rejects.toThrow(/too much mail from that workstation/);
+    });
+
     it('a reply from its recipient may go back: the recipient has written to the remote sender once it answers', async () => {
         await inbox.receiveFromStation({ station: A, stationName: 'desk', id: 'msg_origin_3', from, to: bolt, text: 'q', sentAt: '2026-11-25T12:00:00.000Z' });
         expect(inbox.hasWritten(from, bolt)).toBe(true);
