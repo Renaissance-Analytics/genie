@@ -102,13 +102,21 @@ export async function wireLoginItem(settings: ResidenceSettings, port: LoginItem
         await settings.set('launch_at_login', true).catch((error: unknown) => console.error('[genie] launch at sign-in: adopting Genie 1\'s entry failed:', error));
     }
     const left = () => leftRunning?.now() === true;
-    safely('applying at boot', () => applyLoginItem(port, planFor(env, settings.snapshot(), left())));
+    // Each application says what it read and what it did, in the window's log: the entry at the OS is the logon decision.
+    const apply = (what: string) => safely(what, () => {
+        const values = settings.snapshot();
+        const plan = planFor(env, values, left());
+        applyLoginItem(port, plan);
+        const did = plan.kind === 'none' ? `nothing (${plan.reason})` : plan.kind === 'login-item' ? `login item ${plan.settings.openAtLogin ? 'on' : 'off'}${plan.settings.args?.length ? ` ${plan.settings.args.join(' ')}` : ''}` : plan.content === null ? `${plan.file} removed` : `${plan.file} written`;
+        console.log(`[genie] launch at sign-in (${what}): setting ${values.launch_at_login === true ? 'on' : 'off'}, start minimised ${values.start_minimized === true ? 'on' : 'off'}, left running ${left() ? 'yes' : 'no'}: ${did}`);
+    });
+    apply('applying at boot');
     settings.onChange((key, _value, workspaceId) => {
         if (workspaceId !== undefined || (key !== 'launch_at_login' && key !== 'start_minimized')) return;
-        safely('applying the change', () => applyLoginItem(port, planFor(env, settings.snapshot(), left())));
+        apply('applying the change');
     });
     // SAID LATE (P6-3): a genie-host slower than the boot deadline says its settings after the boot applied the defaults, as a
-    // whole view that changes no key. Measured on both platforms: a relaunch with the setting on removed the entry for good.
-    settings.onView?.(() => safely('applying the settings genie-host said', () => applyLoginItem(port, planFor(env, settings.snapshot(), left()))));
-    leftRunning?.onChange(() => safely('applying the mark', () => applyLoginItem(port, planFor(env, settings.snapshot(), left()))));
+    // whole view that changes no key (measured: the window's page came 10.2 s after a launch, the deadline being 10 s).
+    settings.onView?.(() => apply('applying the settings genie-host said'));
+    leftRunning?.onChange(() => apply('applying the mark'));
 }

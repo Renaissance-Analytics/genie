@@ -63,13 +63,13 @@ function refuse(why) { console.log(`### logon=CANNOT-RUN ${why}`); process.exit(
 const BREAKS = {
     'no-follow': {
         file: 'src/main/tray-residence.ts',
-        anchor: "        safely('applying the change', () => applyLoginItem(port, planFor(env, settings.snapshot(), left())));",
+        anchor: "        apply('applying the change');",
         replace: '        void 0; // P6-3 BREAK PROBE no-follow: a change of the setting is not applied',
         red: 'switching the setting on wrote the entry',
     },
     'mark-ignored': {
         file: 'src/main/tray-residence.ts',
-        anchor: "    leftRunning?.onChange(() => safely('applying the mark', () => applyLoginItem(port, planFor(env, settings.snapshot(), left()))));",
+        anchor: "    leftRunning?.onChange(() => apply('applying the mark'));",
         replace: '    // P6-3 BREAK PROBE mark-ignored: the left-running mark is not followed',
         red: 'left running + setting off',
     },
