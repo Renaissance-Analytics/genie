@@ -417,8 +417,7 @@ describe('what a window can ask for over the link', () => {
             send: (owner, event) => { for (const payload of protocol!.events(event)) remote?.eventTo(owner, LOCAL_EVENTS.device, payload); },
             log: () => {},
         });
-        protocol = deviceLinkProtocol({ link: service, role: { role: () => 'pilot', said: () => 'pilot', why: () => null, reread: async () => {} },
-            wordTynnRefusal: async (refusal) => refusal, openBrowser: async () => null, remoteVia: () => {} });
+        protocol = deviceLinkProtocol({ link: service, openBrowser: async () => null, remoteVia: () => {} });
         const inner = buildHostApi({ features: {}, workspaceOps: {}, agentOps: {}, updates: null, deviceLinkProtocol: protocol } as unknown as HostApiDeps);
         const api = { invoke: (m: RemoteMethod, a: unknown[], c?: CallContext) => inner.invoke(m, a, c), releaseCaller: (c: CallContext) => inner.releaseCaller?.(c), onEvent: () => () => {}, workspaceOfAgent: () => null } as unknown as HostApi;
         const devices = await DeviceStore.open(dir, { now: Date.now, random: () => 'tok' });

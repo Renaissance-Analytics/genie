@@ -1,5 +1,5 @@
 import { deviceExpiryText, isExpiringSoon } from '../../core/device-expiry.js';
-import { droneRefusal, mayBrowse } from '../../core/workstation-role.js';
+import { droneRefusal } from '../../core/workstation-role.js';
 import { useHostPathPicker } from './HostPathPicker.js';
 import { PluginsPage } from './PluginsPage.js';
 import { MarketplacePane } from './MarketplacePane.js';
@@ -2863,9 +2863,10 @@ export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date
     const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
     // The QR carries the PAGE a phone opens (§6.8), with the PIN in its hash — a socket URL is nothing a phone can scan into.
     const pairUrl = mobilePageUrl(remote?.url ?? null) ?? remote?.url ?? '';
-    // What Tynn says this machine is (main reads it from Tynn; genie#1278 W5). A drone offers no browsing.
+    // What Tynn says this machine is (main reads it from Tynn; genie#1278 W5). It gates no connecting out (Tynn #423);
+    // a drone still does not list its tailnet's devices here.
     const role = remote?.tynnWorkstation?.role ?? null;
-    const browse = mayBrowse(role);
+    const browse = role !== 'drone';
     return (
         <section data-remote className="flex flex-col gap-3 border-t border-[var(--border-1)] px-5 py-3">
             <h2 className="text-sm font-semibold">Remote access</h2>

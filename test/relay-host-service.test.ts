@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { genieCatalog, RELAY_HOST_ELEMENT } from '../src/main/genie-catalog.js';
 import { RelayHostService, type RelayHostServicePorts } from '../src/main/relay-host-service.js';
 import type { RelayHostStatus } from '../src/main/tynn-network.js';
-import { mayBrowse } from '../src/core/workstation-role.js';
 
 /*
  * THIS MACHINE ON THE TYNN RELAY, AS A HOST, IS GENIE-HOST'S (Tynn #410, host split P5d.3). Its registration with Tynn, the
@@ -148,8 +147,8 @@ describe('with genie-host linked, the window runs no relay host (source guards)'
 });
 
 /*
- * THE HOST PICKER WENT FROM A PILOT'S TITLE BAR (beta.61 as shipped, main 23354995). The title bar offers Connect unless
- * `features.remote.tynnWorkstation.role` says drone (Shell.tsx `mayBrowse`). That role is genie-host's workstation view, and
+ * THE HOST PICKER WENT FROM A PILOT'S TITLE BAR (beta.61 as shipped, main 23354995). The title bar offered Connect unless
+ * `features.remote.tynnWorkstation.role` said drone; since Tynn #423 it offers it whatever the role. That role is genie-host's workstation view, and
  * it was the FAIL-CLOSED role: `drone` until Tynn's first answer, and `drone` whenever the role read answered nothing or
  * failed. A Pilot whose read had not answered, or had failed once, lost its host picker. What the window SHOWS is what Tynn
  * said; connecting out from a machine Tynn has not called a pilot is still refused where it must be (main's device-open
@@ -160,14 +159,12 @@ describe('the role a window shows is Tynn\'s answer; failing closed stays where 
         const r = rig({}, { role: 'pilot' });
         await r.service.register();
         expect(r.service.status().workstation?.role).toBe('pilot');
-        expect(mayBrowse(r.service.status().workstation?.role ?? null)).toBe(true);
     });
 
     it('the role read answered nothing: the window shows no role (the picker stays), while connecting out still fails closed', async () => {
         const r = rig({}, { role: null });
         await r.service.register();
         expect(r.service.status().workstation?.role ?? null).toBeNull();
-        expect(mayBrowse(r.service.status().workstation?.role ?? null)).toBe(true);
         expect(r.service.status().role).toBe('drone');
     });
 
@@ -179,10 +176,9 @@ describe('the role a window shows is Tynn\'s answer; failing closed stays where 
         expect(r.service.status().role).toBe('drone');
     });
 
-    it('CONTROL: Tynn said drone: shown as a drone, and no picker', async () => {
+    it('CONTROL: Tynn said drone: shown as a drone', async () => {
         const r = rig({}, { role: 'drone' });
         await r.service.register();
         expect(r.service.status().workstation?.role).toBe('drone');
-        expect(mayBrowse(r.service.status().workstation?.role ?? null)).toBe(false);
     });
 });

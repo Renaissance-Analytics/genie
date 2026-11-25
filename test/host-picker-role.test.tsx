@@ -1,16 +1,14 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it, vi } from 'vitest';
-import * as roles from '../src/core/workstation-role.js';
-import { deviceLinkGate } from '../src/main/device-link-gate.js';
+import { describe, expect, it } from 'vitest';
 import { RelayHostService, type RelayHostServicePorts } from '../src/main/relay-host-service.js';
 import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
 import { Shell } from '../src/renderer/Shell.js';
 import type { GenieSnapshot } from '../src/renderer/bridge.js';
 
 /*
- * THE HOST PICKER IN A PILOT'S TITLE BAR (beta.61 as shipped; the owner lost it). What a person sees, then what a click
- * does: the picker is there unless Tynn SAID this machine is a drone, and a click with the role not yet answered asks Tynn
- * first. Only Tynn's own "drone" is refused as a drone; no answer says Tynn could not be reached, and nothing is dialled.
+ * THE HOST PICKER IN THE TITLE BAR (beta.61 as shipped; the owner lost it). It is there whatever role Tynn gave this
+ * machine (Tynn #423: every client a pilot); a dial is genie-host's, and Tynn decides the grant. And the role read that got
+ * no answer is read again, for Settings to say.
  */
 const snapshot = { agents: [], osAgent: null, workspaces: [{ id: 'w', path: '/w', name: 'w', agentsKnown: true, asleep: false }], deckItems: [], signals: {}, workstation: { name: 'pilot', healthy: true } } as unknown as GenieSnapshot;
 const connectProps = { state: null, remembered: [], onConnect: () => {}, onDisconnect: () => {}, tynnWorkstations: { ok: true as const, workstations: [{ id: 'ws_d', name: 'drone-1', role: 'drone' }] }, onOpenWorkstation: () => {}, onOpenLink: () => {}, onRefresh: () => {} };
@@ -35,58 +33,8 @@ describe('what the person sees', () => {
     it('before genie-host has answered at all (no workstation said yet): the picker is there', () => {
         expect(titleBar(null)).toContain(PICKER);
     });
-    it('CONTROL: Tynn said drone: no picker', () => {
-        expect(titleBar({ registered: true, host: 'https://tynn.ai', workstationId: 'ws_me', role: 'drone' })).not.toContain(PICKER);
-    });
-});
-
-type Check = (reading: { role: 'pilot' | 'drone' | null; said: 'pilot' | 'drone' | null }) => string | null;
-const connectOutRefusal = (roles as unknown as { connectOutRefusal: Check }).connectOutRefusal;
-const gate = deviceLinkGate as unknown as (url: unknown, ports: object) => Promise<{ ok: boolean; reason?: string; channel?: string }>;
-const UNREACHED = /could not reach Tynn to check this workstation’s role/;
-
-describe('what a click does', () => {
-    it('only a role Tynn answered as drone is refused as a drone', () => {
-        expect(connectOutRefusal({ role: 'drone', said: 'drone' })).toMatch(/is a drone/);
-        expect(connectOutRefusal({ role: 'drone', said: null })).toMatch(UNREACHED);
-        expect(connectOutRefusal({ role: 'drone', said: null })).not.toMatch(/is a drone/);
-        expect(connectOutRefusal({ role: 'pilot', said: 'pilot' })).toBeNull();
-        // Signed out: not on the Tynn network, no Tynn role to apply.
-        expect(connectOutRefusal({ role: null, said: null })).toBeNull();
-    });
-
-    const dial = (first: { role: 'pilot' | 'drone' | null; said: 'pilot' | 'drone' | null }, afterReread: typeof first) => {
-        let now = first;
-        const open = vi.fn(async () => ({ ok: true as const, channel: 'device_1' }));
-        const reread = vi.fn(async () => { now = afterReread; });
-        return { open, reread, run: () => gate('wss://drone:7421/genie', { role: () => now.role, said: () => now.said, reread, link: () => ({ open }) }) };
-    };
-
-    it('the role unknown: Tynn is asked first, and a pilot connects', async () => {
-        const d = dial({ role: 'drone', said: null }, { role: 'pilot', said: 'pilot' });
-        expect(await d.run()).toEqual({ ok: true, channel: 'device_1' });
-        expect(d.reread).toHaveBeenCalledOnce();
-        expect(d.open).toHaveBeenCalledOnce();
-    });
-
-    it('asked, and Tynn says drone: refused as a drone, nothing dialled', async () => {
-        const d = dial({ role: 'drone', said: null }, { role: 'drone', said: 'drone' });
-        expect(await d.run()).toMatchObject({ ok: false, reason: expect.stringMatching(/is a drone/) });
-        expect(d.open).not.toHaveBeenCalled();
-    });
-
-    it('asked, and Tynn does not answer: said so, never a drone refusal, nothing dialled', async () => {
-        const d = dial({ role: 'drone', said: null }, { role: 'drone', said: null });
-        const r = await d.run();
-        expect(r).toMatchObject({ ok: false, reason: expect.stringMatching(UNREACHED) });
-        expect(r.reason).not.toMatch(/is a drone/);
-        expect(d.open).not.toHaveBeenCalled();
-    });
-
-    it('CONTROL: a known pilot is not asked again', async () => {
-        const d = dial({ role: 'pilot', said: 'pilot' }, { role: 'pilot', said: 'pilot' });
-        expect(await d.run()).toMatchObject({ ok: true });
-        expect(d.reread).not.toHaveBeenCalled();
+    it('Tynn said drone: the picker is there too — the role gates no connecting out (Tynn #423)', () => {
+        expect(titleBar({ registered: true, host: 'https://tynn.ai', workstationId: 'ws_me', role: 'drone' })).toContain(PICKER);
     });
 });
 

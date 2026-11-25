@@ -422,8 +422,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'tynnNetwork.workstations': {
                 const network = owner().tynnNetwork;
                 if (!network.hasAccount()) return { ok: false, reason: 'this Genie has no Tynn account' };
-                const refused = droneRefusal(network.role());
-                if (refused) return { ok: false, reason: refused };
+                // Any role lists (Tynn #423): Tynn decides what this account may open.
                 return network.workstations();
             }
             // A pasted share link, decided HERE with the host's Tynn and the role Tynn gave it; the window opens it (2b-4).

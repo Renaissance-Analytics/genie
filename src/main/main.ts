@@ -60,7 +60,6 @@ import type { SessionEngineClient } from './session-engine-client.js';
 import { gatherSources } from './keychain-migration.js';
 import { tynnAgentIdentities, type AgentSecrets } from './tynn-agent-identities.js';
 import { legacyUnsealer, type LegacyUnsealer } from './legacy-unsealer.js';
-import { outboundDialRefusal } from '../core/workstation-role.js';
 import { actOnConnectLink, connectLinkDecisionOf } from '../core/connect-link.js';
 import { remoteWindowAction, windowsLeftByAccountChange } from '../core/remote-window-policy.js';
 import { mkdir, readFile as readFileText, writeFile as writeFileText } from 'node:fs/promises';
@@ -1563,12 +1562,10 @@ async function boot(): Promise<void> {
     // THE DASHBOARD'S WINDOWS COLUMN (Tynn #706): a workspace's terminals view in a window of its own; a second ask brings it up.
     ipcMain.handle('genie:terminals-popout', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string' && workspaceId !== '') openTerminalsWindow(terminalsWindowRoute(workspaceId), 'user-gesture'); });
     ipcMain.handle('genie:files-popout', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.popOut(workspaceId); });
-    // A drone never connects out (audit M-b): refused HERE, from the role main read from Tynn, not only hidden in the window.
-    // TAKE OVER FROM ANOTHER MACHINE (Tynn #529 part A): this machine's window on that host's terminal; a drone opens none.
+    // TAKE OVER FROM ANOTHER MACHINE (Tynn #529 part A): this machine's window on that host's terminal. The role gates no
+    // connecting out (Tynn #423): Tynn decides who may reach a host, and the host whom it admits.
     ipcMain.handle('genie:remote-takeover-open', (_event, url: unknown, terminalId: unknown, ticket: unknown, name: unknown, route: unknown) => {
         if (typeof url !== 'string' || typeof terminalId !== 'string' || typeof ticket !== 'string' || ticket === '') return { ok: false, reason: 'not a Take Over window' };
-        const refused = outboundDialRefusal(hostSummaryNow.workstationRole, url);
-        if (refused) return { ok: false, reason: refused };
         // A sign-in's window shows its steps (Tynn #896): its login route, when it is that same terminal's.
         openRemoteTakeOverWindow(url, terminalId, ticket, typeof name === 'string' ? name : null, typeof route === 'string' && loginTerminalOf(route) === terminalId ? route : null);
         return { ok: true };
@@ -1579,15 +1576,7 @@ async function boot(): Promise<void> {
         takeOverTickets.delete(event.sender.id);
         return ticket;
     });
-    ipcMain.handle('genie:remote-open-window', (_event, url: unknown, name: unknown) => { if (typeof url !== 'string') return; const refused = outboundDialRefusal(hostSummaryNow.workstationRole, url); if (refused) return { ok: false, reason: refused }; openRemoteWindow(url, typeof name === 'string' ? name : null); });
-    /*
-     * The tailnet socket is dialled by the remote window's renderer, which main otherwise never sees: every WebSocket an
-     * app window opens (they share the default session; the Genie browser has its own) is cancelled while this machine
-     * is a drone. Main's own sockets (the relay, Pusher) are Node's and do not pass through here. A desktop window no longer
-     * dials: genie-host does, and refuses a drone first (device-link-protocol.ts); this stays as defence in depth for anything
-     * else a window opens.
-     */
-    session.defaultSession.webRequest.onBeforeRequest((details, callback) => callback({ cancel: outboundDialRefusal(hostSummaryNow.workstationRole, details.url) !== null }));
+    ipcMain.handle('genie:remote-open-window', (_event, url: unknown, name: unknown) => { if (typeof url !== 'string') return; openRemoteWindow(url, typeof name === 'string' ? name : null); });
     // THE TYNN NETWORK, AS A MEMBER (Tynn #837; Genie 1's workstation:connectable / workstation:open): the workstations
     // Tynn lists, and a connection to one — the grant and its proof key minted and held HERE, never in the window.
     // A PASTED SHARE LINK (genie#1278 C1; Genie 1's connect-dispatch): genie-host decides what it is, against the Tynn it is

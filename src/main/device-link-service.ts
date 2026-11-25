@@ -153,15 +153,24 @@ export class DeviceLinkService {
         // Each step is said where it fails (core/relay-connect.ts): Tynn's way in, then the relay to the machine.
         const naming = relay.name ? relay.name(workstationId).catch(() => null) : Promise.resolve(null);
         const grant = await relay.mint(workstationId, pop.publicJwk);
-        if (!grant.ok) return { ok: false, stage: 'tynn', refusal: grant };
+        // EVERY OPEN IS IN THIS HOST'S LOG (Tynn #423): which workstation, how far it got and why it stopped, never the
+        // grant. The owner's desktop reached none of his machines and its logs held no trace of an attempt.
+        if (!grant.ok) {
+            this.#options.log(`relay open ${workstationId}: Tynn gave no way in: ${grant.reason}`);
+            return { ok: false, stage: 'tynn', refusal: grant };
+        }
         const name = await naming;
         this.#options.send(owner, { type: 'step', workstationId, step: 'relay' });
         // A fresh grant for the SAME key before each one expires (genie#1401): the session lasts while the window stays.
         const renew = (): Promise<ConnectGrant> => (relay.signedIn() ? relay.mint(workstationId, pop.publicJwk) : Promise.resolve({ ok: false, reason: 'signed out of Tynn' }));
         // The host key is the one Tynn named with THIS grant, for the life of the session: a renewal's answer never changes it.
         const opened = await relay.open({ relayUrl: grant.relayEndpoint, workstationId, grant: grant.token, hostPublicKey: grant.hostPublicKey, name: typeof name === 'string' && name.trim() !== '' ? name : null, pop, renew });
-        if (!opened.ok) return { ok: false, stage: 'relay', reason: opened.reason };
+        if (!opened.ok) {
+            this.#options.log(`relay open ${workstationId}: the relay did not reach it: ${opened.reason}`);
+            return { ok: false, stage: 'relay', reason: opened.reason };
+        }
         const id = `relay_${++this.#nextRelay}`;
+        this.#options.log(`relay open ${workstationId}: open (${id})`);
         const channel: RelayChannel = { id, owner, workstationId, transport: opened.transport, via: null, closed: false };
         this.#relays.set(id, channel);
         opened.transport.onMessage((text) => { if (!channel.closed) this.#options.send(owner, { type: 'frame', channel: id, text }); });
