@@ -284,7 +284,8 @@ function launch(label) {
     const log = join(OUT, `logon-${label}.log`);
     const out = openSync(log, 'a');
     const argv = [`--inspect=${INSPECT}`, `--remote-debugging-port=${PORT}`];
-    const child = spawn(APP, argv, { detached: !WIN, stdio: ['ignore', out, out], windowsHide: false, env: { ...process.env, GENIE_TRAY_PROBE: '1' } });
+    // GENIE_TRAY_PROBE: main.ts's read-only tray probe; GENIE_PAGE_PROBE: the page's window.genieTest (features.act), as the rows' launches.
+    const child = spawn(APP, argv, { detached: !WIN, stdio: ['ignore', out, out], windowsHide: false, env: { ...process.env, GENIE_TRAY_PROBE: '1', GENIE_PAGE_PROBE: '1' } });
     let gone = false;
     const exited = new Promise((r) => child.once('exit', (code, signal) => { gone = true; r({ code, signal }); }));
     child.once('error', () => { gone = true; });
