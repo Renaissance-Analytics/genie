@@ -100,7 +100,7 @@ describe('the mark never reaches a build that ships', () => {
         afterEach(() => { if (saved === undefined) delete process.env.GENIE_TEST_HOST_MARK; else process.env.GENIE_TEST_HOST_MARK = saved; vi.resetModules(); });
         const define = async (): Promise<Record<string, string>> => {
             vi.resetModules();
-            const config = (await import('../vite.main.config.ts')).default as { define: Record<string, string> };
+            const config = (await import('../vite.main.config.js')).default as { define: Record<string, string> };
             return config.define;
         };
 
