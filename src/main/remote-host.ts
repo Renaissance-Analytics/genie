@@ -557,6 +557,9 @@ export class RemoteHost {
         return true;
     }
 
+    /** RED STUB (P9 x-station mail): where mail between the owner's workstations will be handed; not built yet. */
+    setCrossStation(_port: { handle(method: string, arg: unknown, from: { station: string }): Promise<unknown> }): void {}
+
     connections(): Array<{ id: string; label: string; isOwner: boolean; workspaceId: string | null; driving: boolean; mode: DriveMode }> {
         const driver = this.#baton.holder()?.connectionId ?? null;
         return [...this.#connections.values()]
