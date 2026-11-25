@@ -1,4 +1,6 @@
 import type { AgentRecord } from './identity.js';
+import { SYSTEM_WORKSPACE } from './inbox.js';
+import { isOsAgent } from './os-agent.js';
 
 /**
  * MAIL BETWEEN WORKSTATIONS — the pure half (P9, Tynn #341/#424; the owner, 2026-11-25: "the only thing we need … is
@@ -93,7 +95,8 @@ export function rosterOf(records: readonly AgentRecord[], slugs: ReadonlyMap<str
     const out: RosterEntry[] = [];
     for (const r of records) {
         if (r.accessScope === 'none' || asleep.has(r.workspaceId)) continue;
-        const workspace = slugs.get(r.workspaceId) ?? r.workspaceId;
+        // The OS agent's address workspace is `system` (core/inbox.ts agentAddress), never its internal id.
+        const workspace = isOsAgent(r) ? SYSTEM_WORKSPACE : slugs.get(r.workspaceId) ?? r.workspaceId;
         out.push({ name: r.name, workspace, opensFrom: r.accessScope === 'all' ? 'all' : [workspace] });
     }
     return out;

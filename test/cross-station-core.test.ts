@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity.js';
+import { OS_AGENT_NAME, OS_WORKSPACE } from '../src/core/os-agent.js';
 import {
     deliveryAdmission, findStation, opensFrom, parseStationAddress, peerLabel, peerParticipant, readPeer, rosterOf, sendPlan, stationWord,
     type StationRow,
@@ -65,6 +66,11 @@ describe('the roster another of the owner’s stations may reach', () => {
             { name: 'atlas', workspace: 'p8x', opensFrom: 'all' },
             { name: 'picky', workspace: 'p8x', opensFrom: ['p8x'] },
         ]);
+    });
+
+    it('the OS agent is genie@system there too, as its address says (run 1125-0504 listed genie@__genie__)', () => {
+        const os = agentRecord({ id: mintAgentId(), workspaceId: OS_WORKSPACE, provider: 'claude', name: OS_AGENT_NAME, accessScope: 'all' });
+        expect(rosterOf([os], slugs, new Set())).toEqual([{ name: OS_AGENT_NAME, workspace: 'system', opensFrom: 'all' }]);
     });
 
     it('a remote sender opens to an entry only from a workspace it allows', () => {
