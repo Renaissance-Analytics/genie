@@ -20,7 +20,7 @@ describe('Docker’s card, by its health', () => {
         const c = card(render(tc(docker('not-running'))), 'docker');
         expect(c).toContain('data-tool="docker"');
         expect(c).toMatch(/data-docker-daemon="not-running"[^>]*>Not running</);
-        expect(c).toMatch(/<button[^>]*data-action="toolchain-start-docker"[^>]*>Start<\/button>/);
+        expect(c).toMatch(/<button[^>]*data-action="toolchain-start-docker"[^>]*>(<span[^>]*>)?Start(<\/span>)?<\/button>/);
     });
     it('no access (the account is not in the group): offers Start, which adds it', () => {
         const c = card(render(tc(docker('no-access'))), 'docker');
@@ -61,7 +61,7 @@ describe('the Services surface links to it', () => {
     const data = (status: string) => ({ ...EMPTY_FEATURES, hosting: { sites: [], processes: [], adding: null, frontDoor: { running: false, reason: 'x' } }, services: { instances: [{ instance: redis, status, note: 'Cannot connect to the Docker daemon' }], adding: null } }) as unknown as FeatureData;
     const html = (status: string) => renderToStaticMarkup(<HostingSurface data={data(status)} onAction={() => {}} onNavigate={() => {}} tab="services" workspaces={[{ id: 'tynn', path: '/w/tynn' }]} />);
     it('a service waiting on Docker offers Docker in the Toolchain', () => {
-        expect(html('docker-not-running')).toMatch(/<button[^>]*data-action="services-open-docker"[^>]*>Docker in Toolchain<\/button>/);
+        expect(html('docker-not-running')).toMatch(/<button[^>]*data-action="services-open-docker"[^>]*>(<span[^>]*>)?Docker in Toolchain(<\/span>)?<\/button>/);
     });
     it('CONTROL: with Docker running, no link', () => {
         expect(html('running')).not.toContain('services-open-docker');
