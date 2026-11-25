@@ -375,7 +375,8 @@ describe('connection controls for a workspace principal', () => {
 
     it('every control is classified: local ones are refused to all relay principals', async () => {
         // `host.version` (anyone admitted) and `host.update` (the owner only), Tynn #894: protocol-versioning-894.test.ts.
-        const handled = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'host.lock', 'host.unlock', 'host.version', 'host.update', 'agent.watch', 'agent.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort'];
+        // `xstation.*` (P9): the owner's own workstation only, by the grant's `src_ws`; cross-station-wire.test.ts.
+        const handled = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'host.lock', 'host.unlock', 'host.version', 'host.update', 'agent.watch', 'agent.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', 'xstation.roster', 'xstation.deliver', 'xstation.read'];
         expect(CONTROL_METHODS.filter((m) => !handled.includes(m) && !LOCAL_CONTROLS.includes(m))).toEqual([]);
         for (const who of [WORKSPACE_GUEST, READONLY_GUEST, OWNER]) {
             const { c } = await admitted(who, false);
