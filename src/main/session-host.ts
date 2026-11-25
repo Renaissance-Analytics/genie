@@ -129,7 +129,7 @@ import {
     type StopVerdict,
     type TurnOutcomeLike,
 } from '../core/session.js';
-import type { NativeStopVerdict } from '../core/session.js';
+import type { NativeStopVerdict, OverloadedPrompt } from '../core/session.js';
 import type { StreamEvent } from '../core/stream-event.js';
 import type { CommandRunRef } from '../core/command-run.js';
 import type { TimedEvent } from '../core/stream-view.js';
@@ -685,6 +685,8 @@ export class SessionHost {
 
     readonly #processTree: ProcessTree | undefined;
     readonly #stopGraceMs: number;
+    /** The sessions' retry timer (an overload's wait); injected by a test, else each session's own `setTimeout`. */
+    readonly #retryLater: ((ms: number, fire: () => void) => () => void) | undefined;
     readonly #lifecycle: SessionLifecycle | undefined;
     readonly #startReportMs: number;
     /** Stops still in their grace or verification, by agent: a start waits for them (hosting plan 1.3). */
@@ -833,6 +835,8 @@ export class SessionHost {
         store?: () => SessionStore;
         /** A graceful stop's grace for a provider that has one (`gracefulEndFor`). Default `STOP_GRACE_MS`. */
         stopGraceMs?: number;
+        /** Every session's retry timer (`AgentSessionOptions.retryLater`); for tests. */
+        retryLater?: (ms: number, fire: () => void) => () => void;
         /** Every run's processes and how it ended — the ledger, the log, the Deck. Absent = told to nobody. */
         lifecycle?: SessionLifecycle;
         /** How long before a start that has not come up is reported. Absent = `START_REPORT_MS`. */
@@ -868,6 +872,7 @@ export class SessionHost {
         this.#clock = options.clock ?? (() => Date.now());
         this.#processTree = options.processTree;
         this.#stopGraceMs = options.stopGraceMs ?? STOP_GRACE_MS;
+        this.#retryLater = options.retryLater;
         this.#lifecycle = options.lifecycle;
         this.#startReportMs = options.startReportMs ?? START_REPORT_MS;
         this.#onThreadId = options.onThreadId;
@@ -1348,6 +1353,9 @@ export class SessionHost {
             onMcpServers: (reports) => this.#onMcpServers?.(record.id, reports),
             ...(this.#onDesignAuth && record.provider === 'claude' ? { onDesignAuth: (event: import('../core/design-auth.js').DesignAuthEvent) => this.#onDesignAuth!(record.id, event) } : {}),
             onRestartForQueue: () => this.#restartForQueue(record, cwd),
+            // An overloaded agent that exited during the wait (Tynn #1060): reloaded on the same conversation, the failed prompt resent.
+            onOverloadExited: (failed) => this.#restartToResend(record, cwd, failed),
+            ...(this.#retryLater ? { retryLater: this.#retryLater } : {}),
             // A Claude agent's tool setting, read when each shell call asks — so a change needs no restart (genie#1188).
             // Autonomous answers the same questions, at the same moment (Tynn #439): Claude's shell calls, and what Codex asks.
             // Where it does not apply, the card says why (`askedWhy`).
@@ -2219,6 +2227,33 @@ export class SessionHost {
     }
 
     /**
+     * AN OVERLOADED AGENT THAT EXITED DURING THE WAIT (Tynn #1060; prism-acp 0.48.0 answers such a retry `session_exited`,
+     * "reload with session/load"). Genie drives the driver in-process, so its reload is this: the old run is ended, the
+     * agent starts again on the same conversation (the record's thread), and the prompt the overload failed is sent to the
+     * new run, once — not written again as a message. A start refused leaves it unsent, and the chat says so.
+     */
+    #restartToResend(record: AgentRecord, cwd: string, failed: OverloadedPrompt): void {
+        const id = record.id;
+        const old = this.#running.get(id)?.session;
+        setTimeout(() => {
+            void (async () => {
+                if (old === undefined || this.#running.get(id)?.session !== old) return;
+                this.stop(id, { graceful: false });
+                const verdict = await this.ended(id);
+                if (verdict && !verdict.verified && verdict.survivors.length > 0) return;
+                const started = this.start(this.#currentRecord?.(id) ?? record, cwd);
+                if (!started.ok) return;
+                this.#onTurnEnd?.(id, 'restarted');
+                const session = this.#running.get(id)?.session;
+                if (!session?.running) return;
+                session.redeliver(randomUUID(), failed.text, failed.by, failed.sent);
+                session.notice('The provider was busy and this agent had exited, so Genie started it again on the same conversation and sent the last message again.');
+                this.#emit(id);
+            })().catch(() => { /* the failed prompt is not sent; the person sends it again */ });
+        }, 0);
+    }
+
+    /**
      * Stop means stop.
      *
      * The session kills the driver and reaps its own subtree. The slot frees here, which is
@@ -2559,6 +2594,7 @@ export class SessionHost {
             signedOut: entry.session.signedOut,
             // The turn its provider stopped, explained and counted (Tynn #859): the red stop line's words.
             providerStop: entry.session.providerStop,
+            overloadRetry: entry.session.overloadRetry,
             // Its turn may have ended while what it started runs on: the header, the Dashboard and the chat say so.
             background: entry.background.count(rows),
             accountPaused: entry.session.accountPaused,

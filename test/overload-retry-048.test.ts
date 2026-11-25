@@ -36,13 +36,14 @@ function open() {
     dirs.push(dir);
     let events: DriverEvents = {};
     let running = true;
+    let refuses = false;
     const prompts: unknown[] = [];
     const breaches: string[] = [];
     const exitedRetries: Array<{ text: string; by: string | null }> = [];
     const factory: SessionDriverFactory = (options) => {
         events = options.events;
         return {
-            start: () => {}, prompt: (t: unknown) => { if (!running) throw new Error('driver exited'); prompts.push(t); },
+            start: () => {}, prompt: (t: unknown) => { if (!running || refuses) { running = false; throw Object.assign(new Error('session_exited'), { code: 'session_exited' }); } prompts.push(t); },
             cancel: () => Promise.resolve(), kill: () => { running = false; },
             get running() { return running; }, get cliSessionId() { return 'thread-1'; },
         };
@@ -61,12 +62,17 @@ function open() {
     });
     session.start();
     const fail = (failure: Record<string, unknown>) => events.onTurnEnd?.({ stopReason: null, isError: true, raw: 'error', failure } as never);
+    const failUnsolicited = (failure: Record<string, unknown>) => events.onTurnEnd?.({ stopReason: null, isError: true, raw: 'error', failure, unsolicited: true, unsolicitedTurnId: 'u1' } as never);
+    const endOk = () => events.onTurnEnd?.({ stopReason: 'end_turn', isError: false, raw: null });
+    const say = () => events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'a background task finished' } } as never);
     const exit = () => { running = false; events.onExit?.(1, null); };
+    // The CLI is gone without an exit event yet: the next prompt is refused, as prism answers session_exited.
+    const stopDriver = () => { refuses = true; };
     const rows = async () => {
         await session.settled();
-        return (await openAgentThread(store, id).messages()).map((r) => r.message as { kind: string; message?: string; by?: string | null });
+        return (await openAgentThread(store, id).messages()).map((r) => r.message as { kind: string; message?: string; by?: string | null; speaker?: string; text?: string });
     };
-    return { session, prompts, timers, breaches, exitedRetries, fail, exit, rows };
+    return { session, prompts, timers, breaches, exitedRetries, fail, failUnsolicited, endOk, say, exit, stopDriver, rows };
 }
 
 describe('overloadRetryMs: Genie\'s backoff, or the provider\'s stated wait', () => {
@@ -104,7 +110,7 @@ describe('an overloaded turn (prism-acp 0.48.0 failure)', () => {
         fail(CLAUDE_529);
         timers[0]!.fire();
         const all = await rows();
-        expect(all.filter((r) => r.kind === 'message' && r.by === 'you')).toHaveLength(1);
+        expect(all.filter((r) => r.kind === 'message' && r.speaker === 'you').map((r) => r.text)).toEqual(['build it']);
         expect(all.some((r) => r.kind === 'notice' && /sent your last message again/i.test(r.message ?? ''))).toBe(true);
     });
 
@@ -115,10 +121,41 @@ describe('an overloaded turn (prism-acp 0.48.0 failure)', () => {
         expect(timers.map((t) => t.ms)).toEqual([45_000]);
     });
 
-    it('CONTROL: no resumable claim keeps the old "continue" nudge', () => {
-        const { session, prompts, timers, fail } = open();
+    it("resumable ABSENT (no claim; prism: do not assume true): the same session is tried once with the failed prompt", () => {
+        const { session, prompts, timers, exitedRetries, fail } = open();
         session.prompt('build it', 'you');
-        fail({ reason: 'serverOverloaded', kind: 'overloaded' });
+        fail({ reason: 'serverOverloaded', kind: 'overloaded', retryable: true });
+        timers[0]!.fire();
+        expect(prompts).toEqual(['build it', 'build it']);
+        expect(exitedRetries).toEqual([]);
+    });
+
+    it('resumable ABSENT and the same session refuses it (session_exited): the host is asked to reload and resend', () => {
+        const { session, prompts, timers, exitedRetries, fail, stopDriver } = open();
+        session.prompt('build it', 'you');
+        fail({ reason: 'serverOverloaded', kind: 'overloaded', retryable: true });
+        stopDriver();
+        timers[0]!.fire();
+        expect(prompts).toEqual(['build it']);
+        expect(exitedRetries).toEqual([{ text: 'build it', by: 'you' }]);
+    });
+
+    it("resumable FALSE (the agent is gone, by the driver's claim): reloaded and resent; the old session is not tried", () => {
+        const { session, prompts, timers, exitedRetries, fail } = open();
+        session.prompt('build it', 'you');
+        fail({ ...CLAUDE_529, resumable: false });
+        timers[0]!.fire();
+        expect(prompts).toEqual(['build it']);
+        expect(exitedRetries).toEqual([{ text: 'build it', by: 'you' }]);
+    });
+
+    it("CONTROL: a turn the provider started itself has no prompt of Genie's to resend: continue, as before", () => {
+        const { session, prompts, timers, endOk, say, failUnsolicited } = open();
+        session.prompt('build it', 'you');
+        endOk();
+        // Claude starts a turn of its own (a background task finished): activity with no prompt of Genie's, then a 529.
+        say();
+        failUnsolicited(CLAUDE_529);
         timers[0]!.fire();
         expect(prompts).toEqual(['build it', OVERLOAD_RESUME_PROMPT]);
     });
@@ -130,7 +167,7 @@ describe('an overloaded turn (prism-acp 0.48.0 failure)', () => {
         session.prompt('build it', 'you');
         fail(CLAUDE_529);
         expect(session.overloadRetry).toEqual({ at: 1_030_000, attempt: 1, of: OVERLOAD_RETRY_MS.length, reason: 'server_error' });
-        const live = { running: true, turnState: 'idle', failure: null, cancelTurn: true, overloadRetry: session.overloadRetry } as unknown as LiveSession;
+        const live = { running: true, turnState: 'idle', failure: null, pendingApproval: null, cancelTurn: true, overloadRetry: session.overloadRetry } as unknown as LiveSession;
         const context = chatContext({ agent: { id: 'a', name: 'a', provider: 'claude', fidelity: 'declared' }, session: live, rows: [] });
         expect(context.text).toBe('Provider busy, retrying in 30 s');
         expect(context.tone).toBe('warn');
