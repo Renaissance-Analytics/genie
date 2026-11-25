@@ -338,6 +338,8 @@ export interface HostApiDeps {
         picked?(paths: unknown[], context: CallContext): void | Promise<void>;
         /** Connection teardown, supplied internally by the protocol owner. */
         releaseCaller?(context: CallContext): void;
+        /** The answer to the host's password prompt (Tynn #973), from the connection it asked; `false` = not taken. */
+        elevationAnswer?(context: CallContext, id: unknown, password: unknown): boolean;
         onChange?(listener: (data: FeatureData) => void): () => void;
         onInvalidated?(listener: () => void): () => void;
     };
@@ -883,6 +885,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return null;
             case 'features.act':
                 return deps.features.act(args[0] as FeatureAction, context);
+            // Tynn #973: the password goes straight to the waiting run; the answer says only whether it was taken.
+            case 'elevation.answer':
+                return deps.features.elevationAnswer?.(context, args[0], args[1] ?? null) ?? false;
             case 'host.listDir':
                 return listHostDir(typeof args[0] === 'string' ? args[0] : '/');
             case 'host.mkdir':

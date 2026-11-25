@@ -193,15 +193,16 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
                 if (status === null) throw new Error('Genie does not manage this tool');
                 return withProviderHealth([status], await providerHealth.refreshAll())[0]!;
             },
-            update: async (tool, version, progress) => AGENT_CLI_PROVIDER[tool] !== undefined
+            update: async (tool, version, progress, elevate) => AGENT_CLI_PROVIDER[tool] !== undefined
                 ? runCliUpdate(AGENT_CLI_PROVIDER[tool]!, cliPorts((step) => { busyLine(step); if (step) progress?.(step); }))
-                : runUpdate(tool, { platform: process.platform as Platform, packageManager: await packageManager() }, longRunner, version ?? null, languageUpdates(progress)),
+                : runUpdate(tool, { platform: process.platform as Platform, packageManager: await packageManager() }, longRunner, version ?? null, languageUpdates(progress), elevate),
             // The row's in-progress state, pushed: which update, and its step (genie#1306).
             now: Date.now,
             // THE UPDATE GUARD's input, read at the moment of the click: running sessions with their provider, Genie-run
             // processes with their command, running service engines by name.
             activity: () => deps.activity(),
-            install: (tool, consent) => installTool(tool, consent, toolchainOps()),
+            // Tynn #973: `elevate` is the host's, bound to the client that clicked (genie-host's effectsFor).
+            install: (tool, consent, elevate) => installTool(tool, consent, { ...toolchainOps(), ...(elevate ? { elevate } : {}) }),
             preview: async (tool) => {
                 const plan = planInstall({ tool, platform: process.platform as Platform, packageManager: await packageManager() });
                 return 'refused' in plan ? { refused: plan.refused } : { label: plan.label, elevated: plan.elevated };

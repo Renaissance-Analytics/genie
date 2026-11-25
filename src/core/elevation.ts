@@ -69,6 +69,25 @@ export type ElevationPromptEvent =
     /** The prompt is over (answered, timed out, the step refused): the client closes it. */
     | { readonly kind: 'close'; readonly id: string };
 
+/** A prompt event as the client reads it off the wire, or `null` when it is not one. */
+export function elevationPromptEvent(payload: unknown): ElevationPromptEvent | null {
+    if (payload === null || typeof payload !== 'object') return null;
+    const p = payload as Record<string, unknown>;
+    if (typeof p.id !== 'string' || p.id === '') return null;
+    if (p.kind === 'close') return { kind: 'close', id: p.id };
+    if (p.kind !== 'ask') return null;
+    const strings = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
+    if (typeof p.title !== 'string' || !strings(p.items) || !strings(p.commands) || typeof p.attempt !== 'number' || (p.retry !== null && typeof p.retry !== 'string') || typeof p.expiresAt !== 'number') return null;
+    return { kind: 'ask', id: p.id, title: p.title, items: p.items, commands: p.commands, attempt: p.attempt, retry: p.retry as string | null, expiresAt: p.expiresAt };
+}
+
+/** What a client offers its page: the host's prompts, and the one way to answer one. */
+export interface ElevationBridge {
+    onPrompt(listener: (event: ElevationPromptEvent) => void): () => void;
+    /** `null` = Cancel. `true` = the host took the answer. */
+    answer(id: string, password: string | null): Promise<boolean>;
+}
+
 /** sudo's own options: password from stdin, no prompt text, cached credentials ignored and never written. */
 export const SUDO_OPTIONS: readonly string[] = ['-S', '-k', '-p', ''];
 /** The ONE shell text, a constant: run the step's words as they are, with an empty stdin. */

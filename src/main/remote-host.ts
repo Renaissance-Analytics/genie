@@ -32,6 +32,7 @@ import {
     type WireMessage,
 } from '../core/remote-protocol.js';
 import { CAP_UNSUPPORTED_RESULT, SUPPORT_WINDOW_DAYS, negotiate, offerOf, remoteOffer, supports, type HostUpdateAnswer, type Negotiated, type ProtocolOffer } from '../core/protocol-version.js';
+import { CAP_ELEVATION_PROMPT, type ELEVATION_EVENT } from '../core/elevation.js';
 import type { Device, DeviceStore } from './remote-devices.js';
 import { guestRefusal, pairRefusal, type PairConfirm } from '../core/pair-confirm.js';
 import type { DriveMode } from '../core/connected-here.js';
@@ -159,6 +160,8 @@ const COMPANION_TERMINAL_METHODS: readonly string[] = ['terminals.write', 'termi
 const OWNER_ONLY: readonly string[] = ['workspaces.previewAdd', 'workspaces.confirmAdd', 'workspaces.create', 'workspaces.previewAddFromGit', 'workspaces.confirmAddFromGit', 'workspaces.readSource', 'workspaces.stageFromGit', 'workspaces.registerExisting', 'workspaces.buildEnvelope', 'workspaces.discardStaged', 'workspaces.githubRepos', 'workspaces.tynnProjects', 'workspaces.tynnOwnerOptions', 'workspaces.createTynnProject', 'workspaces.importedAgents', 'workspaces.adoptAgent', 'workspaces.previewAddFromTynn', 'workspaces.confirmAddFromTynn', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'workspaces.tynnPageAction', 'workspaces.savePreview', 'workspaces.save', 'workspaces.cloneOffers', 'workspaces.applyOffer', 'host.mkdir', 'tynnNetwork.shares.list', 'tynnNetwork.shares.mint', 'tynnNetwork.shares.revoke', 'crashReport.draft', 'crashReport.send', 'providers.chooseProgram',
     // Something opened on the host's own screen (Tynn #912, 2f-1): its owner's; a share-link guest never puts anything there.
     'files.openExternal', 'files.reveal', ...ACCOUNTS_METHODS,
+    // The answer to an elevation's password prompt (Tynn #973): only the owner is ever asked.
+    'elevation.answer',
     // Where a workspace's folder is (host split P7): it points the workspace at any folder of the host's disk, so it is the
     // owner's alone, as adding a folder is. Never a share link's, the shared workspace's own included.
     'workspaces.relocate',
@@ -444,6 +447,24 @@ export class RemoteHost {
         if (!c || c.auth === null || !c.local) return false;
         this.#send(c, { kind: 'event', channel, payload });
         return true;
+    }
+
+    /**
+     * A PROMPT FOR ONE CONNECTION ALONE (Tynn #973): the elevation password prompt, to the client the person clicked from,
+     * this machine's window or another machine's. Only an admitted connection that is not a workstation link hears it, and
+     * only on the one channel the prompt uses; `false` = it is not here (any more).
+     */
+    promptTo(connectionId: string, channel: typeof ELEVATION_EVENT, payload: unknown): boolean {
+        const c = this.#connections.get(connectionId);
+        if (!c || c.auth === null || c.stationLink || c.outside !== null) return false;
+        this.#send(c, { kind: 'event', channel, payload });
+        return true;
+    }
+
+    /** Whether that connection can show Genie's password prompt: it said so in its hello, and it is not a phone (Tynn #973). */
+    canPrompt(connectionId: string): boolean {
+        const c = this.#connections.get(connectionId);
+        return !!c && c.auth !== null && !c.stationLink && c.profile !== 'mobile' && c.outside === null && supports(c.negotiated, CAP_ELEVATION_PROMPT);
     }
 
     /** A connection left: with no authenticated connection remaining, stop hearing the host API. */

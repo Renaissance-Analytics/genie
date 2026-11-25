@@ -45,7 +45,7 @@ const LINK_DOWN = 'Genie isn’t answering this window yet. Try that again in a 
 const REPLACED = 'this window opened a replacement protocol connection';
 
 /** One session per pageBridge. Only moved calls wait for it; unmoved preload methods remain available. */
-export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; features: Pick<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>; reads: Pick<GenieBridge, 'snapshot' | 'subscribe' | 'agentDetail'>; agentWire: NonNullable<RemoteClient['agentWire']>; agentCommands: Pick<GenieBridge, 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'stopToolCall' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'takeOver' | 'providerLogin' | 'switchAccount' | 'designLogin' | 'designSignIn'>; host: NonNullable<GenieBridge['host']>; terminals: GenieBridge['terminals']; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']> } & HostFamily {
+export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; features: Pick<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>; reads: Pick<GenieBridge, 'snapshot' | 'subscribe' | 'agentDetail'>; agentWire: NonNullable<RemoteClient['agentWire']>; agentCommands: Pick<GenieBridge, 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'stopToolCall' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'takeOver' | 'providerLogin' | 'switchAccount' | 'designLogin' | 'designSignIn'>; host: NonNullable<GenieBridge['host']>; terminals: GenieBridge['terminals']; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']>; elevation: NonNullable<GenieBridge['elevation']> } & HostFamily {
     let state: LocalProtocolState = { phase: 'starting', reason: null, revision: 0 };
     let wasReady = false;
     const everReady = () => wasReady;
@@ -112,7 +112,8 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
     /** One connection, up and subscribed. Otherwise released, and the reason. */
     const connect = async (revise: boolean): Promise<Connected> => {
         const transport = localTransport(port!);
-        const attempt = connectRemote(transport, { kind: 'local' }, 'this window');
+        // This window shows the host's password prompt for what it clicked (Tynn #973).
+        const attempt = connectRemote(transport, { kind: 'local' }, 'this window', { elevationPrompt: true });
         client = attempt;
         const result = await attempt.ready;
         if (!result.ok) { release(); return result; }
@@ -260,6 +261,11 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             home: () => read((b) => b.host!.home!()),
         },
         artboard: { read: id => read(b => b.artboard!.read(id)), review: (id, post, verdict, comment) => read(b => b.artboard!.review(id, post, verdict, comment)) },
+        // The host's password prompt (Tynn #973): heard on every connection this window makes, answered on the live one.
+        elevation: {
+            onPrompt: (listener) => subscribe((b) => b.elevation?.onPrompt(listener) ?? (() => {})),
+            answer: (id, password) => read((b) => (b.elevation ? b.elevation.answer(id, password) : Promise.resolve(false))),
+        },
         chatDrafts: {
             load: () => read(b => b.chatDrafts!.load()), save: (id, draft) => read(b => b.chatDrafts!.save(id, draft)),
             putFile: bytes => read(b => b.chatDrafts!.putFile(bytes)), readFile: ref => read(b => b.chatDrafts!.readFile(ref)),

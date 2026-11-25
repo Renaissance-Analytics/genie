@@ -160,6 +160,9 @@ import { hostAgentKeys } from './host-agent-keys.js';
 import { chmod, mkdir, readFile as readFileText, stat as statFile } from 'node:fs/promises';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 import { LOCAL_EVENTS, transportHub, type CallContext, type RemoteMethod } from '../core/remote-protocol.js';
+import { CAP_ELEVATION_PROMPT, ELEVATION_EVENT, type ElevatedBatch, type Elevate } from '../core/elevation.js';
+import { ElevationBroker } from './elevation-broker.js';
+import { realSudoPath, realSudoSpawn, runElevatedWithPassword, serialized, type AskPassword } from './linux-elevation.js';
 import { deviceLinkProtocol } from './device-link-protocol.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { remoteListener } from './remote-listen.js';
@@ -1310,7 +1313,7 @@ async function main(): Promise<void> {
         // THE HOST'S OFFER (Tynn #894), read at each hello: its track and build, the wire's schema and the fixed window's
         // floor, and the catalog's elements as capabilities, so a client sees which elements this host has. `host.update`
         // answers with RemoteHost's stub until the launcher step wires it.
-        protocol: () => remoteOffer('host', build, [...catalogCapabilities(catalogService.snapshot().definitions), `${CAP_CROSS_STATION}@1`]),
+        protocol: () => remoteOffer('host', build, [...catalogCapabilities(catalogService.snapshot().definitions), `${CAP_CROSS_STATION}@1`, `${CAP_ELEVATION_PROMPT}@1`]),
         api: hostRemoteApi({
             hostName: hostname(),
             // What this host answers itself, window or not. The phone's set comes here next (Tynn #551).
@@ -2141,7 +2144,22 @@ async function main(): Promise<void> {
             own.attention.onChange(listener), limitNotices.onChange(listener), playwrightInstaller.onChange(listener), stalledTurns.onChange(listener), attachHost.onChange(listener), approvals.onChange(listener), stores.onEvent(listener)];
         return () => { featureChanges.delete(listener); for (const off of offs) off(); };
     };
-    hostFeatures = new HostFeatures({ lifecycleLog, signIn: (provider, context) => signIns.loginFor(provider, context), slowPart: { ms: 1_000, log: (part, ms) => lifecycleLog(`features slow part=${part} ms=${ms}`) }, settings, knowledge: own.knowledge, inbox: own.inbox, attention: own.attention, flows: hostFlows,
+    /*
+     * ELEVATION ON LINUX, ASKED IN THE CLIENT THAT CLICKED (Tynn #973): the password prompt goes to that one connection
+     * (RemoteHost.promptTo), its answer counts from it alone, and the host runs the batch with `sudo -S -k` and the password
+     * on stdin, one batch at a time (main/linux-elevation.ts). Not pkexec: omarchy-genie has no polkit agent to ask.
+     */
+    const elevationBroker = new ElevationBroker({
+        send: (connectionId, event) => remoteAccessHost.remote.promptTo(connectionId, ELEVATION_EVENT, event),
+        capable: (connectionId) => remoteAccessHost.remote.canPrompt(connectionId),
+    });
+    const elevationRun = serialized((job: { batch: ElevatedBatch; ask: AskPassword }) => runElevatedWithPassword(job.batch, { ask: job.ask, spawn: realSudoSpawn, sudo: realSudoPath(), log: lifecycleLog }));
+    const hostElevation = {
+        elevateFor: (context: CallContext): Elevate | undefined => (process.platform === 'linux' ? (batch) => elevationRun({ batch, ask: elevationBroker.askerFor(context) }) : undefined),
+        answer: (connectionId: string, id: unknown, password: unknown) => elevationBroker.answer(connectionId, id, password),
+        dropConnection: (connectionId: string) => elevationBroker.dropConnection(connectionId),
+    };
+    hostFeatures = new HostFeatures({ lifecycleLog, signIn: (provider, context) => signIns.loginFor(provider, context), elevation: hostElevation, slowPart: { ms: 1_000, log: (part, ms) => lifecycleLog(`features slow part=${part} ms=${ms}`) }, settings, knowledge: own.knowledge, inbox: own.inbox, attention: own.attention, flows: hostFlows,
         roster: () => hostRegistry.listAgents(), workspaceSlugs: () => hostRegistry.workspaceSlugs(), resolveAddress: address => resolveOnRoster(address, hostRegistry.listAgents(), hostRegistry.workspaceSlugs()),
         mailRefusal: address => hostRegistry.mailRefusal(address), workspaceIds: () => hostRegistry.listWorkspaces().map(w => w.id),
         runFlow: id => hostFlows.runNow(id), stopFlow: id => hostFlows.stopRun(id), resumeAgentLimit: id => { const record = hostRegistry.find(id); if (record) host.resumeLimit(record.provider); }, refreshPlugins: async () => { await pluginsService.call('refresh', []); }, applyRemote: () => remoteSwitch.apply(),

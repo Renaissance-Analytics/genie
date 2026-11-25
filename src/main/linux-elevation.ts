@@ -140,10 +140,10 @@ export const realSudoSpawn: SudoSpawn = (command, args, stdin, options) => new P
 });
 
 /** ONE PROMPT AT A TIME on this host: batches run one after the other, never two prompts at once. */
-export function serialized(run: (batch: ElevatedBatch) => Promise<ElevatedResult>): (batch: ElevatedBatch) => Promise<ElevatedResult> {
+export function serialized<T>(run: (job: T) => Promise<ElevatedResult>): (job: T) => Promise<ElevatedResult> {
     let chain: Promise<unknown> = Promise.resolve();
-    return (batch) => {
-        const next = chain.then(() => run(batch), () => run(batch));
+    return (job) => {
+        const next = chain.then(() => run(job), () => run(job));
         chain = next.catch(() => undefined);
         return next;
     };
