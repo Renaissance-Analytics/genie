@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { tynnProjectIdOf } from '../core/issue-watch.js';
 import type { SyncFlags, SyncFs } from './config-sync-targets.js';
 import type { AgentRecord } from '../core/identity.js';
-import { tynnAgentIdentities, type AgentCredentialPorts } from './tynn-agent-identities.js';
+import { tynnAgentIdentities, type AgentCredentialPorts, type TynnAgentSettings } from './tynn-agent-identities.js';
 
 /** The scoped desktop account is a main-process API port; it never enters a provider's environment. */
 export interface TynnSessionPort {
@@ -13,14 +13,16 @@ export interface TynnSessionPort {
      * own stored key be used off grid. `null` once signed out or forgotten. Never a reason to mint or register.
      */
     savedUserId?(): string | null;
-    request(path: string, init: { method: 'GET' | 'POST' | 'DELETE'; body?: unknown; signal?: AbortSignal }): Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
+    request(path: string, init: { method: 'GET' | 'POST' | 'PATCH' | 'DELETE'; body?: unknown; signal?: AbortSignal }): Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
 }
 export interface TynnMcp { readonly url: string; readonly token: string }
 export type TynnAgentToken =
     | { readonly status: 'unlinked' }
     | { readonly status: 'already' | 'minted'; readonly mcp: TynnMcp; readonly remoteAgentId?: string;
         /** A stored key handed back without Tynn's word on it (signed out, or Tynn unreachable): checked once Tynn answers. */
-        readonly unverified?: true }
+        readonly unverified?: true;
+        /** MOUNTED (Tynn #1016): this agent was bound to Tynn's shared agent of its name just now; these are the settings Tynn holds. */
+        readonly adopted?: TynnAgentSettings }
     | { readonly status: 'failed'; readonly reason: string; readonly code?: 'offline' | 'inactive' | 'conflict' | 'pending' | 'storage' | 'refused' };
 export type TynnFailure = NonNullable<Extract<TynnAgentToken, { status: 'failed' }>['code']>;
 const TYNN_NOTES: Record<TynnFailure, string> = {
@@ -53,6 +55,13 @@ export function tynnAgentTokens(credentials?: AgentCredentialPorts) {
     return {
         legacyKeys: async (cipher: { decrypt(bytes: Buffer): string }) => identities?.legacyKeys(cipher) ?? [],
         /** The keys the keychain lost (tynn-agent-identities.ts `lostKeys`). */
+        /** A later setting change, sent to the Tynn agent this agent is bound to (Tynn #1001). */
+        async push(input: { workspacePath: string; fs: SyncFs; agent: AgentRecord; tynn: TynnSessionPort | null }): Promise<'sent' | 'unbound' | 'failed' | 'unlinked'> {
+            if (!identities) return 'failed';
+            let projectId: string | null;
+            try { projectId = tynnProjectIdOf(await input.fs.read(join(input.workspacePath, 'project.json').replace(/\\/g, '/'))); } catch { return 'failed'; }
+            return projectId ? identities.push({ projectId, agent: input.agent, tynn: input.tynn }) : 'unlinked';
+        },
         lostKeys: { ids: async (): Promise<string[]> => identities?.lostKeys.ids() ?? [], forget: async (): Promise<number> => identities?.lostKeys.forget() ?? 0 },
         async ensure(input: {
             workspacePath: string; fs: SyncFs; agent: AgentRecord; tynn: TynnSessionPort | null; signal?: AbortSignal;
