@@ -211,8 +211,8 @@ describe('the held git: one pinned package, from our cache first, never installe
         expect(got.from).toBe('cache');
         expect(slash(got.target)).toBe(`/tmp/tc968-pkg-x/${PIN.file}`);
         expect(Object.keys(written).sort()).toEqual([`/tmp/tc968-pkg-x/${PIN.file}`, `/tmp/tc968-pkg-x/${PIN.file}.sig`]);
-        expect(sha(written[`/tmp/tc968-pkg-x/${PIN.file}`])).toBe(PIN.sha256);
-        expect(sha(written[`/tmp/tc968-pkg-x/${PIN.file}.sig`])).toBe(PIN.sigSha256);
+        expect(sha(written[`/tmp/tc968-pkg-x/${PIN.file}`]!)).toBe(PIN.sha256);
+        expect(sha(written[`/tmp/tc968-pkg-x/${PIN.file}.sig`]!)).toBe(PIN.sigSha256);
         expect(s.asked.some((u) => u.endsWith('/packages/g/git/'))).toBe(false);
         // Every line it logs is a note, never a verdict linux.sh could read; it names the pin it verified.
         expect(got.log.length).toBeGreaterThan(0);
@@ -228,8 +228,8 @@ describe('the held git: one pinned package, from our cache first, never installe
         expect(wrote).toBe(0);
         expect(got.reason).toBe('archive');
         expect(got.detail).toMatch(/^CONTROL not set up: git 2\.55\.0-1 could not be fetched/);
-        expect(got.detail).toContain(SOURCES[0].url);
-        expect(got.detail).toContain(SOURCES[1].url);
+        expect(got.detail).toContain(SOURCES[0]!.url);
+        expect(got.detail).toContain(SOURCES[1]!.url);
         expect(got.detail).toContain('connect timeout');
         expect(got.detail).not.toMatch(/[\r\n]/);
     });
