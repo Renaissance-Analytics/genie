@@ -183,6 +183,12 @@ export class DeviceLinkService {
         return { ok: true, channel: id };
     }
 
+    /** Whether a window here has that workstation open over the relay now: the person is connected to it (P9). */
+    connectedTo(workstationId: string): boolean {
+        for (const r of this.#relays.values()) if (r.workstationId === workstationId && !r.closed) return true;
+        return false;
+    }
+
     /** The browser's door to a relay channel's workstation: its port and that host's CA, as now (Tynn #552). */
     async browserVia(owner: string, id: string): Promise<{ ok: true; workstationId: string; port: number; ca: string | null } | { ok: false; reason: string }> {
         const r = this.#relays.get(id);

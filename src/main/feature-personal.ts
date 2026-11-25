@@ -5,6 +5,7 @@ import { canonicalKind, problemFromText, saveProblems, type FlowProblem } from '
 import { canonicalFlowDocument, flowNodes, formEditable } from '../core/flow-form.js';
 import { flowFormDefaults, knowledgeFormDefaults, validateFlowForm, validateKnowledgeForm, type Problem } from '../core/forms.js';
 import { HUMAN, UNNAMED_AGENT, type Resolution } from '../core/inbox.js';
+import { readPeer } from '../core/cross-station.js';
 import { inboxThreads, pairOf, searchThread, threadKeyOfMessage, threadWindow, uncollected } from '../core/inbox-threads.js';
 import type { FeatureAction, FeatureData, FlowSaved } from '../renderer/features.js';
 import type { FeatureState } from './feature-ipc.js';
@@ -101,7 +102,9 @@ const USER = { kind: 'user' } as const;
 function participantNamer(roster: ReadonlyArray<{ agentId: string; name: string }>, mail: ReadonlyArray<{ from: string; app?: { label: string } }> = []): (participant: string) => string {
     const apps = new Map<string, string>();
     for (const m of mail) if (m.app) apps.set(m.from, m.app.label);
-    return (participant) => (participant === HUMAN ? 'you' : apps.get(participant) ?? roster.find((a) => a.agentId === participant)?.name ?? UNNAMED_AGENT);
+    // An agent on another of the owner's workstations (P9) is its full address: `name@workspace@station`.
+    const peer = (participant: string): string | null => { const p = readPeer(participant); return p ? `${p.name}@${p.workspace}@${p.station}` : null; };
+    return (participant) => (participant === HUMAN ? 'you' : apps.get(participant) ?? roster.find((a) => a.agentId === participant)?.name ?? peer(participant) ?? UNNAMED_AGENT);
 }
 
 /** An agent a flow would prompt must be one address on the roster NOW — the same rule the run resolves it by. */

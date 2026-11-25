@@ -129,7 +129,8 @@ export function principalOf(grant: HostGrant, signedInHere: string | null): { ok
         }
         return { ok: false, reason: 'this workstation is a drone: it accepts only its owner, from the owner’s own paired machines, and share links' };
     }
-    if (owner) return { ok: true, principal: { label, isOwner: true, workspaceId: null, readonly } };
+    // The owner's own machine says which one it is (P9): Tynn's `src_ws`, what a host takes agent mail from.
+    if (owner) return { ok: true, principal: { label, isOwner: true, workspaceId: null, readonly, ...(grant.sourceWorkstationId ? { station: grant.sourceWorkstationId } : {}) } };
     // Tynn's "owner" for someone else reaches the whole host, as Tynn scoped it, but as a guest.
     if (grant.source === 'owner' || grant.scopes.includes('host:all')) return { ok: true, principal: { label, isOwner: false, workspaceId: null, readonly } };
     const workspaces = grant.scopes.map((s) => s.slice('workspace:'.length));

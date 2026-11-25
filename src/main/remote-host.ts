@@ -58,6 +58,12 @@ import { isMarketplaceMethod, type MarketplaceApi } from '../core/marketplace.js
 import { isGappMethod, type GAppsApi } from '../core/gapps.js';
 import { dispatchGapps } from './gapps-api.js';
 import { MarketplaceSession } from './marketplace-session.js';
+import { CROSS_STATION_METHODS, deliveryAdmission, type CrossStationMethod } from '../core/cross-station.js';
+
+/** Where an admitted `xstation.*` call goes (main/cross-station-host.ts `handle`), with the station the grant proved. */
+export interface CrossStationPort {
+    handle(method: CrossStationMethod, arg: unknown, from: { readonly station: string }): Promise<unknown>;
+}
 
 /**
  * WHICH AGENTS' DETAILS A LISTENER WANTS (genie#1346, Tynn #662, Tynn #862).
@@ -368,6 +374,9 @@ export class RemoteHost {
     #stopLocalAgents: (() => void) | null = null;
     #snapshotRevision = 0;
     #featuresRevision = 0;
+    #crossStation: CrossStationPort | null = null;
+    /** Connections that made a call other than agent mail between workstations: a person's window (P9 `personFrom`). */
+    readonly #persons = new WeakSet<Connection>();
 
     /**
      * `confirm`: the desktop's "Pair this device?" (core/pair-confirm.ts). Required — a correct PIN pairs nothing until the
@@ -557,8 +566,21 @@ export class RemoteHost {
         return true;
     }
 
-    /** RED STUB (P9 x-station mail): where mail between the owner's workstations will be handed; not built yet. */
-    setCrossStation(_port: { handle(method: string, arg: unknown, from: { station: string }): Promise<unknown> }): void {}
+    /**
+     * MAIL BETWEEN THE OWNER'S OWN WORKSTATIONS (P9, main/cross-station-host.ts): where `xstation.*` calls go once admitted.
+     * Absent = this host carries no such mail, and says so.
+     */
+    setCrossStation(port: CrossStationPort | null): void {
+        this.#crossStation = port;
+    }
+
+    /** Whether a PERSON is connected here from that workstation of the owner's: a window, not only its host's mail link. */
+    personFrom(station: string): boolean {
+        for (const c of this.#connections.values()) {
+            if (c.auth?.isOwner === true && c.socket.preAuth?.station === station && this.#persons.has(c)) return true;
+        }
+        return false;
+    }
 
     connections(): Array<{ id: string; label: string; isOwner: boolean; workspaceId: string | null; driving: boolean; mode: DriveMode }> {
         const driver = this.#baton.holder()?.connectionId ?? null;
@@ -894,6 +916,20 @@ export class RemoteHost {
                 || (!(CONTROL_METHOD_LIST as readonly string[]).includes(method) && capabilityOf(method as RemoteMethod) === 'read');
             if (!read) return refuse(COMPANION_ONLY);
         }
+
+        /*
+         * MAIL BETWEEN THE OWNER'S OWN WORKSTATIONS (P9): taken only from the owner, with control, on a grant that names which
+         * of the owner's workstations it is (`src_ws`, PreAuth `station`); that station, never anything the caller says, is
+         * whom the mail is from. Not on the baton: another host's mail does not take control from the person driving.
+         */
+        if ((CROSS_STATION_METHODS as readonly string[]).includes(method)) {
+            const station = connection.socket.preAuth?.station ?? null;
+            const refusal = connection.local ? `${method} is said by another workstation's host, not by a window` : deliveryAdmission({ isOwner: auth.isOwner, readonly: auth.readonly, station });
+            if (refusal) return refuse(refusal);
+            if (!this.#crossStation) return refuse(`${this.#hostName} carries no agent mail between workstations`);
+            try { return ok(await this.#crossStation.handle(method as CrossStationMethod, args[0], { station: station! })); } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+        }
+        if (method !== 'host.version') this.#persons.add(connection);
 
         switch (method) {
             // FOLLOWING THE TYNN TAB (P4 family 12, Tynn #561): the local window's own, by subscription.

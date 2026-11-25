@@ -68,6 +68,32 @@ export interface InboxMessage {
      * ever present with a `from` that is that app's own id (`send` holds both directions).
      */
     readonly app?: AppMessageMeta;
+    /**
+     * MAIL ANOTHER WORKSTATION SENT HERE (P9): the station it came from (Tynn's workstation id, from the grant), its name
+     * then, and its id there. A repeat of the same origin is stored once. `receiptSent`: the read was told back to it.
+     */
+    readonly origin?: { readonly station: string; readonly stationName: string; readonly id: string; readonly receiptSent?: true };
+    /**
+     * MAIL THIS HOST SENT TO ANOTHER WORKSTATION (P9): `queued` until that station took it (`delivered`) or refused it in
+     * its own words (`refused`). The queue is this field, so it survives a restart.
+     */
+    readonly outbound?: OutboundState;
+}
+
+export type OutboundState =
+    | { readonly station: string; readonly state: 'queued'; readonly attempts: number; readonly reason?: string }
+    | { readonly station: string; readonly state: 'delivered'; readonly attempts: number; readonly deliveredAt: string }
+    | { readonly station: string; readonly state: 'refused'; readonly attempts: number; readonly reason: string };
+
+export interface StationArrival {
+    readonly station: string;
+    readonly stationName: string;
+    /** The message's id on the sending station. */
+    readonly id: string;
+    readonly from: Participant;
+    readonly to: Participant;
+    readonly text: string;
+    readonly sentAt: string;
 }
 
 interface MailFile {
@@ -115,6 +141,8 @@ export interface SendInput {
     readonly files?: readonly { readonly name: string; readonly bytes: Uint8Array }[];
     /** An app's facts (genie#1345). Required exactly when `from` is an app id, and it must be that app's. */
     readonly app?: AppMessageMeta;
+    /** To another workstation (P9): kept as queued for it until it is settled. Never with attachments (P9.6). */
+    readonly outbound?: { readonly station: string };
 }
 
 /** What a refusal at each end tells the agent will happen instead. */
@@ -286,6 +314,7 @@ export class InboxStore {
             }
             if ((input.attachments ?? []).length > 0 || (input.files ?? []).length > 0) throw new Error('an app cannot attach files; nothing was sent');
         }
+        if (input.outbound && ((input.attachments ?? []).length > 0 || (input.files ?? []).length > 0)) throw new Error('a file does not travel between workstations yet; nothing was sent');
         if (isAppSender(input.to)) throw new Error('nobody can write to an app: apps cannot be replied to; nothing was sent');
         // Everything that can refuse happens BEFORE anything is written: one bad path and the
         // message is not delivered, no blob lands, and the caller is told which path.
@@ -301,6 +330,7 @@ export class InboxStore {
             sentAt: this.#now(),
             readAt: null,
             ...(input.app ? { app: input.app } : {}),
+            ...(input.outbound ? { outbound: { station: input.outbound.station, state: 'queued' as const, attempts: 0 } } : {}),
         };
         const arrivals: InboxMessage[] = [message];
         const fromAgent = asAgentId(input.from);
@@ -330,6 +360,85 @@ export class InboxStore {
             for (const l of this.#sendListeners) l(arrival.to, arrival);
         }
         return pauseNotice === null ? message : { ...message, pauseNotice };
+    }
+
+    /**
+     * Mail another workstation sent (P9), stored for its recipient as any mail is: the same wake, the same reads. The
+     * origin is the station's id and its message id there; a repeat of the same origin is the message already here.
+     */
+    async receiveFromStation(input: StationArrival): Promise<{ message: InboxMessage; repeat: boolean }> {
+        const known = this.#mail.messages.find((m) => m.origin?.station === input.station && m.origin.id === input.id);
+        if (known) return { message: known, repeat: true };
+        const seq = Math.max(this.#mail.lastSeq ?? 0, this.#mail.messages.at(-1)?.seq ?? 0) + 1;
+        const message: InboxMessage = {
+            seq, id: `msg_${randomUUID()}`, from: input.from, to: input.to, text: input.text, attachments: [],
+            sentAt: input.sentAt, readAt: null, origin: { station: input.station, stationName: input.stationName, id: input.id },
+        };
+        this.#mail.lastSeq = seq;
+        this.#mail.messages.push(message);
+        await this.#flush([message]);
+        for (const w of [...this.#waiters]) if (w.participant === message.to) w.wake();
+        for (const l of this.#sendListeners) l(message.to, message);
+        return { message, repeat: false };
+    }
+
+    /** What waits for `station` (P9), oldest first; every station's when none is named. */
+    outboundFor(station?: string): InboxMessage[] {
+        return this.#mail.messages.filter((m) => m.outbound?.state === 'queued' && (station === undefined || m.outbound.station === station));
+    }
+
+    /** One more try that did not reach the station: counted, with why. The mail stays queued. */
+    async outboundTried(id: string, reason: string): Promise<void> {
+        await this.#patch((m) => m.id === id && m.outbound?.state === 'queued', (m) => ({ ...m, outbound: { station: m.outbound!.station, state: 'queued', attempts: m.outbound!.attempts + 1, reason } }));
+    }
+
+    /** The station took it, or refused it in its words: it leaves the queue. */
+    async settleOutbound(id: string, outcome: { state: 'delivered' } | { state: 'refused'; reason: string }): Promise<void> {
+        await this.#patch((m) => m.id === id && m.outbound?.state === 'queued', (m) => {
+            const was = m.outbound!;
+            const outbound: OutboundState = outcome.state === 'delivered'
+                ? { station: was.station, state: 'delivered', attempts: was.attempts + 1, deliveredAt: this.#now() }
+                : { station: was.station, state: 'refused', attempts: was.attempts + 1, reason: outcome.reason.slice(0, 2_000) };
+            return { ...m, outbound };
+        });
+    }
+
+    /** That station's recipient read these (P9): this host's own mail TO that station gets its receipt. How many changed. */
+    async peerRead(station: string, ids: readonly string[], readAt: string): Promise<number> {
+        const wanted = new Set(ids);
+        const changed = await this.#patch((m) => wanted.has(m.id) && m.readAt === null && m.outbound !== undefined && m.outbound.station === station, (m) => ({ ...m, readAt }));
+        if (changed.length > 0) for (const l of this.#readListeners) l(changed[0]!.to, changed.map((m) => m.id));
+        return changed.length;
+    }
+
+    /** Reads owed back to `station` (P9): its mail read here, by its ORIGIN id, not yet told. */
+    receiptsOwed(station: string): Array<{ id: string; readAt: string }> {
+        return this.#mail.messages
+            .filter((m) => m.origin?.station === station && m.readAt !== null && m.origin.receiptSent !== true)
+            .map((m) => ({ id: m.origin!.id, readAt: m.readAt! }));
+    }
+
+    /** Which stations are owed reads now. */
+    stationsOwedReceipts(): string[] {
+        return [...new Set(this.#mail.messages.filter((m) => m.origin !== undefined && m.readAt !== null && m.origin.receiptSent !== true).map((m) => m.origin!.station))];
+    }
+
+    async markReceiptsSent(station: string, originIds: readonly string[]): Promise<void> {
+        const sent = new Set(originIds);
+        await this.#patch((m) => m.origin?.station === station && sent.has(m.origin.id) && m.origin.receiptSent !== true, (m) => ({ ...m, origin: { ...m.origin!, receiptSent: true } }));
+    }
+
+    /** Replace the messages `match` picks with `next` of each, in one durable write. Returns what changed. */
+    async #patch(match: (m: InboxMessage) => boolean, next: (m: InboxMessage) => InboxMessage): Promise<InboxMessage[]> {
+        const changed: InboxMessage[] = [];
+        this.#mail.messages = this.#mail.messages.map((m) => {
+            if (!match(m)) return m;
+            const n = next(m);
+            changed.push(n);
+            return n;
+        });
+        if (changed.length > 0) await this.#flush(changed);
+        return changed;
     }
 
     async receive(input: ReceiveInput): Promise<ReceivePage> {

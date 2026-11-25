@@ -1,3 +1,4 @@
+import { CROSS_STATION_METHODS } from './cross-station.js';
 import { BLOB_METHODS } from './local-blobs.js';
 import { LOCAL_TERMINAL_METHODS, type LocalTerminalMethod } from './local-terminals.js';
 import { LOCAL_CONTENT_METHODS } from './local-content.js';
@@ -234,10 +235,15 @@ export type RemoteMethod = (typeof REMOTE_METHODS)[number];
  * `blob.*`, `localUpload.*`, `page.*`: connection-owned local content resources, gated before any source is opened.
  */
 /**
+ * `xstation.roster`, `xstation.deliver`, `xstation.read` (P9, core/cross-station.ts): mail between the owner's own
+ * workstations, said by one host to another. Taken only from the owner's own workstation (the grant's `src_ws`), never
+ * on the baton.
+ */
+/**
  * `host.version` and `host.update` (Tynn #894): the host's version and window, read at any time, and the client's request
  * that the host update. The two calls a connection outside the support window may still make; neither takes the baton.
  */
-export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'deck.watch', 'summary.watch', 'remote.watch', 'settings.watch', 'registry.watch', 'registry.read', 'frontdoor.watch', 'host.lock', 'host.unlock', 'host.version', 'host.update', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS, ...TYNN_WATCH_METHODS] as const;
+export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'deck.watch', 'summary.watch', 'remote.watch', 'settings.watch', 'registry.watch', 'registry.read', 'frontdoor.watch', 'host.lock', 'host.unlock', 'host.version', 'host.update', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS, ...TYNN_WATCH_METHODS, ...CROSS_STATION_METHODS] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
 /** Moved native pushes have separate local channels; existing remote subscriptions keep their channels. */
@@ -516,6 +522,11 @@ export interface PreAuth {
     readonly workspaceId: string | null;
     /** Reads only: every change is refused. */
     readonly readonly: boolean;
+    /**
+     * WHICH OF THE OWNER'S WORKSTATIONS this is (P9): the grant's `src_ws`, Tynn's word from its device binding, set only on
+     * the owner's own grant. What a host takes agent mail by (core/cross-station.ts `deliveryAdmission`). Absent otherwise.
+     */
+    readonly station?: string;
     /** Only with `kind: 'local'`: which window the door admitted. Absent = not known to be this machine's own (Tynn #578). */
     readonly window?: 'main' | 'remote';
 }

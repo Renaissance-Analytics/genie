@@ -18,7 +18,7 @@ import type { KnowledgeStore } from './knowledge-store.js';
 import type { TerminalsPort } from './mcp-tools-more.js';
 import type { PluginToolsDeps } from './mcp-tools-plugins.js';
 import type { AllToolsDeps } from './mcp-registrations.js';
-import type { Caller, McpCall } from './mcp-tools.js';
+import type { Caller, GenieToolsDeps, McpCall } from './mcp-tools.js';
 import type { SettingsStore } from './settings-store.js';
 
 /**
@@ -42,6 +42,8 @@ export interface GenieToolParts {
     readonly refusalForRecipient?: (address: string) => string | null;
     /** Each agent's liveness for `agentinbox list` (core/liveness.ts). Absent = not reported. */
     readonly liveness?: (agentId: string) => Liveness;
+    /** Mail between the owner's workstations (P9, main/cross-station-host.ts). Absent = none (doctor mode, the window). */
+    readonly crossStation?: GenieToolsDeps['crossStation'];
     /** A Take Over terminal's id or a session's key → who is calling; anything else is nobody. */
     readonly resolveCaller: (id: string) => Caller | null;
     readonly userActive: () => boolean;
@@ -110,6 +112,7 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
             ...(p.workspaceSlugs ? { workspaceSlugs: p.workspaceSlugs } : {}),
             ...(p.refusalForRecipient ? { refusalForRecipient: p.refusalForRecipient } : {}),
             ...(p.liveness ? { liveness: p.liveness } : {}),
+            ...(p.crossStation ? { crossStation: p.crossStation } : {}),
             resolveCaller: p.resolveCaller,
             userActive: p.userActive,
             glow: p.glow,

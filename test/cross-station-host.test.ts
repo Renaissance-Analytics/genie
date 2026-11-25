@@ -19,11 +19,12 @@ const A = '01m88dzykbnbx4kwj2ptpje92z';
 const B = '01m88e0vzh4a36rj22h53hfcwr';
 const ROWS: StationRow[] = [{ id: A, name: 'desk' }, { id: B, name: 'laptop' }];
 
-interface Side { id: string; host: CrossStationHost; inbox: InboxStore; atlas: AgentRecord; bolt: AgentRecord; online: boolean; person: Set<string>; links: number; dir: string }
+interface Side { id: string; host: CrossStationHost; inbox: InboxStore; atlas: AgentRecord; bolt: AgentRecord; extra: AgentRecord[]; online: boolean; person: Set<string>; links: number; dir: string }
 const sides: Record<'A' | 'B', Side> = {} as never;
 let mode: CrossStationMode = 'queue';
 const timers: Array<() => void> = [];
-const settle = async () => { for (let i = 0; i < 20; i += 1) await new Promise<void>((r) => setImmediate(r)); };
+// Real files under the inbox: a settle is time, not ticks.
+const settle = () => new Promise<void>((r) => setTimeout(r, 300));
 const runTimers = async () => { for (const t of timers.splice(0)) t(); await settle(); };
 
 async function side(id: string, other: () => Side): Promise<Side> {
@@ -32,11 +33,11 @@ async function side(id: string, other: () => Side): Promise<Side> {
     const ws = 'ws_p8x';
     const atlas = agentRecord({ id: mintAgentId(), workspaceId: ws, provider: 'claude', name: 'atlas', accessScope: 'self' });
     const bolt = agentRecord({ id: mintAgentId(), workspaceId: ws, provider: 'claude', name: 'bolt', accessScope: 'self' });
-    const s: Side = { id, inbox, atlas, bolt, online: true, person: new Set(), links: 0, dir, host: null as never };
+    const s: Side = { id, inbox, atlas, bolt, extra: [], online: true, person: new Set(), links: 0, dir, host: null as never };
     s.host = new CrossStationHost({
         inbox,
-        roster: () => [atlas, bolt],
-        slugs: () => new Map([[ws, 'p8x']]),
+        roster: () => [atlas, bolt, ...s.extra],
+        slugs: () => new Map([[ws, 'p8x'], ['ws_other', 'other']]),
         asleep: () => new Set(),
         self: () => id,
         stations: async () => ROWS, // every workstation of the owner, this one too
@@ -145,6 +146,7 @@ describe('mail between two of the owner’s workstations', () => {
 
     it('the recipient’s own scope holds across stations: self opens only from its own workspace', async () => {
         const stranger = agentRecord({ id: mintAgentId(), workspaceId: 'ws_other', provider: 'claude', name: 'stranger', accessScope: 'all' });
+        sides.A.extra.push(stranger);
         const r = await sides.A.host.send(stranger, 'bolt@p8x@laptop', 'let me in');
         expect(r).toMatchObject({ ok: false, reason: expect.stringMatching(/not reachable/) });
     });

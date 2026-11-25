@@ -6,6 +6,7 @@ import { builtinToolDefinition, declareBuiltinTool, type BuiltinTool } from './b
 import { type Question } from '../core/attention.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import { HUMAN, agentAddress, reachable, resolveAddress, type Participant } from '../core/inbox.js';
+import { isPeer, parseStationAddress } from '../core/cross-station.js';
 import { framedForAgent, isAppSender } from '../core/app-inbox.js';
 import type { AttentionStore } from './attention-store.js';
 import type { InboxStore } from './inbox-store.js';
@@ -120,6 +121,15 @@ export interface GenieToolsDeps {
     readonly issueWatch?: { forWorkspace(workspaceId: string): IssueWatchSummary; refresh?(workspaceId: string): Promise<IssueWatchRefreshAnswer>; /** Ask Tynn again whether this Genie is signed in (an agent found it signed out). */ recheckSignIn?(): void };
     /** A workspace's folder (the registry's), for the ArtBoard a decided question writes to (Tynn #835). Absent = the folder an asking agent was seen in. */
     readonly workspacePath?: (workspaceId: string) => string | null;
+    /**
+     * MAIL BETWEEN THE OWNER'S WORKSTATIONS (P9, main/cross-station-host.ts): the other stations' agents for `list`, and a
+     * send to `name@workspace@station` or a `peer:` from. `send` answers `null` for an address that is not another station's.
+     * Absent = this Genie sends to no other workstation.
+     */
+    readonly crossStation?: {
+        peers(caller: AgentRecord): Promise<readonly { address: string; name: string; workspace: string; station: string; reachable: boolean }[]>;
+        send(caller: AgentRecord, to: string, text: string): Promise<{ ok: true; messageId: string; delivered: boolean; queued: boolean; note?: string } | { ok: false; reason: string } | null>;
+    };
 }
 
 /** Each workspace's folder as its asking agents were seen in it: the trail's fallback when no registry is handed in. */
@@ -290,7 +300,9 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
                             ...(deps.liveness ? deps.liveness(r.id) : {}),
                         };
                     });
-                    return ok({ ok: true, peers, human: { address: HUMAN, reachable: true } });
+                    // The owner's other workstations' agents, in full (P9); a station that does not answer adds none.
+                    const remote = me && deps.crossStation ? await deps.crossStation.peers(me).catch(() => []) : [];
+                    return ok({ ok: true, peers: [...peers, ...remote.map((p) => ({ address: p.address, name: p.name, workspace: p.workspace, station: p.station, reachable: p.reachable }))], human: { address: HUMAN, reachable: true } });
                 }
                 case 'send': {
                     const to = str(args.to);
@@ -299,9 +311,22 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
                     if (text === undefined) return err('send needs `text`');
                     // An APP's message (genie#1345) has no mailbox behind it: act on the app itself, never by mail to it.
                     if (isAppSender(to)) return err(`${to} is an app (a site, a process or a script): apps cannot be replied to; act on the app itself`);
-                    const refusal = deps.refusalForRecipient?.(to);
+                    // ANOTHER OF THE OWNER'S WORKSTATIONS (P9): `name@workspace@station`, or the `peer:` from of mail one sent.
+                    const station = parseStationAddress(to);
+                    let local = to;
+                    if ((station !== null || isPeer(to)) && deps.crossStation && me && caller.kind === undefined) {
+                        if (Array.isArray(args.attachments) && args.attachments.length > 0) return err('a file does not travel between workstations yet; send the text alone. Nothing was sent.');
+                        const sent = await deps.crossStation.send(me, to, text);
+                        if (sent !== null) {
+                            if (!sent.ok) return err(sent.reason);
+                            return ok({ ok: true, delivered: sent.delivered ? 1 : 0, ...(sent.queued ? { queued: true } : {}), messageId: sent.messageId, attachments: [], ...(sent.note ? { note: sent.note } : {}) });
+                        }
+                        // This workstation's own word: a local address.
+                        if (station !== null) local = `${station.name}@${station.workspace}`;
+                    }
+                    const refusal = deps.refusalForRecipient?.(local);
                     if (refusal) return err(refusal);
-                    const target = resolveAddress(to, deps.roster(), deps.workspaceSlugs?.());
+                    const target = resolveAddress(local, deps.roster(), deps.workspaceSlugs?.());
                     let recipient: Participant;
                     if (target.kind === 'human') recipient = HUMAN;
                     else if (target.kind === 'none') return err(`nobody at ${to}; use \`agentinbox list\` for the addresses that resolve`);
