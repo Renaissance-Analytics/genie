@@ -59,6 +59,7 @@ $Rows = @(
     'local-door-break', 'local-door', 'host-late-ready', 'files-watch', 'chat-drafts', 'gapp-open', 'artboard', 'ui-lag', 'plan-popover',
     'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash', 'quit-keeps-host', 'rebuilt-machine',
     'package', 'sign-plan', 'packed-tree', 'update-metadata', 'package-fuse', 'packaged-launcher',
+    'logon',
     'client-only-update',
     'host-update'
 )
@@ -421,6 +422,11 @@ function Row-package-fuse {
 # starts is ended through scripts/end-own-tree.mjs (Tynn #1031). It builds and packages twice and replaces the install,
 # ~\.genie, release\ and dist\: last in the list, after every row that reads them.
 function Row-client-only-update { Need-Install; Need-Electron; Need-TestMachine; Run 'vm-client-only-update' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-client-only-update.ps1 } }
+# LOGON START, READ AT THE OS (Tynn #1036 P6-3): the packaged app (release\win-unpacked, packaged with --dir when this
+# shard did not package) in a home of its own; the HKCU Run value read back with reg query, the setting switched live with
+# no restart, and the four logon cases. HKCU is the machine's: the row takes its value away again. Before
+# client-only-update, which replaces dist\ and release\.
+function Row-logon { Need-Build; Need-TestMachine; Run 'vm-logon' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-logon-windows.ps1 -Mode table } }
 # A host update drains and swaps (Tynn #1036 P6-2): last, as it replaces the install, the home and the build once more.
 function Row-host-update { Need-Install; Need-Electron; Need-TestMachine; Run 'vm-windows-update' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-windows-update.ps1 } }
 function Row-packaged-launcher {
@@ -515,6 +521,7 @@ function Ceiling([string]$name) {
         { $_ -in 'safe-mode', 'hang' } { return 600 }
         'quit-keeps-host' { return 660 }
         'package' { return 1500 }
+        'logon' { return 900 }
         'client-only-update' { return 2400 }
         'host-update' { return 2400 }
         default { return 600 }

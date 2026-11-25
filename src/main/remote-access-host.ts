@@ -53,6 +53,11 @@ export interface HostRemoteApiPorts {
      * frontdoor.watch for, and the local-frontdoor event, ahead of the built answers. Absent = nothing.
      */
     readonly frontdoor?: { now(): import('../core/front-door-watch.js').FrontDoorWatchView; subscribe(listener: (view: import('../core/front-door-watch.js').FrontDoorWatchView) => void): () => void };
+    /**
+     * genie-host's settings, for main's own client saying settings.watch, from this host's start (P6-3, Tynn #1501): the store is
+     * open long before the host's own answers are built, and the window's boot reads start minimised and the login item from it.
+     */
+    readonly settings?: { now(): import('./settings-watch.js').SettingsWatchView; subscribe(listener: (view: import('./settings-watch.js').SettingsWatchView) => void): () => void };
 }
 
 export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
@@ -87,11 +92,14 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
             const offRegistry = ports.registry?.watch.subscribe((view) => listener(LOCAL_EVENTS.registry, view));
             // genie-host's front door too, from the start (Tynn #1046).
             const offFrontDoor = ports.frontdoor?.subscribe((view) => listener(LOCAL_EVENTS.frontdoor, view));
-            return () => { offReady?.(); offAlone?.(); offRegistry?.(); offFrontDoor?.(); };
+            // genie-host's settings too, from the start (P6-3).
+            const offSettings = ports.settings?.subscribe((view) => listener(LOCAL_EVENTS.settings, view));
+            return () => { offReady?.(); offAlone?.(); offRegistry?.(); offFrontDoor?.(); offSettings?.(); };
         },
         workspaceOfAgent: (agentId) => ports.workspaceOfAgent?.(agentId) ?? null,
         ...(ports.registry ? { registryRead: (method: string) => ports.registry!.read(method as import('./registry-protocol.js').RegistryRead), registryWatch: () => ports.registry!.watch.now() } : {}),
         ...(ports.frontdoor ? { frontDoorWatch: () => ports.frontdoor!.now() } : {}),
+        ...(ports.settings ? { settingsWatch: () => ports.settings!.now() } : {}),
         ...(ports.workspaceOfTerminal ? { workspaceOfTerminal: ports.workspaceOfTerminal } : {}),
         ...(ports.workspacePaths ? { workspacePaths: ports.workspacePaths } : {}),
         ...(ports.takeOverEnded ? { takeOverEnded: ports.takeOverEnded } : {}),

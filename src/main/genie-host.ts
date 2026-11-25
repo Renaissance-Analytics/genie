@@ -1245,6 +1245,10 @@ async function main(): Promise<void> {
     let accountsPortNow: AccountsPort | null = null;
     const phoneReady = new Set<() => void>();
     bootStep('marketplace and gapps', stepAt);
+    // THE SETTINGS, AS MAIN'S OWN CLIENT WATCHES THEM (Tynn #998, 2g-4b1): the whole data, then each change, on settings.watch.
+    // Said from this host's start, as the registry and the front door are (P6-3, Tynn #1501): it rode on the host's own
+    // answers, which hostRemoteApi never carried, so settings.watch answered null and the window's boot read the defaults.
+    const settingsWatch = settingsWatchFeed({ data: () => settings.data(), onChange: (listener) => settings.onChange(listener) });
     const remoteAccessHost = await RemoteAccessHost.open({
         home,
         hostName: hostname(),
@@ -1272,6 +1276,8 @@ async function main(): Promise<void> {
             registry: registryAnswers.registry,
             // main's browser, from this host's start (Tynn #1046): its front door.
             frontdoor: frontDoorWatch,
+            // main's settings, from this host's start (P6-3): the window's boot reads start minimised and the login item.
+            settings: settingsWatch,
             onAloneReady: listener => { phoneReady.add(listener); return () => { phoneReady.delete(listener); }; },
             workspaceOfAgent: (agentId) => hostRegistry.listAgents().find((a) => a.id === agentId)?.workspaceId ?? null,
             // A workspace share's terminals and folders (Tynn #691): from this host's own terminal host and registry.
@@ -1286,8 +1292,6 @@ async function main(): Promise<void> {
      * WHO IS AT THIS MACHINE, AS MAIN'S OWN CLIENT WATCHES IT (Tynn #997, 2g-4a): who is connected and who asks to, for its
      * desktop notifications, said on remote.watch when it changes (its pin and devices are not in it).
      */
-    // THE SETTINGS, AS MAIN'S OWN CLIENT WATCHES THEM (Tynn #998, 2g-4b1): the whole data, then each change, on settings.watch.
-    const settingsWatch = settingsWatchFeed({ data: () => settings.data(), onChange: (listener) => settings.onChange(listener) });
     const remoteWatch = remoteWatchFeed({ read: () => remoteWatchOf(remoteAccessHost.status()), onChange: (listener) => remoteAccessHost.onChange(listener) });
     remoteAccessService = new RemoteAccessService(remoteAccessHost, {
         switch: { ...remoteSwitch, stop: () => remoteListen.stop() },
@@ -2183,8 +2187,7 @@ async function main(): Promise<void> {
         hostSummary,
         // Who is at this machine, for this machine's notifications (Tynn #997, 2g-4a).
         remoteWatch,
-        // This host's settings, for what this machine's window reads (Tynn #998, 2g-4b1).
-        settingsWatch,
+        // This host's settings are said by hostRemoteApi from the host's start (P6-3), not here: a change would be said twice.
         // This host's registry, read and written by this machine's window registry over the protocol (Tynn #1007, 2g-4e):
         // the same store calls the engine link carried, which keep the host's model following and its writes in order.
         registryFiles: registryAnswers.files,

@@ -176,6 +176,18 @@ describe('main’s settings: read from the watch, written over the protocol', ()
         expect(heard).toEqual([['do_not_disturb', false, undefined, false], ['workspace_tabs', '[2]', 'ws_a', false]]);
     });
 
+    it('a WHOLE view (genie-host saying all of its settings: the first, and each after a reconnect) is told to onView, after the data; a keyed change is not (P6-3)', () => {
+        const o = own();
+        const s = windowSettings(o.client);
+        s.start();
+        const heard: SettingValue[] = [];
+        s.onView(() => heard.push(s.snapshot().launch_at_login as SettingValue));
+        o.say({ data: { ...DATA, values: { launch_at_login: true } }, key: null, value: null, workspaceId: null });
+        o.say({ data: { ...DATA, values: { launch_at_login: true, theme: 'dark' } }, key: 'theme', value: 'dark', workspaceId: null });
+        o.say({ data: { ...DATA, values: { launch_at_login: false } }, key: null, value: null, workspaceId: null });
+        expect(heard).toEqual([true, false]);
+    });
+
     it('ready once genie-host has said them, so the boot reads start minimized and the login item as they are, not as defaults; a host that never says is waited for no longer than the deadline', async () => {
         const o = own();
         const s = windowSettings(o.client);
