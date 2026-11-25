@@ -42,7 +42,7 @@ describe('registered as a row on both platforms, before the rows that replace th
         expect(windowsRows).toContain('logon');
         expect(windowsRows.indexOf('logon')).toBeGreaterThan(windowsRows.indexOf('packaged-launcher'));
         expect(windowsRows.indexOf('logon')).toBeLessThan(windowsRows.indexOf('client-only-update'));
-        expect(windowsFunction('Row-logon')).toBe("function Row-logon { Need-Install; Need-Electron; Need-TestMachine; Run 'vm-logon' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-logon-windows.ps1 -Mode table } }");
+        expect(windowsFunction('Row-logon')).toBe("function Row-logon { Need-Build; Need-TestMachine; Run 'vm-logon' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-logon-windows.ps1 -Mode table } }");
         expect(windowsPs1).toMatch(/\n\s*'logon' \{ return 900 \}/);
     });
 });
@@ -94,8 +94,8 @@ describe('break probes', () => {
     it('the logon probes change the entry just before the logon, in both real jobs', () => {
         expect(linuxReal()).toMatch(/no-entry\) rm -f "\$AUTOSTART"/);
         expect(linuxReal()).toMatch(/stale-entry\) printf/);
-        expect(windowsReal()).toMatch(/'no-entry' \{ reg delete/);
-        expect(windowsReal()).toMatch(/'stale-entry' \{ reg add/);
+        expect(windowsReal()).toMatch(/'no-entry' \{ foreach \(\$v in \$ours\) \{[^\n]*reg delete \$runKey \/v \$v \/f/);
+        expect(windowsReal()).toMatch(/'off:stale-entry' \{[^\n]*reg add \$runKey /);
     });
 });
 
