@@ -134,7 +134,7 @@ fn stage(roots: &Roots, options: &InstallOptions, keys: &[VerifyingKey], current
     };
     let manifest = check(&manifest_bytes, &sig, keys, &wanted).map_err(|r| r.to_string())?;
     if manifest.build != build {
-        return Err(Refusal::Wrong(format!("the file says {build}, its manifest {}", manifest.build)).to_string());
+        return Err(Refusal::Wrong("build", format!("the file says {build}, its manifest {}", manifest.build)).to_string());
     }
     let archive = [".zip", ".tar.zst"].iter().map(|ext| options.from.join(format!("{stem}{ext}"))).find(|p| p.is_file()).ok_or_else(|| format!("{stem}: no .zip or .tar.zst beside its manifest"))?;
     let target = roots.build_dir(track, &build).ok_or("not a track build")?;

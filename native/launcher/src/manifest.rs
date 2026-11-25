@@ -59,7 +59,9 @@ pub struct Wanted<'a> {
 pub enum Refusal {
     Signature(String),
     Shape(String),
-    Wrong(String),
+    /// Not the package asked for: the code says which (`track`, `platform`, `arch`, `channel`, or `build` when a
+    /// package's file name and its manifest disagree).
+    Wrong(&'static str, String),
     NotNewer(String),
     LauncherTooOld(String),
     Files(String),
@@ -70,7 +72,7 @@ impl fmt::Display for Refusal {
         match self {
             Refusal::Signature(why) => write!(f, "This update's signature is not Genie's. Nothing was installed. ({why})"),
             Refusal::Shape(why) => write!(f, "This package's manifest is not one Genie reads ({why}). Nothing was installed."),
-            Refusal::Wrong(why) => write!(f, "This package is not the one asked for ({why}). Nothing was installed."),
+            Refusal::Wrong(_, why) => write!(f, "This package is not the one asked for ({why}). Nothing was installed."),
             Refusal::NotNewer(why) => write!(f, "This package is not newer than the one installed ({why}). Nothing was installed."),
             Refusal::LauncherTooOld(why) => write!(f, "This package needs a newer launcher ({why}). Nothing was installed."),
             Refusal::Files(why) => write!(f, "This package's files do not match its signed manifest ({why}). Nothing was installed."),
@@ -85,7 +87,7 @@ impl Refusal {
         match self {
             Refusal::Signature(_) => "signature",
             Refusal::Shape(_) => "format",
-            Refusal::Wrong(_) => "wrong",
+            Refusal::Wrong(code, _) => code,
             Refusal::NotNewer(_) => "downgrade",
             Refusal::LauncherTooOld(_) => "launcher-too-old",
             Refusal::Files(_) => "files",
@@ -162,7 +164,8 @@ pub fn parse_manifest(bytes: &[u8]) -> Result<Manifest, Refusal> {
             return Err(shape(format!("no {k}")));
         }
     }
-    if !o["format"].is_u64() || o["format"].as_u64() != Some(FORMAT) {
+    // A JSON number, compared by value: 1, 1.0 and 1e0 are all 1 (JSON Schema's `const`, and all JSON.parse can see).
+    if o["format"].as_f64() != Some(FORMAT as f64) {
         return Err(shape("format is not 1"));
     }
     let track = string_field(o, "track")?;
@@ -195,7 +198,7 @@ pub fn parse_manifest(bytes: &[u8]) -> Result<Manifest, Refusal> {
         _ => return Err(shape("minLauncher is not a track build or null")),
     };
     let notes = string_field(o, "notes")?;
-    if notes.chars().count() > MAX_NOTES_CHARS {
+    if notes.encode_utf16().count() > MAX_NOTES_CHARS {
         return Err(shape("notes are too long"));
     }
     let next_key = match o.get("nextKey") {
@@ -218,7 +221,7 @@ pub fn parse_manifest(bytes: &[u8]) -> Result<Manifest, Refusal> {
         if !safe_path(path) {
             return Err(shape(format!("the path '{path}' is not a plain relative path")));
         }
-        let size = fo["size"].as_u64().filter(|n| *n <= 9_007_199_254_740_991).ok_or_else(|| shape(format!("{path}: size is not a whole number")))?;
+        let size = whole_size(&fo["size"]).ok_or_else(|| shape(format!("{path}: size is not a whole number")))?;
         let sha = string_field(fo, "sha256")?;
         if sha.len() != 64 || !sha.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)) {
             return Err(shape(format!("{path}: sha256 is not 64 lower-case hex digits")));
@@ -228,7 +231,8 @@ pub fn parse_manifest(bytes: &[u8]) -> Result<Manifest, Refusal> {
                 return Err(shape(format!("files are not in strictly ascending byte order at '{path}'")));
             }
         }
-        if !seen_lower.insert(path.to_ascii_lowercase()) {
+        // Unicode lower case, as the TypeScript reader folds (toLowerCase): É and é are one name to NTFS too.
+        if !seen_lower.insert(path.to_lowercase()) {
             return Err(shape(format!("two paths are the same ignoring case ('{path}')")));
         }
         files.push(ManifestFile { path: path.to_string(), size, sha256: sha.to_string() });
@@ -252,17 +256,20 @@ pub fn check(bytes: &[u8], sig_text: &[u8], keys: &[VerifyingKey], wanted: &Want
     verify_signature(bytes, sig_text, keys)?;
     let m = parse_manifest(bytes)?;
     if m.track != wanted.track {
-        return Err(Refusal::Wrong(format!("track {}, asked for {}", m.track, wanted.track)));
+        return Err(Refusal::Wrong("track", format!("track {}, asked for {}", m.track, wanted.track)));
     }
-    if m.platform != wanted.platform || m.arch != wanted.arch {
-        return Err(Refusal::Wrong(format!("{} {}, this is {} {}", m.platform, m.arch, wanted.platform, wanted.arch)));
+    if m.platform != wanted.platform {
+        return Err(Refusal::Wrong("platform", format!("it is for {}, this is {}", m.platform, wanted.platform)));
+    }
+    if m.arch != wanted.arch {
+        return Err(Refusal::Wrong("arch", format!("it is for {}, this is {}", m.arch, wanted.arch)));
     }
     let channel_ok = match wanted.channel {
         "dev" => m.channel == "dev" || m.channel == "stable",
         other => m.channel == other,
     };
     if !channel_ok {
-        return Err(Refusal::Wrong(format!("channel {}, this install reads {}", m.channel, wanted.channel)));
+        return Err(Refusal::Wrong("channel", format!("channel {}, this install reads {}", m.channel, wanted.channel)));
     }
     if let Some(current) = wanted.current {
         if compare_track_builds(&m.build, current) != Ordering::Greater {
@@ -278,15 +285,32 @@ pub fn check(bytes: &[u8], sig_text: &[u8], keys: &[VerifyingKey], wanted: &Want
 }
 
 /// A manifest path is relative and '/'-separated, with no empty, '.' or '..' segment, no backslash, ':' or control
-/// character, at most MAX_PATH_CHARS characters.
+/// character (C0, DEL or C1), at most MAX_PATH_CHARS UTF-16 units (the TypeScript reader's `length`).
 pub fn safe_path(path: &str) -> bool {
-    if path.is_empty() || path.chars().count() > MAX_PATH_CHARS {
+    if path.is_empty() || path.encode_utf16().count() > MAX_PATH_CHARS {
         return false;
     }
     if path.chars().any(|c| c == '\\' || c == ':' || c.is_control()) {
         return false;
     }
     path.split('/').all(|seg| !seg.is_empty() && seg != "." && seg != "..")
+}
+
+/// The largest whole number a JSON reader in JavaScript holds exactly (`Number.MAX_SAFE_INTEGER`).
+pub const MAX_SAFE_SIZE: u64 = 9_007_199_254_740_991;
+
+/// A file size: a whole JSON number from 0 to MAX_SAFE_SIZE, however it is written (6, 6.0, 6e0), as
+/// `Number.isSafeInteger` reads it.
+fn whole_size(v: &Value) -> Option<u64> {
+    if let Some(n) = v.as_u64() {
+        return (n <= MAX_SAFE_SIZE).then_some(n);
+    }
+    if v.is_i64() {
+        // A negative integer (-0 parses as the unsigned 0 above).
+        return None;
+    }
+    let f = v.as_f64()?;
+    (f.fract() == 0.0 && f >= 0.0 && f <= MAX_SAFE_SIZE as f64).then_some(f as u64)
 }
 
 pub fn sha256_hex(bytes: &[u8]) -> String {

@@ -67,9 +67,18 @@ fn every_start_sets_its_working_folder_from_the_program() {
 #[test]
 fn the_release_build_never_has_the_test_keys() {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/build-win-launcher.mjs");
-    let text = std::fs::read_to_string(&script).unwrap();
-    assert!(text.contains("cargo"), "the Windows build is cargo's");
-    assert!(!text.contains("--features") && !text.contains("test-keys"), "no features in the release build");
+    // The script's code, not its comments: its header says where the test keys live (run 1125-105637-d9df78 read that
+    // sentence as a feature flag). A comment line starts with `*`, `/*` or `//`; a trailing `//` comment is cut.
+    let text: String = std::fs::read_to_string(&script)
+        .unwrap()
+        .lines()
+        .map(str::trim_start)
+        .filter(|l| !(l.starts_with('*') || l.starts_with("/*") || l.starts_with("//")))
+        .map(|l| match l.find(" // ") { Some(i) => &l[..i], None => l })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("execFileSync(cargo"), "the Windows build is cargo's");
+    assert!(!text.contains("--features") && !text.contains("test-keys") && !text.contains("features"), "no features in the release build");
     let (_, keys) = sources().into_iter().find(|(n, _)| n == "keys.rs").unwrap();
     assert!(keys.contains("#[cfg(feature = \"test-keys\")]"), "the test key is read only under the feature");
 }

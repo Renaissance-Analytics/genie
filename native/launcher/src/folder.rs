@@ -94,7 +94,8 @@ fn tree_refusal(code: &'static str, path: &str, reason: String) -> TreeRefusal {
 }
 
 /// Every file `m` lists is in `dir` at its size (and, in `scope`, its sha256), and nothing else is but the folder's own
-/// manifest, signature and marker.
+/// manifest, signature and marker AT ITS ROOT (a `sub/.complete` is a file like any other: verifyTree's rule). Each file
+/// found is checked as it is met (listed, size, hash), then what is listed but was not met is missing.
 pub fn verify_tree(m: &Manifest, dir: &Path, scope: HashScope) -> Result<(), TreeRefusal> {
     let listed: BTreeMap<String, &crate::manifest::ManifestFile> = m.files.iter().map(|f| (name_key(&f.path), f)).collect();
     let own = [name_key(MANIFEST), name_key(SIGNATURE), name_key(COMPLETE)];
@@ -102,29 +103,27 @@ pub fn verify_tree(m: &Manifest, dir: &Path, scope: HashScope) -> Result<(), Tre
     let all = walk(dir).map_err(|why| tree_refusal("not-a-file", "", why))?;
     for rel in all {
         let key = name_key(&rel);
-        if own.contains(&key) {
+        if !rel.contains('/') && own.contains(&key) {
             continue;
         }
-        if !listed.contains_key(&key) {
+        let Some(f) = listed.get(&key) else {
             return Err(tree_refusal("unlisted-file", &rel, format!("{rel} is not in its signed manifest, so this build is not run")));
-        }
+        };
         found.insert(key);
-    }
-    for (key, f) in &listed {
-        if !found.contains(key) {
-            return Err(tree_refusal("missing-file", &f.path, format!("{} is missing", f.path)));
-        }
-        let path = dir.join(&f.path);
-        let size = std::fs::metadata(&path).map_err(|e| tree_refusal("missing-file", &f.path, e.to_string()))?.len();
+        let path = dir.join(&rel);
+        let size = std::fs::metadata(&path).map_err(|e| tree_refusal("missing-file", &rel, format!("{rel}: {e}")))?.len();
         if size != f.size {
-            return Err(tree_refusal("size", &f.path, format!("{} is {size} bytes, its manifest says {}", f.path, f.size)));
+            return Err(tree_refusal("size", &rel, format!("{rel} is {size} bytes, its manifest says {}", f.size)));
         }
         if scope == HashScope::All || is_executable(&f.path) {
-            let data = std::fs::read(&path).map_err(|e| tree_refusal("missing-file", &f.path, format!("{}: {e}", path.display())))?;
+            let data = std::fs::read(&path).map_err(|e| tree_refusal("missing-file", &rel, format!("{rel}: {e}")))?;
             if sha256_hex(&data) != f.sha256 {
-                return Err(tree_refusal("sha256", &f.path, format!("{} is not the file its signed manifest names", f.path)));
+                return Err(tree_refusal("sha256", &rel, format!("{rel} is not the file its signed manifest names")));
             }
         }
+    }
+    if let Some((_, f)) = listed.iter().find(|(key, _)| !found.contains(*key)) {
+        return Err(tree_refusal("missing-file", &f.path, format!("{} is missing", f.path)));
     }
     Ok(())
 }
