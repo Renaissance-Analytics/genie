@@ -1,0 +1,5 @@
+# The launcher stands alone: no CRT DLL on Windows (static, as genie-launch.c was built with /MT).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

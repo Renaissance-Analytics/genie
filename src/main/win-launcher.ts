@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
- * genie-launch.exe (native/win-launcher/genie-launch.c; #1628, #1639): how Genie starts a process on Windows when what it
+ * genie-launch.exe (the launcher, native/launcher, Rust: its `detach`, `job` and `pipe-owner-only` modes; #1628, #1639, Tynn #1058): how Genie starts a process on Windows when what it
  * inherits, or what it starts, matters. `detach` starts genie-host inheriting only its log and NUL (never the window's
  * other handles, a DevTools socket among them); `job` runs a git read inside a kill-on-close job object, so ending the read
  * ends everything it started however it started it.

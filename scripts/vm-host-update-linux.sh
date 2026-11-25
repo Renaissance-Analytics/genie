@@ -21,6 +21,8 @@
 # Break probes (HOST_UPDATE_BREAK, or host-update-break.txt at the root):
 #   client-only   the update is built with no mark (the same host): the row must fail on the kept host.
 #   drop-restore  the drain's record is emptied while the updater runs: the row must fail on the agent that did not come back.
+#   keep-provider a provider from before is kept alive through the update (outside the app's tree): the row must fail on
+#                 the survivor, which shows the pid-and-start-time check still catches a real one.
 #
 # If the two builds' hosts are the same with no probe asking for it: `### host-update=NOT-A-HOST-UPDATE`.
 # Prints `### host-update=PASS` at the end; a failure prints `### host-update=FAIL <why>` and exits 1.
@@ -93,6 +95,19 @@ host_pid() { node -e 'try { const r = JSON.parse(require("fs").readFileSync(proc
 alive() { [ -n "$1" ] && kill -0 "$1" 2>/dev/null; }
 cmdline() { tr '\0' ' ' <"/proc/$1/cmdline" 2>/dev/null; }
 stub_pids() { pgrep -f 'stub-codex\.mjs' | sort -n | tr '\n' ' ' | sed 's/ $//'; }
+# A PROCESS IS ITS PID AND ITS START TIME (/proc/<pid>/stat field 22, ticks since boot), never its pid alone: a freed pid
+# is handed to the next process (the Windows gate 1125-122128-8030b2 failed a correct update on a provider that got the
+# drained one's pid). `proc_key` is empty for a pid that is not running; `alive_key` is true only for that same process.
+proc_key() {
+    local pid="$1" stat
+    stat="$(cat "/proc/$pid/stat" 2>/dev/null)" || return 0
+    stat="${stat##*) }"
+    # shellcheck disable=SC2086
+    set -- $stat
+    echo "$pid@${20}"
+}
+alive_key() { [ -n "$1" ] && [ "$(proc_key "${1%@*}")" = "$1" ]; }
+stub_keys() { for p in $(pgrep -f 'stub-codex\.mjs'); do proc_key "$p"; done | sort -u | tr '\n' ' ' | sed 's/ $//'; }
 # How many ids a JSON array file holds; none when there is no file.
 ids_in() { node -e 'try { console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).length) } catch { console.log(0) }' "$1"; }
 # Whether $1 is $2 or started under it, by the parent pids (bounded: a chain is never this long).
@@ -189,18 +204,25 @@ APP_PID=$!
 host_before=''
 for _ in $(seq 1 45); do sleep 2; p="$(host_pid)"; if alive "$p"; then host_before="$p"; break; fi; done
 [ -n "$host_before" ] || { tail -40 installed-err.log; fail 'no live genie-host recorded in host.json before the update'; }
+host_before_key="$(proc_key "$host_before")"
 host_before_cmd="$(cmdline "$host_before")"
 echo "genie-host before the update: pid $host_before, started $(started_at "$host_before"): $host_before_cmd"
 case "$host_before_cmd" in *"/host/$BASE_HASH/dist/main/host.js"*) ;; *) fail "the base genie-host does not run the base's copy (host/$BASE_HASH): $host_before_cmd" ;; esac
 # THE PROVIDERS ARE SAMPLED WHILE THE DRIVER RUNS, never after it: a full install drains at once, so by the time
 # update-cdp.mjs exits they are already gone (measured, 1124-081929-7eb671: none found after it, on both platforms, while
 # the client-only probe, whose agent is kept, found its provider).
-( while :; do pgrep -f 'stub-codex\.mjs'; sleep 0.5; done ) >stub-samples.txt 2>/dev/null &
+if [ "$BREAK" = keep-provider ]; then
+    # A provider from before that the update does not end: outside the app's tree (setsid), so the drain cannot reach it,
+    # and named like one (its command line holds stub-codex.mjs), so the sampler below sees it. end_all ends it.
+    echo 'BREAK PROBE: a provider from before is kept alive through the update'
+    setsid node -e 'setInterval(() => {}, 1000)' stub-codex.mjs-kept-by-the-probe </dev/null >/dev/null 2>&1 &
+fi
+( while :; do for p in $(pgrep -f 'stub-codex\.mjs'); do proc_key "$p"; done; sleep 0.5; done ) >stub-samples.txt 2>/dev/null &
 SAMPLER=$!
 EXPECT_VERSION="$NEXT" CDP_OWN_PID="$APP_PID" node scripts/update-cdp.mjs
 drive=$?
 kill "$SAMPLER" 2>/dev/null; wait "$SAMPLER" 2>/dev/null
-stubs_before="$(sort -nu stub-samples.txt | tr '\n' ' ' | sed 's/ $//')"
+stubs_before="$(grep -E '^[0-9]+@[0-9]+$' stub-samples.txt | sort -u | tr '\n' ' ' | sed 's/ $//')"
 echo "agent providers when install was asked: ${stubs_before:-none}"
 if [ "$drive" -ne 0 ]; then
     echo '--- installed stderr ---'; tail -120 installed-err.log
@@ -210,8 +232,8 @@ fi
 [ -n "$stubs_before" ] || fail 'no agent provider was running when install was asked: there is nothing for the drain to carry'
 
 step 'the drain: the old host records who comes back, and goes'
-for _ in $(seq 1 150); do alive "$host_before" || break; sleep 1; done
-alive "$host_before" && { tail -40 "$HOST_LOG"; fail "the old genie-host pid $host_before did not exit within 150 s of the install"; }
+for _ in $(seq 1 150); do alive_key "$host_before_key" || break; sleep 1; done
+alive_key "$host_before_key" && { tail -40 "$HOST_LOG"; fail "the old genie-host pid $host_before did not exit within 150 s of the install"; }
 echo "the old genie-host pid $host_before is gone"
 [ -f "$RUNNING_AT_QUIT" ] || fail "the drain wrote no $RUNNING_AT_QUIT"
 at_quit="$(ids_in "$RUNNING_AT_QUIT")"
@@ -235,14 +257,14 @@ echo "the window came back: pid $relaunched, started $(started_at "$relaunched")
 
 step "the swap: a new genie-host, from the update's copy"
 host_after=''
-for _ in $(seq 1 45); do sleep 2; p="$(host_pid)"; if [ "$p" != "$host_before" ] && alive "$p"; then host_after="$p"; break; fi; done
+for _ in $(seq 1 45); do sleep 2; p="$(host_pid)"; if [ -n "$p" ] && [ "$(proc_key "$p")" != "$host_before_key" ] && alive "$p"; then host_after="$p"; break; fi; done
 [ -n "$host_after" ] || host_after="$(host_pid)"
 alive "$host_after" || { tail -40 "$HOST_LOG"; fail 'no live genie-host recorded in host.json after the update'; }
 host_after_cmd="$(cmdline "$host_after")"
 host_after_exe="$(readlink "/proc/$host_after/exe")"
 echo "genie-host after the update: pid $host_after, started $(started_at "$host_after"), runs $host_after_exe: $host_after_cmd"
-[ "$host_after" != "$host_before" ] || fail "genie-host is still pid $host_before: the update did not swap the host"
-alive "$host_before" && fail "the old genie-host pid $host_before is running again"
+[ "$(proc_key "$host_after")" != "$host_before_key" ] || fail "genie-host is still pid $host_before: the update did not swap the host"
+alive_key "$host_before_key" && fail "the old genie-host pid $host_before is running again"
 said="$(grep -h 'updater: it has the install; this host exits' "$HOST_LOG" "$LIFECYCLE" 2>/dev/null | tail -1)"
 [ -n "$said" ] || { tail -40 "$HOST_LOG"; fail 'genie-host did not log a full install'; }
 echo "the old host said: $said"
@@ -257,16 +279,17 @@ step 'the agent: drained, and back exactly once, under the new host'
 revived=''
 for _ in $(seq 1 30); do
     sleep 2
-    for p in $(stub_pids); do case " $stubs_before " in *" $p "*) ;; *) revived="$p" ;; esac; done
+    for k in $(stub_keys); do case " $stubs_before " in *" $k "*) ;; *) revived="${k%@*}" ;; esac; done
     [ -n "$revived" ] && break
 done
 # Time for a second start to show, if there is one.
 sleep 10
-stubs_now="$(stub_pids)"
-echo "agent providers now: ${stubs_now:-none} (before: $stubs_before)"
-for p in $stubs_before; do alive "$p" && fail "agent provider pid $p survived the update"; done
+stubs_now="$(stub_keys)"
+echo "agent providers now (pid@start): ${stubs_now:-none} (before: $stubs_before)"
+for k in $stubs_now; do case " $stubs_before " in *" $k "*) ;; *" ${k%@*}@"*) echo "  ${k%@*}: a reused pid, a new process" ;; esac; done
+for k in $stubs_before; do alive_key "$k" && fail "agent provider pid ${k%@*} survived the update"; done
 revived_n=0
-for p in $stubs_now; do case " $stubs_before " in *" $p "*) ;; *) revived_n=$((revived_n + 1)); revived="$p" ;; esac; done
+for k in $stubs_now; do case " $stubs_before " in *" $k "*) ;; *) revived_n=$((revived_n + 1)); revived="${k%@*}" ;; esac; done
 [ "$revived_n" -eq 1 ] || fail "the agent that was running came back $revived_n times (want exactly 1)"
 descends "$revived" "$host_after" || fail "the agent came back as pid $revived, not under the new genie-host $host_after"
 spent="$(ids_in "$RUNNING_AT_QUIT")"

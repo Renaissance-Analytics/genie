@@ -24,6 +24,8 @@
 # Break probes (HOST_UPDATE_BREAK, or host-update-break.txt at the root: In-Session passes no environment):
 #   client-only   the update is built with no mark (the same host): the row must fail on the kept host.
 #   drop-restore  the drain's record is emptied while the installer runs: the row must fail on the agent that did not come back.
+#   keep-provider a provider from before is kept alive through the update (outside the app's tree): the row must fail on
+#                 the survivor, which shows the pid-and-start-time check still catches a real one.
 #
 # If the two builds' hosts are the same with no probe asking for it, there is no host update to prove: the run stops and says
 # so (### host-update=NOT-A-HOST-UPDATE). Prints `### host-update=PASS` at the end; a failure throws.
@@ -66,6 +68,13 @@ function Descends($child, $ancestor) {
 # The agent providers: the stub runs under genie-host's own executable as Node (ELECTRON_RUN_AS_NODE), never node.exe, so it
 # is found by its script, whatever runs it (measured in P6-1: a node.exe filter found 0 while the agent ran).
 function Stub-Providers() { return @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like '*stub-codex.mjs*' }) }
+# A PROCESS IS ITS PID AND ITS START TIME, never its pid alone: Windows hands a freed pid to the next process, and in the
+# gate 1125-122128-8030b2 the restored provider got the drained one's pid (1248, started 2 s after the new host), so a
+# pid-only "from before" check failed a correct update. Two sightings are one process only when both agree.
+function Proc-Key($p) { return ("" + [int]$p.ProcessId + "@" + ([datetime]$p.CreationDate).ToUniversalTime().ToString('o')) }
+# The same key for a Get-Process object (its StartTime), and whether the process a key names is the one running now.
+function Process-Key($p) { if (-not $p) { return '' }; return ("" + $p.Id + "@" + $p.StartTime.ToUniversalTime().ToString('o')) }
+function Alive-Key($key) { $id = [int]($key.Split('@')[0]); $p = Get-Process -Id $id -ErrorAction SilentlyContinue; return [bool]($p -and (Process-Key $p) -eq $key) }
 # The ids in a JSON array file, one per output line, read by node: in PowerShell 5.1 ConvertFrom-Json does not unroll an
 # array, so @(... | ConvertFrom-Json).Count reads `[]` as ONE (RULES.md: a gauge that reads one as nothing). No file, no ids.
 function Json-Ids($file) { if (-not (Test-Path $file)) { return @() }; return @(& node -e "for (const id of JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'))) console.log(id)" $file) }
@@ -243,6 +252,13 @@ try {
     $hostBeforeLine = Command-Line $hostBefore.Id
     Write-Output ("genie-host before the update: pid " + $hostBefore.Id + ", started " + $hostBefore.StartTime + ": " + $hostBeforeLine)
     if ($hostBeforeLine -notlike "*\host\$baseHostHash\dist\main\host.js*") { throw "the base genie-host does not run the base's copy (host\$baseHostHash): $hostBeforeLine" }
+    $hostBeforeKey = Process-Key $hostBefore
+    if ($break -eq 'keep-provider') {
+        # A provider from before that the update does not end: outside the app's tree, so the drain cannot reach it, and
+        # named like one (its command line holds stub-codex.mjs), so the sampler below sees it.
+        Write-Output 'BREAK PROBE: a provider from before is kept alive through the update'
+        $script:keptProvider = Start-Process -FilePath node -ArgumentList @('-e', '"setInterval(() => {}, 1000)"', 'stub-codex.mjs-kept-by-the-probe') -PassThru -WindowStyle Hidden
+    }
     $env:CDP_OWN_PID = "$($app.Id)"
     # THE PROVIDERS AND PTY HELPERS ARE SAMPLED WHILE THE DRIVER RUNS, never after it: a full install drains at once, so by
     # the time update-cdp.mjs exits they are already gone (measured, 1124-081929-7eb671: none found after it, on both
@@ -254,17 +270,17 @@ try {
     $seenHelpers = @{}
     while (-not $driver.HasExited) {
         foreach ($p in @(Get-CimInstance Win32_Process)) {
-            if ($p.CommandLine -and $p.CommandLine -like '*stub-codex.mjs*') { $seenStubs[[int]$p.ProcessId] = $true }
-            if ($p.Name -like 'fancy-pty-helper*') { $seenHelpers[[int]$p.ProcessId] = $true }
+            if ($p.CommandLine -and $p.CommandLine -like '*stub-codex.mjs*') { $seenStubs[(Proc-Key $p)] = $true }
+            if ($p.Name -like 'fancy-pty-helper*') { $seenHelpers[(Proc-Key $p)] = $true }
         }
         Start-Sleep -Milliseconds 500
     }
     $driver.WaitForExit()
     $drive = $driver.ExitCode
     Get-Content update-cdp.log, update-cdp-err.log -ErrorAction SilentlyContinue
-    $helpersBefore = @($seenHelpers.Keys | ForEach-Object { [int]$_ })
+    $helpersBefore = @($seenHelpers.Keys | ForEach-Object { "$_" })
     Write-Output ("pty helpers seen while the driver ran: " + $helpersBefore.Count + " (" + ($helpersBefore -join ', ') + ")")
-    $beforeIds = @($seenStubs.Keys | ForEach-Object { [int]$_ })
+    $beforeIds = @($seenStubs.Keys | ForEach-Object { "$_" })
     Write-Output ("agent providers when install was asked: " + ($beforeIds -join ', '))
     if ($drive -ne 0) {
         Write-Output "--- installed stderr ---"; Get-Content installed-err.log -Tail 200 -ErrorAction SilentlyContinue
@@ -276,8 +292,8 @@ try {
 
     Step 'the drain: the old host records who comes back, and goes'
     $deadline = (Get-Date).AddSeconds(150)
-    while ((Get-Date) -lt $deadline -and (Get-Process -Id $hostBefore.Id -ErrorAction SilentlyContinue)) { Start-Sleep 1 }
-    if (Get-Process -Id $hostBefore.Id -ErrorAction SilentlyContinue) { Get-Content $hostLog -Tail 40 -ErrorAction SilentlyContinue; throw "the old genie-host pid $($hostBefore.Id) did not exit within 150 s of the install" }
+    while ((Get-Date) -lt $deadline -and (Alive-Key $hostBeforeKey)) { Start-Sleep 1 }
+    if (Alive-Key $hostBeforeKey) { Get-Content $hostLog -Tail 40 -ErrorAction SilentlyContinue; throw "the old genie-host pid $($hostBefore.Id) did not exit within 150 s of the install" }
     Write-Output ("the old genie-host pid " + $hostBefore.Id + " is gone")
     if (-not (Test-Path $runningAtQuit)) { throw "the drain wrote no $runningAtQuit" }
     $atQuit = @(Json-Ids $runningAtQuit)
@@ -313,15 +329,15 @@ try {
     while ((Get-Date) -lt $deadline -and -not $hostAfter) {
         Start-Sleep 2
         $hp = Host-Record-Pid
-        if ($hp -and $hp -ne $hostBefore.Id) { $hostAfter = Get-Process -Id $hp -ErrorAction SilentlyContinue }
+        if ($hp) { $c = Get-Process -Id $hp -ErrorAction SilentlyContinue; if ($c -and (Process-Key $c) -ne $hostBeforeKey) { $hostAfter = $c } }
     }
     if (-not $hostAfter) { $hostAfter = Get-Process -Id (Host-Record-Pid) -ErrorAction SilentlyContinue }
     if (-not $hostAfter) { Get-Content $hostLog -Tail 40 -ErrorAction SilentlyContinue; throw 'no live genie-host recorded in host.json after the update' }
     $hostAfterLine = Command-Line $hostAfter.Id
     $hostAfterExe = [string]$hostAfter.Path
     Write-Output ("genie-host after the update: pid " + $hostAfter.Id + ", started " + $hostAfter.StartTime + ", runs " + $hostAfterExe + ": " + $hostAfterLine)
-    if ($hostAfter.Id -eq $hostBefore.Id) { throw "genie-host is still pid $($hostBefore.Id): the update did not swap the host" }
-    if (Get-Process -Id $hostBefore.Id -ErrorAction SilentlyContinue) { throw "the old genie-host pid $($hostBefore.Id) is running again" }
+    if ((Process-Key $hostAfter) -eq $hostBeforeKey) { throw "genie-host is still pid $($hostBefore.Id): the update did not swap the host" }
+    if (Alive-Key $hostBeforeKey) { throw "the old genie-host pid $($hostBefore.Id) is running again" }
     $said = Select-String -Path @($hostLog, $lifecycle) -Pattern 'updater: it has the install; this host exits' -SimpleMatch -ErrorAction SilentlyContinue
     if (-not $said) { Get-Content $hostLog -Tail 40 -ErrorAction SilentlyContinue; throw 'genie-host did not log a full install' }
     Write-Output ("the old host said: " + ($said | Select-Object -Last 1).Line)
@@ -337,14 +353,21 @@ try {
     $revived = @()
     while ((Get-Date) -lt $deadline -and $revived.Count -eq 0) {
         Start-Sleep 2
-        $revived = @(Stub-Providers | Where-Object { $beforeIds -notcontains [int]$_.ProcessId })
+        $revived = @(Stub-Providers | Where-Object { $beforeIds -notcontains (Proc-Key $_) })
     }
     # Time for a second start to show, if there is one.
     Start-Sleep 10
     $stubsNow = Stub-Providers
-    $survivors = @($stubsNow | Where-Object { $beforeIds -contains [int]$_.ProcessId })
-    $revived = @($stubsNow | Where-Object { $beforeIds -notcontains [int]$_.ProcessId })
-    $stubsNow | ForEach-Object { Write-Output ("  provider: " + $_.ProcessId + " " + $_.Name + " parent " + $_.ParentProcessId + " started " + $_.CreationDate) }
+    $survivors = @($stubsNow | Where-Object { $beforeIds -contains (Proc-Key $_) })
+    $revived = @($stubsNow | Where-Object { $beforeIds -notcontains (Proc-Key $_) })
+    foreach ($s in $stubsNow) {
+        $key = Proc-Key $s
+        $pidPrefix = "$([int]$s.ProcessId)@"
+        $note = ''
+        if ($beforeIds -contains $key) { $note = ' (from before)' }
+        elseif (@($beforeIds | Where-Object { $_.StartsWith($pidPrefix) }).Count -gt 0) { $note = ' (a reused pid: a new process)' }
+        Write-Output ("  provider: " + $key + " " + $s.Name + " parent " + $s.ParentProcessId + $note)
+    }
     Write-Output ("providers from before still running: " + $survivors.Count + "; started since: " + $revived.Count)
     if ($survivors.Count -ne 0) { $survivors | ForEach-Object { Write-Output ("  survivor: " + $_.ProcessId + " " + $_.CommandLine) }; throw "$($survivors.Count) agent provider(s) from before survived the update" }
     if ($revived.Count -ne 1) {
@@ -355,7 +378,7 @@ try {
     if (-not (Descends $revived[0].ProcessId $hostAfter.Id)) { throw "the agent came back as pid $($revived[0].ProcessId), not under the new genie-host $($hostAfter.Id)" }
     $spent = @(Json-Ids $runningAtQuit)
     if ($spent.Count -ne 0) { throw "the drain's record still names $($spent -join ', ') after the restore" }
-    $helpers = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'fancy-pty-helper*' -and $helpersBefore -contains [int]$_.ProcessId })
+    $helpers = @(Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'fancy-pty-helper*' -and $helpersBefore -contains (Proc-Key $_) })
     Write-Output ("pty helpers from before the update still running: " + $helpers.Count)
     if ($helpers.Count -ne 0) { $helpers | ForEach-Object { Write-Output ("  survivor: " + $_.ProcessId + " " + $_.ExecutablePath) }; throw "$($helpers.Count) pty helper(s) survived the update" }
 
@@ -376,6 +399,7 @@ try {
     Write-Output "### host-update=PASS"
 } finally {
     if ($feed -and -not $feed.HasExited) { Kill-Tree $feed.Id }
+    if ($script:keptProvider -and -not $script:keptProvider.HasExited) { Kill-Tree $script:keptProvider.Id }
     # A run that failed before its teardown ends what it started all the same: the windows it saw and genie-host.
     if ($script:began -and -not $script:ended) {
         $roots = @($script:relaunchedPids)

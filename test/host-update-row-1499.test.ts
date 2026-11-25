@@ -151,14 +151,19 @@ describe('the row: drained, swapped, restored once', () => {
     });
 
     it('the old host and every provider from before are gone; a NEW host runs the update’s copy and says its mark', () => {
-        expect(ps1()).toMatch(/if \(\$hostAfter\.Id -eq \$hostBefore\.Id\) \{ throw "genie-host is still pid/);
-        expect(ps1()).toMatch(/if \(Get-Process -Id \$hostBefore\.Id -ErrorAction SilentlyContinue\) \{ throw "the old genie-host/);
+        // The old host by its pid AND start time: a new host given the old one's pid is the swap, not "still the old one".
+        expect(ps1()).toMatch(/\$hostBeforeKey = Process-Key \$hostBefore/);
+        expect(ps1()).toMatch(/if \(\(Process-Key \$hostAfter\) -eq \$hostBeforeKey\) \{ throw "genie-host is still pid/);
+        expect(ps1()).toMatch(/if \(Alive-Key \$hostBeforeKey\) \{ throw "the old genie-host/);
+        expect(ps1()).not.toMatch(/Get-Process -Id \$hostBefore\.Id/);
         expect(ps1()).toMatch(/if \(\$hostAfterLine -notlike "\*\\host\\\$nextHostHash\\dist\\main\\host\.js\*"\) \{ throw/);
         expect(ps1()).toMatch(/if \(\$hostAfterExe -notlike "\$genieHome\\host\\runtime-\*-host\\genie-host\.exe"\) \{ throw/);
         expect(ps1()).toMatch(/-Pattern "host build mark: \$mark"/);
         expect(ps1()).toMatch(/if \(Test-Path \(Join-Path \$genieHome "host\\\$baseHostHash"\)\) \{ throw/);
-        expect(sh()).toMatch(/\[ "\$host_after" != "\$host_before" \] \|\| fail "genie-host is still pid/);
-        expect(sh()).toMatch(/alive "\$host_before" && fail "the old genie-host/);
+        expect(sh()).toMatch(/host_before_key="\$\(proc_key "\$host_before"\)"/);
+        expect(sh()).toMatch(/\[ "\$\(proc_key "\$host_after"\)" != "\$host_before_key" \] \|\| fail "genie-host is still pid/);
+        expect(sh()).toMatch(/alive_key "\$host_before_key" && fail "the old genie-host/);
+        expect(sh()).not.toMatch(/alive "\$host_before"/);
         expect(sh()).toMatch(/case "\$host_after_cmd" in \*"\/host\/\$NEXT_HASH\/dist\/main\/host\.js"\*\) ;; \*\) fail/);
         expect(sh()).toMatch(/case "\$host_after_exe" in "\$GHOME"\/host\/runtime-\*-host\/genie-host\) ;; \*\) fail/);
         expect(sh()).toMatch(/grep -q "host build mark: \$MARK" "\$GHOME\/runtime\/lifecycle\.log" \|\| fail/);
@@ -172,7 +177,13 @@ describe('the row: drained, swapped, restored once', () => {
         // Not once: the new host's agent starts are printed (why it did not come back), and then it fails.
         expect(ps1()).toMatch(/if \(\$revived\.Count -ne 1\) \{\s*Write-Output "--- the new host's agent starts \(lifecycle\.log\) ---"\s*Select-String -Path \$lifecycle [^\n]*\s*throw "the agent that was running came back \$\(\$revived\.Count\) times \(want exactly 1\)"\s*\}/);
         expect(ps1()).toMatch(/if \(-not \(Descends \$revived\[0\]\.ProcessId \$hostAfter\.Id\)\) \{ throw/);
-        expect(sh()).toMatch(/for p in \$stubs_before; do alive "\$p" && fail "agent provider pid \$p survived the update"; done/);
+        // A provider from before is its pid AND start time (1125-122128-8030b2: the restored provider got the drained
+        // one's pid, and a pid-only check called it a survivor).
+        expect(ps1()).toMatch(/\$survivors = @\(\$stubsNow \| Where-Object \{ \$beforeIds -contains \(Proc-Key \$_\) \}\)/);
+        expect(ps1()).toMatch(/\$revived = @\(\$stubsNow \| Where-Object \{ \$beforeIds -notcontains \(Proc-Key \$_\) \}\)/);
+        expect(ps1()).not.toMatch(/\$beforeIds -(?:not)?contains \[int\]/);
+        expect(sh()).toMatch(/for k in \$stubs_before; do alive_key "\$k" && fail "agent provider pid \$\{k%@\*\} survived the update"; done/);
+        expect(sh()).not.toMatch(/for p in \$stubs_before; do alive "\$p"/);
         expect(sh()).toMatch(/\[ "\$revived_n" -eq 1 \] \|\| fail "the agent that was running came back \$revived_n times/);
         expect(sh()).toMatch(/descends "\$revived" "\$host_after" \|\| fail/);
     });
@@ -182,6 +193,21 @@ describe('the row: drained, swapped, restored once', () => {
         expect(sh()).toMatch(/if \[ "\$BREAK" = drop-restore \]; then [^\n]*printf '\[\]' >"\$RUNNING_AT_QUIT"/);
         expect(ps1().indexOf("$break -eq 'drop-restore'")).toBeGreaterThan(ps1().indexOf('$atQuit = @('));
         expect(sh().indexOf('"$BREAK" = drop-restore')).toBeGreaterThan(sh().indexOf('at_quit="$('));
+    });
+
+    it('a process is its pid and its start time: Proc-Key (CIM CreationDate) and proc_key (/proc stat field 22)', () => {
+        expect(ps1()).toMatch(/function Proc-Key\(\$p\) \{ return \("" \+ \[int\]\$p\.ProcessId \+ "@" \+ \(\[datetime\]\$p\.CreationDate\)\.ToUniversalTime\(\)\.ToString\('o'\)\) \}/);
+        expect(ps1()).toMatch(/function Alive-Key\(\$key\) \{[^\n]*\(Process-Key \$p\) -eq \$key\)/);
+        expect(sh()).toMatch(/stat="\$\{stat##\*\) \}"\n(?:\s*#[^\n]*\n)*\s*set -- \$stat\n\s*echo "\$pid@\$\{20\}"/);
+        expect(sh()).toMatch(/alive_key\(\) \{ \[ -n "\$1" \] && \[ "\$\(proc_key "\$\{1%@\*\}"\)" = "\$1" \]; \}/);
+    });
+
+    it('the keep-provider break probe keeps a provider from before alive, outside the app, before the sampler starts', () => {
+        expect(ps1()).toMatch(/if \(\$break -eq 'keep-provider'\) \{[\s\S]*?\$script:keptProvider = Start-Process -FilePath node -ArgumentList @\('-e', [^\n]*'stub-codex\.mjs-kept-by-the-probe'\)/);
+        expect(ps1().indexOf("$break -eq 'keep-provider'")).toBeLessThan(ps1().indexOf('$driver = Start-Process'));
+        expect(ps1()).toMatch(/\} finally \{[\s\S]*if \(\$script:keptProvider -and -not \$script:keptProvider\.HasExited\) \{ Kill-Tree \$script:keptProvider\.Id \}/);
+        expect(sh()).toMatch(/if \[ "\$BREAK" = keep-provider \]; then\n(?:\s*#[^\n]*\n)*[^\n]*\n\s*setsid node -e 'setInterval\(\(\) => \{\}, 1000\)' stub-codex\.mjs-kept-by-the-probe/);
+        expect(sh().indexOf('"$BREAK" = keep-provider')).toBeLessThan(sh().indexOf('SAMPLER=$!'));
     });
 
     it('both rows read the break from the environment or a file at the root', () => {
@@ -215,21 +241,21 @@ describe('a debugger port of its own, its own launch, and its own end', () => {
     it('Windows: no pty helper from before outlives the update, wherever it runs (not the install dir: since the host split it is the host copy)', () => {
         expect(ps1()).toMatch(/Remove-Item Env:EXPECT_HELPERS -ErrorAction SilentlyContinue/);
         expect(ps1()).not.toMatch(/\$env:EXPECT_HELPERS = '1'/);
-        expect(ps1()).toMatch(/if \(\$p\.Name -like 'fancy-pty-helper\*'\) \{ \$seenHelpers\[\[int\]\$p\.ProcessId\] = \$true \}/);
-        expect(ps1()).toMatch(/\$helpersBefore = @\(\$seenHelpers\.Keys \| ForEach-Object \{ \[int\]\$_ \}\)/);
-        expect(ps1()).toMatch(/\$helpers = @\(Get-CimInstance Win32_Process \| Where-Object \{ \$_\.Name -like 'fancy-pty-helper\*' -and \$helpersBefore -contains \[int\]\$_\.ProcessId \}\)/);
+        expect(ps1()).toMatch(/if \(\$p\.Name -like 'fancy-pty-helper\*'\) \{ \$seenHelpers\[\(Proc-Key \$p\)\] = \$true \}/);
+        expect(ps1()).toMatch(/\$helpersBefore = @\(\$seenHelpers\.Keys \| ForEach-Object \{ "\$_" \}\)/);
+        expect(ps1()).toMatch(/\$helpers = @\(Get-CimInstance Win32_Process \| Where-Object \{ \$_\.Name -like 'fancy-pty-helper\*' -and \$helpersBefore -contains \(Proc-Key \$_\) \}\)/);
         expect(ps1().indexOf('$helpersBefore = @(')).toBeLessThan(ps1().indexOf("Step 'the drain"));
     });
 
     it('the agent providers are sampled WHILE the driver runs, never after it (a full install drains at once)', () => {
         // 1124-081929-7eb671: read after update-cdp.mjs exited, no provider was found on either platform, the drain having
         // already ended it; the client-only probe, whose agent is kept, found its provider.
-        expect(ps1()).toMatch(/while \(-not \$driver\.HasExited\) \{\n\s*foreach \(\$p in @\(Get-CimInstance Win32_Process\)\) \{\n\s*if \(\$p\.CommandLine -and \$p\.CommandLine -like '\*stub-codex\.mjs\*'\) \{ \$seenStubs\[\[int\]\$p\.ProcessId\] = \$true \}/);
+        expect(ps1()).toMatch(/while \(-not \$driver\.HasExited\) \{\n\s*foreach \(\$p in @\(Get-CimInstance Win32_Process\)\) \{\n\s*if \(\$p\.CommandLine -and \$p\.CommandLine -like '\*stub-codex\.mjs\*'\) \{ \$seenStubs\[\(Proc-Key \$p\)\] = \$true \}/);
         expect(ps1()).toMatch(/\$drive = \$driver\.ExitCode/);
-        expect(ps1()).toMatch(/\$beforeIds = @\(\$seenStubs\.Keys \| ForEach-Object \{ \[int\]\$_ \}\)/);
+        expect(ps1()).toMatch(/\$beforeIds = @\(\$seenStubs\.Keys \| ForEach-Object \{ "\$_" \}\)/);
         expect(ps1()).not.toMatch(/\$stubsBefore = Stub-Providers/);
-        expect(sh()).toMatch(/\( while :; do pgrep -f 'stub-codex\\\.mjs'; sleep 0\.5; done \) >stub-samples\.txt 2>\/dev\/null &\nSAMPLER=\$!\nEXPECT_VERSION=/);
-        expect(sh()).toMatch(/kill "\$SAMPLER" 2>\/dev\/null; wait "\$SAMPLER" 2>\/dev\/null\nstubs_before="\$\(sort -nu stub-samples\.txt/);
+        expect(sh()).toMatch(/\( while :; do for p in \$\(pgrep -f 'stub-codex\\\.mjs'\); do proc_key "\$p"; done; sleep 0\.5; done \) >stub-samples\.txt 2>\/dev\/null &\nSAMPLER=\$!\nEXPECT_VERSION=/);
+        expect(sh()).toMatch(/kill "\$SAMPLER" 2>\/dev\/null; wait "\$SAMPLER" 2>\/dev\/null\nstubs_before="\$\(grep -E '\^\[0-9\]\+@\[0-9\]\+\$' stub-samples\.txt \| sort -u/);
         expect(sh()).not.toMatch(/stubs_before="\$\(stub_pids\)"/);
     });
 

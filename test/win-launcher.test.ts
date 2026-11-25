@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { WIN_LAUNCHER, winLauncherPath } from '../src/main/win-launcher.js';
 
 /*
- * genie-launch.exe (native/win-launcher/genie-launch.c; #1628, #1639). Where Genie finds it, that CI really builds it (a
+ * genie-launch.exe (the launcher, native/launcher, built by scripts/build-win-launcher.mjs; #1628, #1639, Tynn #1058). Where Genie finds it, that CI really builds it (a
  * Windows build that quietly fell back to Node's spawn would pass the rows that depend on it for the wrong reason), and
  * what each mode does with a real child: its output and exit code through `job`, a pid that is the child's through
  * `detach`. What it keeps out — the window's handles, the hook's children — is held by hang-cdp's Windows step and the git

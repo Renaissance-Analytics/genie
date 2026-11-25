@@ -136,8 +136,9 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 function pathProblem(path: unknown): string | null {
     if (typeof path !== 'string' || path.length === 0) return 'a file has no path';
     if (path.length > MAX_PATH) return `a path is longer than ${MAX_PATH} characters`;
+    // Every control character (Unicode Cc: C0, DEL and C1), as the contract says and the Rust reader refuses.
     // eslint-disable-next-line no-control-regex
-    if (/[\\:\u0000-\u001f\u007f]/.test(path)) return `the path ${JSON.stringify(path)} has a backslash, a colon or a control character`;
+    if (/[\\:\u0000-\u001f\u007f-\u009f]/.test(path)) return `the path ${JSON.stringify(path)} has a backslash, a colon or a control character`;
     for (const segment of path.split('/')) {
         if (segment === '' || segment === '.' || segment === '..') return `the path ${JSON.stringify(path)} is not a plain relative path`;
     }
@@ -213,7 +214,9 @@ function saysItIs(bytes: Uint8Array): string {
 export function verifyManifest(bytes: Uint8Array, sig: string | Uint8Array, keys: readonly string[], expect: ManifestExpect): ManifestVerdict {
     const text = (typeof sig === 'string' ? sig : Buffer.from(sig).toString('latin1')).replace(/[\r\n\t ]+$/, '');
     let key: string | null = null;
-    if (SIGNATURE.test(text)) {
+    // Canonical base64 only: Buffer.from ignores the padding bits of the last character, which the Rust reader (and the
+    // contract's one spelling of 64 bytes) does not, so a re-encoding must give back the same text.
+    if (SIGNATURE.test(text) && Buffer.from(text, 'base64').toString('base64') === text) {
         const signature = Buffer.from(text, 'base64');
         for (const k of keys) {
             const pub = publicKeyFrom(k);

@@ -6,7 +6,7 @@ import { restrictPipeWithLauncher } from './engine-launch.js';
  * Node creates with Windows' default descriptor: full control for Administrators and SYSTEM besides the user, and read
  * access for Everyone and anonymous. Node offers no way to give a pipe a descriptor of its own (no option at listen, and
  * no listening on a handle made elsewhere on Windows), and libuv creates the pipe's first instance itself, so nothing can
- * create it first with the right descriptor. So once the pipe is bound, genie-launch.exe (native/win-launcher,
+ * create it first with the right descriptor. So once the pipe is bound, genie-launch.exe (the launcher, native/launcher,
  * `pipe-owner-only`, run through engine-launch.ts like every launcher call) sets a protected DACL on it: the user the host
  * runs as, and SYSTEM. The pipe's descriptor covers the instances Node creates later too. The token hello stays the
  * second gate, unchanged.

@@ -11,7 +11,7 @@ import { winLauncherPath } from '../src/main/win-launcher.js';
 /*
  * A READ PAST ITS LIMIT ENDS ITS JOB BEFORE ANYTHING IN IT (Windows; genie-launch.exe's `job`, #1628/#1639).
  *
- * The launcher's job is kill-on-close, but only while git runs: native/win-launcher/genie-launch.c lifts the kill when
+ * The launcher's job is kill-on-close, but only while git runs: the launcher's `job` (native/launcher/src/win.rs) lifts the kill when
  * git ends by itself ("what it started is left as it would be without the job"), then closes the job. So if the limit
  * ends GIT before it ends the LAUNCHER, the launcher wakes, lifts the kill and exits, and everything git and its hook
  * started survives. The walk did exactly that: on Windows its first round ended every known process at once, launcher and
