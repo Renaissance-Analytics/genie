@@ -59,7 +59,7 @@ describe('the registry\'s files and the mail wake are genie-host\'s (P3.2)', () 
         expect(main).toMatch(/watchRegistryRefresh\(registryChanges\(ownProtocol\), theRegistry, \(error\) => console\.error\('\[registry\] Background refresh failed; waiting for the next host update\.', error\)\)/);
     });
 
-    it('the mail wake runs in the host; the window\'s own only on the emergency path', () => {
+    it('the mail wake runs in the host; the window has none (its own was deleted in P6-4, Tynn #1036)', () => {
         expect(code('src/main/genie-host.ts')).toMatch(/wireHostMailWake\(\{/);
         expect(code('src/main/main.ts')).not.toMatch(/wireInboxPush\(/);
     });

@@ -12,7 +12,7 @@ import type { PtyOpened, PtyPort, PtySpawnOptions } from '../src/main/terminal-h
  * P5a (host split): THE FRONT DOOR, THE SERVICE ENGINES AND THE SITE ROUTES ARE GENIE-HOST'S. With a host linked, the
  * window's composition is handed the host's hosting (as it is handed the host's supervisor) and builds none of its own:
  * no Caddy started, no front door listening, no engine registry opened, no CA made. What it answers comes from the host's.
- * CONTROL: the same composition with no host (the emergency fallback, until P6) still builds its own, as today.
+ * CONTROL: the same composition handed no hosting (a test that composes alone; the window composes none) builds its own.
  */
 
 function fakePty() {
@@ -81,7 +81,7 @@ describe('P5a: with genie-host linked, the window builds no hosting of its own',
         expect(s.browserTrust()).toEqual(hosting.browserTrust());
     });
 
-    it('CONTROL, no host (the emergency fallback until P6): the window still builds its own, as today', async () => {
+    it('CONTROL, no hosting handed in (a test that composes alone): the composition builds its own', async () => {
         const { services: s, pty, dir: d } = await compose();
         expect(caddyStarts(pty.opened)).toBe(1);
         expect(await exists(join(d, 'runtime', 'caddy', 'Caddyfile'))).toBe(true);

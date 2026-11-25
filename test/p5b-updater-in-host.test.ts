@@ -507,11 +507,10 @@ function graph(entry: string, followDynamic: boolean): { files: Set<string>; pac
 }
 
 /*
- * electron-updater is imported by the helper mode. main's STATIC graph and genie-host's WHOLE graph never import it; the
- * window's emergency path (no host could start) loads it lazily with `import()` until P6 removes that path — the same
- * exception as compose's in-window hosting.
+ * electron-updater is imported by the helper mode. main's WHOLE graph and genie-host's WHOLE graph never import it: the
+ * window's lazy `import()` of it went with its no-host path (P6-4, Tynn #1036).
  */
-describe('electron-updater: the helper mode imports it; main statically and genie-host never; the window’s emergency path lazily until P6', () => {
+describe('electron-updater: the helper mode imports it; main and genie-host never, static or dynamic', () => {
     const port = resolve('src/main/electron-updater-port.ts');
 
     it('the helper mode’s import graph reaches it (the control)', () => {
@@ -526,8 +525,8 @@ describe('electron-updater: the helper mode imports it; main statically and geni
         expect(host.files.has(port)).toBe(false);
     });
 
-    it('main’s static graph never reaches it (its emergency path, no host, loads it lazily until P6)', () => {
-        const main = graph('src/main/main.ts', false);
+    it('main’s graph never reaches it, static or dynamic', () => {
+        const main = graph('src/main/main.ts', true);
         expect(main.packages.has('electron-updater')).toBe(false);
         expect(main.files.has(port)).toBe(false);
     });

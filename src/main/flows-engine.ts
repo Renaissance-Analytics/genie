@@ -9,7 +9,7 @@ import { ensureFlowToolKinds, questionWaiter, type FlowToolCall } from './flow-t
 
 /**
  * WHAT RUNS FLOWS (genie#1204; the host split, P3.3d): the scheduler, the runner and its ports, and the file trigger — one
- * composition for genie-host (where flows run, with or without a window) and a window's emergency path (compose.ts). A run
+ * composition for genie-host (where flows run, with or without a window) and the tests' (compose.ts). A run
  * prompts agents through the sessions it is given, runs commands on the supervisor it is given, writes knowledge, moves
  * files, calls Genie's tools as steps (late-bound: the tools are built after) and waits on a person's answer.
  */

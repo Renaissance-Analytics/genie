@@ -98,8 +98,8 @@ export interface OwnTrust {
 }
 
 /**
- * The trust of the process that composes the hosting: genie-host's, or the window's own on the emergency path. Sets this
- * process's git read policy (git-read-policy.ts) from its own verdicts.
+ * The trust of the process that composes the hosting: genie-host's (or a test's composition's). Sets this process's git
+ * read policy (git-read-policy.ts) from its own verdicts.
  */
 export function ownTrust(input: OwnTrustInput): OwnTrust {
     const listeners = new Set<(workspaceId: string) => void>();

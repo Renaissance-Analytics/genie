@@ -63,7 +63,7 @@ describe('connectAgentEngine beside a live host', () => {
         expect(errors.join(' ')).toMatch(/running but not answering/);
     });
 
-    it('positive control: with NO live host and none that can start, the answer is null — the emergency fallback', async () => {
+    it('positive control: with NO live host and none that can start, the answer is null — the window says so and stops (Tynn #415)', async () => {
         const errors: string[] = [];
         const link = await connectAgentEngine(options(new Set(), new Map(), errors, []));
         expect(link).toBeNull();

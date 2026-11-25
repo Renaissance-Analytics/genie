@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
  * P5a.2: A WINDOW TOUCHES THE HOST'S HOSTING ONLY THROUGH ITS REPLICA. The window's writers (hosting-actions.ts,
  * mcp-tools-hosting.ts, feature-ipc.ts) reach the sites, the engines and the front door through `services` — the
  * replica when linked — and never build or import a piece of the hosting of their own; main.ts never composes one;
- * compose.ts builds its own only when it was handed none (the emergency path). A value import is a run-time edge;
+ * compose.ts (the tests' composition) builds its own only when it was handed none. A value import is a run-time edge;
  * `import type` is not.
  */
 
