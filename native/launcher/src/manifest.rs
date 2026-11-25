@@ -6,7 +6,12 @@
 //! refuses); minLauncher is not newer than the running launcher. The files are checked as they are unpacked
 //! (`install`) and before each run (`folder`).
 
-use ed25519_dalek::VerifyingKey;
+use crate::version::{compare_track_builds, parse_track_build};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use ed25519_dalek::{Signature, VerifyingKey};
+use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
+use std::cmp::Ordering;
 use std::fmt;
 
 pub const FORMAT: u64 = 1;
@@ -82,37 +87,193 @@ pub fn this_arch() -> &'static str {
 
 /// A public key: raw 32 bytes in standard padded base64.
 pub fn parse_public_key(text: &str) -> Result<VerifyingKey, String> {
-    let _ = text;
-    todo!("L2")
+    let t = text.trim();
+    if t.len() != 44 || !t.ends_with('=') {
+        return Err("a public key is 32 bytes in padded base64 (44 characters)".into());
+    }
+    let raw = STANDARD.decode(t).map_err(|e| format!("not base64: {e}"))?;
+    let bytes: [u8; 32] = raw.try_into().map_err(|_| "not 32 bytes".to_string())?;
+    VerifyingKey::from_bytes(&bytes).map_err(|e| format!("not an Ed25519 key: {e}"))
 }
 
 /// The signature over these exact bytes, by any of `keys`. `sig_text` is manifest.json.sig as read (trailing ASCII
 /// whitespace ignored, anything else refused).
 pub fn verify_signature(bytes: &[u8], sig_text: &[u8], keys: &[VerifyingKey]) -> Result<(), Refusal> {
-    let _ = (bytes, sig_text, keys);
-    todo!("L2")
+    let mut end = sig_text.len();
+    while end > 0 && matches!(sig_text[end - 1], b'\r' | b'\n' | b' ' | b'\t') {
+        end -= 1;
+    }
+    let text = &sig_text[..end];
+    if text.len() != 88 {
+        return Err(Refusal::Signature("the signature is not 88 characters of base64".into()));
+    }
+    let raw = STANDARD.decode(text).map_err(|_| Refusal::Signature("the signature is not base64".into()))?;
+    let raw: [u8; 64] = raw.try_into().map_err(|_| Refusal::Signature("the signature is not 64 bytes".into()))?;
+    let sig = Signature::from_bytes(&raw);
+    if keys.is_empty() {
+        return Err(Refusal::Signature("this launcher trusts no key".into()));
+    }
+    if keys.iter().any(|k| k.verify_strict(bytes, &sig).is_ok()) {
+        Ok(())
+    } else {
+        Err(Refusal::Signature("no trusted key signed it".into()))
+    }
+}
+
+fn shape(why: impl Into<String>) -> Refusal {
+    Refusal::Shape(why.into())
+}
+
+fn string_field<'a>(o: &'a Map<String, Value>, key: &str) -> Result<&'a str, Refusal> {
+    o.get(key).and_then(Value::as_str).ok_or_else(|| shape(format!("{key} is not a string")))
+}
+
+/// A track build as a manifest writes it: no `+meta`, no space.
+fn is_manifest_build(b: &str) -> bool {
+    !b.contains('+') && b.trim() == b && parse_track_build(b).is_some()
 }
 
 /// The shape alone (no signature): every rule of the schema.
 pub fn parse_manifest(bytes: &[u8]) -> Result<Manifest, Refusal> {
-    let _ = bytes;
-    todo!("L2")
+    let v: Value = serde_json::from_slice(bytes).map_err(|e| shape(format!("not JSON: {e}")))?;
+    let o = v.as_object().ok_or_else(|| shape("not an object"))?;
+    const FIELDS: [&str; 11] = ["format", "track", "build", "schema", "channel", "platform", "arch", "minLauncher", "files", "notes", "nextKey"];
+    if let Some(k) = o.keys().find(|k| !FIELDS.contains(&k.as_str())) {
+        return Err(shape(format!("an unknown field '{k}' (a new field is a new format)")));
+    }
+    for k in &FIELDS[..10] {
+        if !o.contains_key(*k) {
+            return Err(shape(format!("no {k}")));
+        }
+    }
+    if !o["format"].is_u64() || o["format"].as_u64() != Some(FORMAT) {
+        return Err(shape("format is not 1"));
+    }
+    let track = string_field(o, "track")?;
+    if !["client", "host", "launcher"].contains(&track) {
+        return Err(shape(format!("track '{track}'")));
+    }
+    let build = string_field(o, "build")?;
+    if !is_manifest_build(build) {
+        return Err(shape(format!("build '{build}' is not a track build")));
+    }
+    let schema = string_field(o, "schema")?;
+    if schema.len() != 10 || build.get(..10) != Some(schema) {
+        return Err(shape(format!("schema '{schema}' is not the build's")));
+    }
+    let channel = string_field(o, "channel")?;
+    if !["stable", "dev"].contains(&channel) {
+        return Err(shape(format!("channel '{channel}'")));
+    }
+    let platform = string_field(o, "platform")?;
+    if !["win32", "linux"].contains(&platform) {
+        return Err(shape(format!("platform '{platform}'")));
+    }
+    let arch = string_field(o, "arch")?;
+    if !["x64", "arm64"].contains(&arch) {
+        return Err(shape(format!("arch '{arch}'")));
+    }
+    let min_launcher = match &o["minLauncher"] {
+        Value::Null => None,
+        Value::String(m) if is_manifest_build(m) => Some(m.clone()),
+        _ => return Err(shape("minLauncher is not a track build or null")),
+    };
+    let notes = string_field(o, "notes")?;
+    if notes.chars().count() > MAX_NOTES_CHARS {
+        return Err(shape("notes are too long"));
+    }
+    let next_key = match o.get("nextKey") {
+        None => None,
+        Some(Value::String(k)) if k.len() == 44 && k.ends_with('=') && k[..43].bytes().all(|c| c.is_ascii_alphanumeric() || c == b'+' || c == b'/') => Some(k.clone()),
+        Some(_) => return Err(shape("nextKey is not a padded base64 key")),
+    };
+    let list = o["files"].as_array().ok_or_else(|| shape("files is not a list"))?;
+    if list.is_empty() {
+        return Err(shape("files is empty"));
+    }
+    let mut files: Vec<ManifestFile> = Vec::with_capacity(list.len());
+    let mut seen_lower = std::collections::HashSet::new();
+    for f in list {
+        let fo = f.as_object().ok_or_else(|| shape("a file is not an object"))?;
+        if fo.len() != 3 || !fo.contains_key("path") || !fo.contains_key("size") || !fo.contains_key("sha256") {
+            return Err(shape("a file has exactly path, size and sha256"));
+        }
+        let path = string_field(fo, "path")?;
+        if !safe_path(path) {
+            return Err(shape(format!("the path '{path}' is not a plain relative path")));
+        }
+        let size = fo["size"].as_u64().filter(|n| *n <= 9_007_199_254_740_991).ok_or_else(|| shape(format!("{path}: size is not a whole number")))?;
+        let sha = string_field(fo, "sha256")?;
+        if sha.len() != 64 || !sha.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)) {
+            return Err(shape(format!("{path}: sha256 is not 64 lower-case hex digits")));
+        }
+        if let Some(prev) = files.last() {
+            if prev.path.as_bytes() >= path.as_bytes() {
+                return Err(shape(format!("files are not in strictly ascending byte order at '{path}'")));
+            }
+        }
+        if !seen_lower.insert(path.to_ascii_lowercase()) {
+            return Err(shape(format!("two paths are the same ignoring case ('{path}')")));
+        }
+        files.push(ManifestFile { path: path.to_string(), size, sha256: sha.to_string() });
+    }
+    Ok(Manifest {
+        track: track.into(),
+        build: build.into(),
+        schema: schema.into(),
+        channel: channel.into(),
+        platform: platform.into(),
+        arch: arch.into(),
+        min_launcher,
+        files,
+        notes: notes.into(),
+        next_key,
+    })
 }
 
 /// Signature, shape, what was asked, newer, minLauncher: in that order.
 pub fn check(bytes: &[u8], sig_text: &[u8], keys: &[VerifyingKey], wanted: &Wanted) -> Result<Manifest, Refusal> {
-    let _ = (bytes, sig_text, keys, wanted);
-    todo!("L2")
+    verify_signature(bytes, sig_text, keys)?;
+    let m = parse_manifest(bytes)?;
+    if m.track != wanted.track {
+        return Err(Refusal::Wrong(format!("track {}, asked for {}", m.track, wanted.track)));
+    }
+    if m.platform != wanted.platform || m.arch != wanted.arch {
+        return Err(Refusal::Wrong(format!("{} {}, this is {} {}", m.platform, m.arch, wanted.platform, wanted.arch)));
+    }
+    let channel_ok = match wanted.channel {
+        "dev" => m.channel == "dev" || m.channel == "stable",
+        other => m.channel == other,
+    };
+    if !channel_ok {
+        return Err(Refusal::Wrong(format!("channel {}, this install reads {}", m.channel, wanted.channel)));
+    }
+    if let Some(current) = wanted.current {
+        if compare_track_builds(&m.build, current) != Ordering::Greater {
+            return Err(Refusal::NotNewer(format!("{} is not newer than {}", m.build, current)));
+        }
+    }
+    if let Some(min) = &m.min_launcher {
+        if compare_track_builds(min, wanted.launcher) == Ordering::Greater {
+            return Err(Refusal::LauncherTooOld(format!("it needs launcher {min}, this is {}", wanted.launcher)));
+        }
+    }
+    Ok(m)
 }
 
 /// A manifest path is relative and '/'-separated, with no empty, '.' or '..' segment, no backslash, ':' or control
 /// character, at most MAX_PATH_CHARS characters.
 pub fn safe_path(path: &str) -> bool {
-    let _ = path;
-    todo!("L2")
+    if path.is_empty() || path.chars().count() > MAX_PATH_CHARS {
+        return false;
+    }
+    if path.chars().any(|c| c == '\\' || c == ':' || c.is_control()) {
+        return false;
+    }
+    path.split('/').all(|seg| !seg.is_empty() && seg != "." && seg != "..")
 }
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    let _ = bytes;
-    todo!("L2")
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|b| format!("{b:02x}")).collect()
 }

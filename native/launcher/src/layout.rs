@@ -66,35 +66,61 @@ impl Program {
     }
 }
 
+fn absolute_env(name: &str) -> Result<Option<PathBuf>, String> {
+    match std::env::var_os(name) {
+        Some(v) if !v.is_empty() => {
+            let p = PathBuf::from(v);
+            if p.is_absolute() { Ok(Some(p)) } else { Err(format!("{name} must be an absolute path ({})", p.display())) }
+        }
+        _ => Ok(None),
+    }
+}
+
+fn home() -> Result<PathBuf, String> {
+    let var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    absolute_env(var)?.ok_or_else(|| format!("{var} is not set: no home folder"))
+}
+
 impl Roots {
     /// From the environment: GENIE_CODE_ROOT and GENIE_HOME when set (absolute), else this OS's defaults.
     pub fn from_env() -> Result<Roots, String> {
-        todo!("L2")
+        let code = match absolute_env("GENIE_CODE_ROOT")? {
+            Some(p) => p,
+            None if cfg!(windows) => absolute_env("LOCALAPPDATA")?.ok_or("LOCALAPPDATA is not set")?.join("Genie"),
+            None => match absolute_env("XDG_DATA_HOME")? {
+                Some(x) => x.join("genie"),
+                None => home()?.join(".local").join("share").join("genie"),
+            },
+        };
+        let data = match absolute_env("GENIE_HOME")? {
+            Some(p) => p,
+            None => home()?.join(".genie"),
+        };
+        Ok(Roots { code, data })
     }
     pub fn track_dir(&self, track: Track) -> PathBuf {
-        let _ = track;
-        todo!("L2")
+        self.code.join(track.as_str())
     }
     /// `None` when `build` is not a track build (a folder name is never taken from anything else).
     pub fn build_dir(&self, track: Track, build: &str) -> Option<PathBuf> {
-        let _ = (track, build);
-        todo!("L2")
+        let plain = !build.contains('+') && build.trim() == build;
+        if plain && crate::version::parse_track_build(build).is_some() { Some(self.track_dir(track).join(build)) } else { None }
     }
     pub fn state_file(&self) -> PathBuf {
-        todo!("L2")
+        self.code.join("state.json")
     }
     pub fn runtime_dir(&self) -> PathBuf {
-        todo!("L2")
+        self.data.join("runtime")
     }
     pub fn logs_dir(&self) -> PathBuf {
-        todo!("L2")
+        self.data.join("logs")
     }
     pub fn host_program(&self, build: &str) -> Option<Program> {
-        let _ = build;
-        todo!("L2")
+        let folder = self.build_dir(Track::Host, build)?;
+        Some(Program { path: folder.join(host_executable_name()), folder })
     }
     pub fn client_program(&self, build: &str) -> Option<Program> {
-        let _ = build;
-        todo!("L2")
+        let folder = self.build_dir(Track::Client, build)?;
+        Some(Program { path: folder.join(client_executable_name()), folder })
     }
 }

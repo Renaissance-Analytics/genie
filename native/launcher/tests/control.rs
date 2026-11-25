@@ -109,6 +109,14 @@ impl Wire {
     }
 }
 
+/// One launcher per user is the rule under test, so these tests run one at a time (on Windows the endpoint is the
+/// user's own pipe, whatever the data root). Each test holds the guard for its whole run.
+static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+    ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 fn setup(name: &str) -> (std::path::PathBuf, Roots, ed25519_dalek::SigningKey) {
     let base = temp_dir(name);
     let r = roots(&base);
@@ -118,6 +126,7 @@ fn setup(name: &str) -> (std::path::PathBuf, Roots, ed25519_dalek::SigningKey) {
 
 #[test]
 fn one_launcher_per_user_and_it_says_so() {
+    let _one = one_at_a_time();
     let (_b, r, key) = setup("single");
     let _l = start(&r, &key);
     let out = run(genie_in(&r, &key).arg("serve"));
@@ -127,6 +136,7 @@ fn one_launcher_per_user_and_it_says_so() {
 
 #[test]
 fn launcher_json_says_pid_endpoint_build_and_schema() {
+    let _one = one_at_a_time();
     let (_b, r, key) = setup("record");
     let l = start(&r, &key);
     let rec: Value = serde_json::from_str(&std::fs::read_to_string(r.runtime_dir().join("launcher.json")).unwrap()).unwrap();
@@ -138,6 +148,7 @@ fn launcher_json_says_pid_endpoint_build_and_schema() {
 
 #[test]
 fn the_endpoint_and_token_are_the_owners_only() {
+    let _one = one_at_a_time();
     let (_b, r, key) = setup("owner-only");
     let _l = start(&r, &key);
     let rec: Value = serde_json::from_str(&std::fs::read_to_string(r.runtime_dir().join("launcher.json")).unwrap()).unwrap();
@@ -160,6 +171,7 @@ fn the_endpoint_and_token_are_the_owners_only() {
 
 #[test]
 fn a_wrong_token_is_refused_and_nothing_else_is_answered() {
+    let _one = one_at_a_time();
     let (_b, r, key) = setup("token");
     let _l = start(&r, &key);
     let mut w = Wire::open(&r);
@@ -175,6 +187,7 @@ fn a_wrong_token_is_refused_and_nothing_else_is_answered() {
 
 #[test]
 fn the_hello_is_negotiated_on_track_launcher() {
+    let _one = one_at_a_time();
     let (_b, r, key) = setup("negotiate");
     let _l = start(&r, &key);
     let token = std::fs::read_to_string(r.runtime_dir().join("launcher.token")).unwrap();
@@ -196,6 +209,7 @@ fn the_hello_is_negotiated_on_track_launcher() {
 
 #[test]
 fn status_answers_and_unknown_or_later_methods_say_unsupported() {
+    let _one = one_at_a_time();
     let (base, r, key) = setup("methods");
     install_fakes(&r, &key, &base);
     let _l = start(&r, &key);
@@ -212,6 +226,7 @@ fn status_answers_and_unknown_or_later_methods_say_unsupported() {
 
 #[test]
 fn ensure_host_starts_the_current_host_detached_then_adopts_it_and_stop_host_ends_it() {
+    let _one = one_at_a_time();
     let (base, r, key) = setup("host");
     install_fakes(&r, &key, &base);
     let _l = start(&r, &key);
@@ -245,6 +260,7 @@ fn ensure_host_starts_the_current_host_detached_then_adopts_it_and_stop_host_end
 
 #[test]
 fn the_host_outlives_the_launcher() {
+    let _one = one_at_a_time();
     let (base, r, key) = setup("outlives");
     install_fakes(&r, &key, &base);
     let mut l = start(&r, &key);
@@ -259,6 +275,7 @@ fn the_host_outlives_the_launcher() {
 
 #[test]
 fn a_host_folder_with_no_complete_marker_is_never_started() {
+    let _one = one_at_a_time();
     let (base, r, key) = setup("host-incomplete");
     install_fakes(&r, &key, &base);
     std::fs::remove_file(r.build_dir(Track::Host, "2026.11.25-1").unwrap().join(".complete")).unwrap();
@@ -271,6 +288,7 @@ fn a_host_folder_with_no_complete_marker_is_never_started() {
 
 #[test]
 fn a_host_that_exits_at_boot_is_said_in_words_and_not_waited_for() {
+    let _one = one_at_a_time();
     let (base, r, key) = setup("host-dies");
     install_fakes(&r, &key, &base);
     let t = Instant::now();
@@ -282,6 +300,7 @@ fn a_host_that_exits_at_boot_is_said_in_words_and_not_waited_for() {
 
 #[test]
 fn open_window_and_start_browser_start_the_current_client() {
+    let _one = one_at_a_time();
     let (base, r, key) = setup("client");
     install_fakes(&r, &key, &base);
     let _l = start(&r, &key);

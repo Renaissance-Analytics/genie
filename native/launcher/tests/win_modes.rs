@@ -50,9 +50,12 @@ mod windows {
 
     #[test]
     fn job_hands_arguments_over_unchanged() {
-        let out = genie().args(["job", PS, "-NoProfile", "-Command", "[Environment]::GetCommandLineArgs()[3..5] -join '|'", "a b", "c\"d"]).output().unwrap();
+        // The stand-in prints the arguments it was given (Rust's Debug form), then records them under GENIE_HOME.
+        let home = temp_dir("job-args");
+        let out = genie().env("GENIE_HOME", &home).args(["job", env!("CARGO_BIN_EXE_genie-fake-host"), "--open-window", "a b", "c\"d", "e\\", ""]).output().unwrap();
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "a b|c\"d");
+        let said = String::from_utf8_lossy(&out.stdout);
+        assert!(said.contains(r#"["--open-window", "a b", "c\"d", "e\\", ""]"#), "{said}");
     }
 
     fn alive(pid: u32) -> bool {
@@ -66,7 +69,7 @@ mod windows {
         // The child starts a grandchild of its own (Start-Process: not in its console, not its child in any way the
         // caller could walk) and waits; the grandchild writes its pid.
         let script = format!("$p = Start-Process -PassThru -WindowStyle Hidden -FilePath '{PS}' -ArgumentList '-NoProfile','-Command','Start-Sleep 120'; Set-Content -Path '{}' -Value $p.Id; Start-Sleep 120", mark.display());
-        let mut parent = genie().args(["job", PS, "-NoProfile", "-Command", &script]).stdout(std::process::Stdio::null()).spawn().unwrap();
+        let mut parent = genie().args(["job", PS, "-NoProfile", "-Command", script.as_str()]).stdout(std::process::Stdio::null()).spawn().unwrap();
         let t = Instant::now();
         let grandchild: u32 = loop {
             if let Ok(text) = std::fs::read_to_string(&mark) {

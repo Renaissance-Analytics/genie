@@ -28,7 +28,7 @@ v1-installers/
 # machine). Scratch: the ship step commits the placed files by path, never this directory.
 .patch/
 
-# genie-launch.exe, built from native/win-launcher by scripts/build-win-launcher.mjs (never checked in, #1628)
+# genie-launch.exe, the launcher, built from native/launcher by scripts/build-win-launcher.mjs (never checked in, #1628, Tynn #1058)
 build/win-launcher/
 
 # What scripts/ci/linux.sh and windows.ps1 write on a run: each row's log, the suite's times (Tynn #692)

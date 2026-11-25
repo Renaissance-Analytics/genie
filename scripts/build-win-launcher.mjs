@@ -1,20 +1,27 @@
 #!/usr/bin/env node
 /**
- * BUILD genie-launch.exe (native/win-launcher/genie-launch.c; #1628, #1639) with MSVC, on Windows. Nothing prebuilt is
- * checked in: CI and the release build it from source, and electron-builder packs it (resources/bin) with the app.
+ * BUILD genie-launch.exe ON WINDOWS: the launcher (native/launcher, Rust; Tynn #1058 L2), whose `detach`, `job` and
+ * `pipe-owner-only` modes are genie-launch.c's (#1628, #1639, Tynn #398) with the same contracts. Nothing prebuilt is
+ * checked in: CI and the release build it from source with cargo (MSVC), and electron-builder packs it (resources/bin)
+ * with the app. Until the install layout moves it into the NSIS folder as Genie.exe (L3), it keeps this name and place,
+ * so the sign plan, the packed tree and every caller (src/main/win-launcher.ts) read it where they always have.
  *
- * Elsewhere it does nothing but leave the (empty) output folder electron-builder reads. On a Windows machine with no MSVC
- * it says so and exits 0 — Genie then starts its processes with Node's spawn, as before — EXCEPT on CI (CI=true), where
- * a missing compiler is a failure: a Windows build that ships without the launcher must never pass.
+ * Elsewhere it does nothing but leave the (empty) output folder electron-builder reads. On a Windows machine with no
+ * cargo it says so and exits 0 (Genie then starts its processes with Node's spawn, as before) EXCEPT on CI (CI=true),
+ * where a missing toolchain is a failure: a Windows build that ships without the launcher must never pass.
+ *
+ * The release build has no cargo features: the launcher's test-only keys exist only under `--features test-keys`,
+ * which only its own `cargo test` passes (native/launcher/tests/source_guard.rs holds this file to that).
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 const outDir = join(root, 'build', 'win-launcher');
 const out = join(outDir, 'genie-launch.exe');
-const source = join(root, 'native', 'win-launcher', 'genie-launch.c');
+const crate = join(root, 'native', 'launcher');
 mkdirSync(outDir, { recursive: true });
 
 if (process.platform !== 'win32') {
@@ -28,19 +35,18 @@ const fail = (why) => {
     process.exit(0);
 };
 
-const vswhere = join(process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)', 'Microsoft Visual Studio', 'Installer', 'vswhere.exe');
-if (!existsSync(vswhere)) fail('no vswhere.exe (Visual Studio Build Tools are not installed)');
-let vs = '';
-try {
-    vs = execFileSync(vswhere, ['-latest', '-products', '*', '-requires', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64', '-property', 'installationPath'], { encoding: 'utf8' }).trim();
-} catch (error) { fail(`vswhere failed: ${error.message}`); }
-const vcvars = join(vs, 'VC', 'Auxiliary', 'Build', 'vcvars64.bat');
-if (!vs || !existsSync(vcvars)) fail('no MSVC x64 tools');
+// cargo by its absolute path: rustup's own place first, then what PATH names (never a bare name run through a shell).
+const candidates = [join(homedir(), '.cargo', 'bin', 'cargo.exe')];
+for (const dir of (process.env.PATH ?? '').split(';')) if (dir) candidates.push(join(dir, 'cargo.exe'));
+const cargo = candidates.find((p) => existsSync(p));
+if (!cargo) fail('no cargo (install Rust with rustup; the MSVC Build Tools are its linker)');
 
-// One cmd: the compiler's environment, then cl. Warnings are errors; no CRT DLL (static), so the exe stands alone.
-const cmd = `call "${vcvars}" >nul && cl /nologo /O2 /W4 /WX /MT /DUNICODE /D_UNICODE "${source}" /Fo"${join(outDir, 'genie-launch.obj')}" /Fe"${out}" /link /SUBSYSTEM:CONSOLE kernel32.lib advapi32.lib`;
+const args = ['build', '--release', '--bin', 'genie', '--manifest-path', join(crate, 'Cargo.toml')];
+if (existsSync(join(crate, 'Cargo.lock'))) args.push('--locked');
 try {
-    execFileSync('cmd.exe', ['/d', '/s', '/c', `"${cmd}"`], { stdio: 'inherit', windowsVerbatimArguments: true });
-} catch (error) { fail(`cl failed: ${error.message}`); }
-if (!existsSync(out) || statSync(out).size === 0) fail('cl produced no genie-launch.exe');
-console.log(`[win-launcher] built ${out} (${statSync(out).size} bytes)`);
+    execFileSync(cargo, args, { stdio: 'inherit', cwd: crate });
+} catch (error) { fail(`cargo failed: ${error.message}`); }
+const built = join(crate, 'target', 'release', 'genie.exe');
+if (!existsSync(built) || statSync(built).size === 0) fail('cargo produced no genie.exe');
+copyFileSync(built, out);
+console.log(`[win-launcher] built ${out} from native/launcher (${statSync(out).size} bytes)`);

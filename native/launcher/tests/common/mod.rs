@@ -157,8 +157,8 @@ pub fn zip(files: &[(String, Vec<u8>)], deflate: bool) -> Vec<u8> {
         central.extend_from_slice(&(body.len() as u32).to_le_bytes());
         central.extend_from_slice(&(data.len() as u32).to_le_bytes());
         central.extend_from_slice(&(name.len() as u16).to_le_bytes());
-        central.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]); // extra, comment, disk
-        central.extend_from_slice(&[0, 0, 0, 0, 0, 0]); // internal and external attributes
+        central.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]); // extra, comment, disk, internal attributes
+        central.extend_from_slice(&[0, 0, 0, 0]); // external attributes
         central.extend_from_slice(&offset.to_le_bytes());
         central.extend_from_slice(name.as_bytes());
     }
