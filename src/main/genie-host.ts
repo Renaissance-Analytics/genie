@@ -2125,7 +2125,7 @@ async function main(): Promise<void> {
             onChange: listener => featureGithub.onEvent(listener),
         },
         keyring: { view: () => featureKeyring.dump().view, notice: () => featureKeyring.dump().notice ?? null,
-            fix: async () => { await featureKeyring.call('fix', []); }, cancel: async () => { await featureKeyring.call('cancel', []); } },
+            fix: async (elevate) => { await featureKeyring.call('fix', [elevate]); }, cancel: async () => { await featureKeyring.call('cancel', []); } },
         issueWatch: () => featureIssueWatch.panels(hostRegistry.listWorkspaces(), workspaceTynnProject, Date.now()),
         issueWatchRefresh: id => issueWatch.call('refresh', [id]), issueWatchSetRepo: (id, owner, repo, change) => issueWatch.call('setRepo', [id, owner, repo, change]),
         toolchain: featureNative,

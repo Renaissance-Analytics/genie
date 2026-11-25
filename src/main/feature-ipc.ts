@@ -104,7 +104,8 @@ export interface FeaturePorts {
      * Linux with no keyring (main/linux-keyring.ts, the owner 2026-11-01): the card's view (null = fine, or not Linux) and
      * its one button. Absent = no card (doctor mode, tests that do not wire it).
      */
-    readonly keyring?: { view(): import('./linux-keyring.js').KeyringView | null; fix(): Promise<void>; press?(): Promise<void>; cancel?(): void | Promise<void>; notice?(): string | null };
+    /** `elevate` (Tynn #973): the host's elevation for the window that pressed it; an install asks that window for the password. */
+    readonly keyring?: { view(): import('./linux-keyring.js').KeyringView | null; fix(elevate?: Elevate): Promise<void>; press?(elevate?: Elevate): Promise<void>; cancel?(): void | Promise<void>; notice?(): string | null };
     /** The background processes the person keeps (§6.6): written down, restored on launch. */
     readonly processes?: import('./processes-host.js').ProcessBookApi;
     /** Scheduled tasks' clock (genie#1204): the person's Run now. Absent = none (doctor mode). */

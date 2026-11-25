@@ -247,7 +247,11 @@ export class HostFeatures {
         const tc = machine?.toolchain;
         // This caller's elevation (Tynn #973): an elevated install or update asks THIS connection for the password.
         const elevate = this.ports.elevation?.elevateFor(context);
-        const effects: MachineFeaturePorts = { ...machine, ...(tc ? { toolchain: { ...tc,
+        const keyring = machine?.keyring;
+        const effects: MachineFeaturePorts = { ...machine,
+            // The keyring's Install asks THIS connection for the password too (Tynn #973).
+            ...(keyring ? { keyring: { ...keyring, fix: () => keyring.fix(elevate), ...(keyring.press ? { press: () => keyring.press!(elevate) } : {}) } } : {}),
+            ...(tc ? { toolchain: { ...tc,
             ...(tc.install ? { install: (tool: string, consent: boolean) => tc.install!(tool, consent, elevate) } : {}),
             update: (tool: string, version?: string, progress?: (step: string | null) => void) => tc.update(tool, version, progress, elevate),
             login: async provider => {
