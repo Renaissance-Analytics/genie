@@ -247,7 +247,7 @@ describe('installing with pacman', () => {
     });
 
     it('REFUSES an install that would upgrade an installed package (a partial upgrade), by name, and asks for nothing', async () => {
-        const m = arch({ tool: 'php', pkg: 'php', banner: 'PHP 8.5.12 (cli)', sp: 'php 8.5.12-1\nicu 78.1-1\n', si: 'Repository      : extra\nName            : php\nVersion         : 8.5.12-1\n' });
+        const m = arch({ tool: 'php', pkg: 'php', banner: 'PHP 8.5.12 (cli)', sp: 'php 8.5.12-1\nphp-cgi 8.5.12-1\nicu 78.1-1\n', si: 'Repository      : extra\nName            : php\nVersion         : 8.5.12-1\n\nRepository      : extra\nName            : php-cgi\nVersion         : 8.5.12-1\n' });
         const r = await installTool('php', true, m.ports);
         expect(r).toEqual({ kind: 'refused', reason: 'installing php with pacman would also upgrade icu 77.1-1 → 78.1-1, a partial upgrade Arch does not support; update the whole system first (omarchy-update, or pacman -Syu), then install php' });
         expect(m.batches).toEqual([]);
