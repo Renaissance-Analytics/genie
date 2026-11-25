@@ -265,7 +265,7 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
         };
     };
     const hostOfUrl = (url: string): string => { try { return new URL(url).hostname.toLowerCase(); } catch { return ''; } };
-    /** Which store a local tab on this address uses; null when this window keeps one session (the no-host path). */
+    /** Which store a local tab on this address uses; null when the caller names no workspaces (one shared session). */
     const storeOf = (url: string): string | null => (options.workspaceOf ? options.workspaceOf(hostOfUrl(url)) : null);
     const sessionFor = (key: string, url: string): { ses: Session; routed: () => Promise<void> } => {
         if ((key === LOCAL || key.startsWith(SINGLE)) && options.workspaceOf && options.genieHome) {

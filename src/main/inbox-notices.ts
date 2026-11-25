@@ -10,7 +10,7 @@ export const NOTICE_MAIL_CHARS = 4_000;
 /**
  * THE NOTICES DUE NOW (the inbox push's "reminders"): for each agent with a run and unread mail the reminder book has not
  * told it about, the notice's text and the mail it is about. One implementation for genie-host's mail wake (P3.2) and the
- * window's own on the emergency path (compose.ts).
+ * tests' composition (compose.ts).
  */
 export function inboxNotices(input: {
     readonly agents: ReadonlyMap<string, { readonly name: string }>;

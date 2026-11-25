@@ -124,7 +124,7 @@ describe('the env files', () => {
         const running = site({ id: 'running' });
         expect(envFileSites([waiting, running]).map((s) => s.id)).toEqual(['running']);
         // And it is what the hosting gives the env files, which the row above cannot see: genie-host's (hosting-compose.ts,
-        // the host owns it), and the emergency window's, which composes the same stack.
+        // the host owns it), and a test's composition, which composes the same stack.
         expect(readFileSync('src/main/hosting-compose.ts', 'utf8')).toMatch(/sites: \(\) => envFileSites\(sites\.list\(\)\)/);
     });
 });

@@ -191,7 +191,7 @@ describe('Genie’s socket against that rule (real socket, real wire)', () => {
         expect(liveTimers(h).map((t) => t.ms)).toEqual([RECONNECT_MS]);
     });
 
-    it('the Tynn sockets dial through dialTynnSocket (COUNTED), with the account’s host: genie-host’s, and the window’s only on the emergency no-host path (P5c)', async () => {
+    it('the Tynn sockets dial through dialTynnSocket (COUNTED), with the account’s host: genie-host’s, never the window’s (P5c)', async () => {
         const host = await readFile(resolve('src/main/genie-host.ts'), 'utf8');
         expect(host.match(/dialTynnSocket\(url, hostTynn\?\.host\(\) \?\? TYNN_HOST\)/g)).toHaveLength(1);
         // IssueWatch, the board, the Issues queue and the Features page (row F1): each uses the same origin-confined dialer.

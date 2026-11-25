@@ -45,9 +45,9 @@ const killPid = (pid: number): void => {
 };
 
 /**
- * Find (adopt, replace or start) the host and connect to it. `null` when it cannot be had at all: the caller falls back
- * to the EMERGENCY in-process engine and says so on the Deck — never a quiet downgrade, and never a mode anyone chooses
- * (the owner, 2026-11-01: "we split host from UI for good"; plan §4.1).
+ * Find (adopt, replace or start) the host and connect to it. `null` when it cannot be had at all: the caller says what is
+ * wrong and how to fix it, and stops (main.ts `stopForNoHost`, Tynn #415). There is no in-process engine to fall back to
+ * (the owner, 2026-11-01: "we split host from UI for good"; removed in P6-4, Tynn #1036).
  */
 export async function connectAgentEngine(options: AgentEngineLinkOptions & { readonly onLinked?: (client: SessionEngineClient) => void }): Promise<AgentEngineLink | null> {
     const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));

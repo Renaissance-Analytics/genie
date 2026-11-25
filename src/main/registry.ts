@@ -9,8 +9,8 @@ import type { GenieSnapshot } from '../renderer/bridge.js';
 import { Store, type WorkspaceRecord } from './store.js';
 
 /**
- * Where a Registry's files are read and written (the host split, P3.2): the Store itself (genie-host, and the emergency
- * path), or a window's HostRegistryStore — the same calls, answered by the host, the files' one writer.
+ * Where a Registry's files are read and written (the host split, P3.2): the Store itself (genie-host), or a window's
+ * HostRegistryStore — the same calls, answered by the host, the files' one writer.
  */
 export type RegistryStore = Pick<Store, 'readWorkspaces' | 'readAgents' | 'readRunningAtQuit' | 'readInterruptedAtQuit' | 'beginRestore' | 'restoreStarted' | 'writeWorkspaces' | 'writeAgents' | 'writeRunningAtQuit' | 'writeInterruptedAtQuit' | 'dropped'>;
 import { withMcpSeen, withWorkspaceMcpServer } from '../core/agent-mcp.js';

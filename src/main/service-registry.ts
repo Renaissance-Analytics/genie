@@ -75,7 +75,7 @@ export interface RegistryDeps {
     readonly portFree?: (port: number) => Promise<boolean>;
     /**
      * Genie Mail (G5, Tynn #491): the inbox book's auth directory, which Genie's shared Mailpit reads, and each workspace's
-     * default inbox credentials for its env. Absent = no book (the emergency path, tests): the address alone.
+     * default inbox credentials for its env. Absent = no book (tests): the address alone.
      */
     readonly mail?: { readonly authDir: string; readonly credentialsFor: (workspaceId: string) => MailCredentials | null };
 }

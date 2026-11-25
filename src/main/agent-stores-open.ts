@@ -8,8 +8,8 @@ import { KnowledgeStore } from './knowledge-store.js';
 import { runV1InboxImport } from './v1-inbox.js';
 
 /**
- * THE STORES AGENTS WRITE TO, OPENED IN ONE PLACE (the host split, P3.1): genie-host opens them (their one writer), and
- * compose only on the emergency path when no host could start. Genie 1's memories and AgentInbox history are taken
+ * THE STORES AGENTS WRITE TO, OPENED IN ONE PLACE (the host split, P3.1): genie-host opens them (their one writer); a
+ * test that composes alone opens its own. Genie 1's memories and AgentInbox history are taken
  * once, by whoever opens them — each store records that it did.
  */
 export async function openAgentStores(

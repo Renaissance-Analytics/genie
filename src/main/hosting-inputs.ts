@@ -12,8 +12,8 @@ import type { CommandRunner } from './toolchain-prober.js';
 import { execFileRunner } from './toolchain-runner.js';
 
 /**
- * WHAT GENIE-HOST BUILDS ITS HOSTING WITH (the host split, P5a): the same machine inputs main.ts hands compose on the
- * emergency path — the bundled Caddy (run from the per-user copy), the site readiness probe, PHP's workers, pins and trust
+ * WHAT GENIE-HOST BUILDS ITS HOSTING WITH (the host split, P5a): the machine inputs main.ts once handed its own
+ * composition — the bundled Caddy (run from the per-user copy), the site readiness probe, PHP's workers, pins and trust
  * bundle, and Genie 1's CA and database — computed here with no Electron. What only Electron knows (Genie 1's userData,
  * the app data folder, the resources folder) the window passed in the host's environment when it started it
  * (main.ts `hostEnv`); a host started without one goes without that input, and SAYS SO in Hosting (`problems`).

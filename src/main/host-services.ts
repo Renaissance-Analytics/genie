@@ -32,8 +32,8 @@ import type { SiteManager } from './site-manager.js';
  */
 
 /**
- * What compose built. `S` is the stores agents write to as this window holds them: genie-host's replicas (engine mode,
- * `WindowServices`) or the stores themselves (`OwnAgentStores`, the default: the emergency path, and every test that composes alone).
+ * What a composition holds. `S` is the stores agents write to as it holds them: the narrow surfaces genie-host's features
+ * read (`WindowServices`), or the stores themselves (`OwnAgentStores`, the default: what a test that composes alone opens).
  */
 /** The settings as compose and its consumers use them: the store itself, or genie-host's through a replica (P3.2). */
 type S_Settings = NonNullable<WindowAgentStores['settings']>;
@@ -42,18 +42,14 @@ export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> 
     readonly inbox: S['inbox'];
     readonly attention: S['attention'];
     readonly knowledge: S['knowledge'];
-    /** The stores themselves when THIS window opened them (the emergency path); null when genie-host owns them. */
-    readonly own: OwnAgentStores | null;
     readonly flows: S extends OwnAgentStores ? FlowStore : FlowsApi;
     readonly flowScheduler: S extends OwnAgentStores ? FlowScheduler : FlowSchedulerApi;
-    /** The flows file itself when THIS window opened it (the emergency path); null when genie-host owns it (P3.3d). */
-    readonly ownFlows: FlowStore | null;
     readonly settings: S extends OwnAgentStores ? SettingsStore : S_Settings;
     readonly supervisor: SupervisorApi;
     /**
      * WHAT EACH WORKSPACE'S OWN FILES SAY WOULD RUN, AND WHETHER THE PERSON HAS SAID YES TO IT (genie#1519). The host owns
-     * it: genie-host's verdicts through this window's replica (failing closed before the first dump and after the link
-     * drops), or this window's own hosting's on the emergency path, until P6.
+     * it: genie-host's verdicts (a window reads them failing closed before the first dump and after the link drops), or
+     * the hosting of a test that composes alone.
      */
     readonly workspaceTrust: TrustApi;
     /** Genie's own files for an agent whose workspace is not trusted, or `null`. */
@@ -63,8 +59,8 @@ export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> 
     /** The verdict as last read, without reading: for a shell call. A workspace not read yet is not trusted. */
     untrustedNow(record: { readonly workspaceId: string }): boolean;
     /**
-     * Genie's hosting (P5a): the classes themselves when THIS window built it (the emergency path, and every test that
-     * composes alone); the narrow surface a window uses (hosting-host.ts) when it is genie-host's, through the replica.
+     * Genie's hosting (P5a): the classes themselves when the composition built it (every test that composes alone); the
+     * narrow surface (hosting-host.ts) when it is genie-host's.
      */
     readonly sites: S extends OwnAgentStores ? SiteManager : SitesApi;
     readonly envelopeSites: S extends OwnAgentStores ? EnvelopeSites : EnvelopeSitesApi;
@@ -102,7 +98,7 @@ export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> 
     readonly plugins: PluginsApi;
     /**
      * Every element the catalog holds now (ADF A5): what the window's editors, panels and flow palette are projected from.
-     * genie-host's through the replica; with no host, this window's own plugins' catalog.
+     * genie-host's.
      */
     catalogDefinitions(): readonly ElementDefinition[];
     readonly pluginsDir: string;

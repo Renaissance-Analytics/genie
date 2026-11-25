@@ -12,7 +12,7 @@ import { type RemoteHost } from './remote-host.js';
  * window forwards no events: it is one of genie-host's connections (Tynn #898 step 2d-4b).
  */
 
-/** What Settings → Workstation reads of remote access: genie-host's (this replica) or, on the emergency path, the window's own. */
+/** What Settings → Workstation reads of remote access: genie-host's, through this replica. */
 export interface RemoteAccessView {
     readonly hostName: string;
     url(): string | null;

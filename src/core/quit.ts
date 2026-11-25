@@ -171,7 +171,7 @@ export function quitSequence(): QuitSequence {
 
 /** What each answer does, as ports: main.ts's real ones; a test's counted ones. */
 export interface QuitPorts {
-    /** Every agent session stopped (in the host, or in this process on the emergency path). */
+    /** Every agent session stopped, in genie-host (the window runs none). */
     stopAgents(): void;
     /** What this window process runs, and what it drives in the host (the supervised processes). */
     closeWindow(): void;

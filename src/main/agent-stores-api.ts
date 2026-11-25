@@ -37,14 +37,14 @@ export interface KnowledgeApi {
     summaries(...a: Parameters<KnowledgeStore['summaries']>): MaybePromise<ReturnType<KnowledgeStore['summaries']>>;
 }
 
-/** The stores themselves: what a window that opened them (the emergency path) holds, and what genie-host holds. */
+/** The stores themselves: what genie-host holds, and what a test that composes alone opens (compose.ts). */
 export type OwnAgentStores = AgentStores;
 
 /** The settings as a window uses them (P3.2): reads synchronous (a replica), writes the host's, change listeners kept. */
 export type SettingsApi = Pick<SettingsStore, 'get' | 'set' | 'setFor' | 'resetFor' | 'reset' | 'workspaceValues' | 'snapshotFor' | 'snapshot' | 'onChange'>;
 
 export interface WindowAgentStores {
-    /** Absent = this window opens the settings itself (the emergency path, and a window composed before P3.2). */
+    /** Absent = the holder opens the settings itself (a composition before P3.2). */
     readonly settings?: SettingsApi;
     readonly inbox: InboxApi;
     readonly attention: AttentionApi;

@@ -75,7 +75,7 @@ afterEach(async () => {
 });
 
 describe('(a) a Deck refresh reads liveness, never the mail', () => {
-    it('the in-process SessionHost (the emergency path): N items, a big inbox, ZERO comms scans; a Dashboard probe still has its cell', () => {
+    it('a SessionHost in its own process (genie-host’s): N items, a big inbox, ZERO comms scans; a Dashboard probe still has its cell', () => {
         const records = Array.from({ length: 8 }, (_, i) => agentRecord({ id: mintAgentId(), workspaceId: 'ws', provider: 'claude', name: `a${i}` }));
         const ids = records.map((r) => r.id);
         const mail = bigInbox(ids);

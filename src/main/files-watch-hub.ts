@@ -19,7 +19,7 @@ import { treeChangesOf } from '../core/local-files-watch.js';
  * that lands while git runs marks it, and it runs once more after.
  *
  * It runs in genie-host (session-engine-server's `files` option), so the watcher's events, the `stat` behind each and git
- * and its parsing cost the window nothing; in the window only on the emergency path, when no host can start.
+ * and its parsing cost the window nothing. The window never runs it: with no host, the window stops (Tynn #415).
  */
 
 /** The window changes are coalesced over before the views are told (Genie 1's DEBOUNCE_MS). */
