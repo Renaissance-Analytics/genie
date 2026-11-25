@@ -248,6 +248,12 @@ let wrongTried = false;
  * An action that needs root, as a person meets it: start it, wait for Genie's password prompt in this client, answer it
  * (the first time with a wrong password, which must ask again), and wait for `done`. Returns what happened.
  */
+/**
+ * A card that shows a VERSION (Tynn #968): a card with none reads "not here", and a language card (PHP's) has no
+ * data-tone, so any text counting judged php's card while pacman was still installing, before Genie's rescan.
+ */
+const shows = (c) => Boolean(c?.version && /\d/.test(c.version));
+
 async function elevated(name, start, done, names, waitMs = 600_000) {
     const r = { prompted: false, promptText: '', reasked: null, refused: null, done: false };
     if (!(await start())) { r.refused = 'its button was not there to press'; return r; }
@@ -402,7 +408,7 @@ try {
             track(`${tool}-install-progress`, 'BLOCKED', 'pacman', 'not reached');
             continue;
         }
-        const r = await elevated(tool, () => press(tool, '^Install$'), async () => { if (!pkgVersion(pkg)) return null; const c = await card(tool); return c && c.tone !== 'not-installed' && c.version ? c : null; }, pkg);
+        const r = await elevated(tool, () => press(tool, '^Install$'), async () => { if (!pkgVersion(pkg)) return null; const c = await card(tool); return c && c.tone !== 'not-installed' && shows(c) ? c : null; }, pkg);
         const prompted = elevationVerdict(`${tool}-elevation`, r, pkg);
         const after = await card(tool);
         const have = pkgVersion(pkg);
