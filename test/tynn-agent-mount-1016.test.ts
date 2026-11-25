@@ -226,3 +226,32 @@ describe('the host applies a mounted agent’s settings and sends later changes'
         expect(sent, 'what is not a setting is not sent').toHaveLength(3);
     });
 });
+
+/*
+ * ONE WRITE (harness run-1124-225604.log, b9/b10): the mounted settings were written one setter at a time, so the host's
+ * settings sync sent Tynn each half-applied state — B's default autoApprove overwrote A's in Tynn — and each write was one
+ * more chance for a stale whole-registry write from the window to land between them. They are written as one change.
+ */
+describe('a mounted agent’s settings are one registry write', () => {
+    it('applyMountedSettings writes permissions, mode, autoApprove, accessScope and model together, once', async () => {
+        const { mkdir: mk, writeFile: wf } = await import('node:fs/promises');
+        const { Registry } = await import('../src/main/registry.js');
+        const { Store } = await import('../src/main/store.js');
+        const home = join(dir, 'home'); await mk(join(home, 'runtime'), { recursive: true });
+        await wf(join(home, 'runtime', 'workspaces.json'), JSON.stringify([{ id: 'ws', path: home }]));
+        const b = atlas();
+        await wf(join(home, 'runtime', 'agents.json'), JSON.stringify([b]));
+        const store = new Store(home);
+        let writes = 0;
+        const counted = new Proxy(store, { get: (t, p, r) => (p === 'writeAgents' ? (...args: unknown[]) => { writes++; return (t.writeAgents as (...a: unknown[]) => Promise<void>)(...args); } : Reflect.get(t, p, r)) });
+        const registry = new Registry(counted as never);
+        await registry.load({ name: 'fixture', healthy: true });
+        writes = 0;
+        const after = await registry.applyMountedSettings(b.id, { permissions: 'edits', mode: 'automated', autoApprove: true, accessScope: 'all', model: 'opus' });
+        expect(writes).toBe(1);
+        expect(after).toMatchObject({ permissions: 'edits', mode: 'automated', autoApprove: true, accessScope: 'all', model: 'opus' });
+        // Nothing Tynn holds: nothing changes.
+        const c = await registry.applyMountedSettings(b.id, {});
+        expect(c).toMatchObject({ permissions: 'edits' });
+    });
+});
