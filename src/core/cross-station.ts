@@ -30,6 +30,10 @@ export const CROSS_STATION_METHODS = ['xstation.roster', 'xstation.deliver', 'xs
 export type CrossStationMethod = (typeof CROSS_STATION_METHODS)[number];
 export const CAP_CROSS_STATION = 'cross-station';
 
+export function isCrossStationMethod(method: string): method is CrossStationMethod {
+    return (CROSS_STATION_METHODS as readonly string[]).includes(method);
+}
+
 const SEGMENT = /^[A-Za-z0-9._-]+$/;
 const PEER = /^peer:([A-Za-z0-9._-]+):([A-Za-z0-9._-]+)@([A-Za-z0-9._-]+)$/;
 

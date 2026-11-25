@@ -58,7 +58,7 @@ import { isMarketplaceMethod, type MarketplaceApi } from '../core/marketplace.js
 import { isGappMethod, type GAppsApi } from '../core/gapps.js';
 import { dispatchGapps } from './gapps-api.js';
 import { MarketplaceSession } from './marketplace-session.js';
-import { CROSS_STATION_METHODS, deliveryAdmission, type CrossStationMethod } from '../core/cross-station.js';
+import { deliveryAdmission, isCrossStationMethod, type CrossStationMethod } from '../core/cross-station.js';
 
 /** Where an admitted `xstation.*` call goes (main/cross-station-host.ts `handle`), with the station the grant proved. */
 export interface CrossStationPort {
@@ -922,12 +922,12 @@ export class RemoteHost {
          * of the owner's workstations it is (`src_ws`, PreAuth `station`); that station, never anything the caller says, is
          * whom the mail is from. Not on the baton: another host's mail does not take control from the person driving.
          */
-        if ((CROSS_STATION_METHODS as readonly string[]).includes(method)) {
+        if (isCrossStationMethod(method)) {
             const station = connection.socket.preAuth?.station ?? null;
             const refusal = connection.local ? `${method} is said by another workstation's host, not by a window` : deliveryAdmission({ isOwner: auth.isOwner, readonly: auth.readonly, station });
             if (refusal) return refuse(refusal);
             if (!this.#crossStation) return refuse(`${this.#hostName} carries no agent mail between workstations`);
-            try { return ok(await this.#crossStation.handle(method as CrossStationMethod, args[0], { station: station! })); } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+            try { return ok(await this.#crossStation.handle(method, args[0], { station: station! })); } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
         }
         if (method !== 'host.version') this.#persons.add(connection);
 

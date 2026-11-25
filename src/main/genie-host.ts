@@ -2613,7 +2613,7 @@ async function main(): Promise<void> {
      * (its Tynn account mints the grant, Tynn names this machine in it as `src_ws`), and takes mail from them through its
      * RemoteHost, which admits `xstation.*` only from the owner's own workstations.
      */
-    const tynnRequest = (path: string, init?: Parameters<NonNullable<typeof tynnAccountNow>['request']>[1]) => {
+    const tynnRequest = (path: string, init: Parameters<NonNullable<typeof tynnAccountNow>['request']>[1] & {}) => {
         if (!tynnAccountNow || tynnAccountNow.status().signedIn !== true) return Promise.reject(new Error('this workstation is signed out of Tynn'));
         return tynnAccountNow.request(path, init);
     };

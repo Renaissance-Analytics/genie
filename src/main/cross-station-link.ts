@@ -34,7 +34,7 @@ export async function stationLinkOver(transport: ClientTransport, options: { lab
             welcomed?.(true);
             return;
         }
-        if (m.kind === 'pairing') { failed?.(new Error(`${m.host} asked its person to let this workstation in, so it was not admitted as its owner`)); transport.close(); return; }
+        if (m.kind === 'pairing') { failed?.(new Error(`${m.host} would let this workstation in only as a guest its person allows, not as its owner`)); transport.close(); return; }
         if (m.kind === 'refused') { failed?.(new Error(m.reason)); return; }
         if (m.kind === 'result') {
             const p = pending.get(m.id);
