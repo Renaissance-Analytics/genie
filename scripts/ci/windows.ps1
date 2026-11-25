@@ -179,7 +179,10 @@ function Need-Rust {
             $rustupUrl = 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe'
             $rustupInit = Join-Path $Setup 'rustup-init.exe'
             Invoke-WebRequest -UseBasicParsing -Uri $rustupUrl -OutFile $rustupInit
-            $rustupSum = ([string](Invoke-WebRequest -UseBasicParsing -Uri "$rustupUrl.sha256").Content).Trim().Split(' ')[0].ToLowerInvariant()
+            # To a file, read as text: .Content of a .sha256 is bytes (an octet-stream), not the hex.
+            $rustupSumFile = Join-Path $Setup 'rustup-init.exe.sha256'
+            Invoke-WebRequest -UseBasicParsing -Uri "$rustupUrl.sha256" -OutFile $rustupSumFile
+            $rustupSum = ((Get-Content -Raw $rustupSumFile).Trim() -split '\s+')[0].ToLowerInvariant()
             $rustupHash = (Get-FileHash -Algorithm SHA256 $rustupInit).Hash.ToLowerInvariant()
             if ($rustupSum -ne $rustupHash) { $script:Rust = "rustup-init.exe is not the one rustup published (sha256 $rustupHash, published $rustupSum)"; Block $script:Rust }
             & $rustupInit -y --profile minimal --default-toolchain stable --no-modify-path *> (Join-Path $Setup 'rustup.log')
