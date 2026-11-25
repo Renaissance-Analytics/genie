@@ -5,7 +5,7 @@ import { Baton, PairingPins, type PinEnded } from '../core/remote.js';
 import { LOCAL_EVENTS, type CallContext, type RemoteMethod, type ServerTransport } from '../core/remote-protocol.js';
 import type { LocalUploads } from './local-uploads.js';
 import { DeviceStore, type Device } from './remote-devices.js';
-import { RemoteHost, type HostApi } from './remote-host.js';
+import { RemoteHost, type CrossStationPort, type HostApi } from './remote-host.js';
 import type { ProtocolOffer } from '../core/protocol-version.js';
 import { HOST_WORKSPACE_READ_METHODS } from './host-alone-api.js';
 
@@ -136,6 +136,8 @@ export interface RemoteAccessHostOptions {
     readonly createLocalUploads?: () => LocalUploads | Promise<LocalUploads>;
     /** What one of this machine's windows adds to its own snapshot (its renderer notice); null = nothing. Never a remote connection's. */
     readonly localSnapshot?: (connectionId: string) => Readonly<Record<string, unknown>> | null;
+    /** Mail between the owner's workstations (P9): given to the RemoteHost as it is made, so no call finds it missing. */
+    readonly crossStation?: CrossStationPort;
 }
 
 export class RemoteAccessHost {
@@ -167,6 +169,7 @@ export class RemoteAccessHost {
             ...(options.protocol ? { protocol: options.protocol } : {}),
             ...(options.createLocalUploads ? { createLocalUploads: options.createLocalUploads } : {}),
             ...(options.localSnapshot ? { localSnapshot: options.localSnapshot } : {}),
+            ...(options.crossStation ? { crossStation: options.crossStation } : {}),
         });
         return new RemoteAccessHost(remote, pairing, devices);
     }

@@ -601,12 +601,15 @@ export type WireMessage =
     /**
      * `code` (Tynn #894): `unsupported`, the other side does not know the method (the call settles, nothing hangs);
      * `version`, the connection is outside the support window and may only read the version and ask for the update.
+     * `no-address`, `scope` (P9, core/cross-station.ts `DefiniteRefusal`): another workstation's mail was refused for good,
+     * for nobody at that address or for the recipient's scope. A refusal with no code is not definite.
      */
     | { kind: 'result'; id: number; ok: false; reason: string; code?: ResultCode }
     | { kind: 'event'; channel: string; payload: unknown };
 
 export type RefusalCode = 'version';
-export type ResultCode = 'unsupported' | 'version';
+export type ResultCode = 'unsupported' | 'version' | 'no-address' | 'scope';
+const RESULT_CODES: readonly ResultCode[] = ['unsupported', 'version', 'no-address', 'scope'];
 
 /** Why a frame was not parsed. A CALL to a method this side does not know keeps its `id`, so the answer can carry it. */
 export type FrameRefusal = { ok: false; reason: string; id?: number; method?: string; code?: 'unsupported' };
@@ -663,7 +666,7 @@ export function parseFrame<M extends string>(text: string, isMethodOf: (m: unkno
         case 'result': {
             if (typeof raw.id !== 'number' || typeof raw.ok !== 'boolean') return { ok: false, reason: 'a result needs a numeric id and ok' };
             if (raw.ok) return { ok: true, message: { kind: 'result', id: raw.id, ok: true, value: raw.value } };
-            return { ok: true, message: { kind: 'result', id: raw.id, ok: false, reason: typeof raw.reason === 'string' ? raw.reason : 'refused', ...(raw.code === 'unsupported' || raw.code === 'version' ? { code: raw.code } : {}) } };
+            return { ok: true, message: { kind: 'result', id: raw.id, ok: false, reason: typeof raw.reason === 'string' ? raw.reason : 'refused', ...((RESULT_CODES as readonly unknown[]).includes(raw.code) ? { code: raw.code as ResultCode } : {}) } };
         }
         case 'event':
             if (typeof raw.channel !== 'string') return { ok: false, reason: 'an event needs a channel' };

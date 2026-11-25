@@ -7,8 +7,10 @@ import { StationRefused, type StationLink } from './cross-station-host.js';
  * ONE HOST SPEAKING TO ANOTHER OF THE OWNER'S WORKSTATIONS (P9): over a relay member transport (relay-member.ts, end to
  * end since P9.2), the same protocol a remote window speaks: hello as `relay` (the grant already proved who this is),
  * the welcome, then calls. It is a link only when the other host admits it as its OWNER: a guest's "wait for Allow" or a
- * non-owner welcome ends it before any call. A refusal by the other host is a {@link StationRefused}, which a sender
- * settles (it will not change on a retry); anything else (the link dropped, no answer) is an Error worth a retry.
+ * non-owner welcome ends it before any call. A DEFINITE refusal by the other host (its result's code: nobody at that
+ * address, the recipient's scope, a method it does not know) is a {@link StationRefused}, which a sender settles; any other
+ * refusal (a host still booting, a disk error, a lock) and anything else (the link dropped, no answer) is an Error worth a
+ * retry (the review of #2180, finding 1: a booting host's "carries no mail" settled the message as refused forever).
  */
 export async function stationLinkOver(transport: ClientTransport, options: { label: string; timeoutMs?: number; build?: string | null }): Promise<StationLink> {
     const timeoutMs = options.timeoutMs ?? 20_000;
@@ -43,7 +45,8 @@ export async function stationLinkOver(transport: ClientTransport, options: { lab
             clearTimeout(p.timer);
             if (m.ok) p.resolve(m.value);
             else if (m.code === 'unsupported') p.reject(new StationRefused('that workstation runs an older Genie that carries no mail between workstations; update it'));
-            else p.reject(new StationRefused(m.reason));
+            else if (m.code === 'no-address' || m.code === 'scope') p.reject(new StationRefused(m.reason));
+            else p.reject(new Error(m.reason));
         }
     });
     const offClose = transport.onClose(() => endAll('the connection to that workstation closed'));

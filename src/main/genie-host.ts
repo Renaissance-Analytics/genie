@@ -220,7 +220,7 @@ import { siteDoor } from './relay-site.js';
 import { DeviceLinkService } from './device-link-service.js';
 import { CrossStationHost } from './cross-station-host.js';
 import { stationLinkOver } from './cross-station-link.js';
-import { CAP_CROSS_STATION, CROSS_STATION_MAIL } from '../core/cross-station.js';
+import { CAP_CROSS_STATION, CROSS_STATION_MAIL, sharedWorkspaceId } from '../core/cross-station.js';
 import { deviceSocket } from './device-socket.js';
 import { configWriter, writeWorkspaceConfig } from './workspace-config-sync.js';
 import { deviceTokenStore } from './device-tokens.js';
@@ -1247,10 +1247,53 @@ async function main(): Promise<void> {
     /** The account book as every client asks it (Tynn #895): set once its parts are composed, below. */
     let accountsPortNow: AccountsPort | null = null;
     const phoneReady = new Set<() => void>();
+    /*
+     * MAIL BETWEEN THE OWNER'S OWN WORKSTATIONS (P9, Tynn #424; the owner, 2026-11-25: "agents can stay connected even if
+     * clients aren't"): this host sends to another of the owner's workstations over a short-lived relay link of its own
+     * (its Tynn account mints the grant, Tynn names this machine in it as `src_ws`), and takes mail from them through its
+     * RemoteHost, which admits `xstation.*` only from the owner's own workstations. BUILT BEFORE THE REMOTE HOST and handed
+     * to it as it is made (the review of #2180, finding 1): the relay host registers long before the sessions are up, and
+     * a host that answered "carries no mail" in between had the other workstation settle the message as refused.
+     */
+    let crossStationPersons: ((station: string) => boolean) | null = null;
+    const tynnRequest = (path: string, init: Parameters<NonNullable<typeof tynnAccountNow>['request']>[1] & {}) => {
+        if (!tynnAccountNow || tynnAccountNow.status().signedIn !== true) return Promise.reject(new Error('this workstation is signed out of Tynn'));
+        return tynnAccountNow.request(path, init);
+    };
+    const crossStation = new CrossStationHost({
+        inbox: own.inbox,
+        roster: () => hostRegistry.listAgents(),
+        slugs: () => hostRegistry.workspaceSlugs(),
+        // The same workspace on another station is the same SHARED one, its Tynn project, never a matching slug.
+        sharedIdOf: (workspaceId) => sharedWorkspaceId(workspaceTynnProject(workspaceId)),
+        // listAgents leaves out a hibernated workspace's agents already.
+        asleep: () => new Set(),
+        self: () => { const w = relayHostService.status().workstation; return w?.registered ? w.workstationId : null; },
+        stations: async () => {
+            const self = (() => { const w = relayHostService.status().workstation; return w?.registered ? w.workstationId : null; })();
+            const listed = await connectableWorkstations(tynnRequest, new Set());
+            // `mine`: this account registered it (the review of #2180, finding 7): the host dials no other.
+            return listed.ok ? listed.workstations.filter((w) => w.id === self || w.mine).map((w) => ({ id: w.id, name: w.name, online: w.online, mine: w.id === self || w.mine })) : null;
+        },
+        link: async (station) => {
+            const pop = PopKeypair.generate();
+            const grant = await mintConnectGrant(tynnRequest, station, pop.publicJwk);
+            if (!grant.ok) { pop.discard(); throw new Error(grant.reason); }
+            const opened = await openRelayMember({ socket: (url) => deviceSocket(url), relayUrl: grant.relayEndpoint, workstationId: station, grant: grant.token, hostPublicKey: grant.hostPublicKey, pop });
+            if (!opened.ok) throw new Error(opened.reason);
+            return stationLinkOver(opened.transport, { label: hostname(), build });
+        },
+        mode: () => CROSS_STATION_MAIL,
+        // Read through `crossStationPersons`: the device links and the remote host it reads are made after this host.
+        personConnected: (station) => crossStationPersons?.(station) ?? false,
+        log: (line) => { say(line); lifecycleLog(line); },
+    });
     bootStep('marketplace and gapps', stepAt);
     const remoteAccessHost = await RemoteAccessHost.open({
         home,
         hostName: hostname(),
+        // Mail between the owner's workstations: here from the first call (the review of #2180, finding 1).
+        crossStation,
         transport: remoteHub,
         build,
         // What a local connection uploads (Tynn #898 step 2d-3b) is staged under this host's runtime, per process.
@@ -1508,6 +1551,7 @@ async function main(): Promise<void> {
         },
         browsers: new RemoteBrowsers(siteDoor),
     });
+    crossStationPersons = (station) => deviceLinkService.connectedTo(station) || remoteAccessHost.remote.personFrom(station);
     /*
      * A REMOTE WINDOW'S TRANSPORT TO ANOTHER MACHINE, ON THE ONE PROTOCOL (Tynn #941, 2f-2): the window asks over its own
      * connection, which owns what it opens. The role gates no dial (Tynn #423); Tynn's refusal of a grant is said in Tynn's
@@ -2607,41 +2651,7 @@ async function main(): Promise<void> {
     clocks.push(planKeepalive);
     wireHostMailWake({ inbox: own.inbox, host, registry: hostRegistry, settings, osaDir: osaHome, log: (line) => { say(line); lifecycleLog(line); }, issueWatch: issueWatch.delivery, safeMode: safeNow });
     bootStep('sessions', stepAt);
-    /*
-     * MAIL BETWEEN THE OWNER'S OWN WORKSTATIONS (P9, Tynn #424; the owner, 2026-11-25: "agents can stay connected even if
-     * clients aren't"): this host sends to another of the owner's workstations over a short-lived relay link of its own
-     * (its Tynn account mints the grant, Tynn names this machine in it as `src_ws`), and takes mail from them through its
-     * RemoteHost, which admits `xstation.*` only from the owner's own workstations.
-     */
-    const tynnRequest = (path: string, init: Parameters<NonNullable<typeof tynnAccountNow>['request']>[1] & {}) => {
-        if (!tynnAccountNow || tynnAccountNow.status().signedIn !== true) return Promise.reject(new Error('this workstation is signed out of Tynn'));
-        return tynnAccountNow.request(path, init);
-    };
-    const crossStation = new CrossStationHost({
-        inbox: own.inbox,
-        roster: () => hostRegistry.listAgents(),
-        slugs: () => hostRegistry.workspaceSlugs(),
-        // listAgents leaves out a hibernated workspace's agents already.
-        asleep: () => new Set(),
-        self: () => { const w = relayHostService.status().workstation; return w?.registered ? w.workstationId : null; },
-        stations: async () => {
-            const self = (() => { const w = relayHostService.status().workstation; return w?.registered ? w.workstationId : null; })();
-            const listed = await connectableWorkstations(tynnRequest, new Set());
-            return listed.ok ? listed.workstations.filter((w) => w.id === self || w.mine).map((w) => ({ id: w.id, name: w.name, online: w.online })) : null;
-        },
-        link: async (station) => {
-            const pop = PopKeypair.generate();
-            const grant = await mintConnectGrant(tynnRequest, station, pop.publicJwk);
-            if (!grant.ok) { pop.discard(); throw new Error(grant.reason); }
-            const opened = await openRelayMember({ socket: (url) => deviceSocket(url), relayUrl: grant.relayEndpoint, workstationId: station, grant: grant.token, hostPublicKey: grant.hostPublicKey, pop });
-            if (!opened.ok) throw new Error(opened.reason);
-            return stationLinkOver(opened.transport, { label: hostname(), build });
-        },
-        mode: () => CROSS_STATION_MAIL,
-        personConnected: (station) => deviceLinkService.connectedTo(station) || remoteAccessHost.remote.personFrom(station),
-        log: (line) => { say(line); lifecycleLog(line); },
-    });
-    remoteAccessHost.remote.setCrossStation(crossStation);
+    // Its queue is picked up once the sessions are up (the host itself was built before the remote host, below).
     crossStation.start();
     mcp = startHostMcp({
         crossStation: {

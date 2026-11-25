@@ -42,7 +42,8 @@ beforeEach(async () => {
     host.setCrossStation({
         handle: async (method, arg, from) => {
             handled.push({ method, arg, station: from.station });
-            if ((arg as { to?: string } | null)?.to === 'ghost@p8x') throw new Error('nobody at ghost@p8x on laptop');
+            // A definite refusal (the review of #2180): only these are settled by the sender.
+            if ((arg as { to?: string } | null)?.to === 'ghost@p8x') throw new DefiniteRefusal('no-address', 'nobody at ghost@p8x on laptop');
             return { messageId: 'msg_there' };
         },
     });
@@ -206,13 +207,13 @@ describe('finding 1: only a definite refusal settles, on the wire', () => {
 
     it('a host built with its cross-station port takes mail from its first connection (no window between start and set)', async () => {
         const seen: string[] = [];
-        let first: ((c: ServerConnection) => void) | null = null;
+        const door: { first?: (c: ServerConnection) => void } = {};
         const api: HostApi = { invoke: vi.fn(async () => ({ ok: true })) as unknown as HostApi['invoke'], onEvent: () => () => {}, workspaceOfAgent: () => 'ws' };
         new RemoteHost({ api, hostName: 'laptop', baton: new Baton(), devices, pins: new PairingPins({ now: Date.now }), confirm: allowEveryPairing,
-            transport: { onConnection: (l) => { first = l; return () => {}; } },
+            transport: { onConnection: (l) => { door.first = l; return () => {}; } },
             crossStation: { handle: async (method) => { seen.push(method); return { agents: [] }; } } });
         const pair = inMemoryPair();
-        first!({ ...pair.server, preAuth: OWNER_FROM_A } as ServerConnection);
+        door.first!({ ...pair.server, preAuth: OWNER_FROM_A } as ServerConnection);
         const link = await stationLinkOver(pair.client, { label: 'desk', timeoutMs: 5_000 });
         await expect(link.call('xstation.roster', {})).resolves.toEqual({ agents: [] });
         expect(seen).toEqual(['xstation.roster']);
@@ -240,15 +241,15 @@ describe('finding 7: a station link that is not the owner raises no "Allow guest
     it('refused at once, in words, and the card is never asked; a guest window still is (control)', async () => {
         const asked: string[] = [];
         const confirm = { ask: (input: { label: string }) => { asked.push(input.label); return { id: 'p1', expiresAt: Number.MAX_SAFE_INTEGER, answer: new Promise<never>(() => {}) }; }, cancel: () => {} };
-        let enter: ((c: ServerConnection) => void) | null = null;
+        const door: { enter?: (c: ServerConnection) => void } = {};
         const api: HostApi = { invoke: vi.fn(async () => ({ ok: true })) as unknown as HostApi['invoke'], onEvent: () => () => {}, workspaceOfAgent: () => 'ws' };
-        new RemoteHost({ api, hostName: 'laptop', baton: new Baton(), devices, pins: new PairingPins({ now: Date.now }), confirm, transport: { onConnection: (l) => { enter = l; return () => {}; } } });
+        new RemoteHost({ api, hostName: 'laptop', baton: new Baton(), devices, pins: new PairingPins({ now: Date.now }), confirm, transport: { onConnection: (l) => { door.enter = l; return () => {}; } } });
         const pair = inMemoryPair();
-        enter!({ ...pair.server, preAuth: { ...OWNER_FROM_A, isOwner: false, label: 'desk' } } as ServerConnection);
+        door.enter!({ ...pair.server, preAuth: { ...OWNER_FROM_A, isOwner: false, label: 'desk' } } as ServerConnection);
         await expect(stationLinkOver(pair.client, { label: 'desk', timeoutMs: 2_000 })).rejects.toThrow(/not as its owner/);
         expect(asked).toEqual([]);
         const guest = inMemoryPair();
-        enter!({ ...guest.server, preAuth: { ...OWNER_FROM_A, isOwner: false, label: 'a guest' } } as ServerConnection);
+        door.enter!({ ...guest.server, preAuth: { ...OWNER_FROM_A, isOwner: false, label: 'a guest' } } as ServerConnection);
         guest.client.send(JSON.stringify({ kind: 'hello', auth: { kind: 'relay' } }));
         await vi.waitFor(() => expect(asked).toEqual(['a guest']));
     });

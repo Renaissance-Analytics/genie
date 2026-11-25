@@ -58,7 +58,7 @@ import { isMarketplaceMethod, type MarketplaceApi } from '../core/marketplace.js
 import { isGappMethod, type GAppsApi } from '../core/gapps.js';
 import { dispatchGapps } from './gapps-api.js';
 import { MarketplaceSession } from './marketplace-session.js';
-import { deliveryAdmission, isCrossStationMethod, type CrossStationMethod } from '../core/cross-station.js';
+import { CAP_CROSS_STATION, DefiniteRefusal, deliveryAdmission, isCrossStationMethod, type CrossStationMethod } from '../core/cross-station.js';
 
 /** Where an admitted `xstation.*` call goes (main/cross-station-host.ts `handle`), with the station the grant proved. */
 export interface CrossStationPort {
@@ -229,6 +229,12 @@ interface Connection {
      * host's Deck (`local-deck`) when it changes, and no estate snapshot or other local push. `deckSent`: the Deck it last heard.
      */
     deckOnly: boolean;
+    /**
+     * A STATION LINK (P9; the review of #2180, finding 6): another of the owner's workstations' HOST, here only to hand over
+     * agent mail (its hello offers `cross-station`). Not a person: it is not listed among the connections, hears no host
+     * event, and may make no call but `xstation.*` and `host.version`.
+     */
+    stationLink: boolean;
     deckSent: string | null;
     /**
      * A SUMMARY-ONLY CONNECTION (`summary.watch`, Tynn #953 2g-2): main's own client, for its tray and quit. It hears what
@@ -382,8 +388,10 @@ export class RemoteHost {
      * `confirm`: the desktop's "Pair this device?" (core/pair-confirm.ts). Required — a correct PIN pairs nothing until the
      * person presses Allow on this machine (q_8c07b142; Genie 1's confirmPair).
      */
-    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number; build?: string; openBlob?: BlobOpener; openPage?: PageOpener; createLocalUploads?: () => LocalUploads | Promise<LocalUploads>; localSnapshot?: (connectionId: string) => Readonly<Record<string, unknown>> | null; schedule?: (ms: number, fn: () => void) => () => void; protocol?: ProtocolOffer | (() => ProtocolOffer); requestUpdate?: (who: { label: string; connectionId: string }) => Promise<HostUpdateAnswer> }) {
+    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number; build?: string; openBlob?: BlobOpener; openPage?: PageOpener; createLocalUploads?: () => LocalUploads | Promise<LocalUploads>; localSnapshot?: (connectionId: string) => Readonly<Record<string, unknown>> | null; schedule?: (ms: number, fn: () => void) => () => void; protocol?: ProtocolOffer | (() => ProtocolOffer); requestUpdate?: (who: { label: string; connectionId: string }) => Promise<HostUpdateAnswer>; crossStation?: CrossStationPort }) {
         this.#api = deps.api;
+        // Given at construction (the review of #2180, finding 1): no call can arrive before it is here.
+        this.#crossStation = deps.crossStation ?? null;
         const protocol = deps.protocol;
         const build = deps.build ?? 'dev';
         this.#offer = typeof protocol === 'function' ? protocol : protocol ? () => protocol : () => remoteOffer('host', build);
@@ -407,7 +415,7 @@ export class RemoteHost {
 
     /** Someone is connected and known: hear the host API (once, however many connect). */
     #listen(): void {
-        if (![...this.#connections.values()].some((connection) => connection.auth !== null)) return;
+        if (![...this.#connections.values()].some((connection) => connection.auth !== null && !connection.stationLink)) return;
         this.#stopListening ??= this.#api.onEvent((channel, payload) => this.#broadcast(channel, payload), {
             wantsAgent: (agentId) => this.#wantsAgent(agentId),
             // Tynn #862: told when a phone's watch is recorded, the host API pushes that agent as it is now.
@@ -421,7 +429,7 @@ export class RemoteHost {
     /** Someone wants this agent's detail: a window that is not a phone (it hears every agent), or a phone watching it. */
     #wantsAgent(agentId: string): boolean {
         for (const c of this.#connections.values()) {
-            if (c.auth === null || c.local) continue;
+            if (c.auth === null || c.local || c.stationLink) continue;
             if (c.profile !== 'mobile' || c.watching.has(agentId)) return true;
         }
         return false;
@@ -465,8 +473,8 @@ export class RemoteHost {
             try { this.#api.releaseCaller?.(this.#callContext(connection)); }
             catch { console.warn('[genie] feature caller cleanup failed'); }
         }
-        if (was && connection.auth !== null && !connection.local) this.#changed();
-        if ([...this.#connections.values()].some((c) => c.auth !== null)) return;
+        if (was && connection.auth !== null && !connection.local && !connection.stationLink) this.#changed();
+        if ([...this.#connections.values()].some((c) => c.auth !== null && !c.stationLink)) return;
         this.#stopListening?.();
         this.#stopListening = null;
         this.#stopLocalAgents?.();
@@ -585,7 +593,7 @@ export class RemoteHost {
     connections(): Array<{ id: string; label: string; isOwner: boolean; workspaceId: string | null; driving: boolean; mode: DriveMode }> {
         const driver = this.#baton.holder()?.connectionId ?? null;
         return [...this.#connections.values()]
-            .filter((c) => c.auth !== null && !c.local)
+            .filter((c) => c.auth !== null && !c.local && !c.stationLink)
             .map((c) => ({ id: c.id, label: c.auth!.label, isOwner: c.auth!.isOwner, workspaceId: c.auth!.workspaceId, driving: c.id === driver, mode: this.#viewOnly.has(c.auth!.label) ? 'view' as const : 'control' as const }));
     }
 
@@ -689,7 +697,7 @@ export class RemoteHost {
     }
 
     #accept(socket: ServerConnection): void {
-        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, agentPush: null, watching: new Map(), activityViews: new Set(), tynnWatches: new Map(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null, batonWatch: false, deckOnly: false, deckSent: null, summaryOnly: false, remoteOnly: false, settingsOnly: false, registryOnly: false, frontdoorOnly: false, companion: null, negotiated: null, outside: null };
+        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, agentPush: null, watching: new Map(), activityViews: new Set(), tynnWatches: new Map(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null, batonWatch: false, deckOnly: false, stationLink: false, deckSent: null, summaryOnly: false, remoteOnly: false, settingsOnly: false, registryOnly: false, frontdoorOnly: false, companion: null, negotiated: null, outside: null };
         this.#connections.set(connection.id, connection);
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
@@ -831,6 +839,13 @@ export class RemoteHost {
             // The transport proved who this is (a Tynn grant and its key); without that proof there is nothing to take.
             const pre = connection.socket.preAuth;
             if (!pre) return this.#refuse(connection, 'this connection did not come through the Tynn relay', true);
+            connection.stationLink = (message.capabilities ?? []).some((c) => c.split('@')[0] === CAP_CROSS_STATION);
+            /*
+             * ANOTHER WORKSTATION'S HOST THAT IS NOT THE OWNER (the review of #2180, finding 7): it came only to hand over
+             * mail, which this host takes only from its owner's own workstations, so it is refused here, before any "Allow
+             * guest?" card: a person at this machine is never asked to let in a host that cannot be let in.
+             */
+            if (connection.stationLink && !pre.isOwner) return this.#refuse(connection, `${this.#hostName} is signed in to another Tynn account: it would admit this workstation, but not as its owner, so it takes no agent mail from it`, true);
             /*
              * A GUEST WAITS AT THE DOOR (Tynn #731; the owner, 2026-11-17): anyone a share admitted — not the owner's own
              * machine — gets in only when the person at THIS machine presses Allow. Until then `auth` stays null, so every
@@ -886,7 +901,7 @@ export class RemoteHost {
             ...(connection.outside !== null ? { compatible: false as const, code: 'version' as const, reason: connection.outside } : {}),
         });
         this.#listen();
-        if (!connection.local) this.#changed();
+        if (!connection.local && !connection.stationLink) this.#changed();
     }
 
     async #call(connection: Connection, id: number, method: RemoteMethod | ControlMethod, args: unknown[]): Promise<WireMessage> {
@@ -926,9 +941,18 @@ export class RemoteHost {
             const station = connection.socket.preAuth?.station ?? null;
             const refusal = connection.local ? `${method} is said by another workstation's host, not by a window` : deliveryAdmission({ isOwner: auth.isOwner, readonly: auth.readonly, station });
             if (refusal) return refuse(refusal);
-            if (!this.#crossStation) return refuse(`${this.#hostName} carries no agent mail between workstations`);
-            try { return ok(await this.#crossStation.handle(method, args[0], { station: station! })); } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+            // Locked (the owner's kill-switch): mail and receipts are writes, refused like every other; not definite, so
+            // the sender keeps them until this host is unlocked (the review of #2180).
+            if (this.#locked && method !== 'xstation.roster') return refuse(`${this.#hostName} is locked: it takes no agent mail until it is unlocked`);
+            // Not definite either: the sender keeps the mail (the review of #2180, finding 1).
+            if (!this.#crossStation) return refuse(`${this.#hostName} carries no agent mail between workstations yet`);
+            try { return ok(await this.#crossStation.handle(method, args[0], { station: station! })); } catch (error) {
+                // Only a DEFINITE refusal carries its code; anything else (a disk error, too much mail) the sender retries.
+                if (error instanceof DefiniteRefusal) return { kind: 'result', id, ok: false, reason: error.message, code: error.code };
+                return refuse(error instanceof Error ? error.message : String(error));
+            }
         }
+        if (connection.stationLink && method !== 'host.version') return refuse(`a link from another workstation's host carries agent mail only; ${method} is not taken from it`);
         if (method !== 'host.version') this.#persons.add(connection);
 
         switch (method) {
@@ -1477,7 +1501,7 @@ export class RemoteHost {
     #broadcast(channel: string, payload: unknown): void {
         if (channel === LOCAL_EVENT_CHANNELS.snapshot) return this.#pushLocalSnapshot(payload);
         for (const c of this.#connections.values()) {
-            if (c.auth === null) continue;
+            if (c.auth === null || c.stationLink) continue;
             // A deck-only connection hears the Deck and nothing else (Tynn #941, 2f-2); a summary-only one, the summary (#953).
             if (c.deckOnly) continue;
             if (c.frontdoorOnly || channel === LOCAL_EVENT_CHANNELS.frontdoor) {

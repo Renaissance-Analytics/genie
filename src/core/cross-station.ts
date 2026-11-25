@@ -19,9 +19,34 @@ import { isOsAgent } from './os-agent.js';
  *   O5 ruling's reading). The default is `CROSS_STATION_MAIL`.
  */
 
-/** One of the owner's workstations as Tynn lists it. `online: false` = Tynn says it is not connected now (absent = unknown). */
-export interface StationRow { readonly id: string; readonly name: string; readonly online?: boolean | null }
+/**
+ * One of the owner's workstations as Tynn lists it. `online: false` = Tynn says it is not connected now (absent = unknown).
+ * `mine`: Tynn says THIS account registered it as its owner; only such a station is ever dialled (the review of #2180).
+ */
+export interface StationRow { readonly id: string; readonly name: string; readonly online?: boolean | null; readonly mine?: boolean }
+/**
+ * `opensFrom`: the SHARED workspaces (core `sharedWorkspaceId`, a Tynn project) whose agents may open a conversation with
+ * this one, or `all`. Never slugs: the same slug on two stations is not the same workspace.
+ */
 export interface RosterEntry { readonly name: string; readonly workspace: string; readonly opensFrom: 'all' | readonly string[] }
+
+/**
+ * A DEFINITE REFUSAL by the receiving host (the review of #2180, finding 1): the only answers that settle a message for
+ * good. `no-address`: nobody by that address there; `scope`: its agent scope does not open to the sender. Said on the wire
+ * as the result's `code`, with `unsupported` (an older host). Anything else (a host still booting, a disk error, a lock)
+ * is not definite: the sender keeps the mail and tries again.
+ */
+export type DefiniteCode = 'no-address' | 'scope';
+export class DefiniteRefusal extends Error {
+    constructor(readonly code: DefiniteCode, message: string) {
+        super(message);
+    }
+}
+
+/** A workspace's shared identity across stations: its Tynn project, as `tynn:<project id>`; `null` = linked to none. */
+export function sharedWorkspaceId(tynnProjectId: string | null): string | null {
+    return tynnProjectId ? `tynn:${tynnProjectId}` : null;
+}
 export type CrossStationMode = 'queue' | 'connected';
 
 /** THE ONE SWITCH's default. `connected` delivers only while the person is connected between the two stations. */
@@ -87,23 +112,27 @@ export function peerLabel(participant: string, stations: readonly StationRow[]):
 }
 
 /**
- * The agents another station's agents may reach here. A `specific` scope names workspaces by THIS host's ids, which mean
- * nothing on another station, so it opens to its own workspace only; chosen agents are ids of this host's agents and do
- * not cross either. The OS agent's address workspace is `system`.
+ * The agents another station's agents may reach here. A `self` or `specific` scope opens to its own workspace only, and
+ * across stations its own workspace is its SHARED identity (`sharedIdOf`, its Tynn project): the same workspace on another
+ * station is the same workspace only when it is the same shared one, never because the slugs match, and a workspace linked
+ * to nothing matches nothing (the coordinator's ruling on the review of #2180). Chosen agents are ids of this host's agents
+ * and do not cross. The OS agent's address workspace is `system`.
  */
-export function rosterOf(records: readonly AgentRecord[], slugs: ReadonlyMap<string, string>, asleep: ReadonlySet<string>): RosterEntry[] {
+export function rosterOf(records: readonly AgentRecord[], slugs: ReadonlyMap<string, string>, asleep: ReadonlySet<string>, sharedIdOf: (workspaceId: string) => string | null): RosterEntry[] {
     const out: RosterEntry[] = [];
     for (const r of records) {
         if (r.accessScope === 'none' || asleep.has(r.workspaceId)) continue;
         // The OS agent's address workspace is `system` (core/inbox.ts agentAddress), never its internal id.
         const workspace = isOsAgent(r) ? SYSTEM_WORKSPACE : slugs.get(r.workspaceId) ?? r.workspaceId;
-        out.push({ name: r.name, workspace, opensFrom: r.accessScope === 'all' ? 'all' : [workspace] });
+        const shared = r.accessScope === 'all' ? null : sharedIdOf(r.workspaceId);
+        out.push({ name: r.name, workspace, opensFrom: r.accessScope === 'all' ? 'all' : shared ? [shared] : [] });
     }
     return out;
 }
 
-export function opensFrom(entry: RosterEntry, senderWorkspace: string): boolean {
-    return entry.opensFrom === 'all' || entry.opensFrom.includes(senderWorkspace);
+/** Whether a sender from that SHARED workspace (`null`: linked to none) may open a conversation with this entry. */
+export function opensFrom(entry: RosterEntry, senderShared: string | null): boolean {
+    return entry.opensFrom === 'all' || (senderShared !== null && entry.opensFrom.includes(senderShared));
 }
 
 /** Why a connection may not hand this host mail, or `null` when it may. */

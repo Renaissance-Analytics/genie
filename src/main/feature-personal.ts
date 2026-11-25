@@ -99,11 +99,20 @@ const USER = { kind: 'user' } as const;
  * A participant by name: the person is `you`, an agent its roster name, an APP the label its mail carries
  * (`site:flabs@fancy`, genie#1345), one no longer here its id.
  */
-function participantNamer(roster: ReadonlyArray<{ agentId: string; name: string }>, mail: ReadonlyArray<{ from: string; app?: { label: string } }> = []): (participant: string) => string {
+export function participantNamer(
+    roster: ReadonlyArray<{ agentId: string; name: string }>,
+    mail: ReadonlyArray<{ from: string; to?: string; app?: { label: string }; origin?: { stationName: string }; outbound?: { stationName?: string } }> = [],
+): (participant: string) => string {
     const apps = new Map<string, string>();
-    for (const m of mail) if (m.app) apps.set(m.from, m.app.label);
+    // A station's NAME as its mail carries it (the review of #2180): from it, the name it came with; to it, the name it was sent to.
+    const stations = new Map<string, string>();
+    for (const m of mail) {
+        if (m.app) apps.set(m.from, m.app.label);
+        if (m.origin) stations.set(m.from, m.origin.stationName);
+        if (m.outbound?.stationName && m.to) stations.set(m.to, m.outbound.stationName);
+    }
     // An agent on another of the owner's workstations (P9) is its full address: `name@workspace@station`.
-    const peer = (participant: string): string | null => { const p = readPeer(participant); return p ? `${p.name}@${p.workspace}@${p.station}` : null; };
+    const peer = (participant: string): string | null => { const p = readPeer(participant); return p ? `${p.name}@${p.workspace}@${stations.get(participant) ?? p.station}` : null; };
     return (participant) => (participant === HUMAN ? 'you' : apps.get(participant) ?? roster.find((a) => a.agentId === participant)?.name ?? peer(participant) ?? UNNAMED_AGENT);
 }
 

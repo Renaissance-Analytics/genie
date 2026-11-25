@@ -80,10 +80,19 @@ export interface InboxMessage {
     readonly outbound?: OutboundState;
 }
 
+/** `stationName`: the station's name when it was sent, how the person reads the recipient (absent on older mail). */
 export type OutboundState =
-    | { readonly station: string; readonly state: 'queued'; readonly attempts: number; readonly reason?: string }
-    | { readonly station: string; readonly state: 'delivered'; readonly attempts: number; readonly deliveredAt: string }
-    | { readonly station: string; readonly state: 'refused'; readonly attempts: number; readonly reason: string };
+    | { readonly station: string; readonly stationName?: string; readonly state: 'queued'; readonly attempts: number; readonly reason?: string }
+    | { readonly station: string; readonly stationName?: string; readonly state: 'delivered'; readonly attempts: number; readonly deliveredAt: string }
+    | { readonly station: string; readonly stationName?: string; readonly state: 'refused'; readonly attempts: number; readonly reason: string };
+
+/**
+ * HOW MUCH MAIL ONE OTHER STATION MAY HAND THIS HOST (the review of #2180, finding 3): per minute and per day, counted as
+ * it arrives (a repeat is not counted, nor is a refusal). Past either, the arrival is refused, not definitely: the sender
+ * keeps it and tries again later.
+ */
+export interface StationArrivalLimits { readonly perMinute: number; readonly perDay: number }
+export const STATION_ARRIVAL_LIMITS: StationArrivalLimits = { perMinute: 120, perDay: 5_000 };
 
 export interface StationArrival {
     readonly station: string;
@@ -142,11 +151,15 @@ export interface SendInput {
     /** An app's facts (genie#1345). Required exactly when `from` is an app id, and it must be that app's. */
     readonly app?: AppMessageMeta;
     /** To another workstation (P9): kept as queued for it until it is settled. Never with attachments (P9.6). */
-    readonly outbound?: { readonly station: string };
+    readonly outbound?: { readonly station: string; readonly stationName?: string };
 }
 
 /** What a refusal at each end tells the agent will happen instead. */
 const SEND_REFUSED = 'only files inside it can be attached, and nothing was sent';
+
+// A station id is [A-Za-z0-9._-] (core/cross-station.ts), so `|` after it cannot be part of it.
+const originKey = (station: string, id: string): string => `${station}|${id}`;
+const stationOf = (o: OutboundState): { station: string; stationName?: string } => ({ station: o.station, ...(o.stationName ? { stationName: o.stationName } : {}) });
 const SAVE_REFUSED = 'a received file can only be saved inside it, and nothing was written';
 
 export interface ReceiveInput {
@@ -330,7 +343,7 @@ export class InboxStore {
             sentAt: this.#now(),
             readAt: null,
             ...(input.app ? { app: input.app } : {}),
-            ...(input.outbound ? { outbound: { station: input.outbound.station, state: 'queued' as const, attempts: 0 } } : {}),
+            ...(input.outbound ? { outbound: { station: input.outbound.station, ...(input.outbound.stationName ? { stationName: input.outbound.stationName } : {}), state: 'queued' as const, attempts: 0 } } : {}),
         };
         const arrivals: InboxMessage[] = [message];
         const fromAgent = asAgentId(input.from);
@@ -366,9 +379,19 @@ export class InboxStore {
      * Mail another workstation sent (P9), stored for its recipient as any mail is: the same wake, the same reads. The
      * origin is the station's id and its message id there; a repeat of the same origin is the message already here.
      */
-    async receiveFromStation(input: StationArrival): Promise<{ message: InboxMessage; repeat: boolean }> {
-        const known = this.#mail.messages.find((m) => m.origin?.station === input.station && m.origin.id === input.id);
+    async receiveFromStation(input: StationArrival, limits: StationArrivalLimits = STATION_ARRIVAL_LIMITS): Promise<{ message: InboxMessage; repeat: boolean }> {
+        // BY AN INDEX of origins (the review of #2180, finding 3), not a scan of the mailbox per arrival; it keeps an origin
+        // whose thread was deleted since, so a repeat of it is still a repeat.
+        const origins = this.#originIndex();
+        const key = originKey(input.station, input.id);
+        const known = origins.get(key);
         if (known) return { message: known, repeat: true };
+        const at = Date.parse(this.#now());
+        const seen = (this.#arrivals.get(input.station) ?? []).filter((t) => at - t < 86_400_000);
+        if (seen.length >= limits.perDay || seen.filter((t) => at - t < 60_000).length >= limits.perMinute) {
+            this.#arrivals.set(input.station, seen);
+            throw new Error('too much mail from that workstation for now: it is taken again in a while');
+        }
         const seq = Math.max(this.#mail.lastSeq ?? 0, this.#mail.messages.at(-1)?.seq ?? 0) + 1;
         const message: InboxMessage = {
             seq, id: `msg_${randomUUID()}`, from: input.from, to: input.to, text: input.text, attachments: [],
@@ -376,11 +399,25 @@ export class InboxStore {
         };
         this.#mail.lastSeq = seq;
         this.#mail.messages.push(message);
+        origins.set(key, message);
+        this.#arrivals.set(input.station, [...seen, at]);
         await this.#flush([message]);
         for (const w of [...this.#waiters]) if (w.participant === message.to) w.wake();
         for (const l of this.#sendListeners) l(message.to, message);
         return { message, repeat: false };
     }
+
+    /** Every origin another station's mail came from, built once from the mailbox and kept as mail arrives. */
+    #originIndex(): Map<string, InboxMessage> {
+        if (this.#origins) return this.#origins;
+        const index = new Map<string, InboxMessage>();
+        for (const m of this.#mail.messages) if (m.origin) index.set(originKey(m.origin.station, m.origin.id), m);
+        this.#origins = index;
+        return index;
+    }
+    #origins: Map<string, InboxMessage> | null = null;
+    /** When each station's mail arrived, in this process: its caps (STATION_ARRIVAL_LIMITS). */
+    readonly #arrivals = new Map<string, number[]>();
 
     /** What waits for `station` (P9), oldest first; every station's when none is named. */
     outboundFor(station?: string): InboxMessage[] {
@@ -389,7 +426,7 @@ export class InboxStore {
 
     /** One more try that did not reach the station: counted, with why. The mail stays queued. */
     async outboundTried(id: string, reason: string): Promise<void> {
-        await this.#patch((m) => m.id === id && m.outbound?.state === 'queued', (m) => ({ ...m, outbound: { station: m.outbound!.station, state: 'queued', attempts: m.outbound!.attempts + 1, reason } }));
+        await this.#patch((m) => m.id === id && m.outbound?.state === 'queued', (m) => ({ ...m, outbound: { ...stationOf(m.outbound!), state: 'queued', attempts: m.outbound!.attempts + 1, reason } }));
     }
 
     /** The station took it, or refused it in its words: it leaves the queue. */
@@ -397,8 +434,8 @@ export class InboxStore {
         await this.#patch((m) => m.id === id && m.outbound?.state === 'queued', (m) => {
             const was = m.outbound!;
             const outbound: OutboundState = outcome.state === 'delivered'
-                ? { station: was.station, state: 'delivered', attempts: was.attempts + 1, deliveredAt: this.#now() }
-                : { station: was.station, state: 'refused', attempts: was.attempts + 1, reason: outcome.reason.slice(0, 2_000) };
+                ? { ...stationOf(was), state: 'delivered', attempts: was.attempts + 1, deliveredAt: this.#now() }
+                : { ...stationOf(was), state: 'refused', attempts: was.attempts + 1, reason: outcome.reason.slice(0, 2_000) };
             return { ...m, outbound };
         });
     }

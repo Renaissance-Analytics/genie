@@ -44,10 +44,11 @@ describe('nit: a remote agent in the inbox is named with its station’s name', 
     it('mail from it carries the station’s name; mail to it, the name it was sent to', () => {
         const fromA = peerParticipant(A, 'atlas', 'p8x');
         const toB = peerParticipant(B, 'bolt', 'p8x');
-        const name = participantNamer([], [
+        const mail = [
             { from: fromA, to: 'agent_x', origin: { station: A, stationName: 'desk', id: 'm1' } },
             { from: 'agent_x', to: toB, outbound: { station: B, stationName: 'laptop', state: 'queued', attempts: 0 } },
-        ]);
+        ];
+        const name = participantNamer([], mail);
         expect(name(fromA)).toBe('atlas@p8x@desk');
         expect(name(toB)).toBe('bolt@p8x@laptop');
     });
