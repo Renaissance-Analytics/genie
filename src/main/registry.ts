@@ -838,6 +838,21 @@ export class Registry {
         return this.#update(agentId, ({ accessAgents: _old, ...rest }) => (accessAgents === null ? rest : { ...rest, accessAgents: [...accessAgents] }));
     }
 
+    /**
+     * A MOUNTED AGENT TAKES TYNN'S SETTINGS (Tynn #1016), in ONE write: written setter by setter, each half-applied state was
+     * sent to Tynn by the settings sync, and each was one more write for a stale one to land between. Only what is given.
+     */
+    async applyMountedSettings(agentId: AgentId, settings: { readonly permissions?: AgentPermissions; readonly mode?: AgentRecord['mode']; readonly autoApprove?: boolean; readonly accessScope?: AgentRecord['accessScope']; readonly model?: string }): Promise<AgentRecord | null> {
+        return this.#update(agentId, (a) => ({
+            ...a,
+            ...(settings.permissions !== undefined ? { permissions: settings.permissions } : {}),
+            ...(settings.mode !== undefined ? { mode: settings.mode } : {}),
+            ...(settings.autoApprove !== undefined ? { autoApprove: settings.autoApprove } : {}),
+            ...(settings.accessScope !== undefined ? { accessScope: settings.accessScope } : {}),
+            ...(settings.model !== undefined ? { model: settings.model } : {}),
+        }));
+    }
+
     async setAccessScope(agentId: AgentId, accessScope: AgentRecord['accessScope']): Promise<AgentRecord | null> {
         return this.#update(agentId, (a) => ({ ...a, accessScope }));
     }

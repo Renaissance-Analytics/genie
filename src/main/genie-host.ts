@@ -881,11 +881,9 @@ async function main(): Promise<void> {
         onAdopted: async (agent, settings) => {
             const registry = phoneRegistryNow;
             if (!registry) return;
-            if (settings.permissions && agent.provider === 'claude') await registry.setPermissions(agent.id, settings.permissions);
-            if (settings.mode) await registry.setMode(agent.id, settings.mode);
-            if (settings.autoApprove !== undefined) await registry.setAutoApprove(agent.id, settings.autoApprove);
-            if (settings.accessScope) await registry.setAccessScope(agent.id, settings.accessScope);
-            if (settings.model) await registry.setModel(agent.id, settings.model);
+            // A tool setting is Claude's alone (agent-ops-host setPermissions); one write for all of it.
+            const { permissions, ...rest } = settings;
+            await registry.applyMountedSettings(agent.id, { ...rest, ...(permissions && agent.provider === 'claude' ? { permissions } : {}) });
             registry.touch();
             lifecycleLog(`agent mounted from Tynn agent=${agent.id} settings=${Object.keys(settings).join(',') || 'none'}`);
         },
