@@ -37,7 +37,7 @@ import { mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, statSync, 
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { mainWindow } from './cdp-main-window.mjs';
-import { archiveBase, heldBackOf, holdBackCheck, holdBackLog, holdGitBack, readListing, repoVersion } from './toolchain-hold-back.mjs';
+import { holdBackCheck, holdBackLog, holdGitBack, repoVersion, resolveHeldGit } from './toolchain-hold-back.mjs';
 import { closeWhatsNew } from './cdp-whats-new.mjs';
 
 if (process.env.GENIE_TEST_MACHINE !== '1' && userInfo().username !== 'genie') {
@@ -435,27 +435,29 @@ try {
         track('pacman-no-partial-upgrade', 'BLOCKED', 'pacman', 'nothing was installed through Genie to check');
     }
 
-    // 8. AN UPDATE: git held one version back by the harness (from the Arch archive), then Update on its card.
+    // 8. AN UPDATE: git held back by the harness (a pinned package, from our cache), then Update on its card.
     {
-        // The archive is outside Genie (Tynn #968): read with a deadline and once more, and when it cannot be read the control is
-        // not set up, so the check is BLOCKED by `archive` (linux.sh TRACKED_ENV), never a failure of Genie's.
-        const base = archiveBase(process.env);
-        const listing = await readListing(fetch, `${archiveBase(process.env)}/packages/g/git/`);
         // Held below what THIS machine's repositories have (Tynn #968: Omarchy's mirror lags the archive), read without root
         // and without touching the system's sync databases, as Genie reads them.
         const repoGit = repoVersion(run, 'git', join(mkdtempSync(join(tmpdir(), 'tc968-')), 'db'));
         say(`git in this machine's repositories: ${repoGit ?? 'could not be read'}`);
-        const plan = listing === null || repoGit === null ? null : heldBackOf(listing, repoGit);
+        // The held git is ONE pinned package (gate 1125-223010-b05ea9: the archive could not be read, and a release gate
+        // must not depend on a third-party website): from our Azure blob first, the archive only after, never installed
+        // unless it hashes to the pin; pacman checks the signature beside it. Not had at all: the control is not set up,
+        // so the check is BLOCKED by `archive` (linux.sh TRACKED_ENV), never a failure of Genie's.
+        const got = await resolveHeldGit({ fetchFn: fetch, env: process.env, repoGit, dir: mkdtempSync(join(tmpdir(), 'tc968-pkg-')), write: writeFileSync });
+        for (const line of got.log) say(line);
+        const plan = got.ok ? got.plan : null;
         const held = plan?.held ?? null;
         const newest = plan?.newest ?? null;
-        const url = held ? `${base}/packages/g/git/git-${held}-x86_64.pkg.tar.zst` : null;
+        const url = got.ok ? got.target : null;
         // The install is the harness's own control too (the archive read a second time, and pacman's hooks on a machine this
         // row has just changed): tried once more after a wait, with every try's output and status in this log.
         const heldRun = url ? await holdGitBack(() => sudoP('pacman', '-U', '--noconfirm', url)) : null;
         if (heldRun) for (const line of holdBackLog(url, heldRun)) console.log(line.replaceAll(PW, '<password>'));
         const heldOk = heldRun?.ok === true;
-        if (!plan) {
-            track('git-update', 'BLOCKED', 'archive', `CONTROL not set up: ${listing === null ? `the Arch archive (${base}) could not be read` : repoGit === null ? "this machine's repositories could not be read (checkupdates)" : `the Arch archive lists no git older than the repositories' ${repoGit}`}`);
+        if (!got.ok) {
+            track('git-update', 'BLOCKED', got.reason, got.detail);
         } else if (!heldOk) {
             // Still not set up: a control the harness could not make says nothing about Genie, so it BLOCKS (by `control`,
             // linux.sh TRACKED_ENV) with pacman's own words. The checks below, which measure Genie, are not reached.
