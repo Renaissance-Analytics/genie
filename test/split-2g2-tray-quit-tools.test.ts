@@ -139,7 +139,8 @@ describe('genie-host computes it and ends its own terminals at shutdown', () => 
         // ...and the role, the account (2g-3a) and the keychain and GitHub's block (2g-3b) after them.
         expect(host).toMatch(/const hostSummary = hostSummaryFeed\(\{\s*read: \(\) => hostSummaryOf\(terminalHost\.list\(\), hostFlows\.list\(\), hostBook\.kept\(\), \{/);
         expect(host).toMatch(/terminalHost\.onChange\(listener\)/);
-        expect(host).toMatch(/hostSummary,/);
+        // Given to hostRemoteApi and said from the host's start (P6-3 follow-up, own-watches-served-from-start.test.ts).
+        expect(host).toMatch(/\n\s*summary: hostSummary,/);
     });
 
     it('its shutdown ends the terminals it holds, after the sessions stop and before the hosted processes', () => {
