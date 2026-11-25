@@ -95,6 +95,8 @@ export const HOST_LAST_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod
     'tynnNetwork.shares.list', 'tynnNetwork.shares.mint', 'tynnNetwork.shares.revoke',
     // The crash report (Tynn #897, 2c-2): built from genie-host's own safe mode, crash state, registry and identity.
     'crashReport.draft', 'crashReport.send',
+    // The answer to genie-host's password prompt (Tynn #973): to its own broker, which asked.
+    'elevation.answer',
     // A provider's program (Tynn #897, 2c-3): written to genie-host's own choice file.
     'providers.chooseProgram',
     // The throwaway shell (Tynn #897, 2c-4): opened on genie-host's terminal host, in the caller's window.

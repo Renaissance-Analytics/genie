@@ -185,7 +185,7 @@ describe('runElevatedWithPassword', () => {
         const order: string[] = [];
         let release!: () => void;
         const gate = new Promise<void>((r) => { release = r; });
-        const run = serialized(async (b) => { order.push(`start ${b.title}`); if (b.title === 'one') await gate; order.push(`end ${b.title}`); return { kind: 'refused', reason: 'x' }; });
+        const run = serialized<ElevatedBatch>(async (b) => { order.push(`start ${b.title}`); if (b.title === 'one') await gate; order.push(`end ${b.title}`); return { kind: 'refused', reason: 'x' }; });
         const p1 = run(batch({ title: 'one' }));
         const p2 = run(batch({ title: 'two' }));
         await new Promise((r) => setTimeout(r, 10));

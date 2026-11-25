@@ -92,8 +92,9 @@ try {
     const grantDir = mkdtempSync(join(tmpdir(), 'm973-'));
     writeFileSync(join(grantDir, 'grant'), `${USER} ALL=(ALL:ALL) ALL${NL}`);
     personDone = true;
-    const written = sudoN('install', '-m', '0440', '-o', 'root', '-g', 'root', join(grantDir, 'grant'), PERSON);
+    // Read while NOPASSWD still answers: once the grant is in, it is the last match and sudo -n is refused.
     const hadNopasswd = sudoN('test', '-e', NOPASSWD);
+    const written = sudoN('install', '-m', '0440', '-o', 'root', '-g', 'root', join(grantDir, 'grant'), PERSON);
     asideDone = hadNopasswd && sudoP(['mv', '-f', NOPASSWD, ASIDE]).status === 0;
     const asks = !sudoN('true') && sudoP(['true']).status === 0;
     measure('control-sudo-asks-for-the-password', chp.status === 0 && written && asks, `chpasswd ${chp.status}; grant ${written}; NOPASSWD aside ${asideDone}; sudo -n refused and sudo -S with the password works: ${asks}`);
@@ -111,7 +112,8 @@ try {
     const asked: PasswordQuestion[] = [];
     const answers = [WRONG, PW];
     // A control process carrying markers in its argv and env, alive while the batch runs: the sampler must see both.
-    const control = spawn('sh', ['-c', 'sleep 8', MARK_ARGV], { env: { ...process.env, M973: MARK_ENV }, stdio: 'ignore' });
+    // `sleep 8; true`: a lone command would be exec'd by sh, and its argv (with the marker) replaced by sleep's.
+    const control = spawn('sh', ['-c', 'sleep 8; true', MARK_ARGV], { env: { ...process.env, M973: MARK_ENV }, stdio: 'ignore' });
     const started = new Date(Date.now() - 5000).toISOString().replace('T', ' ').slice(0, 19);
     const hostile = ['$(touch /tmp/m973-pwned-a)', '`touch /tmp/m973-pwned-b`', '; touch /tmp/m973-pwned-c', '&& touch /tmp/m973-pwned-d'];
     const log: string[] = [];
@@ -153,9 +155,13 @@ try {
     measure('password-not-in-any-argv-or-env', pwHits.length === 0 && wrongHits.length === 0, `the right password in ${pwHits.length} copies, the wrong one in ${wrongHits.length} (every process's argv and environment, root's included)`);
 
     // 5. NOR IN THE JOURNAL, /var/log, /tmp or this run's evidence. The pattern reaches grep on fd 3, never an argv.
-    const journal = sudoP(['sh', '-c', `exec 3<&0; journalctl --since '${started}' --no-pager -o cat | grep -cF -f /dev/fd/3 || true`], `${PW}${NL}`).stdout.trim();
-    const journalWrong = sudoP(['sh', '-c', `exec 3<&0; journalctl --since '${started}' --no-pager -o cat | grep -cF -f /dev/fd/3 || true`], `${WRONG}${NL}`).stdout.trim();
-    const journalControl = sudoP(['sh', '-c', `journalctl --since '${started}' --no-pager -o cat | grep -c 'COMMAND=' || true`]).stdout.trim();
+    // The journal since the run began, into a root-only file, then searched like the copies (the pattern on grep's stdin).
+    const JOURNAL = `${SAMPLES}/journal.txt`;
+    sudoP(['sh', '-c', `journalctl --since '${started}' --no-pager -o cat > ${JOURNAL}`]);
+    const count = (pattern: string) => sudoP(['grep', '-cF', '-f', '-', JOURNAL], `${pattern}${NL}`).stdout.trim();
+    const journal = count(PW);
+    const journalWrong = count(WRONG);
+    const journalControl = count('COMMAND=');
     const logs = lines(sudoP(['grep', '-rlsF', '-f', '-', '/var/log', '/tmp', '/var/tmp', OUT], `${PW}${NL}`).stdout).filter((l) => !l.startsWith(SAMPLES));
     measure('password-not-in-journal-or-logs', journal === '0' && journalWrong === '0' && logs.length === 0 && Number(journalControl) > 0, `journal lines with the password: ${journal}, with the wrong one: ${journalWrong} (the journal does hold this run's sudo COMMAND lines: ${journalControl}); files under /var/log, /tmp, /var/tmp and the evidence holding it: ${logs.join(', ') || 'none'}`);
 
@@ -174,6 +180,10 @@ try {
     const decoy = `decoy${randomBytes(6).toString('hex')}`;
     sudoP(['mv', '-f', ASIDE, NOPASSWD]);
     asideDone = false;
+    // The person's grant out too: while it is there it is the last match, and sudo asks for a password whatever the drop-in says.
+    sudoP(['rm', '-f', PERSON]);
+    personDone = false;
+    measure('control-nopasswd-back', sudoN('true'), 'sudo -n answers: the image\'s NOPASSWD holds again for step 8');
     const leak = run('sudo', ['-S', '-k', '-p', '', '--', 'cat'], `${decoy}${NL}`).stdout;
     const guarded = await realSudoSpawn(sudo!, sudoStepArgs({ command: 'cat', args: [] }), `${decoy}${NL}`, { timeoutMs: 20_000 });
     measure('nopasswd-step-stdin-guard', leak.includes(decoy) && !guarded.stdout.includes(decoy) && guarded.exitCode === 0, `without the wrapper cat printed the line: ${leak.includes(decoy)}; with it: ${guarded.stdout.includes(decoy)} (exit ${guarded.exitCode})`);

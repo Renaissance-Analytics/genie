@@ -33,7 +33,7 @@ export function ElevationPrompt({ elevation }: ElevationPromptProps) {
     }, [elevation]);
 
     // The field takes the keyboard when a prompt appears: the person clicked Install a moment ago and expects to type.
-    useEffect(() => { if (ask) field.current?.focus(); }, [ask?.id]);
+    useEffect(() => { if (ask) field.current?.focus({ preventScroll: true }); }, [ask?.id]);
 
     if (!ask || !elevation) return null;
 
