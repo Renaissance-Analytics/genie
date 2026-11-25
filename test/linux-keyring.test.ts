@@ -287,10 +287,11 @@ describe('LinuxKeyring — the card and its flow', () => {
     it('a click while a step is running starts nothing twice', async () => {
         const gate: { release?: () => void; execs: number } = { execs: 0 };
         const m = machine(NOTHING, PACMAN);
-        const slow: KeyringPorts = { ...m.ports, exec: () => new Promise((r) => { gate.execs += 1; gate.release = () => r({ code: 126, stderr: '' }); }) };
-        const k = await LinuxKeyring.open(slow);
-        const first = k.fix();
-        const second = k.fix();
+        // Tynn #973: the install is the elevated batch, held open here as if the person had not answered yet.
+        const slow: Elevate = () => new Promise((r) => { gate.execs += 1; gate.release = () => r({ kind: 'refused', reason: 'you cancelled the password prompt; nothing was run' }); });
+        const k = await LinuxKeyring.open(m.ports);
+        const first = k.fix(slow);
+        const second = k.fix(slow);
         expect(second).toBe(first);
         while (!gate.release) await new Promise((r) => setTimeout(r, 0));
         expect(k.view()?.step).toBe('installing');
