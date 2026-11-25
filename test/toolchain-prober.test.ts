@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { platformArgv } from '../src/core/toolchain.js';
 import { latestIndex, probeTools, runUpdate, shouldCheckUpdates, type CommandRunner } from '../src/main/toolchain-prober.js';
+import type { ElevatedBatch, Elevate } from '../src/core/elevation.js';
 
 /**
  * THE MANAGED TOOLCHAIN (§6.6) — the main-side half, with the process runner INJECTED so the test
@@ -92,6 +93,24 @@ describe('an update, judged by the version measured after', () => {
         const lazy: CommandRunner = async (binary) => (binary === 'node' ? { stdout: 'v22.23.2', exitCode: 0 } : { stdout: 'No applicable update found.', exitCode: 0 });
         const u = await runUpdate('node', { platform: 'win32', packageManager: 'winget' }, lazy, '22.24.0');
         expect(u).toMatchObject({ kind: 'unchanged', installed: '22.23.2' });
+    });
+
+    it('Linux (Tynn #973): an apt update is ONE elevated batch through `elevate`, measured after; never pkexec or sudo on the plain runner', async () => {
+        const calls: Array<[string, readonly string[]]> = [];
+        let version = '2.50.0';
+        const run: CommandRunner = async (binary, args) => { calls.push([binary, args]); return { stdout: binary === 'git' ? `git version ${version}` : '', exitCode: 0 }; };
+        const batches: ElevatedBatch[] = [];
+        const elevate: Elevate = async (b) => { batches.push(b); version = '2.51.0'; return { kind: 'ran', exitCode: 0, output: '', failedStep: null }; };
+        const r = await runUpdate('git', { platform: 'linux', packageManager: 'apt' }, run, null, undefined, elevate);
+        expect(r).toEqual({ kind: 'repaired', from: '2.50.0', to: '2.51.0' });
+        expect(batches).toEqual([{ title: 'Update git', items: ['git'], steps: [{ command: 'apt-get', args: ['install', '--only-upgrade', '-y', 'git'] }] }]);
+        expect(calls.map(([b]) => b)).toEqual(['git', 'git']);
+        // No elevation port (no client to ask): refused with why, nothing run beyond nothing.
+        calls.length = 0;
+        expect(await runUpdate('git', { platform: 'linux', packageManager: 'dnf' }, run, null)).toEqual({ kind: 'refused', reason: 'updating git needs the administrator password, and no Genie window is connected to ask for it; nothing was updated' });
+        expect(calls).toEqual([]);
+        // The person cancelled: that refusal, in its words.
+        expect(await runUpdate('git', { platform: 'linux', packageManager: 'apt' }, run, null, undefined, async () => ({ kind: 'refused', reason: 'you cancelled the password prompt; nothing was run' }))).toEqual({ kind: 'refused', reason: 'you cancelled the password prompt; nothing was run' });
     });
 
     it('a tool the planner refuses is refused before anything runs', async () => {
