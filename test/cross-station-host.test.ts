@@ -31,6 +31,8 @@ let rows: StationRow[] = ROWS;
 interface Side {
     id: string; host: CrossStationHost; inbox: InboxStore; atlas: AgentRecord; bolt: AgentRecord; extra: AgentRecord[]; online: boolean; person: Set<string>; links: number; dir: string;
     dials: number; booting: boolean; hang: boolean; shared: Map<string, string>; slugs: Map<string, string>;
+    /** Agents whose provider has them paused (they cannot take mail now), and hibernated workspaces. */
+    paused: Set<string>; asleepWs: Set<string>;
 }
 let offsetMs = 0;
 const sides: Record<'A' | 'B', Side> = {} as never;
@@ -49,13 +51,16 @@ async function side(id: string, other: () => Side): Promise<Side> {
     const s: Side = {
         id, inbox, atlas, bolt, extra: [], online: true, person: new Set(), links: 0, dir, host: null as never,
         dials: 0, booting: false, hang: false, shared: new Map([[ws, 'tynn:proj_p8x']]), slugs: new Map([[ws, 'p8x'], ['ws_other', 'other']]),
+        paused: new Set(), asleepWs: new Set(),
     };
     s.host = new CrossStationHost({
         inbox,
         roster: () => [atlas, bolt, ...s.extra],
         slugs: () => s.slugs,
         sharedIdOf: (workspaceId) => s.shared.get(workspaceId) ?? null,
-        asleep: () => new Set(),
+        asleep: () => s.asleepWs,
+        cannotReceive: (agentId) => (s.paused.has(agentId) ? 'this agent is paused and cannot take mail right now' : null),
+        recipientRefusal: (address) => (s.asleepWs.size > 0 && address.endsWith('@p8x') ? `${address} is in a hibernated workspace; wake it to send` : null),
         self: () => id,
         stations: async () => rows, // every workstation of the owner, this one too
         link: async (station): Promise<StationLink> => {
@@ -436,3 +441,36 @@ function rebuilt(s: Side, extra: Partial<ConstructorParameters<typeof CrossStati
     host.start();
     return host;
 }
+
+/*
+ * THE OWNER'S RULE (2026-11-25, on #2180): "mail sent should get a message received response only when the agent is
+ * capable of receiving messages". DELIVERED means the recipient agent can take it now: it exists, it is not hibernated, it
+ * is not paused. Never only "B's host stored it". An agent that cannot receive now: the mail stays queued (paused), or is
+ * refused in that reason (hibernated); nothing is said received, and nothing is stored for it.
+ */
+describe('the owner’s rule: received only when the agent is CAPABLE OF RECEIVING', () => {
+    it('B’s bolt is paused: A’s send is not delivered but queued, nothing is stored on B; unpaused, the retry delivers it', async () => {
+        sides.B.paused.add(sides.B.bolt.id);
+        const r = await sendFromA('bolt@p8x@laptop', 'while you are paused');
+        expect(r).toMatchObject({ ok: true, delivered: false, queued: true });
+        expect(sides.B.inbox.all().filter((m) => m.text === 'while you are paused')).toEqual([]);
+        expect(sides.A.inbox.outboundFor(B)).toHaveLength(1);
+        sides.B.paused.delete(sides.B.bolt.id);
+        await runTimers();
+        expect(sides.A.inbox.outboundFor(B)).toEqual([]);
+        expect(sides.A.inbox.all().find((m) => m.text === 'while you are paused')?.outbound).toMatchObject({ state: 'delivered' });
+        expect(sides.B.inbox.unread(sides.B.bolt.id).map((m) => m.text)).toEqual(['while you are paused']);
+    });
+
+    it('B’s bolt is in a hibernated workspace: refused with that reason, never said received, nothing stored', async () => {
+        sides.B.asleepWs.add('ws_p8x');
+        const r = await sendFromA('bolt@p8x@laptop', 'are you asleep?');
+        expect(r).toMatchObject({ ok: false, reason: expect.stringMatching(/hibernated/) });
+        expect(sides.A.inbox.all().find((m) => m.text === 'are you asleep?')?.outbound).toMatchObject({ state: 'refused' });
+        expect(sides.B.inbox.all().filter((m) => m.text === 'are you asleep?')).toEqual([]);
+    });
+
+    it('control: the same agent, awake and not paused, is delivered at once', async () => {
+        expect(await sendFromA('bolt@p8x@laptop', 'awake')).toMatchObject({ ok: true, delivered: true, queued: false });
+    });
+});
