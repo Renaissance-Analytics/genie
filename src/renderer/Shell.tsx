@@ -1,3 +1,4 @@
+import { readStationExchanges } from '../core/station-exchanges.js';
 import { readOnlyTerminals } from './read-only-terminals.js';
 import { routeInScope, workspaceHome, WORKSTATION_SCOPE, type WindowScope } from '../core/workspace-window.js';
 import type { AttachmentReply } from '../core/thread-store.js';
@@ -679,6 +680,7 @@ export function Shell({
                 route={scoped ? route : address ?? route}
                 controlsInset={controlsInset}
                 workstation={snapshot.workstation}
+                stationExchanges={readStationExchanges(snapshot.stationExchanges)}
                 remote={remoteShown}
                 scopedHome={scoped ? workspaceHome(scoped.workspaceId) : undefined}
                 share={onShareWorkstation && !scoped ? { onShare: onShareWorkstation } : undefined}

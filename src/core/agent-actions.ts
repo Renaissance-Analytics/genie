@@ -1,3 +1,4 @@
+import { isPeer } from './cross-station.js';
 import { HUMAN, type Participant } from './inbox.js';
 import type { StreamEvent } from './stream-event.js';
 
@@ -43,7 +44,10 @@ export function agentActionOf(event: StreamEvent): AgentAction | null {
  * Mail one agent sends another is the SENDER's action (Tynn #766 row C2a). Mail to you sounds on its own row (the Deck's
  * `msg_` item), and mail you send is not an agent's action: neither is one here.
  */
-export function mailAction(message: { readonly from: Participant; readonly to: Participant }): { agentId: string; kind: 'agentmail' } | null {
+export function mailAction(message: { readonly from: Participant; readonly to: Participant }): { agentId: string; kind: 'agentmail' | 'outside' } | null {
+    // OUTSIDE COMMUNICATION (P9): mail to or from another of the owner's workstations is its own row, on the LOCAL agent.
+    if (isPeer(message.to) && !isPeer(message.from) && message.from !== HUMAN) return { agentId: message.from, kind: 'outside' };
+    if (isPeer(message.from) && !isPeer(message.to) && message.to !== HUMAN) return { agentId: message.to, kind: 'outside' };
     // An APP's message (genie#1345) is no agent's action: an app has no row to sound on.
     return message.from === HUMAN || message.to === HUMAN || message.from.startsWith('app:') ? null : { agentId: message.from, kind: 'agentmail' };
 }

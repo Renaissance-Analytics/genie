@@ -111,6 +111,8 @@ export interface GenieSnapshot {
     signals: SignalState;
     /** `null` until the workstation has been read — never a default `healthy: false`. */
     workstation: { name: string; healthy: boolean } | null;
+    /** Agent mail with another of the owner's workstations going on now (P9); absent = none. The header shows it. */
+    stationExchanges?: readonly import('../core/station-exchanges.js').StationExchange[];
     /** genie-host's safe mode (Tynn #386): the banner on every window. Absent/`null` = not known (no host, an older one). */
     safeMode?: import('../core/safe-mode.js').SafeModeView | null;
     /** genie-host ended a hung window and started this one (Tynn #386): the notice, not safe mode. Absent/`null` = none. */

@@ -53,6 +53,27 @@ export interface CrossStationPorts {
     readonly retryMs?: readonly number[];
     /** How long Tynn's list of workstations is kept before it is asked again; default a minute. */
     readonly stationsTtlMs?: number;
+    /**
+     * WHILE AN EXCHANGE GOES ON (the owner, 2026-11-25: the header shows it): a link opened to send is one OUT until it
+     * closes; mail another station handed here is a pulse IN (core/station-exchanges.ts). Absent = not shown.
+     */
+    readonly exchanges?: {
+        begin(station: string, name: string, direction: 'in' | 'out'): () => void;
+        pulse(station: string, name: string, direction: 'in' | 'out'): void;
+    };
+    /** Each message that crossed, once, on each side (the sound and the flow trigger hear this). Absent = nobody listens. */
+    readonly crossed?: (crossing: StationCrossing) => void;
+}
+
+/** One message that crossed between workstations: which way, the other station, the local agent and the other end's address. */
+export interface StationCrossing {
+    readonly direction: 'in' | 'out';
+    readonly station: string;
+    readonly stationName: string;
+    readonly agentId: string;
+    /** The remote agent's full address, `name@workspace@station`. */
+    readonly address: string;
+    readonly messageId: string;
 }
 
 export type CrossStationSend =
@@ -217,6 +238,9 @@ export class CrossStationHost {
             this.#retryLater(station);
             return;
         }
+        const rowsNow = (await this.#stationRows()) ?? [];
+        const stationName = rowsNow.find((r) => r.id === station)?.name ?? station;
+        const endExchange = this.#p.exchanges?.begin(station, stationName, 'out') ?? (() => {});
         try {
             for (const m of mail) {
                 const sender = this.#p.roster().find((r) => r.id === m.from);
@@ -226,6 +250,7 @@ export class CrossStationHost {
                 try {
                     await link.call('xstation.deliver', arg);
                     await this.#p.inbox.settleOutbound(m.id, { state: 'delivered' });
+                    this.#p.crossed?.({ direction: 'out', station, stationName, agentId: m.from, address: `${to.name}@${to.workspace}@${stationWord(station, rowsNow)}`, messageId: m.id });
                 } catch (error) {
                     if (!(error instanceof StationRefused)) throw error;
                     await this.#p.inbox.settleOutbound(m.id, { state: 'refused', reason: error.message });
@@ -243,6 +268,7 @@ export class CrossStationHost {
             this.#p.log(`cross-station: the link to ${station} failed: ${reason}`);
             this.#retryLater(station);
         } finally {
+            endExchange();
             link.close();
         }
     }
@@ -311,7 +337,12 @@ export class CrossStationHost {
         const entry = rosterOf([record], this.#p.slugs(), asleep)[0];
         const answered = this.#p.inbox.hasWritten(record.id, sender);
         if (!answered && (!entry || !opensFrom(entry, d.from.workspace))) throw new Error(`${d.to} on ${myWord} is not reachable from ${d.from.name}@${d.from.workspace}: its agent scope does not allow it (permission, not liveness)`);
-        const stored = await this.#p.inbox.receiveFromStation({ station, stationName: fromRow?.name ?? station, id: d.id, from: sender, to: record.id as Participant, text: d.text, sentAt: d.sentAt });
+        const stationName = fromRow?.name ?? station;
+        const stored = await this.#p.inbox.receiveFromStation({ station, stationName, id: d.id, from: sender, to: record.id as Participant, text: d.text, sentAt: d.sentAt });
+        if (!stored.repeat) {
+            this.#p.exchanges?.pulse(station, stationName, 'in');
+            this.#p.crossed?.({ direction: 'in', station, stationName, agentId: record.id, address: `${d.from.name}@${d.from.workspace}@${stationWord(station, rows)}`, messageId: stored.message.id });
+        }
         return { messageId: stored.message.id };
     }
 }

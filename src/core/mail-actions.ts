@@ -9,7 +9,9 @@ import { mailAction } from './agent-actions.js';
 export type MailActionSignal =
     | { readonly agentId: string; readonly kind: 'mail-sent'; readonly to: string; readonly id: string }
     | { readonly agentId: string; readonly kind: 'mail-read'; readonly ids: readonly string[] }
-    | { readonly agentId: string; readonly kind: 'agentmail' };
+    | { readonly agentId: string; readonly kind: 'agentmail' }
+    /** Mail crossed to or from another of the owner's workstations (P9): its own sound row, on the local agent. */
+    | { readonly agentId: string; readonly kind: 'outside' };
 
 export function mailSignalsOfSend(to: string, message: { readonly id: string; readonly from: Participant; readonly to: Participant }): MailActionSignal[] {
     const own = mailAction(message);
@@ -25,5 +27,6 @@ export function readMailSignal(raw: unknown): MailActionSignal | null {
     if (r.kind === 'mail-sent') return typeof r.to === 'string' && typeof r.id === 'string' ? { agentId: r.agentId, kind: 'mail-sent', to: r.to, id: r.id } : null;
     if (r.kind === 'mail-read') return Array.isArray(r.ids) && r.ids.every((i) => typeof i === 'string') ? { agentId: r.agentId, kind: 'mail-read', ids: [...r.ids] as string[] } : null;
     if (r.kind === 'agentmail') return { agentId: r.agentId, kind: 'agentmail' };
+    if (r.kind === 'outside') return { agentId: r.agentId, kind: 'outside' };
     return null;
 }

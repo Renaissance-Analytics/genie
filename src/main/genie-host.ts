@@ -219,6 +219,7 @@ import { RemoteBrowsers } from './remote-browsers.js';
 import { siteDoor } from './relay-site.js';
 import { DeviceLinkService } from './device-link-service.js';
 import { CrossStationHost } from './cross-station-host.js';
+import { StationExchanges } from '../core/station-exchanges.js';
 import { stationLinkOver } from './cross-station-link.js';
 import { CAP_CROSS_STATION, CROSS_STATION_MAIL } from '../core/cross-station.js';
 import { deviceSocket } from './device-socket.js';
@@ -2617,7 +2618,12 @@ async function main(): Promise<void> {
         if (!tynnAccountNow || tynnAccountNow.status().signedIn !== true) return Promise.reject(new Error('this workstation is signed out of Tynn'));
         return tynnAccountNow.request(path, init);
     };
+    // While an exchange with another workstation goes on, every window's header shows it (the owner, 2026-11-25).
+    const stationExchanges = new StationExchanges();
+    phoneRegistry.setStationExchanges(() => stationExchanges.view());
+    stationExchanges.onChange(() => phoneRegistry.touch());
     const crossStation = new CrossStationHost({
+        exchanges: stationExchanges,
         inbox: own.inbox,
         roster: () => hostRegistry.listAgents(),
         slugs: () => hostRegistry.workspaceSlugs(),

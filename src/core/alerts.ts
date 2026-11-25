@@ -22,7 +22,7 @@ export type AlertKind =
     | 'question' | 'approval' | 'broken' | 'limited'
     | 'started' | 'replied' | 'finished' | 'thumbsup' | 'stopped' | 'resumed'
     | 'edits' | 'runs' | 'reads' | 'fetches' | 'plans'
-    | 'mail' | 'agentmail'
+    | 'mail' | 'agentmail' | 'outside'
     | 'exits' | 'siteup' | 'sitedown' | 'serviceup' | 'flowdone'
     | 'ghissue' | 'ghpr' | 'ghsecurity' | 'ghci';
 
@@ -140,6 +140,8 @@ export const ALERT_KINDS: readonly AlertDef[] = [
     { kind: 'plans', group: 'work', label: 'An agent updates its plan', sound: 'off', motif: 'done', verb: 'Plans' },
     { kind: 'mail', group: 'messages', label: 'Mail arrives for you', sound: 'dingdongdoink', motif: 'done', verb: 'Mail' },
     { kind: 'agentmail', group: 'messages', label: 'An agent writes to another agent', sound: 'off', motif: 'done', verb: 'Writes' },
+    // OUTSIDE COMMUNICATION (P9; the owner, 2026-11-25: "outside communications get their own event for sounds and flows").
+    { kind: 'outside', group: 'messages', label: 'Mail crosses to or from another of your workstations', sound: 'off', motif: 'done', verb: 'Mail between workstations' },
     // What agents run through Genie (Tynn #766 C2b, core/thing-sounds.ts): something that STOPPED on its own knocks.
     { kind: 'exits', group: 'things', label: 'A process exits', sound: 'off', motif: 'attention', verb: 'Exited' },
     { kind: 'siteup', group: 'things', label: 'A site comes back up', sound: 'off', motif: 'done', verb: 'Up' },

@@ -14,6 +14,7 @@ import { WorkspaceSwatch, wsStyle } from '../workspace-colors.js';
 import type { DndHeaderView } from '../../core/dnd-header.js';
 import { FlowPills, type FlowPillsProps } from './FlowPills.js';
 import { RateLimitPills, type RateLimitPillsProps } from './Dashboard.js';
+import type { StationExchange } from '../../core/station-exchanges.js';
 
 /**
  * THE TITLE BAR — 36px, and the only chrome that is on every surface.
@@ -40,6 +41,12 @@ import { RateLimitPills, type RateLimitPillsProps } from './Dashboard.js';
 import { remoteBadge } from '../../core/remote-protocol.js';
 
 export interface TitleBarProps {
+    /**
+     * EXCHANGES WITH ANOTHER WORKSTATION going on now (P9; the owner, 2026-11-25: "a visual display in the genie header during
+     * the exchange on the right side"): the other station and the direction, beside this workstation's name. Absent or
+     * empty = none.
+     */
+    readonly stationExchanges?: readonly StationExchange[];
     /** The current route, shown verbatim. */
     route: string;
     /**
@@ -429,6 +436,24 @@ export function TitleBar(props: TitleBarProps) {
             {accountPills ? (
                 <div data-title-account-pills="" className="[-webkit-app-region:no-drag] flex shrink-0 items-center">
                     <RateLimitPills {...accountPills} />
+                </div>
+            ) : null}
+            {/*
+              * MAIL WITH ANOTHER OF YOUR WORKSTATIONS (P9), on the host side of the bar: an icon for the direction and the other
+              * station's name, while it goes on. The words are in the tooltip; the arrow is what a glance reads.
+              */}
+            {props.stationExchanges && props.stationExchanges.length > 0 ? (
+                <div data-station-exchanges="" className="flex shrink-0 items-center gap-1">
+                    {props.stationExchanges.map((e) => (
+                        <Tooltip key={e.station} placement="bottom"
+                            content={e.direction === 'in' ? `Agent mail arriving from ${e.name}` : e.direction === 'out' ? `Agent mail going to ${e.name}` : `Agent mail with ${e.name}, both ways`}>
+                            <span data-station-exchange={e.direction}
+                                className="flex items-center gap-1 rounded-md bg-[var(--primary)]/15 px-1.5 py-0.5 font-mono text-[11px] text-[var(--primary)]">
+                                <Icon name={e.direction === 'in' ? 'arrow-down-left' : e.direction === 'out' ? 'arrow-up-right' : 'arrow-left-right'} size="xs" />
+                                {e.name}
+                            </span>
+                        </Tooltip>
+                    ))}
                 </div>
             ) : null}
             {workstation && !scopedHome ? (

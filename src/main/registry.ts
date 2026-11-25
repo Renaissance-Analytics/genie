@@ -69,6 +69,7 @@ export class Registry {
     #signals: (() => SignalState) | null = null;
     #safeMode: (() => import('../core/safe-mode.js').SafeModeView | null) | null = null;
     #hangNotice: (() => import('../core/crash-record.js').HangNotice | null) | null = null;
+    #stationExchanges: (() => readonly import('../core/station-exchanges.js').StationExchange[]) | null = null;
     #rendererNotice: (() => import('../core/renderer-notice.js').RendererNotice | null) | null = null;
     #deckSource: () => readonly DeckItem[] = () => [];
     #runningAtQuit: AgentId[] = [];
@@ -208,6 +209,14 @@ export class Registry {
     /** genie-host's reopened-window notice (Tynn #386): a hung window was ended and this one started; read into every snapshot. */
     setHangNotice(provider: () => import('../core/crash-record.js').HangNotice | null): void {
         this.#hangNotice = provider;
+    }
+
+    /**
+     * Exchanges with another of the owner's workstations going on now (P9, core/station-exchanges.ts), read into every
+     * snapshot while there are any: the header shows them.
+     */
+    setStationExchanges(provider: () => readonly import('../core/station-exchanges.js').StationExchange[]): void {
+        this.#stationExchanges = provider;
     }
 
     /** This window's page ended and was brought back (Tynn #386, renderer-recovery.ts); read into every snapshot. */
@@ -370,6 +379,8 @@ export class Registry {
             // Only once main has said where it comes from: a snapshot with no host to ask carries no claim about it.
             ...(this.#safeMode ? { safeMode: this.#safeMode() } : {}),
             ...(this.#hangNotice ? { hangNotice: this.#hangNotice() } : {}),
+            // Only while one goes on: every other snapshot literal stays exact.
+            ...((): { stationExchanges?: readonly import('../core/station-exchanges.js').StationExchange[] } => { const e = this.#stationExchanges?.() ?? []; return e.length > 0 ? { stationExchanges: e } : {}; })(),
             ...(this.#rendererNotice ? { rendererNotice: this.#rendererNotice() } : {}),
         };
     }
