@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
+import type { ElevatedBatch, Elevate } from '../src/core/elevation.js';
 import {
     KEYRING_PACKAGES,
     LinuxKeyring,
@@ -106,21 +107,16 @@ describe('the install command, per package manager', () => {
     });
 });
 
-describe('installPlan — pkexec, and its fallback', () => {
-    it('with pkexec: the system asks for the password (pkexec), Genie never does; the command is shown too', () => {
-        const plan = installPlan('pacman', '/usr/bin/pkexec');
-        expect(plan.run).toEqual(['/usr/bin/pkexec', 'pacman', '-S', '--needed', '--noconfirm', 'gnome-keyring', 'libsecret']);
+describe('installPlan — an elevated step the host runs (Tynn #973), and the command to type', () => {
+    it('the package manager\'s own argv, with no pkexec or sudo: the host asks the clicking client for the password', () => {
+        const plan = installPlan('pacman');
+        expect(plan.run).toEqual(['pacman', '-S', '--needed', '--noconfirm', 'gnome-keyring', 'libsecret']);
         expect(plan.manual).toBe('sudo pacman -S --needed --noconfirm gnome-keyring libsecret');
-    });
-
-    it('without pkexec: nothing to run, the exact command to type', () => {
-        const plan = installPlan('apt', null);
-        expect(plan.run).toBeNull();
-        expect(plan.manual).toBe('sudo apt-get install -y gnome-keyring libsecret-1-0');
+        expect(installPlan('apt')).toEqual({ run: ['apt-get', 'install', '-y', 'gnome-keyring', 'libsecret-1-0'], manual: 'sudo apt-get install -y gnome-keyring libsecret-1-0', packages: ['gnome-keyring', 'libsecret-1-0'] });
     });
 
     it('unknown package manager: nothing to run and no invented command', () => {
-        expect(installPlan(null, '/usr/bin/pkexec')).toEqual({ run: null, manual: null, packages: ['gnome-keyring', 'libsecret'] });
+        expect(installPlan(null)).toEqual({ run: null, manual: null, packages: ['gnome-keyring', 'libsecret'] });
     });
 });
 
@@ -132,9 +128,21 @@ describe('starting the keyring for this session', () => {
 });
 
 /** A machine in a state, and the commands Genie ran against it; each command may change the state. */
-function machine(start: Omit<KeyringFacts, 'platform'>, plan: InstallPlan, effects: Record<string, { code: number; stderr?: string; then?: Partial<KeyringFacts> }> = {}) {
+function machine(start: Omit<KeyringFacts, 'platform'>, plan: InstallPlan, effects: Record<string, { code: number; stderr?: string; refused?: string; then?: Partial<KeyringFacts> }> = {}) {
     let facts = { ...start };
     const ran: string[] = [];
+    // Tynn #973: what the host's elevation was asked (the real one asks the clicking client for the password first).
+    const batches: ElevatedBatch[] = [];
+    const execs: string[] = [];
+    const elevate: Elevate = async (batch) => {
+        batches.push(batch);
+        const key = batch.steps.map((s) => [s.command, ...s.args].join(' ')).join(' && ');
+        ran.push(key);
+        const effect = Object.entries(effects).find(([k]) => key.startsWith(k))?.[1] ?? { code: 0 };
+        if (effect.refused) return { kind: 'refused', reason: effect.refused };
+        if (effect.then) facts = { ...facts, ...effect.then };
+        return { kind: 'ran', exitCode: effect.code, output: effect.stderr ?? '', failedStep: effect.code === 0 ? null : 0 };
+    };
     let relaunched = 0;
     let changes = 0;
     const ports: KeyringPorts = {
@@ -143,7 +151,7 @@ function machine(start: Omit<KeyringFacts, 'platform'>, plan: InstallPlan, effec
         plan: async () => plan,
         exec: async (argv) => {
             const key = argv.join(' ');
-            ran.push(key);
+            ran.push(key); execs.push(key);
             const effect = Object.entries(effects).find(([k]) => key.startsWith(k))?.[1] ?? { code: 0 };
             if (effect.then) facts = { ...facts, ...effect.then };
             return { code: effect.code, stderr: effect.stderr ?? '' };
@@ -151,11 +159,11 @@ function machine(start: Omit<KeyringFacts, 'platform'>, plan: InstallPlan, effec
         relaunch: () => { relaunched += 1; },
         onChange: () => { changes += 1; },
     };
-    return { ports, ran, relaunched: () => relaunched, changes: () => changes };
+    return { ports, ran, batches, execs, elevate, relaunched: () => relaunched, changes: () => changes };
 }
 
 const NOTHING: Omit<KeyringFacts, 'platform'> = { installed: false, owned: false, activatable: false, backend: 'basic_text', available: false };
-const PACMAN = installPlan('pacman', '/usr/bin/pkexec');
+const PACMAN = installPlan('pacman');
 
 describe('LinuxKeyring — the card and its flow', () => {
     it('ready: no card at all', async () => {
@@ -171,17 +179,19 @@ describe('LinuxKeyring — the card and its flow', () => {
         expect(k.view()).toEqual({ state: 'not-installed', step: null, failure: null, manual: 'sudo pacman -S --needed --noconfirm gnome-keyring libsecret', packages: 'gnome-keyring, libsecret' });
     });
 
-    it('Install → pkexec install → start → keyring answers → restart-needed; every step shown on the way', async () => {
+    it('Install → ONE elevated batch naming the packages (Tynn #973) → start → keyring answers → restart-needed; every step shown on the way', async () => {
         const m = machine(NOTHING, PACMAN, {
-            '/usr/bin/pkexec pacman': { code: 0, then: { installed: true, activatable: true } },
+            'pacman -S': { code: 0, then: { installed: true, activatable: true } },
             'dbus-send': { code: 0, then: { owned: true } },
         });
         const k = await LinuxKeyring.open(m.ports);
         const steps: Array<string | null> = [];
         const unsubscribe = k.onChange(() => steps.push(k.view()?.step ?? null));
-        await k.fix();
+        await k.fix(m.elevate);
         unsubscribe();
         expect(m.ran).toEqual([PACMAN.run!.join(' '), START_SECRET_SERVICE_ARGV.join(' ')]);
+        expect(m.batches).toEqual([{ title: 'Install the keyring', items: ['gnome-keyring', 'libsecret'], steps: [{ command: 'pacman', args: ['-S', '--needed', '--noconfirm', 'gnome-keyring', 'libsecret'] }] }]);
+        expect(m.execs).toEqual([START_SECRET_SERVICE_ARGV.join(' ')]); // nothing elevated through the plain runner
         expect(steps).toContain('installing');
         expect(steps).toContain('starting');
         // Chromium chose the plaintext store when this Genie launched: only a restart picks the keyring up.
@@ -198,47 +208,47 @@ describe('LinuxKeyring — the card and its flow', () => {
         expect(k.view()?.step).toBe('restarting');
     });
 
-    it('the person dismisses the password prompt (pkexec 126): Cancelled, nothing changed, Retry', async () => {
-        const m = machine(NOTHING, PACMAN, { '/usr/bin/pkexec': { code: 126 } });
+    it('the person cancels Genie\'s password prompt: Cancelled, nothing changed, Retry', async () => {
+        const m = machine(NOTHING, PACMAN, { 'pacman -S': { code: 0, refused: 'you cancelled the password prompt; nothing was run' } });
         const k = await LinuxKeyring.open(m.ports);
-        await k.fix();
+        await k.fix(m.elevate);
         expect(k.view()).toMatchObject({ state: 'not-installed', step: null });
         expect(k.view()?.failure).toMatch(/Cancelled/);
         expect(m.ran).toHaveLength(1);
     });
 
-    it('no polkit agent to ask (pkexec 127): says so and shows the command to run', async () => {
-        const m = machine(NOTHING, PACMAN, { '/usr/bin/pkexec': { code: 127, stderr: 'Error executing command as another user: No authentication agent found.' } });
+    it('the password was not accepted, or no client can be asked: the refusal in its words, and the command to run', async () => {
+        const m = machine(NOTHING, PACMAN, { 'pacman -S': { code: 0, refused: 'the password was not accepted 3 times; nothing was run' } });
         const k = await LinuxKeyring.open(m.ports);
-        await k.fix();
-        expect(k.view()?.failure).toMatch(/could not ask for your password/i);
+        await k.fix(m.elevate);
+        expect(k.view()?.failure).toBe('The password was not accepted 3 times; nothing was run.');
         expect(k.view()?.manual).toBe('sudo pacman -S --needed --noconfirm gnome-keyring libsecret');
     });
 
     it('the package manager fails: its own last words, the command, Retry', async () => {
-        const m = machine(NOTHING, PACMAN, { '/usr/bin/pkexec': { code: 1, stderr: 'error: failed to synchronize all databases\nerror: target not found: gnome-keyring' } });
+        const m = machine(NOTHING, PACMAN, { 'pacman -S': { code: 1, stderr: 'error: failed to synchronize all databases\nerror: target not found: gnome-keyring' } });
         const k = await LinuxKeyring.open(m.ports);
-        await k.fix();
+        await k.fix(m.elevate);
         expect(k.view()?.failure).toMatch(/exit 1/);
         expect(k.view()?.failure).toMatch(/target not found: gnome-keyring/);
         // Retry runs the install again.
-        await k.fix();
+        await k.fix(m.elevate);
         expect(m.ran).toHaveLength(2);
     });
 
-    it('no pkexec: nothing is run; the card shows the command to type, and Check again re-reads the machine', async () => {
-        const m = machine(NOTHING, installPlan('pacman', null));
+    it('NO CLIENT TO ASK (no elevation, Tynn #973): nothing is run, never a hang; the card says why and shows the command to type', async () => {
+        const m = machine(NOTHING, PACMAN);
         const k = await LinuxKeyring.open(m.ports);
         await k.fix();
         expect(m.ran).toEqual([]);
-        expect(k.view()?.failure).toMatch(/terminal/);
+        expect(k.view()?.failure).toBe('Installing the keyring needs your password, and no Genie window is connected to ask for it. Press Install in Genie, or run this in a terminal, then Check again.');
         expect(k.view()?.manual).toBe('sudo pacman -S --needed --noconfirm gnome-keyring libsecret');
     });
 
     it('unknown distro: no command is invented; the packages are named', async () => {
-        const m = machine(NOTHING, installPlan(null, '/usr/bin/pkexec'));
+        const m = machine(NOTHING, installPlan(null));
         const k = await LinuxKeyring.open(m.ports);
-        await k.fix();
+        await k.fix(m.elevate);
         expect(m.ran).toEqual([]);
         expect(k.view()?.manual).toBeNull();
         expect(k.view()?.failure).toMatch(/gnome-keyring/);
@@ -332,16 +342,16 @@ describe('realKeyringPorts — reading the session', () => {
         expect(await ports.facts()).toEqual({ installed: false, owned: false, activatable: false, backend: 'basic_text', available: false });
     });
 
-    it('plan: /etc/os-release + pkexec on PATH', async () => {
+    it('plan: /etc/os-release; no pkexec anywhere (Tynn #973)', async () => {
         const ports = realKeyringPorts({
             ...base,
             run: enoent,
             exists: (p) => p === '/usr/bin/pkexec' || p === '/usr/bin/pacman',
             readFile: (p) => (p === '/etc/os-release' ? 'NAME="Arch Linux"\nID=arch\n' : null),
         });
-        expect((await ports.plan()).run).toEqual(['/usr/bin/pkexec', 'pacman', '-S', '--needed', '--noconfirm', 'gnome-keyring', 'libsecret']);
-        const noPkexec = realKeyringPorts({ ...base, run: enoent, exists: () => false, readFile: () => 'ID=ubuntu\n' });
-        expect(await noPkexec.plan()).toEqual({ run: null, manual: 'sudo apt-get install -y gnome-keyring libsecret-1-0', packages: ['gnome-keyring', 'libsecret-1-0'] });
+        expect((await ports.plan()).run).toEqual(['pacman', '-S', '--needed', '--noconfirm', 'gnome-keyring', 'libsecret']);
+        const ubuntu = realKeyringPorts({ ...base, run: enoent, exists: () => false, readFile: () => 'ID=ubuntu\n' });
+        expect(await ubuntu.plan()).toEqual({ run: ['apt-get', 'install', '-y', 'gnome-keyring', 'libsecret-1-0'], manual: 'sudo apt-get install -y gnome-keyring libsecret-1-0', packages: ['gnome-keyring', 'libsecret-1-0'] });
     });
 
     it('exec: a missing program is a failed step with its words, never a throw', async () => {
