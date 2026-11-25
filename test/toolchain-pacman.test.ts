@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { HOST_TOOLS, planInstall, planUpdate, pacmanSteps } from '../src/core/toolchain.js';
 import { pacmanVersion, parsePacmanQ, parsePacmanSi, parsePacmanTargets, upgradedByInstall } from '../src/core/pacman.js';
-import { detectPackageManager, installTool, type ElevateBatch, type ElevateResult, type ToolchainOpsPorts } from '../src/main/toolchain-ops.js';
+import type { ElevatedBatch as ElevateBatch, ElevatedResult as ElevateResult } from '../src/core/elevation.js';
+import { detectPackageManager, installTool, type ToolchainOpsPorts } from '../src/main/toolchain-ops.js';
 import { pacmanSync, withPacmanLatest } from '../src/main/pacman.js';
 import { runUpdate, type CommandRunner } from '../src/main/toolchain-prober.js';
 
@@ -32,7 +33,6 @@ describe('the pacman table and plans, per tool', () => {
         it(`${tool}: install is ONE elevated batch, sync then \`pacman -S --needed --noconfirm ${pkg}\`, with no pkexec or sudo`, () => {
             const plan = planInstall({ tool, platform: 'linux', packageManager: 'pacman' });
             expect(plan).toEqual({
-                argv: ['pacman', '-S', '--needed', '--noconfirm', pkg],
                 label: `pacman -S --needed --noconfirm ${pkg} (as administrator)`,
                 manager: 'pacman',
                 elevated: true,
@@ -46,7 +46,6 @@ describe('the pacman table and plans, per tool', () => {
         for (const [tool, pkg] of [['git', 'git'], ['docker', 'docker'], ['php', 'php'], ['node', 'nodejs'], ['python', 'python'], ['go', 'go']] as const) {
             expect(planUpdate({ tool, platform: 'linux', packageManager: 'pacman' })).toEqual({
                 command: `pacman -S --needed --noconfirm ${pkg}`,
-                argv: ['pacman', '-S', '--needed', '--noconfirm', pkg],
                 manager: 'pacman',
                 elevated: true,
                 items: [pkg],
@@ -261,6 +260,11 @@ describe('installing with pacman', () => {
         expect(m.batches).toEqual([]);
     });
 
+    it('an update with no way to ask is refused, never a hang', async () => {
+        const m = arch({ tool: 'git', pkg: 'git', banner: 'git version 2.55.0' });
+        expect(await runUpdate('git', { platform: 'linux', packageManager: 'pacman', pacman: pacmanSync({ run: m.run, dbPath: '/db', now: () => 0 }) }, m.run, null)).toEqual({ kind: 'refused', reason: 'updating git needs your password, and no Genie window here can ask for it; nothing was changed' });
+    });
+
     it('a host with no way to ask for the password refuses before anything runs', async () => {
         const m = arch({ tool: 'git', pkg: 'git', banner: '' });
         const { elevate: _drop, ...ports } = m.ports;
@@ -289,7 +293,7 @@ describe('updating with pacman', () => {
         const batches: ElevateBatch[] = [];
         const elevate = async (batch: ElevateBatch): Promise<ElevateResult> => { batches.push(batch); version = '2.56.1'; return { kind: 'ran', exitCode: 0, output: '', failedStep: null }; };
         const sync = pacmanSync({ run, dbPath: '/db', now: () => 0 });
-        const r = await runUpdate('git', { platform: 'linux', packageManager: 'pacman', elevate, pacman: sync }, run, null);
+        const r = await runUpdate('git', { platform: 'linux', packageManager: 'pacman', pacman: sync }, run, null, undefined, elevate);
         expect(r).toEqual({ kind: 'repaired', from: '2.55.0', to: '2.56.1' });
         expect(batches).toEqual([{ title: 'Update git with pacman', items: ['git'], steps: [{ command: 'pacman', args: ['-Sy'] }, { command: 'pacman', args: ['-S', '--needed', '--noconfirm', 'git'] }] }]);
     });
@@ -297,7 +301,7 @@ describe('updating with pacman', () => {
     it('git: an update that would upgrade another installed package is refused by name', async () => {
         const m = arch({ tool: 'git', pkg: 'git', banner: 'git version 2.55.0', q: 'git 2.55.0-1\nperl 5.40-1\n', sp: 'git 2.56.1-1\nperl 5.42-1\n' });
         const elevate = async (): Promise<ElevateResult> => { throw new Error('must not elevate'); };
-        const r = await runUpdate('git', { platform: 'linux', packageManager: 'pacman', elevate, pacman: pacmanSync({ run: m.run, dbPath: '/db', now: () => 0 }) }, m.run, null);
+        const r = await runUpdate('git', { platform: 'linux', packageManager: 'pacman', pacman: pacmanSync({ run: m.run, dbPath: '/db', now: () => 0 }) }, m.run, null, undefined, elevate);
         expect(r).toEqual({ kind: 'refused', reason: 'updating git with pacman would also upgrade perl 5.40-1 → 5.42-1, a partial upgrade Arch does not support; update the whole system first (omarchy-update, or pacman -Syu), then update git' });
     });
 });
