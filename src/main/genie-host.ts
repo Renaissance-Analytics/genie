@@ -2627,7 +2627,7 @@ async function main(): Promise<void> {
         stations: async () => {
             const self = (() => { const w = relayHostService.status().workstation; return w?.registered ? w.workstationId : null; })();
             const listed = await connectableWorkstations(tynnRequest, new Set());
-            return listed.ok ? listed.workstations.filter((w) => w.id === self || w.mine).map((w) => ({ id: w.id, name: w.name })) : null;
+            return listed.ok ? listed.workstations.filter((w) => w.id === self || w.mine).map((w) => ({ id: w.id, name: w.name, online: w.online })) : null;
         },
         link: async (station) => {
             const pop = PopKeypair.generate();

@@ -301,7 +301,7 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
                         };
                     });
                     // The owner's other workstations' agents, in full (P9); a station that does not answer adds none.
-                    const remote = me && deps.crossStation ? await deps.crossStation.peers(me).catch(() => []) : [];
+                    const remote = me && deps.crossStation ? await deps.crossStation.peers(me).catch((error: unknown) => { console.warn(`[genie] agentinbox list: the other workstations could not be listed: ${error instanceof Error ? error.message : String(error)}`); return []; }) : [];
                     return ok({ ok: true, peers: [...peers, ...remote.map((p) => ({ address: p.address, name: p.name, workspace: p.workspace, station: p.station, reachable: p.reachable }))], human: { address: HUMAN, reachable: true } });
                 }
                 case 'send': {

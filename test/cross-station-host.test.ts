@@ -18,6 +18,7 @@ import { InboxStore } from '../src/main/inbox-store.js';
 const A = '01m88dzykbnbx4kwj2ptpje92z';
 const B = '01m88e0vzh4a36rj22h53hfcwr';
 const ROWS: StationRow[] = [{ id: A, name: 'desk' }, { id: B, name: 'laptop' }];
+let rows: StationRow[] = ROWS;
 
 interface Side { id: string; host: CrossStationHost; inbox: InboxStore; atlas: AgentRecord; bolt: AgentRecord; extra: AgentRecord[]; online: boolean; person: Set<string>; links: number; dir: string }
 const sides: Record<'A' | 'B', Side> = {} as never;
@@ -40,7 +41,7 @@ async function side(id: string, other: () => Side): Promise<Side> {
         slugs: () => new Map([[ws, 'p8x'], ['ws_other', 'other']]),
         asleep: () => new Set(),
         self: () => id,
-        stations: async () => ROWS, // every workstation of the owner, this one too
+        stations: async () => rows, // every workstation of the owner, this one too
         link: async (station): Promise<StationLink> => {
             const there = other();
             if (station !== there.id || !there.online) throw new Error('that workstation is not online');
@@ -51,6 +52,7 @@ async function side(id: string, other: () => Side): Promise<Side> {
             };
         },
         mode: () => mode,
+        stationsTtlMs: 0,
         personConnected: (station) => s.person.has(station),
         log: () => {},
         schedule: (_ms, fn) => { timers.push(fn); return () => {}; },
@@ -61,6 +63,7 @@ async function side(id: string, other: () => Side): Promise<Side> {
 
 beforeEach(async () => {
     mode = 'queue';
+    rows = ROWS;
     timers.length = 0;
     sides.A = await side(A, () => sides.B);
     sides.B = await side(B, () => sides.A);
@@ -180,6 +183,14 @@ describe('agentinbox list shows the other stations’ agents, in full', () => {
     it('B’s agents as name@workspace@laptop, with whether atlas may open to each', async () => {
         const peers = await sides.A.host.peers(sides.A.atlas);
         expect(peers.map((p) => [p.address, p.reachable])).toEqual([['atlas@p8x@laptop', true], ['bolt@p8x@laptop', true]]);
+    });
+
+    it('a workstation Tynn says is not connected is not dialled for the list (an owner has many machines; each dial is a grant)', async () => {
+        rows = [{ id: A, name: 'desk' }, { id: B, name: 'laptop', online: false }];
+        expect(await sides.A.host.peers(sides.A.atlas)).toEqual([]);
+        expect(sides.A.links).toBe(0);
+        rows = [{ id: A, name: 'desk' }, { id: B, name: 'laptop', online: true }];
+        expect(await sides.A.host.peers(sides.A.atlas)).toHaveLength(2); // positive control
     });
 
     it('an unreachable station lists nobody, and says so', async () => {

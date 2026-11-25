@@ -51,6 +51,8 @@ export interface CrossStationPorts {
     readonly schedule?: (ms: number, fn: () => void) => () => void;
     /** The retry backoff, in ms; the last value repeats. */
     readonly retryMs?: readonly number[];
+    /** How long Tynn's list of workstations is kept before it is asked again; default a minute. */
+    readonly stationsTtlMs?: number;
 }
 
 export type CrossStationSend =
@@ -155,7 +157,8 @@ export class CrossStationHost {
         if (rows === null || self === null) return [];
         const myWorkspace = this.#p.slugs().get(caller.workspaceId) ?? caller.workspaceId;
         const out: RemotePeer[] = [];
-        const others = rows.filter((r) => r.id !== self);
+        // Only what Tynn says is connected now: an owner can have many machines, and each dial costs a grant.
+        const others = rows.filter((r) => r.id !== self && r.online !== false);
         const rosters = await Promise.all(others.map(async (row) => {
             try {
                 const link = await this.#p.link(row.id);
@@ -163,6 +166,7 @@ export class CrossStationHost {
                     const answer = await link.call('xstation.roster', {});
                     const roster = rosterFrom(answer);
                     this.#rosters.set(row.id, roster);
+                    this.#p.log(`cross-station: ${row.name} (${row.id}) lists ${roster.length} agent(s)`);
                     return { row, roster };
                 } finally { link.close(); }
             } catch (error) {
@@ -266,7 +270,7 @@ export class CrossStationHost {
     }
 
     async #stationRows(): Promise<readonly StationRow[] | null> {
-        if (this.#stations && Date.now() - this.#stations.at < STATIONS_TTL_MS) return this.#stations.rows;
+        if (this.#stations && Date.now() - this.#stations.at < (this.#p.stationsTtlMs ?? STATIONS_TTL_MS)) return this.#stations.rows;
         const rows = await this.#p.stations().catch(() => null);
         if (rows === null) return this.#stations?.rows ?? null;
         this.#stations = { rows, at: Date.now() };

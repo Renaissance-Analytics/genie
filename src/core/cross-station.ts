@@ -17,7 +17,8 @@ import type { AgentRecord } from './identity.js';
  *   O5 ruling's reading). The default is `CROSS_STATION_MAIL`.
  */
 
-export interface StationRow { readonly id: string; readonly name: string }
+/** One of the owner's workstations as Tynn lists it. `online: false` = Tynn says it is not connected now (absent = unknown). */
+export interface StationRow { readonly id: string; readonly name: string; readonly online?: boolean | null }
 export interface RosterEntry { readonly name: string; readonly workspace: string; readonly opensFrom: 'all' | readonly string[] }
 export type CrossStationMode = 'queue' | 'connected';
 
