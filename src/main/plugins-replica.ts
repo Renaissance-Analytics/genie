@@ -4,8 +4,8 @@ import type { PluginsDump } from './plugins-host.js';
 
 /**
  * The plugins as a window uses them (Settings → Plugins, the `+plugin` panels, which editor opens a file, whether that
- * editor may touch the file's bytes). Genie-host's, through `PluginsReplica` (ADF A3, Tynn #447); `NO_PLUGINS` when this
- * window has no host to ask (the emergency path has none).
+ * editor may touch the file's bytes). Genie-host's, through `PluginsReplica` (ADF A3, Tynn #447): a window with no host
+ * stops (Tynn #415), so there is no plugins-less window to stand in for.
  */
 export interface PluginsApi {
     list(): readonly PluginEntry[];
@@ -56,14 +56,3 @@ export class PluginsReplica implements PluginsApi {
         await this.#call('refresh', []);
     }
 }
-
-/** A window with no host: no plugins, and nothing to change. */
-export const NO_PLUGINS: PluginsApi = {
-    list: () => [],
-    panels: () => [],
-    editors: () => [],
-    editorBytes: (pluginId) => ({ allowed: false, reason: `${pluginId} is not available: Genie's host is not running` }),
-    setEnabled: async () => false,
-    setNetworkAllowed: async () => false,
-    refresh: async () => {},
-};
