@@ -100,8 +100,11 @@ describe('break probes', () => {
 });
 
 describe('a real logon', () => {
-    it('Linux restarts SDDM (autologin starts a new session), and checks a NEW Hyprland session before it reads anything', () => {
-        expect(linuxReal()).toMatch(/sudo -n systemctl restart sddm/);
+    it('Linux restarts SDDM and the user manager (autologin starts a new session), and checks a NEW Hyprland session before it reads anything', () => {
+        // SDDM down, the user manager afresh (it makes the autostart units when it starts), SDDM up: a logon's order.
+        const order = ['sudo -n systemctl stop sddm', 'sudo -n systemctl restart "user@$(id -u).service"', 'sudo -n systemctl start sddm'].map((c) => linuxReal().indexOf(c));
+        expect(order.every((i) => i > 0)).toBe(true);
+        expect([...order].sort((a, b) => a - b)).toEqual(order);
         expect(linuxReal()).toMatch(/new_session/);
     });
 

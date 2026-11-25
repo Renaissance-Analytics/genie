@@ -69,10 +69,16 @@ hypr_pid() { pgrep -x Hyprland | head -1; }
 # A NEW SESSION: SDDM restarted, so every process of the old graphical session ends, and its autologin logs genie in again;
 # a new Hyprland (another pid) with its Wayland socket, and the session's environment taken again. uwsm's session start runs
 # systemd's xdg-desktop-autostart.target, which is what starts an autostart entry at a logon.
+# THE USER MANAGER IS STARTED AFRESH TOO, as at a logon after a logout or a reboot: the autostart units are made by
+# systemd-xdg-autostart-generator when user@1000 starts, and this job's own SSH session keeps that manager alive through an
+# SDDM restart alone, so it never read the file again (measured, item 1125-025900-274bb7: the new session listed no
+# app-genie@autostart.service). The SSH session itself is a scope of the system's, so it survives the manager's restart.
 new_session() {
     local before="$1" now=''
-    echo "--- the session ends and genie logs in again (sudo systemctl restart sddm; Hyprland was pid ${before:-none})"
-    sudo -n systemctl restart sddm || fail 'sddm could not be restarted (sudo -n)'
+    echo "--- the session ends and genie logs in again (sddm stopped, user@$(id -u) restarted, sddm started; Hyprland was pid ${before:-none})"
+    sudo -n systemctl stop sddm || fail 'sddm could not be stopped (sudo -n)'
+    sudo -n systemctl restart "user@$(id -u).service" || fail "user@$(id -u) could not be restarted (sudo -n)"
+    sudo -n systemctl start sddm || fail 'sddm could not be started (sudo -n)'
     for _ in $(seq 1 90); do
         sleep 2
         now="$(hypr_pid)"

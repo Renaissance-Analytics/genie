@@ -295,7 +295,10 @@ function launch(label) {
 }
 async function open(label) {
     launch(label);
+    const launched = Date.now();
     const page = await target(PORT, 'page', 120_000);
+    // The main window is built after the window's settings are said or the boot deadline (10 s) has passed (main.ts): how long it took says which.
+    step(`the main window's page after ${((Date.now() - launched) / 1000).toFixed(1)} s`);
     const cdp = await Cdp.connect(page.webSocketDebuggerUrl);
     if (await until(() => cdp.evaluate('typeof window.genie === "object" && document.readyState === "complete"', 5_000), 60_000) !== true) throw new Error('window.genie never appeared');
     const inspector = await Cdp.connect((await target(INSPECT, 'node', 30_000)).webSocketDebuggerUrl);
