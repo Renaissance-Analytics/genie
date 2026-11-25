@@ -136,7 +136,9 @@ export class CrossStationHost {
         if (plan === 'refuse') return { ok: false, reason: notConnectedWords(address, word) };
         const message = await this.#p.inbox.send({ from: caller.id, to: recipient, text, outbound: { station: station.id } });
         await this.#flush(station.id);
-        const now = this.#p.inbox.all().find((m) => m.id === message.id)?.outbound;
+        // A batch already running for that station took this one as "again": wait for that next pass too.
+        if (this.#p.inbox.outboundFor(station.id).some((m) => m.id === message.id)) await this.#busy.get(station.id);
+        const now =this.#p.inbox.all().find((m) => m.id === message.id)?.outbound;
         if (now?.state === 'delivered') return { ok: true, messageId: message.id, delivered: true, queued: false };
         if (now?.state === 'refused') return { ok: false, reason: now.reason };
         if (plan === 'try-once') {
