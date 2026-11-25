@@ -20,6 +20,8 @@
  *   - Docker: the image's "installed, daemon inactive" state, then Start; then the real install path after the harness
  *     removes it; then a Genie service (redis) started on it (#970).
  *   - A Genie-managed language install and its default (Node), which work today and must keep working.
+ *   - The keyring's Install (#973 on its own: its pacman table is its own): gnome-keyring removed, the button pressed here,
+ *     Genie's prompt in this client naming it, a wrong password asking again, the right one installing it.
  *
  * OUTPUT: one `TRACK <check> PASS|RED|BLOCKED|FAIL <reason> <what a person sees>` line per check (linux.sh's
  * tracked_verdict reads them against TRACKED_RED[toolchain]). <reason> is what turns the check green: `pacman` (#968),
@@ -560,6 +562,25 @@ try {
                 track('node-default', isDefault ? 'PASS' : 'FAIL', 'none', !made ? `Node ${pick}'s default radio could not be pressed` : isDefault ? `Node ${pick}'s radio reads the default in its row; a login shell's node: ${nodeNow || 'none'}` : `Node ${pick}'s row does not read the default; ${JSON.stringify(await snapshot(['toolchain', 'defaults']))?.slice(0, 160)}`);
             }
         }
+    }
+    // 13. ELEVATION IN THE CLIENT, ON ITS OWN (Tynn #973): the one elevated step on this machine that waits on nothing
+    // but #973 — the keyring's Install, which has its own pacman table. Its package really removed and its daemon ended,
+    // then the card's button pressed from THIS window: Genie's prompt must appear here naming the packages, a wrong
+    // password must ask again, and the right one must install it (pacman -Q). Last, so nothing before it meets a machine
+    // without a keyring; the keyring is back at the end of the step whatever happened.
+    {
+        const keyringPkgs = 'gnome-keyring';
+        const hadKeyring = Boolean(pkgVersion(keyringPkgs));
+        const gone = hadKeyring && sudoP('pacman', '-Rdd', '--noconfirm', keyringPkgs).status === 0 && !pkgVersion(keyringPkgs);
+        run('pkill', ['-f', 'gnome-keyring-daemon']);
+        if (!gone) track('keyring-elevation', 'FAIL', 'none', `CONTROL: ${hadKeyring ? 'the harness could not remove gnome-keyring' : 'gnome-keyring was not installed to begin with'}`);
+        else {
+            // Not awaited: the button's action answers once the install is done, which waits on the prompt this step answers.
+            const r = await elevated('keyring', async () => { void act({ kind: 'keyring.fix' }).catch(() => {}); return true; }, async () => (pkgVersion(keyringPkgs) ? true : null), keyringPkgs);
+            elevationVerdict('keyring-elevation', r, keyringPkgs);
+            track('keyring-install', r.done && pkgVersion(keyringPkgs) ? 'PASS' : r.prompted ? 'FAIL' : 'BLOCKED', r.prompted ? 'none' : 'elevation', `pacman -Q gnome-keyring ${pkgVersion(keyringPkgs) || 'not installed'}${r.refused ? `; Genie said "${r.refused}"` : ''}`);
+        }
+        if (hadKeyring && !pkgVersion(keyringPkgs)) sudoP('pacman', '-S', '--needed', '--noconfirm', keyringPkgs);
     }
 } catch (error) {
     track('the-row-threw', 'FAIL', 'none', error instanceof Error ? error.message : String(error));
