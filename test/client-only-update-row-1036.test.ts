@@ -24,15 +24,16 @@ const sh = () => code(read('scripts', 'vm-client-only-update-linux.sh'), /^\s*#/
 const js = (file: string) => code(read('scripts', file), /^\s*(\/\/|\*|\/\*)/);
 
 describe('registered as a row, last', () => {
-    it('linux.sh: listed last, run with its own timeout under its ceiling, its leftovers reaped', () => {
-        expect(linuxRows.at(-1)).toBe('client-only-update');
+    it('linux.sh: listed just before host-update, run with its own timeout under its ceiling, its leftovers reaped', () => {
+        // Just before host-update (Tynn #1036 P6-2), which replaces the install, the home and the build once more.
+        expect(linuxRows.slice(-2)).toEqual(['client-only-update', 'host-update']);
         expect(linuxRow('client-only-update')).toBe('row_client-only-update() { need_install && need_electron && need_display && timeout 2300 bash scripts/vm-client-only-update-linux.sh; }');
         expect(linuxSh).toMatch(/\n\s*client-only-update\) echo 2400 ;;/);
         expect(/case " ([^"\n]*) " in\n\s*\*" \$name "\*\) reap_leftovers "\$name" ;;/.exec(linuxSh)?.[1]?.split(' ')).toContain('client-only-update');
     });
 
-    it('windows.ps1: listed last, its function, its ceiling', () => {
-        expect(windowsRows.at(-1)).toBe('client-only-update');
+    it('windows.ps1: listed just before host-update, its function, its ceiling', () => {
+        expect(windowsRows.slice(-2)).toEqual(['client-only-update', 'host-update']);
         expect(windowsFunction('Row-client-only-update')).toBe("function Row-client-only-update { Need-Install; Need-Electron; Need-TestMachine; Run 'vm-client-only-update' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-client-only-update.ps1 } }");
         expect(windowsPs1).toMatch(/\n\s*'client-only-update' \{ return 2400 \}/);
     });

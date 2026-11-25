@@ -6,7 +6,12 @@ import { defineConfig } from 'vite';
  */
 export default defineConfig({
     // The test build that stops at each step of the keychain move (src/main/migration-holds.ts). Nothing that ships sets it.
-    define: { __GENIE_TEST_HOLDS__: process.env.GENIE_TEST_HOLDS === '1' ? 'true' : 'false' },
+    // The host-update row's mark (Tynn #1036 P6-2, scripts/vm-windows-update.ps1): its update is built with one, so that build
+    // carries ANOTHER genie-host (host.js differs) and says so in the lifecycle log. Nothing that ships sets it.
+    define: {
+        __GENIE_TEST_HOLDS__: process.env.GENIE_TEST_HOLDS === '1' ? 'true' : 'false',
+        __GENIE_TEST_HOST_MARK__: JSON.stringify(process.env.GENIE_TEST_HOST_MARK ?? ''),
+    },
     build: {
         outDir: 'dist/main',
         emptyOutDir: false,

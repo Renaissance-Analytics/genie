@@ -47,6 +47,7 @@ ROWS=(
     package package-fuse
     toolchain
     client-only-update
+    host-update
 )
 
 # TRACKED RED ROWS (Tynn #967). An acceptance row that lands RED ahead of the stories that fix it, with the reasons it
@@ -650,6 +651,8 @@ row_package-fuse() {
 # provider pids after, and every tick streamed while there was no window in the agent's ledger, in order. It builds and
 # packages twice and replaces ~/.genie, ~/Applications/Genie.AppImage and dist/: last in the list, after every row that reads them.
 row_client-only-update() { need_install && need_electron && need_display && timeout 2300 bash scripts/vm-client-only-update-linux.sh; }
+# A host update drains and swaps (Tynn #1036 P6-2): last, as it replaces the install, the home and the build once more.
+row_host-update() { need_install && need_electron && need_display && timeout 2300 bash scripts/vm-host-update-linux.sh; }
 row_toolchain() {
     need_build && need_display || return 1
     local ran
@@ -708,6 +711,7 @@ ceiling() {
         package) echo 1500 ;;
         toolchain) echo 2700 ;;
         client-only-update) echo 2400 ;;
+        host-update) echo 2400 ;;
         *) echo 600 ;;
     esac
 }
@@ -895,7 +899,7 @@ run_rows() {
     for name in "${selected[@]}"; do
         echo "=== $name"
         machine_line "$name"
-        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover trust-step accounts-popover claude-accounts sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash quit-keeps-host host-late-ready package-fuse toolchain client-only-update " in
+        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover trust-step accounts-popover claude-accounts sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash quit-keeps-host host-late-ready package-fuse toolchain client-only-update host-update " in
             *" $name "*) reap_leftovers "$name" ;;
         esac
         from="$(now_ms)"
