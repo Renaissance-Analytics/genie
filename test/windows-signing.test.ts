@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
+import { LOADS_PROBE, loadsOf } from './support/windows-powershell-loads.js';
 
 const require = createRequire(import.meta.url);
 const read = (file: string) => existsSync(file) ? readFileSync(file, 'utf8').replace(/\r\n/g, '\n') : '';
@@ -196,8 +197,10 @@ describe('Windows release signing', () => {
             expect(command).not.toContain('-Exclude');
             if (process.platform !== 'win32') return;
             const stub = `function Invoke-TrustedSigning { [CmdletBinding()]param([string]$Endpoint,[string]$CertificateProfileName,[string]$CodeSigningAccountName,[string]$TimestampRfc3161,[string]$TimestampDigest,[string]$FileDigest,[string]$Files) $PSBoundParameters | ConvertTo-Json -Compress };`;
-            const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', stub + command], { encoding: 'utf8' });
+            const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', stub + command + LOADS_PROBE], { encoding: 'utf8' });
             expect(result.status, result.stderr).toBe(0);
+            // Nothing a new VM reads cold for the first time (Tynn #989): no module import, no ConvertTo-Json serializer.
+            expect(loadsOf(result.stderr), 'what the binding check had to load').toEqual([]);
             const bound = JSON.parse(result.stdout);
             expect(bound.Endpoint).toBe('https://eus.codesigning.azure.net');
             expect(bound.CertificateProfileName).toBe('genie-public');
