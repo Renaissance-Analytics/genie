@@ -135,7 +135,9 @@ describe('the capability table', () => {
         // 193 with `workspaces.relocate` ("Locate folder" on a workspace whose folder is not there: a write, workspace-scoped,
         // the host owner's only) (host split P7).
         // 194 with `agents.setAppWakeCap` (a write, agent-scoped, the owner's): an agent's app wake cap (Tynn #1053).
-        expect(REMOTE_METHODS.length).toBe(194);
+        // 195 with `workspaces.adoptAgents` (a write, the host owner's only): every offered agent in one step (Tynn #1016).
+        expect(REMOTE_METHODS.length).toBe(195);
+        expect(capabilityOf('workspaces.adoptAgents')).toBe('write');
         expect(capabilityOf('agents.setAppWakeCap')).toBe('write');
         expect(AGENT_SCOPED_METHODS).toContain('agents.setAppWakeCap');
         expect(capabilityOf('registry.write')).toBe('local');
