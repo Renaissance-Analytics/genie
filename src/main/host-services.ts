@@ -42,12 +42,8 @@ export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> 
     readonly inbox: S['inbox'];
     readonly attention: S['attention'];
     readonly knowledge: S['knowledge'];
-    /** The stores themselves when THIS window opened them (the emergency path); null when genie-host owns them. */
-    readonly own: OwnAgentStores | null;
     readonly flows: S extends OwnAgentStores ? FlowStore : FlowsApi;
     readonly flowScheduler: S extends OwnAgentStores ? FlowScheduler : FlowSchedulerApi;
-    /** The flows file itself when THIS window opened it (the emergency path); null when genie-host owns it (P3.3d). */
-    readonly ownFlows: FlowStore | null;
     readonly settings: S extends OwnAgentStores ? SettingsStore : S_Settings;
     readonly supervisor: SupervisorApi;
     /**

@@ -22,9 +22,8 @@ import { assembleDeckItems } from './deck-assembly.js';
 import { ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
 import type { AgentSessionsPort } from './flow-runner.js';
 import { startFlowsEngine } from './flows-engine.js';
-import type { FlowSchedulerApi, FlowsApi } from './flows-host.js';
+import type { FlowSchedulerApi } from './flows-host.js';
 import { FlowStore } from './flow-store.js';
-import type { WindowAgentStores } from './agent-stores-api.js';
 import { importV1Inbox, importV1Knowledge, openAgentStores } from './agent-stores-open.js';
 import { attentionLimitsFrom } from './attention-store.js';
 import { runtimeDir } from './paths.js';
@@ -42,9 +41,10 @@ import { composeStageDiagnostics, type ComposeStageSample } from './compose-stag
 import type { HostingApi } from './hosting-host.js';
 
 /**
- * THE COMPOSITION ROOT. Every store, the scheduler, the supervisor, the site manager and the front
- * door, wired once at boot and torn down once at quit. `main.ts` calls this and hands the result to
- * the IPC layer; nothing else constructs these.
+ * THE TESTS' COMPOSITION. Every store, the scheduler, the supervisor, the site manager and the front
+ * door, wired once and torn down once, as one service object a test drives (test/helpers/compose-alone.ts).
+ * The app composes nothing with it: the window reads genie-host's over the protocol (Tynn #955), and a
+ * window whose host cannot start stops (Tynn #415), so there is no window composition to fall back to.
  *
  * Boot order matters in two places: the settings carry-over runs before anything reads a setting,
  * and the front door starts after the site manager exists so its route function is live. Shutdown
@@ -69,12 +69,7 @@ export interface ComposeInput extends HostingOptions {
     readonly v1Knowledge?: () => V1Knowledge | null;
     /** Reads Genie 1's AgentInbox history (`readV1Inbox`), or `null`; called at boot until the inbox records an import that saw v1. */
     readonly v1Inbox?: () => V1Inbox | null;
-    /**
-     * The stores agents write to, when genie-host owns them (the host split, P3.1): the window's replicas. Absent = this
-     * window opens them itself — only on the emergency path, when no host could start.
-     */
-    readonly agentStores?: WindowAgentStores;
-    /** genie-host's process supervisor, through this window's replica (P3.3b). Absent = this window runs its own. */
+    /** A process supervisor handed in (a test's, P5a.3). Absent = the composition's own (`alone.supervisor`). */
     readonly supervisor?: SupervisorApi;
     /**
      * A hosting handed in (the host split, P5a): a test's stand-in of genie-host's. The app composes none (Tynn #584), and no
@@ -83,10 +78,8 @@ export interface ComposeInput extends HostingOptions {
     readonly hosting?: HostingApi;
     /** Tests that compose alone hand in a real hosting stack (test/helpers/compose-alone.ts). Nothing in the app does. */
     readonly buildOwnHosting?: (input: HostingComposeInput) => Promise<HostingStack>;
-    /** The same for what genie-host owns besides (Tynn #594): only a test that composes alone sets this. */
-    readonly alone?: ComposeAlone;
-    /** genie-host's flows and their scheduler, through this window's replica (P3.3d). Absent = this window runs its own. */
-    readonly flowsEngine?: { readonly flows: FlowsApi; readonly scheduler: FlowSchedulerApi };
+    /** What genie-host owns besides (Tynn #594), opened by the test that composes: its settings, stores, flows and approvals. */
+    readonly alone: ComposeAlone;
     /**
      * Genie 1's database, for bringing its FLOWS over as disarmed canvas flows (main/v1-flows.ts, genie#1204). Absent = none.
      */
@@ -165,9 +158,6 @@ import type { ComposedServices, WindowServices } from './host-services.js';
 export type { FrontDoorStatus } from './hosting-compose.js';
 export type { ComposedServices, WindowServices } from './host-services.js';
 
-/** The settings as compose and its consumers use them: the store itself, or genie-host's through a replica (P3.2). */
-type S_Settings = NonNullable<WindowAgentStores['settings']>;
-
 /** What a test that composes alone opens for itself. The app never does: every one of these is genie-host's (Tynn #594). */
 export interface ComposeAlone {
     openSettings(): Promise<SettingsStore>;
@@ -187,7 +177,6 @@ const FLOW_SETTLE_ON_QUIT_MS = 5_000;
 
 /** The composition itself: the TESTS' (test/helpers/compose-alone.ts). The app composes nothing: its services are genie-host's (Tynn #955). */
 export async function composeWith(input: ComposeInput): Promise<WindowServices> {
-    if (!input.agentStores?.settings && !input.alone) throw new Error("compose was given no settings: they are genie-host's");
     // Tynn story #402: signed in to tynn.ai, the agents' protocol carries Tynn's work model; otherwise the plan-file fallback.
     // The window holds no Tynn account (Tynn #959) and writes no agent's docs: genie-host decides it from its own account
     // (genie-host.ts featureWorkspaceFiles). What the window composes alone is a test's, and says the fallback (Tynn #961).
@@ -201,66 +190,48 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
     await mkdir(runtimeDir(input.userData), { recursive: true });
     stage?.end();
 
-    // THE SETTINGS (the host split, P3.2): genie-host's, through this window's replica — hot-swap kept: every change, by
-    // whoever, fires the listeners below with the new value readable. Opened here only on the emergency path.
-    let ownSettings: SettingsStore | null = null;
+    // THE SETTINGS, the composition's own (in the app they are genie-host's, P3.2) — hot-swap kept: every change, by
+    // whoever, fires the listeners below with the new value readable.
     stage?.begin('settings');
-    if (!input.agentStores?.settings) {
-        ownSettings = await input.alone!.openSettings();
-        stage?.end(); stage?.begin('settings-carry-over');
-        await ownSettings.carryOverFromV1(input.v1Settings());
-    }
+    const settings: SettingsStore = await input.alone.openSettings();
+    stage?.end(); stage?.begin('settings-carry-over');
+    await settings.carryOverFromV1(input.v1Settings());
     stage?.end();
-    const settings: S_Settings = input.agentStores?.settings ?? ownSettings!;
 
-    // THE STORES AGENTS WRITE TO (the host split, P3.1): genie-host's, through this window's replicas — or, only when no
-    // host could start, this window's own, opened here with Genie 1's history taken once.
-    let ownStores: Awaited<ReturnType<typeof openAgentStores>> | null = null;
+    // THE STORES AGENTS WRITE TO, the composition's own (in the app genie-host's, P3.1), with Genie 1's history taken once.
     stage?.begin('agent-stores');
-    if (!input.agentStores) {
-        ownStores = await input.alone!.openStores(() => attentionLimitsFrom(settings.snapshot()));
-        stage?.end(); stage?.begin('agent-store-imports');
-        importV1Knowledge(ownStores.knowledge, input.v1Knowledge);
-        await importV1Inbox(ownStores.inbox, input.v1Inbox, input.roster?.() ?? [], now());
-    }
+    const ownStores: OwnStores = await input.alone.openStores(() => attentionLimitsFrom(settings.snapshot()));
+    stage?.end(); stage?.begin('agent-store-imports');
+    importV1Knowledge(ownStores.knowledge, input.v1Knowledge);
+    await importV1Inbox(ownStores.inbox, input.v1Inbox, input.roster?.() ?? [], now());
     stage?.end();
-    const inbox: WindowAgentStores['inbox'] = input.agentStores?.inbox ?? ownStores!.inbox;
-    const attention: WindowAgentStores['attention'] = input.agentStores?.attention ?? ownStores!.attention;
-    const knowledge: WindowAgentStores['knowledge'] = input.agentStores?.knowledge ?? ownStores!.knowledge;
+    const { inbox, attention, knowledge } = ownStores;
     const hiddenWorkspaces = () => (input.workspaces?.() ?? []).filter((w) => w.asleep === true).map((w) => w.id);
-    ownStores?.knowledge.setHiddenWorkspaces(hiddenWorkspaces);
-    ownStores?.inbox.setVisibility((message) => {
+    knowledge.setHiddenWorkspaces(hiddenWorkspaces);
+    inbox.setVisibility((message) => {
         if (input.inboxParticipantVisible) return input.inboxParticipantVisible(message.from) && input.inboxParticipantVisible(message.to);
         const hidden = new Set(hiddenWorkspaces());
         const ghosts = new Set((input.roster?.() ?? []).filter((r) => hidden.has(r.workspaceId)).map((r) => r.id as string));
         return !ghosts.has(message.from) && !ghosts.has(message.to);
     }, input.inboxVisibilityVersion);
-    // FLOWS (P3.3d): genie-host's when it runs — its scheduler fires armed flows with no window, and this window reads and
-    // drives them through a replica. This window's own (its store, scheduler and file trigger) only on the emergency path.
+    // FLOWS, the composition's own: its store, scheduler and file trigger (in the app genie-host's, P3.3d).
     // Genie's tools as flow steps (genie#1204): their kinds before the store reads any document that holds one.
     ensureFlowToolKinds();
-    let ownFlows: FlowStore | null = null;
     stage?.begin('flows');
-    if (!input.flowsEngine) {
-        ownFlows = await input.alone!.openFlows();
-        ownFlows.setHiddenWorkspaces(hiddenWorkspaces);
-        // Genie 1's FLOWS (genie#1204), once, DISARMED — before the scheduler plans, which arms nothing they bring.
-        if (input.v1Flows) await runV1FlowImport(ownFlows, { database: input.v1Flows.database, workspaces: input.workspaces?.() ?? [] }).catch((error: unknown) => console.error(`[genie] v1 flows import failed: ${error instanceof Error ? error.message : String(error)}`));
-    }
+    const flows: FlowStore = await input.alone.openFlows();
+    flows.setHiddenWorkspaces(hiddenWorkspaces);
+    // Genie 1's FLOWS (genie#1204), once, DISARMED — before the scheduler plans, which arms nothing they bring.
+    if (input.v1Flows) await runV1FlowImport(flows, { database: input.v1Flows.database, workspaces: input.workspaces?.() ?? [] }).catch((error: unknown) => console.error(`[genie] v1 flows import failed: ${error instanceof Error ? error.message : String(error)}`));
     stage?.end();
-    const flows: FlowsApi = input.flowsEngine?.flows ?? ownFlows!;
 
-    // THE PROCESS SUPERVISOR (P3.3b): genie-host's when it runs — its restart policy keeps sites and workers alive with the
-    // UI closed, and this window drives it through a replica. This window's own only on the emergency path.
-    let supervisor: SupervisorApi;
-    if (input.supervisor) supervisor = input.supervisor;
-    else supervisor = input.alone!.supervisor();
+    // THE PROCESS SUPERVISOR: the one handed in, or the composition's own (in the app genie-host's, P3.3b).
+    const supervisor: SupervisorApi = input.supervisor ?? input.alone.supervisor();
     /** A source's app credential, while its workspace allows apps (the setting's default is on). */
     const appEnvOf = (source: AppEnvSource): Readonly<Record<string, string>> =>
         input.appInboxEnv && settings.snapshotFor(source.workspaceId).app_inbox !== false ? input.appInboxEnv(source) : {};
     // An autonomous agent's gated actions run without asking, recorded (Tynn #801): read from its record at each ask.
     // A permission switch the person turned on answers its own actions the same way (genie#1294, SWITCH_ANSWERS).
-    const ownApprovals = input.agentStores ? null : input.alone!.approvals({
+    const approvals = input.alone.approvals({
         now,
         autoApproved: (caller) => (input.roster?.() ?? []).some((a) => a.id === caller.agentId && a.autoApprove === true),
         granted: (caller, action) => {
@@ -268,7 +239,6 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
             return flag !== undefined && (input.roster?.() ?? []).some((a) => a.id === caller.agentId && a[flag] === true);
         },
     });
-    const approvals: WindowAgentStores['approvals'] = input.agentStores?.approvals ?? ownApprovals!;
 
     // §6.7: plugins live beside the rest of Genie's state; signed by default, unsigned only under developer mode. They are
     // GENIE-HOST'S (ADF A3, Tynn #447): this window reads them through the host's replica and opens no plugin host itself.
@@ -307,8 +277,8 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
     const workspaceRef = (id: string): WorkspaceRef | undefined => workspacesNow().find((w) => w.id === id);
     const asleep = (id: string): boolean => workspaceRef(id)?.asleep === true;
     const sessions: AgentSessionsPort = input.agentSessions ?? { session: () => null, rows: () => [], prompt: () => false, subscribe: () => () => {} };
-    const ownEngine = ownFlows ? input.alone!.startFlows({
-        store: ownFlows,
+    const engine = input.alone.startFlows({
+        store: flows,
         now,
         asleep,
         workspacePath: (id) => workspaceRef(id)?.path ?? null,
@@ -328,14 +298,14 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
             const workspace = workspacesNow().find((w) => w.id === agent.workspaceId);
             return workspace !== undefined && hosting.trust.view(workspace.id)?.trusted !== true;
         },
-    }) : null;
+    });
     let flowVisibility = JSON.stringify(hiddenWorkspaces().sort());
     const stopFlowVisibility = input.onWorkspacesChange?.(() => {
         const key = JSON.stringify(hiddenWorkspaces().sort());
         if (key === flowVisibility) return;
-        flowVisibility = key; ownFlows?.visibilityChanged();
+        flowVisibility = key; flows.visibilityChanged();
     });
-    const flowScheduler: FlowSchedulerApi = input.flowsEngine?.scheduler ?? ownEngine!.scheduler;
+    const flowScheduler: FlowSchedulerApi = engine.scheduler;
     // A running process is ASKED after on a heartbeat (P2): one whose pty vanished without an exit is a crash, not
     // "running". Started last, after every await that could fail, so a composition that throws leaves no timer behind.
     const stopLiveness = supervisor.watchLiveness();
@@ -344,8 +314,6 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
     // Old local staging is swept by genie-host (host-staging-sweep.ts, Tynn #955): the composition sweeps nothing.
     stage?.ready();
     return {
-        own: ownStores ? { ...ownStores, approvals: ownApprovals! } : null,
-        ownFlows,
         inbox,
         attention,
         knowledge,
@@ -458,16 +426,16 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
         resolveAddress: (text) => resolveOnRoster(text, roster(), input.workspaceSlugs?.()),
         mailRefusal: (text) => input.refusalForRecipient?.(text) ?? null,
         workspaceVisible: (id) => !hiddenWorkspaces().includes(id),
-        setFlowToolCaller: (call) => { ownEngine?.setToolCaller(call); },
+        setFlowToolCaller: (call) => { engine.setToolCaller(call); },
         workspaceIds: () => workspacesNow().filter((workspace) => workspace.asleep !== true).map((workspace) => workspace.id),
         shutdown: () => {
             setGitReadPolicy(null);
             down ??= (async () => {
-                ownApprovals?.cancelAll('Genie is shutting down');
+                approvals.cancelAll('Genie is shutting down');
                 stopLiveness();
                 stopFlowVisibility?.();
                 // No flow fires from here: its timer is cancelled for good, so nothing starts after `settled()` answers (genie#1351).
-                ownEngine?.stop();
+                engine.stop();
                 // Nothing more is started (a port probe still in flight) or synced (a pending hosts write, the docker watch, a
                 // workspace change) from here.
                 ownHosting?.quiesce();
@@ -486,12 +454,12 @@ export async function composeWith(input: ComposeInput): Promise<WindowServices> 
                 // A run's command was just stopped above (it records as failed); a run waiting on an agent's turn may not end
                 // soon, and a quit does not wait on an agent — bounded, then the run is left unrecorded.
                 let quitWait: ReturnType<typeof setTimeout> | undefined;
-                if (ownEngine) await Promise.race([ownEngine.scheduler.settled(), new Promise<void>((r) => { quitWait = setTimeout(r, FLOW_SETTLE_ON_QUIT_MS); })]);
+                await Promise.race([engine.scheduler.settled(), new Promise<void>((r) => { quitWait = setTimeout(r, FLOW_SETTLE_ON_QUIT_MS); })]);
                 clearTimeout(quitWait);
                 // And the flows file's last write has landed (a held record, the run in flight kept as it goes).
-                await ownFlows?.flushed();
+                await flows.flushed();
                 await ownHosting?.settled();
-                ownStores?.knowledge.close();
+                knowledge.close();
             })();
             return down;
         },
