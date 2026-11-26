@@ -1,0 +1,170 @@
+import { renderToStaticMarkup } from 'react-dom/server';
+import { describe, expect, it } from 'vitest';
+import type { ToolStatus } from '../src/core/toolchain.js';
+import { ToolchainSurface } from '../src/renderer/components/FeatureSurfaces.js';
+import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
+import { installNote } from '../src/renderer/toolchain-view.js';
+
+/**
+ * Tynn #1062 — THE TOOLCHAIN, USABLE (the owner's beta.66 screenshot, Windows, a ~1050 px window with the chat open:
+ * "barely usable"). One title; the panel only when a tool is chosen; plain words instead of paths, registry keys, stars
+ * and "no password"; every action a button that names what it does. The layout itself is proved by screenshots
+ * (scripts/toolchain-shots-cdp.mjs); this file holds the words and the structure.
+ */
+type Tc = NonNullable<FeatureData['toolchain']>;
+const t = (tool: string, installed: string | null, tone: ToolStatus['tone'], extra: Partial<ToolStatus> = {}): ToolStatus => ({ tool, installed, latest: null, tone, source: null, ...extra });
+const HOME_DIR = 'C:\\Users\\someone\\.genie\\toolchain\\php\\8.4.27';
+const DEFAULTS = { php: '8.4.27', node: null, go: null, python: null, dotnet: null, rust: null, ruby: null, java: null } as const;
+/** The owner's machine, as his screenshot showed it. */
+const OWNER: Tc = {
+    tools: [t('git', '2.52.0', 'up-to-date'), t('docker', null, 'not-installed')],
+    checkedAt: 1,
+    installs: { docker: { label: 'winget install Docker.DockerDesktop', elevated: true } },
+    php: {
+        managed: [
+            { version: '8.4.27', dir: HOME_DIR, usedBy: ['a.gen', 'b.gen'] },
+            { version: '8.3.26', dir: 'C:\\Users\\someone\\.genie\\toolchain\\php\\8.3.26', usedBy: ['tynn.gen'] },
+        ],
+        system: null,
+        available: [{ version: '8.4.27', installed: true }, { version: '8.5.2', installed: false }],
+    },
+    python: { managed: [], system: { version: '3.13.15' }, available: [{ version: '3.15.1', installed: false }] },
+    defaults: DEFAULTS,
+    machinePath: {
+        applied: true,
+        where: ['the user PATH (HKCU\\Environment)'],
+        entries: ['C:\\Users\\someone\\.genie\\toolchain\\shims'],
+        targets: ['the user PATH (HKCU\\Environment)'],
+    },
+};
+const render = (toolchain: Tc | null, selected?: string) =>
+    renderToStaticMarkup(<ToolchainSurface data={{ ...EMPTY_FEATURES, toolchain }} onAction={() => {}} onNavigate={() => {}} {...(selected ? { selected } : {})} />);
+/** What a person READS: the markup's text, attributes (titles, data-*) left out. */
+const text = (html: string) => html.replace(/<[^>]*>/g, ' ').replace(/&#x27;|&#39;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
+const card = (html: string, key: string) => {
+    const at = html.indexOf(`data-tool-card="${key}"`);
+    return at < 0 ? '' : html.slice(at, html.indexOf('</li>', at));
+};
+const panel = (html: string) => {
+    const at = html.indexOf('data-toolchain-panel=');
+    return at < 0 ? '' : html.slice(at);
+};
+
+describe('#1062 — one title', () => {
+    it('the Toolchain draws no title of its own: Settings already says "Toolchain" above it', () => {
+        const html = render(OWNER);
+        expect(html).not.toMatch(/<h1[^>]*>\s*Toolchain\s*</);
+        // CONTROL: its controls are still there, in its toolbar.
+        expect(html).toContain('data-action="toolchain-check-updates"');
+        expect(html).toContain('Check and repair');
+    });
+});
+
+describe('#1062 — the panel only when a tool is chosen', () => {
+    it('nothing chosen: the cards have the room, no panel is drawn', () => {
+        expect(render(OWNER)).not.toContain('data-toolchain-panel=');
+    });
+    it('chosen: its panel, with a Back button that names where it goes', () => {
+        const html = render(OWNER, 'php');
+        expect(html).toContain('data-toolchain-panel="php"');
+        expect(text(panel(html))).toMatch(/All tools/);
+        expect(html).toContain('data-panel-close');
+    });
+});
+
+describe('#1062 — the panel says where a version comes from in words, never a path', () => {
+    it('Genie’s copy, the default; the folder only behind a copy button', () => {
+        const p = panel(render(OWNER, 'php'));
+        const words = text(p);
+        expect(words).toMatch(/8\.4\.27/);
+        expect(words).toMatch(/Installed by Genie/);
+        expect(words).not.toMatch(/Users|someone|\.genie|→/);
+        expect(p).toMatch(/data-copy-path=""[^>]*aria-label="Copy the folder it is in"|aria-label="Copy the folder it is in"[^>]*data-copy-path=""/);
+    });
+    it('the system’s copy says so', () => {
+        const words = text(panel(render(OWNER, 'python')));
+        expect(words).toMatch(/3\.13\.15/);
+        expect(words).toMatch(/On your system/);
+    });
+    it('no "means everywhere" jargon: the heading says what the choice does', () => {
+        const words = text(panel(render(OWNER, 'php')));
+        expect(words).not.toMatch(/means everywhere/);
+        expect(words).toMatch(/Which version php runs/);
+    });
+    it('a pinned version is "Used by 2 sites", its Remove a button that names the version', () => {
+        const p = panel(render(OWNER, 'php'));
+        expect(text(p)).toMatch(/Used by 2 sites/);
+        expect(text(p)).toMatch(/Used by tynn\.gen/);
+        expect(p).toMatch(/aria-label="Remove PHP 8\.3\.26"/);
+        expect(text(p)).not.toMatch(/\b2 sites Remove\b/);
+    });
+});
+
+describe('#1062 — "other terminals" in plain words, with a button that names what it does', () => {
+    it('on: says it, and the button turns it off by name; no registry key, no path, no bare Undo', () => {
+        const html = render(OWNER);
+        const at = html.indexOf('data-machine-path=');
+        const mp = html.slice(at, html.indexOf('</section>', at));
+        const words = text(mp);
+        expect(mp).toContain('data-machine-path="on"');
+        expect(words).toMatch(/Terminals outside Genie use these versions too/);
+        expect(words).not.toMatch(/HKCU|Environment|Users|\bUndo\b/);
+        expect(mp).toMatch(/data-machine-path-undo=""[^>]*>[^]*?Stop using them outside Genie/);
+    });
+    it('off: says what it would do, the paths only in its tooltip', () => {
+        const html = render({ ...OWNER, machinePath: { ...OWNER.machinePath!, applied: false, where: [] } });
+        const at = html.indexOf('data-machine-path=');
+        const mp = html.slice(at, html.indexOf('</section>', at));
+        expect(mp).toContain('data-machine-path="off"');
+        expect(text(mp)).not.toMatch(/HKCU|Users|shims/);
+        expect(mp).toMatch(/data-machine-path-apply=""[^>]*>[^]*?Use them outside Genie too/);
+    });
+});
+
+describe('#1062 — no "no password" noise; a password is a lock, named', () => {
+    it('Genie’s own installs say nothing about passwords', () => {
+        const html = render(OWNER, 'php');
+        expect(text(html)).not.toMatch(/no password/i);
+        expect(installNote({ label: 'x', elevated: false })).toBeNull();
+    });
+    it('an install that asks shows a lock, named for a screen reader and on hover — not the words "asks once"', () => {
+        const docker = card(render(OWNER), 'docker');
+        expect(docker).toMatch(/data-install-note="docker"[^>]*title="Asks for your password"/);
+        expect(text(docker)).not.toMatch(/asks once/);
+    });
+});
+
+describe('#1062 — what a card is using, in words: Default or System', () => {
+    it('PHP: 8.4.27, Genie’s default, said as "Default" — no star', () => {
+        const php = card(render(OWNER), 'php');
+        expect(php).toMatch(/data-in-use="php"[^>]*data-in-use-kind="default"/);
+        expect(text(php)).toMatch(/8\.4\.27 Default/);
+        expect(php).not.toContain('★');
+        expect(text(php)).toMatch(/Also 8\.3\.26/);
+    });
+    it('Python: the system copy said ONCE, as "System"; one action that says it installs Genie’s copy', () => {
+        const py = card(render(OWNER), 'python');
+        const words = text(py);
+        expect(py).toMatch(/data-in-use="python"[^>]*data-in-use-kind="system"/);
+        expect(words.match(/3\.13\.15/g)).toHaveLength(1);
+        expect(words).toMatch(/System/);
+        expect(words).not.toMatch(/system 3\.13\.15/);
+        expect(py).toMatch(/data-card-primary="install"[^>]*data-version="3\.15\.1"/);
+        expect(words).toMatch(/Install Genie's 3\.15\.1/);
+    });
+    it('"Versions" is a button with an icon, not a word', () => {
+        const git = card(render({ ...OWNER, php: { ...OWNER.php!, available: [] } }), 'php');
+        expect(git).toMatch(/<button[^>]*data-open-panel="php"[^>]*>[^]*?<svg[^]*?Versions/);
+    });
+});
+
+describe('#1062 — the tallies are one compact line', () => {
+    it('three counts in one row, no big numbers', () => {
+        const html = render(OWNER);
+        const at = html.indexOf('data-toolchain-tallies');
+        const tallies = html.slice(at, html.indexOf('</div>', at));
+        expect(tallies).not.toMatch(/text-xl|<br/);
+        expect(text(tallies)).toMatch(/\d+ ready/);
+        expect(text(tallies)).toMatch(/\d+ need you/);
+    });
+});
