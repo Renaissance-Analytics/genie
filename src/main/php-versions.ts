@@ -6,6 +6,7 @@ import { catalogLine, catalogVersions, currentPhpCatalog } from '../core/php-rel
 import {
     PHP_VERSION,
     compareVersionsDesc,
+    vcRuntimeFor,
     managedCgiCommand,
     managedVersions,
     missingPinReason,
@@ -90,9 +91,10 @@ export interface PhpVersionsPorts {
     /**
      * Windows: make sure the Visual C++ runtime every windows.php.net build links is installed (T1's consented winget
      * install). Genie INSTALLS what PHP needs rather than naming it and leaving the person to fetch it (Genie 1
-     * `enginePrerequisites`, genie#209). Absent = nothing to ensure.
+     * `enginePrerequisites`, genie#209). Absent = nothing to ensure. `min` (Tynn #1066): the build's toolset needs at
+     * least this runtime version (`14.50` for vs18) — an older one is updated, or the answer says why it could not be.
      */
-    readonly ensureVcRuntime?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
+    readonly ensureVcRuntime?: (min?: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
     readonly progress?: (step: string | null) => void;
     /** How many compile jobs a source build runs at once (Linux). */
     readonly cpus?: number;
@@ -317,6 +319,15 @@ export async function installPhpVersion(asked: string, consent: boolean, ports: 
         const build = phpWindowsBuild(listed.body, version);
         if ('missing' in build) return { kind: 'not-installed', reason: `${build.missing}, so Genie will not install PHP ${version} unverified. Nothing was downloaded` };
         const file = build.file;
+
+        // THE RUNTIME ITS TOOLSET LINKS (Tynn #1066): 8.6 is vs18, which needs VCRUNTIME140 14.50 — a fresh machine had
+        // 14.44 and php-cgi would not start. Brought up to it before the download, or stopped saying which it needs.
+        const vcMin = vcRuntimeFor(file);
+        if (vcMin !== null && ports.ensureVcRuntime) {
+            say(`PHP ${version}: making sure the Microsoft Visual C++ runtime is ${vcMin} or newer`);
+            const vc = await ports.ensureVcRuntime(vcMin);
+            if (!vc.ok) return { kind: 'not-installed', reason: `PHP ${version} (${file}) needs the Microsoft Visual C++ runtime ${vcMin} or newer, and it could not be brought up to it: ${vc.reason}. Nothing was downloaded` };
+        }
 
         say(`PHP ${version}: downloading ${file} from windows.php.net`);
         let zip: Uint8Array | null = null;

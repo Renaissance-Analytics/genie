@@ -24,6 +24,7 @@ import { userHome } from './paths.js';
 import { join } from 'node:path';
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { PhpReleaseFeed } from './php-release-feed.js';
+import { ensureVcRuntimeAtLeast } from './vc-runtime.js';
 import { applyDuePhpUpdates, PhpPatchNotices, type PhpPatchSite } from './php-patch-keeper.js';
 import type { FeaturePorts } from './feature-ipc.js';
 import type { ProviderHealthBook } from './provider-health.js';
@@ -95,9 +96,11 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
         fetchText: httpFetch.text,
         cpus: availableParallelism(),
         // The VC++ runtime through T1's own consented install (winget); the click on Install PHP is the consent.
-        ensureVcRuntime: async () => {
+        ensureVcRuntime: async (min) => {
             const r = await installTool('vcredist', true, toolchainOps());
-            return r.kind === 'installed' || r.kind === 'already-installed' ? { ok: true } : { ok: false, reason: r.reason };
+            if (r.kind !== 'installed' && r.kind !== 'already-installed') return { ok: false, reason: r.reason };
+            // Tynn #1066: present is not enough — the build's toolset needs at least `min` (vs18: 14.50).
+            return min ? ensureVcRuntimeAtLeast(min, { run: longRunner, systemRoot: process.env.SystemRoot ?? 'C:\\Windows', progress: (step) => deps.busy(step) }) : { ok: true };
         },
         progress: (step) => deps.busy(step),
     });

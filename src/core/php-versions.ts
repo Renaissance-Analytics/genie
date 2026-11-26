@@ -70,6 +70,25 @@ export function phpBuildUrls(file: string): string[] {
     return ['https://windows.php.net/downloads/releases/', 'https://windows.php.net/downloads/releases/archives/'].map((base) => `${base}${file}`);
 }
 
+/**
+ * THE VISUAL C++ RUNTIME A WINDOWS BUILD NEEDS, by the toolset in its file name (Tynn #1066). Measured on a fresh Windows
+ * VM, 2026-11-26: php-8.6.0-nts-Win32-vs18-x64 unpacked, and php-cgi said "VCRUNTIME140.dll 14.44 is not compatible with
+ * this PHP build linked with 14.51". VS 2019 (vs16) links 14.2x, VS 2022 (vs17) 14.3x–14.4x, VS 2026 (vs18) 14.5x: the
+ * runtime must be at least the toolset's first.
+ */
+export const VC_RUNTIME_FOR_TOOLSET: Readonly<Record<string, string>> = { vs16: '14.20', vs17: '14.30', vs18: '14.50' };
+
+/** The runtime a build's zip needs (`php-8.6.0-nts-Win32-vs18-x64.zip` → `14.50`), or `null` for a toolset Genie does not know. */
+export function vcRuntimeFor(file: string): string | null {
+    const vs = /-(vs[0-9]+)-x64[.]zip$/.exec(file)?.[1];
+    return vs ? VC_RUNTIME_FOR_TOOLSET[vs] ?? null : null;
+}
+
+/** Is a runtime version (`14.44.35211.0`) at least `min` (`14.50`)? Numeric per segment. */
+export function vcRuntimeAtLeast(version: string, min: string): boolean {
+    return compareVersionsDesc(version, min) <= 0;
+}
+
 /** windows.php.net's own index of its CURRENT builds: per line, each build's zip with its sha256. */
 export const PHP_WINDOWS_RELEASES_JSON = 'https://windows.php.net/downloads/releases/releases.json';
 
