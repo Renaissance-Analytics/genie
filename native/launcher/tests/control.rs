@@ -425,3 +425,29 @@ fn genie_with_no_arguments_opens_genie_and_a_second_asks_the_first() {
     let args = lines_of(&r.data.join("client-args.txt"), 3);
     assert_eq!(args.lines().nth(2), Some("--doctor"), "{args}");
 }
+
+#[test]
+fn uninstall_stops_the_host_and_the_running_launcher_then_removes_the_programs() {
+    // The NSIS uninstaller runs `Genie.exe uninstall` while the launcher serves from Genie.exe: unless the launcher ends,
+    // its file cannot be removed (gate 1126-222922-9e0b4e: "the launcher is still installed after the uninstall").
+    let _one = one_at_a_time();
+    let (base, r, key) = setup("uninstall");
+    install_fakes(&r, &key, &base);
+    let mut l = start(&r, &key);
+    let mut w = Wire::hello(&r);
+    let host = w.call("launcher.ensureHost", json!([]));
+    let host_pid = host["value"]["pid"].as_u64().unwrap() as u32;
+    let out = run(genie_in(&r, &key).args(["uninstall", "--yes"]));
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(!pid_alive(host_pid), "the host stopped");
+    let t = Instant::now();
+    loop {
+        if let Ok(Some(_)) = l.child.try_wait() {
+            break;
+        }
+        assert!(t.elapsed() < Duration::from_secs(15), "the running launcher did not end");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(!r.code.exists(), "the programs folder is gone");
+    assert!(r.data.exists(), "the data root is kept");
+}
