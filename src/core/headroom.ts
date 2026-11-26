@@ -48,6 +48,11 @@ export interface ReadingStamp {
     readonly runId: string;
     /** The first reading after the account may have changed (a sign-in, or another active account): it keeps no earlier window. */
     readonly fresh?: boolean;
+    /**
+     * The run is in a directory of its OWN account's (Tynn #1011), not the active one's: the reading is that account's for
+     * certain, and is never re-credited to whichever account is active when a read of who is signed in ends (#753).
+     */
+    readonly pinned?: boolean;
 }
 
 /** A window as it reads at a moment: a window past its reset time is `Refreshed`, and carries no figure at all. */

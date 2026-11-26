@@ -918,6 +918,16 @@ export class AgentSession {
      * Claude can still open a turn of its own for a prompt it took mid-turn just after the last one ended (`#queued`).
      * For a restart Genie chooses by itself; the person's own Restart does not ask.
      */
+    /**
+     * HELD ON THE LIMIT WITH NOTHING WORKING (the owner, 2026-11-26: switched off a spent account and the agent never moved).
+     * The provider refuses this account until its reset, so a turn the limit cut has nothing left to do and what waits is held
+     * for the next run: a move to another account cuts nothing. Not quiet (`quiet` is false while held), yet movable.
+     */
+    get limitIdle(): boolean {
+        if (!this.#held || !this.running || this.#starting || this.#needsNewDriver || this.#approval !== null) return false;
+        return !this.#inTurn || this.#cutByLimit || this.#limitThisTurn;
+    }
+
     get quiet(): boolean {
         // What waits in `#afterTurn` here is held for the next run, and a run that ends leaves it owed.
         return this.promptable && !this.#held && this.#coolingCancel === null;
@@ -1900,11 +1910,13 @@ export class AgentSession {
      * account's reading is never delivered; its next turn opens with `note` (the account and its room), once; and a hold on the
      * limit goes, as when the limit resets.
      */
-    accountSwitched(note: string, headroom: Headroom | null): void {
+    accountSwitched(note: string, headroom: Headroom | null, resume = true): void {
         this.#latestHeadroom = headroom;
         this.#rateWarningPending = false;
         this.#accountNote = note;
-        if (this.#held) this.resumeAfterLimit();
+        // `resume: false`: this process is still in the spent account's directory and is about to move. Lifting the hold here
+        // would send what waited to the account that refuses it, re-hold the agent, and the move would never come.
+        if (this.#held && resume) this.resumeAfterLimit();
         this.#changed();
     }
 

@@ -936,14 +936,24 @@ export class SessionHost {
         return this.#loginOf(provider, this.#activeId(provider));
     }
 
-    #onLogin(e: { readonly provider: string }, login: Login): boolean {
-        return e.provider === login.provider && login.account === this.#activeId(e.provider);
+    /** Whether a run is on that login: the account its readings belong to (`#readingAccount`), not merely the active one. */
+    #onLogin(e: Running, login: Login): boolean {
+        return e.provider === login.provider && login.account === this.#readingAccount(e).accountId;
+    }
+
+    /**
+     * THE LOGIN A RUN DRAWS ON. A run still in an old account's own directory after a switch is on THAT account: its limit
+     * closes that account, never the new active one (the owner, 2026-11-26: a spent run's refusal held every agent on the
+     * account just switched to).
+     */
+    #runLogin(e: Running): Login {
+        return this.#loginOf(e.provider, this.#readingAccount(e).accountId);
     }
 
     /** The distinct logins the running agents are on. */
     #runningLogins(): Login[] {
         const seen = new Map<string, Login>();
-        for (const e of this.#running.values()) { const login = this.#loginFor(e.provider); seen.set(loginKey(login), login); }
+        for (const e of this.#running.values()) { const login = this.#runLogin(e); seen.set(loginKey(login), login); }
         return [...seen.values()];
     }
 
@@ -1348,8 +1358,8 @@ export class SessionHost {
             onStraggler: () => this.#lifecycle?.straggler(record.id, entry.run),
             // Its turns so far, known at start: the first turn after a relaunch numbers on at once (identity.ts lastTurn).
             ...(record.lastTurn !== undefined ? { turnsBefore: record.lastTurn } : {}),
-            onRateLimit: (readings, message) => this.#limitReport(this.#loginFor(record.provider), readings, message),
-            ...(this.#onHeadroom ? { onHeadroom: (room: Headroom) => this.#onHeadroom!(record.provider, room, { accountId: this.#readingAccount(entry), runId }) } : {}),
+            onRateLimit: (readings, message) => this.#limitReport(this.#runLogin(entry), readings, message),
+            ...(this.#onHeadroom ? { onHeadroom: (room: Headroom) => this.#onHeadroom!(record.provider, room, { ...this.#readingAccount(entry), runId }) } : {}),
             onMcpServers: (reports) => this.#onMcpServers?.(record.id, reports),
             ...(this.#onDesignAuth && record.provider === 'claude' ? { onDesignAuth: (event: import('../core/design-auth.js').DesignAuthEvent) => this.#onDesignAuth!(record.id, event) } : {}),
             onRestartForQueue: () => this.#restartForQueue(record, cwd),
@@ -1369,7 +1379,7 @@ export class SessionHost {
             // THE ONE PLACE THAT DECIDES IT: a run launched in a trusted workspace takes no work once it no longer is. It goes to the next run.
             // And READ NOW (Tynn #364): work for a run launched trusted waits for a fresh read unless the person's own yes stands.
             mayTakeWork: () => !this.#shutdownPending && !(this.#running.get(record.id)?.launchedUntrusted === false && this.#untrustedNow?.(record) === true) && this.#readNow(record),
-            onLimitBreach: (reason) => this.#limitBreach(record.id, this.#loginFor(record.provider), reason),
+            onLimitBreach: (reason) => this.#limitBreach(record.id, this.#runLogin(entry), reason),
             /*
              * A change the UI renders — a parked approval, an answered one, a turn ending.
              *
@@ -1387,7 +1397,7 @@ export class SessionHost {
                         // A turn that REPLIED went through: a no-reset backoff on its login is over, and the next breach
                         // starts at its first step (genie#1195: `ok` was never called). Only when the login is open — a
                         // reply from a turn that was already running never lets another agent's hold go.
-                        const login = this.#loginFor(record.provider);
+                        const login = this.#runLogin(entry);
                         if (this.#gate.view(login, this.#clock()).state === 'open') this.#gate.ok(login);
                     } else if (session.lastTurnEnd === 'stopped' && !session.stoppedByYou && !session.needsNewDriver) {
                         // Stopped, but not by the person, and this session can go on: the keepalive's to weigh (Tynn #754).
@@ -1514,9 +1524,9 @@ export class SessionHost {
             }
             // Its login is at its limit (the provider's reading says so): held from the start, so nothing is sent to a
             // provider that would refuse it — and the chat says why and until when (Tynn #556).
-            if (this.#gate.limitedByReading(this.#loginFor(record.provider), this.#clock())) {
+            if (this.#gate.limitedByReading(this.#runLogin(entry), this.#clock())) {
                 session.hold();
-                session.notice(this.#heldWords(this.#loginFor(record.provider)));
+                session.notice(this.#heldWords(this.#runLogin(entry)));
             }
         } catch (error) {
             this.#running.delete(record.id);
@@ -1602,8 +1612,13 @@ export class SessionHost {
         let reader: Running | null = null;
         for (const [id, entry] of this.#running) {
             if (entry.provider !== provider) continue;
-            entry.session.accountSwitched(note, input.headroom);
-            if (reader === null && entry.session.canReadRateLimits) reader = entry;
+            // A run in another directory than the new account's moves (`#considerMove`); until it does it is on the OLD account,
+            // so its hold stays and what waited goes to the new process, never to the account that refuses it.
+            const moves = entry.account !== undefined && entry.launchedConfigDir !== undefined && entry.launchedConfigDir !== claudeLaunchConfigDir(input.account);
+            entry.session.accountSwitched(note, input.headroom, !moves);
+            if (moves) this.#scheduleMove(id);
+            // Only a run on the new account can read the new account's room.
+            else if (reader === null && entry.session.canReadRateLimits) reader = entry;
             this.#emit(id);
         }
         reader?.session.readRateLimits()?.catch(() => { /* no reading: the published one stands */ });
@@ -1615,10 +1630,10 @@ export class SessionHost {
      * again in the default home, #753), so a reading there is the active account's. A run in a directory of its OWN keeps
      * its account until it moves, so a reading from it is that account's, whichever is active now.
      */
-    #readingAccount(entry: Running): string {
+    #readingAccount(entry: Running): { readonly accountId: string; readonly pinned?: true } {
         const active = this.#activeAccount?.(entry.provider);
-        if (entry.account && active && entry.launchedConfigDir !== undefined && claudeLaunchConfigDir(active) !== entry.launchedConfigDir) return entry.account.id;
-        return this.#activeId(entry.provider);
+        if (entry.account && active && entry.launchedConfigDir !== undefined && claudeLaunchConfigDir(active) !== entry.launchedConfigDir) return { accountId: entry.account.id, pinned: true };
+        return { accountId: this.#activeId(entry.provider) };
     }
 
     /** Cheap, for every state change: a Claude run on another account than the active one, not already moving. */
@@ -1648,11 +1663,13 @@ export class SessionHost {
             launchedConfigDir: entry.launchedConfigDir ?? null, activeConfigDir,
             // QUIET (core/session.ts): promptable, not held, and past Cooling, in which Claude may still open a turn for a
             // prompt it took mid-turn. A move while it is not would cut that prompt's work.
-            inTurn: session.inTurn || session.starting || !session.quiet, pendingApproval: session.pendingApproval !== null,
+            // HELD ON THE LIMIT with nothing working (`limitIdle`): the old account refuses it, so moving cuts nothing, and what
+            // waits is owed to the next run (`deliverOwed`), so it does not hold the move either.
+            inTurn: !session.limitIdle && (session.inTurn || session.starting || !session.quiet), pendingApproval: session.pendingApproval !== null,
             // A question to the person parks as an approval (`pendingApproval`); an answer arrives as queued work.
             pendingQuestion: false,
             backgroundRunning: session.runningCall !== null || entry.background.count(entry.rows) > 0,
-            queued: session.queuedPromptIds.length + (session.workWaiting ? 1 : 0), threadId,
+            queued: session.limitIdle ? 0 : session.queuedPromptIds.length + (session.workWaiting ? 1 : 0), threadId,
         };
         const first = respawnDecision({ ...base, store: 'absent' });
         if (first.kind === 'stay' || first.kind === 'wait') return;
