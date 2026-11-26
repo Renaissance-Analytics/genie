@@ -20,7 +20,7 @@ import { installableVersions, patchWithinLine } from '../src/core/toolchain-upda
 import { applyDuePhpUpdates, PhpPatchNotices, type PhpPatchPorts, type PhpPatchSite } from '../src/main/php-patch-keeper.js';
 import { withSharedToolchainPhp } from '../src/main/features-host.js';
 import { PhpReleaseFeed } from '../src/main/php-release-feed.js';
-import { installPhpVersion, listPhpVersions, type Fetched, type PhpVersionsFs, type PhpVersionsPorts } from '../src/main/php-versions.js';
+import { installPhpVersion, listPhpVersions, resolvePhpCgi, type Fetched, type PhpVersionsFs, type PhpVersionsPorts } from '../src/main/php-versions.js';
 
 /**
  * Tynn #1066 (hotfix; the owner, 2026-11-26: "we don't want critical security updates being held behind genie upgrades
@@ -232,7 +232,7 @@ const ROOT = join('/data', 'genie2-toolchain', 'php-versions');
 const ZIP = new TextEncoder().encode('the official php 8.4.28 nts zip bytes');
 const MODULES = ['[PHP Modules]', 'Core', 'bz2', 'curl', 'exif', 'fileinfo', 'ftp', 'gd', 'gettext', 'gmp', 'intl', 'mbstring', 'mysqli', 'openssl', 'pdo_mysql', 'pdo_pgsql', 'pdo_sqlite', 'pgsql', 'soap', 'sockets', 'sodium', 'sqlite3', 'xsl', 'zip', ''].join('\n');
 
-function winInstallPorts(published: string, installedVersions: string[] = []) {
+function winInstallPorts(published: string, installedVersions: string[] = [], built = '8.4.28') {
     const files = new Set<string>(installedVersions.map((v) => join(ROOT, v, 'php-cgi.exe')));
     const writes = { bytes: 0, text: 0 };
     const under = (p: string) => [...files].filter((f) => f === p || f.startsWith(p + '/') || f.startsWith(p + '\\'));
@@ -245,17 +245,17 @@ function winInstallPorts(published: string, installedVersions: string[] = []) {
         rename: (a, b) => { for (const f of under(a)) { files.delete(f); files.add(b + f.slice(a.length)); } },
         removeTree: (p) => { for (const f of under(p)) files.delete(f); },
     };
-    const bodies = { ...NEW_DAY, [PHP_WINDOWS_RELEASES_JSON]: windowsJson({ '8.4': { version: '8.4.28', vs: 'vs17', sha: published }, '8.5': { version: '8.5.13', vs: 'vs17' } }) };
+    const bodies = { ...NEW_DAY, [PHP_WINDOWS_RELEASES_JSON]: windowsJson({ '8.4': { version: '8.4.28', vs: 'vs17', ...(built === '8.4.28' ? { sha: published } : {}) }, '8.5': { version: '8.5.13', vs: 'vs17', ...(built === '8.5.13' ? { sha: published } : {}) } }) };
     const ports: PhpVersionsPorts = {
         platform: 'win32', root: ROOT, fs,
         fetchText: fakeNet(bodies).fetchText,
         fetchBytes: async () => ({ ok: true, body: ZIP }),
         run: async (binary) => {
             if (binary === 'powershell.exe') {
-                for (const f of ['php-cgi.exe', 'php.exe']) files.add(join(ROOT, '.staging-8.4.28', f));
+                for (const f of ['php-cgi.exe', 'php.exe']) files.add(join(ROOT, `.staging-${built}`, f));
                 return { stdout: '', exitCode: 0 };
             }
-            if (binary.endsWith('php-cgi.exe')) return { stdout: 'PHP 8.4.28 (cgi-fcgi) (built: Nov 19 2026) (NTS Visual C++ 2022 x64)', exitCode: 0 };
+            if (binary.endsWith('php-cgi.exe')) return { stdout: `PHP ${built} (cgi-fcgi) (built: Nov 19 2026) (NTS Visual C++ 2022 x64)`, exitCode: 0 };
             if (binary.endsWith('php.exe')) return { stdout: MODULES, exitCode: 0 };
             throw new Error('ENOENT');
         },
@@ -291,6 +291,32 @@ describe('installing a live version: sha256-verified before anything is unpacked
         expect(view.available).toContainEqual({ version: '8.4.28', installed: false });
         expect(view.managed[0]).toMatchObject({ version: '8.4.27' });
         expect(view.managed[0]!.advisory).toMatch(/8\.4\.28/);
+    });
+});
+
+describe('beta.66 on a fresh Windows machine: "Install 8.5.12" was refused, windows.php.net publishes 8.5.13', () => {
+    it('the offered PHP 8.5 is the one windows.php.net publishes with a checksum: 8.5.13, not the baked 8.5.12', async () => {
+        await liveCatalog();
+        const { ports } = winInstallPorts(sha(ZIP), [], '8.5.13');
+        const view = await listPhpVersions(ports);
+        expect(view.available.map((a) => a.version)).toContain('8.5.13');
+        expect(view.available.map((a) => a.version)).not.toContain('8.5.12');
+    });
+
+    it('asked for the stale 8.5.12 (a card drawn before, a site pinned to it): the newest 8.5, 8.5.13, is installed instead — never refused', async () => {
+        await liveCatalog();
+        const { ports } = winInstallPorts(sha(ZIP), [], '8.5.13');
+        const r = await installPhpVersion('8.5.12', true, ports);
+        expect(r).toMatchObject({ kind: 'installed', version: '8.5.13' });
+        // and a site pinned to 8.5.12 runs it: the newest patch of its line
+        const run = resolvePhpCgi('8.5.12', ports);
+        expect(run.ok && run.command).toContain(join(ROOT, '8.5.13'));
+    });
+
+    it('control: another LINE is never substituted — 8.1.34 is not turned into an 8.2', async () => {
+        await liveCatalog();
+        const { ports } = winInstallPorts(sha(ZIP), [], '8.5.13');
+        expect((await installPhpVersion('8.1.34', true, ports)).kind).toBe('refused');
     });
 });
 
