@@ -54,8 +54,16 @@ function baseConfig() {
 
 async function exists(p) { return stat(p).then(() => true, () => false); }
 
-/** The biggest files of a tree, and of its app.asar by top folder: what a package's size is made of, said at each build. */
+/**
+ * The biggest files of a tree, and of its app.asar by top folder: what a package's size is made of, said at each build.
+ * A REPORT ONLY: it never fails the build. An entry it cannot stat (the Windows run, item 1126-110558-adb0a2: asar's
+ * statFile on a listed path threw) is counted and skipped.
+ */
 async function biggest(name, root) {
+    try { await biggestOf(name, root); } catch (e) { console.log(`[tracks] ${name}: no size report (${e instanceof Error ? e.message : e})`); }
+}
+
+async function biggestOf(name, root) {
     const sizes = [];
     for (const f of await treeOf(root)) sizes.push([f, (await stat(join(root, f))).size]);
     sizes.sort((x, y) => y[1] - x[1]);
@@ -66,16 +74,18 @@ async function biggest(name, root) {
     if (!(await exists(asarPath))) return;
     const asar = require('@electron/asar');
     const by = new Map();
+    let skipped = 0;
     for (const f of asar.listPackage(asarPath, { isPack: false })) {
         const p = f.replace(/\\/g, '/');
-        const st = asar.statFile(asarPath, p.slice(1), false);
+        let st = null;
+        try { st = asar.statFile(asarPath, p.replace(/^\//, ''), false); } catch { skipped++; continue; }
         if (!st || typeof st.size !== 'number' || st.files) continue;
         const parts = p.split('/').filter(Boolean);
         const key = parts[0] === 'node_modules' ? `node_modules/${parts[1]?.startsWith('@') ? `${parts[1]}/${parts[2]}` : parts[1]}` : parts.slice(0, 2).join('/');
         by.set(key, (by.get(key) ?? 0) + st.size + (st.unpacked ? 0 : 0));
     }
     const rows = [...by].sort((x, y) => y[1] - x[1]).slice(0, 15);
-    console.log(`[tracks] ${name}'s app.asar by folder (unpacked sizes):`);
+    console.log(`[tracks] ${name}'s app.asar by folder (unpacked sizes${skipped ? `; ${skipped} entries not statted` : ''}):`);
     for (const [k, s] of rows) console.log(`[tracks]   ${(s / 1048576).toFixed(1).padStart(7)} MiB  ${k}`);
 }
 

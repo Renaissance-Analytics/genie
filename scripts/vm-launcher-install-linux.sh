@@ -18,14 +18,26 @@
 set -uo pipefail
 ROOT="$(pwd)"
 OUT="$ROOT/ci-out/launcher-install"
+# The person's homes (install trees, hundreds of MB, with links) live OUTSIDE ci-out, which is fetched: ci-out holds logs,
+# screenshots and status JSON only (item 1126-110558-adb0a2 fetched 783 MB of a home and its tar failed on the links).
+HOMES="$(cd "$ROOT/.." && pwd)/launcher-install-homes"
 PKG="$ROOT/release/tracks/packages"
 KEY="$ROOT/ci-out/setup/THROWAWAY-manifest-public-key.txt"
 fail() { echo "### launcher-install=FAIL $*"; cleanup; exit 1; }
 pids_started=()
 cleanup() {
     local p
+    [ -n "${HOMES:-}" ] && [ "$HOMES" != / ] || return 0
     for p in "${pids_started[@]}"; do kill -9 "$p" 2>/dev/null || true; done
-    pkill -9 -f "$OUT/" 2>/dev/null || true
+    pkill -9 -f "$HOMES/" 2>/dev/null || true
+    # What the person's homes said, kept in ci-out (logs only, never the install trees); then the homes go.
+    local h
+    for h in "$HOMES"/*/; do
+        [ -d "$h" ] || continue
+        mkdir -p "$OUT/logs/$(basename "$h")"
+        cp "$h"/.genie/logs/*.log "$h"/.genie/runtime/lifecycle.log "$OUT/logs/$(basename "$h")/" 2>/dev/null || true
+    done
+    rm -rf "$HOMES"
 }
 
 take_session() {
@@ -44,8 +56,8 @@ BUILD="$(cat "$ROOT/release/tracks/build.txt")"
 DOWNLOADED="$ROOT/release/tracks/trees/launcher/genie"
 [ -x "$DOWNLOADED" ] || fail "no launcher at $DOWNLOADED"
 
-rm -rf "$OUT"; mkdir -p "$OUT"
-fresh_home() { local h="$OUT/$1"; mkdir -p "$h/Downloads"; chmod 700 "$h"; cp "$DOWNLOADED" "$h/Downloads/genie"; chmod 755 "$h/Downloads/genie"; echo "$h"; }
+rm -rf "$OUT" "$HOMES"; mkdir -p "$OUT" "$HOMES"
+fresh_home() { local h="$HOMES/$1"; mkdir -p "$h/Downloads"; chmod 700 "$h"; cp "$DOWNLOADED" "$h/Downloads/genie"; chmod 755 "$h/Downloads/genie"; echo "$h"; }
 as_person() { local h="$1"; shift; env -u XDG_DATA_HOME -u XDG_CONFIG_HOME -u GENIE_HOME -u GENIE_CODE_ROOT HOME="$h" "$@"; }
 
 # --- 1. setup: the launcher's window (direction C), as a person on a fresh machine meets it ------------------------------
@@ -118,10 +130,18 @@ CLIENT_EXE=''
 for p in $(pgrep -f "$CODE/client/$BUILD/genie-client" || true); do CLIENT_EXE="$(readlink "/proc/$p/exe" 2>/dev/null)"; [ -n "$CLIENT_EXE" ] && break; done
 [ "$CLIENT_EXE" = "$CODE/client/$BUILD/genie-client" ] || fail "no genie-client runs from $CODE/client/$BUILD (found '$CLIENT_EXE')"
 echo "the client runs from $CLIENT_EXE"
+# Ready, as a Linux host says it: it serves its socket and its three spawn hosts are up. (prism-acp's supervisor is a
+# Windows Job Object: prepareGenieSupervisor() returns null elsewhere, so "containment ready" is Windows-only; the
+# Windows row checks it.)
+HLOG="$H/.genie/logs/genie-host.log"
 ready=''
-for _ in $(seq 1 60); do ready="$(grep -m1 'containment ready supervisor=' "$LIFE" 2>/dev/null || true)"; [ -n "$ready" ] && break; sleep 1; done
-[ -n "$ready" ] || fail "genie-host did not say its supervisor is ready within 60 s"
-[[ "$ready" == *"$CODE/host/$BUILD/"* ]] || fail "genie-host's supervisor is not in the host's own folder: $ready"
+for _ in $(seq 1 60); do
+    if grep -q "serving $H/.genie/runtime/host.sock" "$HLOG" 2>/dev/null && [ "$(grep -cE 'spawn host ready pid=[0-9]+ profile=(terminals|processes|supervised)' "$HLOG" 2>/dev/null)" -ge 3 ]; then ready=yes; break; fi
+    sleep 1
+done
+[ -n "$ready" ] || { tail -40 "$HLOG"; fail "genie-host did not say it serves its socket with its three spawn hosts ready within 60 s"; }
+grep -q 'containment unready' "$LIFE" && fail "genie-host says its containment is not ready: $(grep -m1 'containment unready' "$LIFE")"
+ready="serves $H/.genie/runtime/host.sock; spawn hosts: $(grep -oE 'profile=[a-z]+' "$HLOG" | sort -u | tr '\n' ' ')"
 echo "genie-host: $ready"
 grep -q 'started by the launcher' "$LIFE" || fail 'the client did not say the launcher started it'
 LAUNCHER_PID="$(node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));console.log(s.launcher.running?s.launcher.pid:"")' "$OUT/status-running.json")"
@@ -153,9 +173,9 @@ echo
 # --- 4. a tampered package: the setup window says so in words, with a way forward, and installs nothing ----------------
 T="$(fresh_home tampered)"
 echo "--- 4. one changed byte in the browser's package, through the setup window"
-node "$ROOT/scripts/ci/tamper-package.mjs" "$PKG" "$ROOT/release/tracks/trees" "$OUT/tampered-packages" || fail 'the tampered package set could not be made'
+node "$ROOT/scripts/ci/tamper-package.mjs" "$PKG" "$ROOT/release/tracks/trees" "$HOMES/tampered-packages" || fail 'the tampered package set could not be made'
 SETUP_LOG="$OUT/setup-tampered.log"
-as_person "$T" setsid "$T/Downloads/genie" setup --from "$OUT/tampered-packages" >"$SETUP_LOG" 2>&1 </dev/null &
+as_person "$T" setsid "$T/Downloads/genie" setup --from "$HOMES/tampered-packages" >"$SETUP_LOG" 2>&1 </dev/null &
 TAMPER_PID=$!
 pids_started+=("$TAMPER_PID")
 wait_for 'setup: choose' 60 || { cat "$SETUP_LOG"; fail 'the setup window did not open for the tampered packages'; }

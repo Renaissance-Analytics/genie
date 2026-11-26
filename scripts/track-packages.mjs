@@ -51,7 +51,9 @@ const clone = (v) => JSON.parse(JSON.stringify(v));
 export function clientBuilderConfig(base) {
     const c = clone(base);
     c.executableName = 'genie-client';
-    c.files = [...(c.files ?? []), '!dist/main/host.js', '!dist/main/host.js.map'];
+    // Third-party sourcemaps are not shipped: nothing loads them at runtime (the Linux breakdown, item 1126-110558-adb0a2:
+    // lucide-react's maps alone were 13 MiB). Genie's own dist maps stay, for its stack traces.
+    c.files = [...(c.files ?? []), '!dist/main/host.js', '!dist/main/host.js.map', '!**/node_modules/**/*.map'];
     c.extraResources = (c.extraResources ?? []).filter((e) => !JSON.stringify(e).includes('genie-launch.exe'));
     c.directories = { ...(c.directories ?? {}), output: 'release/tracks/client-app' };
     c.publish = null;
@@ -167,6 +169,8 @@ export async function layoutHost({ unpackedApp, asarDir, dist, runtimeDir, out, 
         const at = join(runtimeDir, c);
         if (await stat(at).then((s) => s.isFile(), () => false)) planned.set(`resources/runtime/${c}`, at);
     }
+    // Third-party sourcemaps, as in the client (clientBuilderConfig): not shipped.
+    for (const k of [...planned.keys()]) if (k.startsWith('app/node_modules/') && k.endsWith('.map')) planned.delete(k);
     const left = hostLeftovers([...planned.keys()], platform, arch);
     const skip = new Set(left.map((l) => l.file));
     for (const [to, from] of planned) if (!skip.has(to)) await copyInto(from, join(out, to));
