@@ -69,6 +69,19 @@ describe('a host of another build', () => {
         expect(started).toEqual([]);
     });
 
+    it('a live host of another ENGINE PROTOCOL is not this client\'s: the engine answers null (the directory says it needs an update), nothing ended or started', async () => {
+        const dialled: string[] = [];
+        const link = await connectAgentEngine({
+            callbacks: {},
+            launch: { runtimeDir: 'rt', readFile: (f: string) => (f.endsWith('host.json') ? record({ protocol: 999 }) : 'tok'), alive: () => true, connectTo: async (e: string) => { dialled.push(e); return transport(); } },
+            onError: () => {}, agentName: (id) => id, log: () => {},
+            sleep: () => new Promise<void>(() => {}),
+        });
+        expect(link).toBeNull();
+        expect(dialled).toEqual([]);
+        expect(started).toEqual([]);
+    });
+
     it('a live host that does not answer yet is not ended: no link now, and it is tried again later', async () => {
         const kills: number[] = [];
         const link = await linkToHost({
