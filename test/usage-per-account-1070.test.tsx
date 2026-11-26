@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AccountRecord } from '../src/core/accounts.js';
 import { accountsView, type AccountsSnapshot, type KnownAccountRecord } from '../src/core/accounts-view.js';
 import { HeadroomFeed, type AccountHeadroom } from '../src/core/headroom-board.js';
-import { limitRows, type Headroom, type WindowReading } from '../src/core/headroom.js';
+import { leftWords, limitRows, type Headroom, type WindowReading } from '../src/core/headroom.js';
 import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity.js';
 import type { ProcessInfo, ProcessTree } from '../src/core/process-tree.js';
 import { ReadingAttribution } from '../src/core/reading-attribution.js';
@@ -260,5 +260,45 @@ describe('the Accounts popover draws each account\'s own windows', () => {
         expect(callout).toContain('Account 1: 0% left in the 5-hour window.');
         expect(callout).not.toMatch(/window window|of its/);
         expect(callout).toContain('Account 2 (50% left in the 7d fable window)');
+    });
+});
+
+describe('ONE meaning of a figure, said on screen: the share LEFT (Tynn #1070 review)', () => {
+    const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    let el: HTMLDivElement;
+    let root: Root;
+    beforeEach(() => { g.IS_REACT_ACT_ENVIRONMENT = true; el = document.createElement('div'); document.body.appendChild(el); root = createRoot(el); });
+    afterEach(() => { act(() => root.unmount()); el.remove(); document.body.innerHTML = ''; });
+
+    it('the words: "N% left", "over" when spent', () => {
+        expect(leftWords({ leftPct: 64, over: false })).toBe('64% left');
+        expect(leftWords({ leftPct: 0, over: true })).toBe('over');
+    });
+
+    it('every bar in the popover says "% left" beside a fill of that share; the chip says it too', () => {
+        const readings = [reading(A.id, [live('5h', 0), live('7d', 64)]), reading(B.id, [live('7d', 95), live('7d fable', 50)])];
+        const snapshot: AccountsSnapshot = { providers: accountsView([A, B, C].map(known), readings, { claude: A.id }), offers: [] };
+        act(() => root.render(<RateLimitPills limits={{}} accounts={snapshot} now={NOW} />));
+        const chip = el.querySelector('[data-account-chip="claude"]')!;
+        expect(chip.textContent).toContain('0% left');
+        act(() => { chip.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+        const pop = document.querySelector('[data-account-popover="claude"]')!;
+        const said = (id: string, w: string) => pop.querySelector(`[data-account="${id}"] [data-account-window="${w}"]`)!;
+        expect(said(A.id, '7d').textContent).toContain('64% left');
+        expect(said(A.id, '5h').textContent).toContain('0% left');
+        expect(said(B.id, '7d').textContent).toContain('95% left');
+        expect(said(B.id, '7d fable').textContent).toContain('50% left');
+        // The fill is the share left: 64 of 100.
+        expect(said(A.id, '7d').querySelector('[role="progressbar"]')!.getAttribute('aria-valuenow')).toBe('64');
+    });
+
+    it('the headline is the TIGHTEST window: 95 % used on 7d (5 % left) and 50 % on the model cap headlines 7d', () => {
+        const readings = [reading(B.id, [live('7d', 5), live('7d fable', 50)])];
+        const snapshot: AccountsSnapshot = { providers: accountsView([B].map(known), readings, { claude: B.id }), offers: [] };
+        act(() => root.render(<RateLimitPills limits={{}} accounts={snapshot} now={NOW} />));
+        const chip = el.querySelector('[data-account-chip="claude"]')!;
+        expect(chip.textContent).toBe('Account 25% left7d');
+        // And the offer's suggestion names it: B's room is its 7d at 5 % left, too near to suggest at all.
+        expect(switchTargets({ provider: 'claude', accountId: A.id, window: '5h', leftPct: 0 }, readings, [A, B])).toEqual([]);
     });
 });

@@ -131,7 +131,7 @@ describe('S11: the Accounts block in Settings → Providers', () => {
         expect(row(A).textContent).toContain('Work Max');
         expect(row(A).querySelector('[data-account-plan]')!.textContent).toBe('max');
         expect(row(B).querySelector('[data-account-plan]')!.textContent).toBe('unknown');
-        expect(row(A).querySelector('[data-account-usage="5h"]')!.textContent).toContain('40%');
+        expect(row(A).querySelector('[data-account-usage="5h"]')!.textContent).toContain('40% left');
         // Tynn #1070: B was never read: its usage is unknown, and no window row is made up for it.
         expect(row(B).querySelector('[data-account-usage]')).toBeNull();
         expect(row(B).querySelector('[data-account-usage-unknown]')!.textContent).toContain('unknown');

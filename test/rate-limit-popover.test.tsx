@@ -69,8 +69,8 @@ describe('the pill', () => {
         expect(c.getAttribute('aria-haspopup')).toBe('dialog');
         expect(c.getAttribute('aria-expanded')).toBe('false');
         expect(c.querySelector('[data-provider-logo="claude"]')).not.toBeNull();
-        expect(c.textContent).toBe('40%5h');
-        expect(pill('codex').textContent).toBe('12%7d');
+        expect(c.textContent).toBe('40% left5h'); // ONE meaning, said (Tynn #1070): the share LEFT
+        expect(pill('codex').textContent).toBe('12% left7d');
         expect(pill('codex').getAttribute('data-level')).toBe('warning');
         // A react-fancy Button, which carries the pointer itself (react-fancy 5.71.3+).
         expect(c.hasAttribute('data-react-fancy-button')).toBe(true);
@@ -140,14 +140,14 @@ describe('inside the popover', () => {
         const bar = five.querySelector('[role="progressbar"]')!;
         expect(bar.getAttribute('aria-valuenow')).toBe('40');
         expect((bar.querySelector('[data-rate-limit-fill]') as HTMLElement).style.width).toBe('40%');
-        expect(five.querySelector('[data-rate-limit-pct]')!.textContent).toBe('40%');
+        expect(five.querySelector('[data-rate-limit-pct]')!.textContent).toBe('40% left');
         expect(five.querySelector('[data-rate-limit-reset]')!.textContent).toBe('resets in 2h 14m');
         const exact = five.querySelector('[data-rate-limit-at]')!;
         expect(exact.textContent).toBe(shortDateTime(NOW + 134 * MIN));
         expect(exact.className).toMatch(/text-\[11px\]|text-\[10px\]/);
 
         const seven = row('claude', '7d')!;
-        expect(seven.querySelector('[data-rate-limit-pct]')!.textContent).toBe('65%');
+        expect(seven.querySelector('[data-rate-limit-pct]')!.textContent).toBe('65% left');
         expect(seven.querySelector('[data-rate-limit-reset]')!.textContent).toBe('resets in 3d 12h');
     });
 
@@ -221,7 +221,7 @@ describe('a window the provider did not report', () => {
         // Positive control: the reported window in the same popover has its bar and number.
         const seven = row('codex', '7d')!;
         expect(seven.querySelector('[role="progressbar"]')).not.toBeNull();
-        expect(seven.querySelector('[data-rate-limit-pct]')!.textContent).toBe('47%');
+        expect(seven.querySelector('[data-rate-limit-pct]')!.textContent).toBe('47% left');
     });
 });
 
@@ -260,12 +260,12 @@ describe('a window past its reset reads Refreshed, never its last figure (Tynn #
         // Positive control: the window that has not reset still draws its bar and figure.
         const seven = row('claude', '7d')!;
         expect(seven.querySelector('[role="progressbar"]')!.getAttribute('aria-valuenow')).toBe('40');
-        expect(seven.querySelector('[data-rate-limit-pct]')!.textContent).toBe('40%');
+        expect(seven.querySelector('[data-rate-limit-pct]')!.textContent).toBe('40% left');
     });
 
     it('the pill: shows the tightest window that has NOT reset, not the stale 5%', () => {
         render({ claude: mixed() });
-        expect(pill('claude').textContent).toBe('40%7d');
+        expect(pill('claude').textContent).toBe('40% left7d');
         expect(pill('claude').getAttribute('data-level')).toBe('ok');
     });
 
