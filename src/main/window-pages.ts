@@ -29,7 +29,7 @@ import { format } from 'node:url';
  */
 
 export const WINDOW_HOST = 'genie.localhost';
-export const WINDOW_PAGES = ['index', 'doctor', 'question', 'host-wait', 'browser'] as const;
+export const WINDOW_PAGES = ['index', 'doctor', 'question', 'host-wait', 'browser', 'host-directory'] as const;
 export type WindowPage = (typeof WINDOW_PAGES)[number];
 /** [from, to): below Windows' dynamic range (49152+) and Linux's (32768+). */
 export const WINDOW_PORT_RANGE: readonly [number, number] = [20000, 30000];

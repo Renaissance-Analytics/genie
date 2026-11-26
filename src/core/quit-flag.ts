@@ -14,6 +14,7 @@
  * A plain second launch is unchanged: it reveals the first one's window (hidden in the tray included).
  */
 
+import { remoteFromSearch } from './remote-window.js';
 import { genieUrlIn } from './tynn-sign-in.js';
 
 export const QUIT_ARG = '--quit';
@@ -59,6 +60,17 @@ const SCRIPT_ARG = /\.(c|m)?js$/i;
  * when it carries a script (genie#1235): that is a program running Genie.exe as if it were Node, never a person, and only
  * a person's launch may raise Genie.
  */
+/**
+ * THE HOST A LAUNCH ASKS FOR (Tynn #1058 L4): the launcher's `launcher.openWindow {host}` starts the client with
+ * `--host <address>` (native/launcher/src/control.rs). Only what a host window takes (ws://, wss://, relay:<id>), else none.
+ */
+export function hostAsked(argv: readonly string[]): string | null {
+    const at = argv.indexOf('--host');
+    const address = at >= 0 ? argv[at + 1] : undefined;
+    if (typeof address !== 'string' || address === '') return null;
+    return remoteFromSearch(`?${new URLSearchParams({ remote: address }).toString()}`) === address ? address : null;
+}
+
 export function secondInstanceAction(argv: readonly string[], additionalData: unknown): 'quit' | 'reveal' | 'ignore' {
     const data = additionalData !== null && typeof additionalData === 'object' ? (additionalData as { genie?: unknown }) : null;
     if (data?.genie === QUIT_DATA.genie || asksToQuit(argv)) return 'quit';
@@ -77,10 +89,17 @@ export function secondInstanceAction(argv: readonly string[], additionalData: un
 export function answerSecondInstance(
     argv: readonly string[],
     additionalData: unknown,
-    act: { readonly quit: () => void; readonly reveal: () => void; readonly defer: (run: () => void) => void; readonly open?: (url: string) => void },
-): 'quit' | 'reveal' | 'ignore' {
+    act: { readonly quit: () => void; readonly reveal: () => void; readonly defer: (run: () => void) => void; readonly open?: (url: string) => void; readonly openHost?: (address: string) => void },
+): 'quit' | 'reveal' | 'ignore' | 'open-host' {
     const action = secondInstanceAction(argv, additionalData);
     if (action === 'quit') act.defer(act.quit);
+    // ONE WINDOW PER HOST, ONE CLIENT PROCESS (Tynn #1058 L4): that host's window, focused or opened; not the main window.
+    else if (action === 'reveal' && hostAsked(argv) !== null && act.openHost) {
+        const address = hostAsked(argv)!;
+        const openHost = act.openHost;
+        act.defer(() => { openHost(address); });
+        return 'open-host';
+    }
     else if (action === 'reveal') {
         act.reveal();
         // A genie:// URL (the browser handing Tynn's sign-in back, Windows and Linux): opened after the handler returns,

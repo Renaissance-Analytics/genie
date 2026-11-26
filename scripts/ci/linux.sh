@@ -45,7 +45,7 @@ ROWS=(
     trust-step accounts-popover claude-accounts sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash quit-keeps-host rebuilt-machine
     flows zip64 host-plain-node mailpit launcher-unit
     package package-fuse
-    package-tracks packed-tree-client packed-tree-browser packed-tree-host track-manifest launcher-install
+    package-tracks packed-tree-client packed-tree-browser packed-tree-host track-manifest launcher-install client-no-host
     logon
     toolchain
     client-only-update
@@ -730,6 +730,8 @@ row_packed-tree-host() { need_tracks && node scripts/track-tree-check.mjs releas
 row_track-manifest() { need_tracks && need_install && npx tsx scripts/track-manifest-check.mts release/tracks/packages "$SETUP/THROWAWAY-manifest-public-key.txt"; }
 # THE LAUNCHER INSTALLS GENIE (Tynn #1058 L3; was packaged-launcher): scripts/vm-launcher-install-linux.sh, a home of its own.
 row_launcher-install() { need_tracks && need_display && timeout 840 bash scripts/vm-launcher-install-linux.sh; }
+# A CLIENT WITH NO HOST (Tynn #1058 L4): a client-only home and a both home on one machine; the host directory photographed.
+row_client-no-host() { need_tracks && need_display && timeout 840 bash scripts/vm-client-no-host-linux.sh; }
 row_client-only-update() { need_install && need_electron && need_display && timeout 2300 bash scripts/vm-client-only-update-linux.sh; }
 # LOGON START, READ AT THE OS (Tynn #1036 P6-3): the packaged AppImage (the package row's) in a home of its own; its
 # autostart file read back (Exec, Hidden, and what systemd's xdg-autostart generator makes of it), the setting switched
@@ -799,6 +801,7 @@ ceiling() {
         package-tracks) echo 2400 ;;
         packed-tree-client|packed-tree-browser|packed-tree-host|track-manifest) echo 300 ;;
         launcher-install) echo 900 ;;
+        client-no-host) echo 900 ;;
         client-only-update) echo 2400 ;;
         host-update) echo 2400 ;;
         *) echo 600 ;;
@@ -988,7 +991,7 @@ run_rows() {
     for name in "${selected[@]}"; do
         echo "=== $name"
         machine_line "$name"
-        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover trust-step accounts-popover claude-accounts sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash quit-keeps-host host-late-ready package-fuse launcher-install logon toolchain client-only-update host-update " in
+        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover trust-step accounts-popover claude-accounts sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash quit-keeps-host host-late-ready package-fuse launcher-install client-no-host logon toolchain client-only-update host-update " in
             *" $name "*) reap_leftovers "$name" ;;
         esac
         from="$(now_ms)"

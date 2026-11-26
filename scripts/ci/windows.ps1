@@ -60,7 +60,7 @@ $Rows = @(
     'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash', 'quit-keeps-host', 'rebuilt-machine',
     'package', 'sign-plan', 'packed-tree', 'update-metadata', 'package-fuse', 'packaged-launcher',
     'package-tracks', 'sign-plan-client', 'sign-plan-browser', 'sign-plan-host', 'sign-plan-launcher',
-    'packed-tree-client', 'packed-tree-browser', 'packed-tree-host', 'track-manifest', 'launcher-install',
+    'packed-tree-client', 'packed-tree-browser', 'packed-tree-host', 'track-manifest', 'launcher-install', 'client-no-host',
     'logon',
     'launcher-unit',
     'client-only-update',
@@ -535,6 +535,9 @@ function Row-track-manifest { Need-Tracks; Need-Install; Run 'track-manifest-che
 # THE LAUNCHER INSTALLS GENIE (Tynn #1058 L3; was packaged-launcher): the installer as a person runs it, its choice page
 # and Genie running after it in screenshots (scripts/vm-launcher-install.ps1).
 function Row-launcher-install { Need-Tracks; Need-TestMachine; Run 'vm-launcher-install' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-launcher-install.ps1 } }
+# A CLIENT WITH NO HOST (Tynn #1058 L4): a client-only install and a both install on one machine; the host directory
+# photographed at 1280x800 (scripts/vm-client-no-host.ps1).
+function Row-client-no-host { Need-Tracks; Need-TestMachine; Run 'vm-client-no-host' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-client-no-host.ps1 } }
 function Row-packaged-launcher {
     Need-Packaged
     $saved = @{ USERPROFILE = $env:USERPROFILE; HOME = $env:HOME; APPDATA = $env:APPDATA; LOCALAPPDATA = $env:LOCALAPPDATA }
@@ -631,6 +634,7 @@ function Ceiling([string]$name) {
         'package-tracks' { return 2400 }
         { $_ -in 'sign-plan-client', 'sign-plan-browser', 'sign-plan-host', 'sign-plan-launcher', 'packed-tree-client', 'packed-tree-browser', 'packed-tree-host', 'track-manifest' } { return 300 }
         'launcher-install' { return 900 }
+        'client-no-host' { return 900 }
         'logon' { return 900 }
         'client-only-update' { return 2400 }
         'host-update' { return 2400 }
