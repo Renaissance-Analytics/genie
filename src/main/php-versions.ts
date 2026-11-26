@@ -1,10 +1,14 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { phpAdvisoryText } from '../core/php-advisories.js';
+import { catalogLine, catalogVersions, currentPhpCatalog } from '../core/php-releases.js';
 import {
-    PHP_RECIPES,
     PHP_VERSION,
+    compareVersionsDesc,
+    vcRuntimeFor,
+    VC_RUNTIME_FOR_TOOLSET,
+    vcRuntimeAtLeast,
     managedCgiCommand,
     managedVersions,
     missingPinReason,
@@ -89,14 +93,20 @@ export interface PhpVersionsPorts {
     /**
      * Windows: make sure the Visual C++ runtime every windows.php.net build links is installed (T1's consented winget
      * install). Genie INSTALLS what PHP needs rather than naming it and leaving the person to fetch it (Genie 1
-     * `enginePrerequisites`, genie#209). Absent = nothing to ensure.
+     * `enginePrerequisites`, genie#209). Absent = nothing to ensure. `min` (Tynn #1066): the build's toolset needs at
+     * least this runtime version (`14.50` for vs18) — an older one is updated, or the answer says why it could not be.
      */
-    readonly ensureVcRuntime?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
+    readonly ensureVcRuntime?: (min?: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
     readonly progress?: (step: string | null) => void;
     /** How many compile jobs a source build runs at once (Linux). */
     readonly cpus?: number;
     /** The CA bundle the new version's php.ini names (genie#1334). Absent = none is named. */
     readonly ca?: PhpCaPort;
+    /**
+     * Windows (Tynn #1066): this machine's VCRUNTIME140 version, or `null` unread. A line whose build needs a newer one
+     * (8.6, vs18: 14.50) is offered after every line that runs here, so the card's Install is one that works.
+     */
+    readonly vcRuntimeVersion?: () => Promise<string | null>;
 }
 
 export interface PhpVersionsView {
@@ -107,7 +117,10 @@ export interface PhpVersionsView {
     readonly managed: ReadonlyArray<{ readonly version: string; readonly dir: string; readonly usedBy: readonly string[]; readonly advisory?: string }>;
     /** The php-cgi on PATH — what an unpinned site runs — or `null` when none answers. `advisory` as above. */
     readonly system: { readonly version: string; readonly advisory?: string } | null;
-    /** What this release can install, and whether each is here already. Empty where Genie installs none. */
+    /**
+     * What Genie can install, and whether each is here already: the newest patch of each supported line, from php.net's
+     * live data (Tynn #1066; the baked list offline). Empty where Genie installs none.
+     */
     readonly available: ReadonlyArray<{ readonly version: string; readonly installed: boolean }>;
     /** Why nothing can be installed here (macOS/Linux), when that is so. */
     readonly installRefused?: string;
@@ -247,21 +260,47 @@ function withAdvisory(version: string): { advisory?: string } {
     return advisory === null ? {} : { advisory };
 }
 
+/** Whether the php-cgi on PATH (`where` / `which`: the first one) lives under `dir`. Unreadable = no. */
+async function resolvesUnder(ports: Pick<PhpVersionsPorts, 'platform' | 'run'>, dir: string): Promise<boolean> {
+    try {
+        const r = await ports.run(ports.platform === 'win32' ? 'where' : 'which', ['php-cgi']);
+        const first = r.stdout.split(/\r?\n/).map((l) => l.trim()).find(Boolean);
+        if (!first) return false;
+        const norm = (p: string) => p.split('\\').join('/').replace(/[/]+$/, '').toLowerCase();
+        return norm(first).startsWith(`${norm(dir)}/`);
+    } catch {
+        return false;
+    }
+}
+
 /** What the Toolchain surface lists: Genie's own versions (with the sites on each), the PATH PHP, and what can be added. */
 export async function listPhpVersions(ports: PhpVersionsPorts, pins: readonly SitePin[] = []): Promise<PhpVersionsView> {
     const managed = managedPhp(ports);
     let system: PhpVersionsView['system'] = null;
     try {
         const banner = parsePhpBanner((await ports.run('php-cgi', ['-v'])).stdout);
-        if (banner) system = { version: banner.version, ...withAdvisory(banner.version) };
+        // GENIE'S OWN IS NOT THE SYSTEM'S (Tynn #1066): once Genie's PHP is the default, `current/php` is first on PATH and
+        // its php-cgi answers here. A php-cgi that resolves under Genie's toolchain is not listed as the system PHP.
+        if (banner && !(await resolvesUnder(ports, dirname(ports.root)))) system = { version: banner.version, ...withAdvisory(banner.version) };
     } catch {
         // no php-cgi on PATH: an unpinned php site cannot start either, and Toolchain's php row says how to install one
     }
     const have = new Set(managed.map((m) => m.version));
+    const catalog = currentPhpCatalog();
+    let offer = catalogVersions(catalog);
+    const runtime = ports.platform === 'win32' && ports.vcRuntimeVersion ? await ports.vcRuntimeVersion().catch(() => null) : null;
+    if (runtime !== null) {
+        const runs = (v: string) => {
+            const toolset = catalogLine(catalog, v.split('.').slice(0, 2).join('.'))?.toolset;
+            const need = toolset ? VC_RUNTIME_FOR_TOOLSET[toolset] : undefined;
+            return need === undefined || vcRuntimeAtLeast(runtime, need);
+        };
+        offer = [...offer.filter(runs), ...offer.filter((v) => !runs(v))];
+    }
     return {
         managed: managed.map((m) => ({ ...m, usedBy: sitesOn(m.version, pins, managed), ...withAdvisory(m.version) })),
         system,
-        available: ports.platform !== 'darwin' ? PHP_RECIPES.map((r) => ({ version: r.version, installed: have.has(r.version) })) : [],
+        available: ports.platform !== 'darwin' ? offer.map((version) => ({ version, installed: have.has(version) })) : [],
         ...(ports.platform !== 'darwin' ? {} : { installRefused: NOT_HERE }),
     };
 }
@@ -275,15 +314,25 @@ const psQuote = (s: string) => `'${s.replace(/'/g, "''")}'`;
  * this version as an NTS build, and php loads the extensions the ini enables without a complaint. Any failure after the
  * unpack deletes what was written.
  */
-export async function installPhpVersion(version: string, consent: boolean, ports: PhpVersionsPorts): Promise<PhpInstallOutcome> {
-    if (consent !== true) return { kind: 'refused', reason: `Genie installs nothing without your go-ahead; PHP ${version} was not installed` };
+export async function installPhpVersion(asked: string, consent: boolean, ports: PhpVersionsPorts): Promise<PhpInstallOutcome> {
+    if (consent !== true) return { kind: 'refused', reason: `Genie installs nothing without your go-ahead; PHP ${asked} was not installed` };
     if (ports.platform === 'darwin') return { kind: 'refused', reason: NOT_HERE };
+    // AN OLDER PATCH OF A LINE IS THAT LINE'S NEWEST (Tynn #1066). beta.66 on a fresh Windows machine offered "Install
+    // 8.5.12" and then refused it: windows.php.net publishes 8.5.13, and an archived build has no checksum. A patch is a
+    // patch: asked for 8.5.12 (a card drawn before php.net moved on, a site pinned to it), Genie installs the newest 8.5
+    // php.net publishes with a checksum — the same line, never another — and a pin to 8.5.12 runs it (pickPinned).
+    const askedLine = asked.split('.').slice(0, 2).join('.');
+    const lineNewest = asked.split('.').length === 3 ? catalogLine(currentPhpCatalog(), askedLine)?.newest ?? null : null;
+    const version = lineNewest !== null && compareVersionsDesc(lineNewest, asked) < 0 ? lineNewest : asked;
+    if (version !== asked) ports.progress?.(`PHP ${asked} is not php.net's newest ${askedLine}: installing PHP ${version}`);
     // THE FLOOR FIRST (PHP2Shell, 2026-10-22): a version under it is refused by name — the CVEs and the release to take
     // instead — before the recipe list is consulted and before a byte is fetched. "Genie has no installer for 8.4.24"
     // would be true and would hide the reason there is none.
     const unsafe = phpAdvisoryText(version);
     if (unsafe !== null) return { kind: 'refused', reason: `${unsafe}; Genie will not install it` };
-    if (!PHP_RECIPES.some((r) => r.version === version)) return { kind: 'refused', reason: `Genie has no installer for PHP ${version}; this release installs ${PHP_RECIPES.map((r) => r.version).join(', ')}` };
+    // What php.net lists now (Tynn #1066): the newest patch of each supported line, or the baked list offline.
+    const offered = catalogVersions(currentPhpCatalog());
+    if (!offered.includes(version)) return { kind: 'refused', reason: `Genie has no installer for PHP ${version}; it installs the newest patch of each line php.net supports: ${offered.join(', ')}` };
     const dir = join(ports.root, version);
     if (ports.fs.exists(join(dir, phpCgiName(ports.platform)))) return { kind: 'already-installed', version };
     if (ports.platform === 'linux') return buildPhpOnLinux(version, ports);
@@ -303,6 +352,16 @@ export async function installPhpVersion(version: string, consent: boolean, ports
         const build = phpWindowsBuild(listed.body, version);
         if ('missing' in build) return { kind: 'not-installed', reason: `${build.missing}, so Genie will not install PHP ${version} unverified. Nothing was downloaded` };
         const file = build.file;
+
+        // THE RUNTIME ITS TOOLSET LINKS (Tynn #1066): 8.6 is vs18, which needs VCRUNTIME140 14.50 — a fresh machine had
+        // 14.44 and php-cgi would not start. Brought up to it before the download, or stopped saying which it needs.
+        const vcMin = vcRuntimeFor(file);
+        if (vcMin !== null && ports.ensureVcRuntime) {
+            say(`PHP ${version}: making sure the Microsoft Visual C++ runtime is ${vcMin} or newer`);
+            const vc = await ports.ensureVcRuntime(vcMin);
+            // The first words are the plain line the Toolchain shows (toolchain-view plainRefusal), with its button.
+            if (!vc.ok) return { kind: 'not-installed', reason: `PHP ${version.split('.').slice(0, 2).join('.')} needs a newer Microsoft Visual C++ runtime (${vcMin} or newer for ${file}; ${vc.reason}). Nothing was downloaded` };
+        }
 
         say(`PHP ${version}: downloading ${file} from windows.php.net`);
         let zip: Uint8Array | null = null;
@@ -377,7 +436,17 @@ async function putInPlace(a: { version: string; file: string; dir: string; zip: 
         }
         if (!banner) return fail(`PHP ${version} unpacked, but ${join(dir, 'php-cgi.exe')} did not run${said ? `: ${said.slice(0, 300)}` : ''}`);
         if (banner.version !== version) return fail(`PHP ${version} was asked for, but the binary reports ${banner.version}`);
-        if (banner.threadSafe !== false) return fail(`PHP ${version} ${banner.threadSafe ? 'is a thread-safe build' : 'did not say it is an NTS build'}, and Genie's php-cgi runs the NTS build`);
+        // A banner that names no thread safety (8.3.37's, on a fresh Windows VM — Tynn #1066) is ASKED: PHP_ZTS.
+        let threadSafe = banner.threadSafe;
+        if (threadSafe === null) {
+            try {
+                const asked = (await ports.run(join(dir, 'php.exe'), ['-c', ini, '-r', "echo PHP_ZTS ? 'ZTS' : 'NTS';"])).stdout.trim();
+                threadSafe = asked === 'NTS' ? false : asked === 'ZTS' ? true : null;
+            } catch {
+                threadSafe = null;
+            }
+        }
+        if (threadSafe !== false) return fail(`PHP ${version} ${threadSafe ? 'is a thread-safe build' : `did not say it is an NTS build (it said: ${said.split(/\r?\n/)[0]?.slice(0, 200) ?? ''})`}, and Genie's php-cgi runs the NTS build`);
         let modules = '';
         try {
             modules = (await ports.run(join(dir, 'php.exe'), ['-c', ini, '-m'])).stdout;

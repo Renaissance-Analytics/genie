@@ -564,6 +564,8 @@ export type FeatureAction =
     | { kind: 'toolchain.repair' }
     /** Install one managed PHP version (windows.php.net, checksum-verified). `consent` is the person's click. */
     | { kind: 'toolchain.installPhp'; version: string; consent: boolean }
+    /** Tynn #1066: install the Visual C++ runtime PHP `version`'s build needs (asks for administrator), then that PHP. */
+    | { kind: 'toolchain.installVcRuntime'; version: string }
     /** Remove a managed PHP version — refused while a site is pinned to it. */
     | { kind: 'toolchain.removePhp'; version: string }
     /** Install one Genie-managed Node version (nodejs.org, checksum-verified). `consent` is the person's click. */
@@ -685,7 +687,7 @@ export function toolchainRefusalOf(action: FeatureAction, data: FeatureData): To
     const refusals = data.toolchain?.refusals ?? [];
     if (action.kind === 'toolchain.update' || action.kind === 'toolchain.install') return refusals.find((r) => r.tool === action.tool && r.version === undefined) ?? null;
     if (action.kind === 'toolchain.startDocker') return refusals.find((r) => r.tool === 'docker' && r.version === undefined) ?? null;
-    if (action.kind === 'toolchain.installPhp' || action.kind === 'toolchain.removePhp') return refusals.find((r) => r.tool === 'php' && r.version === action.version) ?? null;
+    if (action.kind === 'toolchain.installPhp' || action.kind === 'toolchain.removePhp' || action.kind === 'toolchain.installVcRuntime') return refusals.find((r) => r.tool === 'php' && r.version === action.version) ?? null;
     if (action.kind === 'toolchain.installNode' || action.kind === 'toolchain.removeNode') return refusals.find((r) => r.tool === 'node' && r.version === action.version) ?? null;
     if (action.kind === 'toolchain.installGo' || action.kind === 'toolchain.removeGo') return refusals.find((r) => r.tool === 'go' && r.version === action.version) ?? null;
     if (action.kind === 'toolchain.installPython' || action.kind === 'toolchain.removePython') return refusals.find((r) => r.tool === 'python' && r.version === action.version) ?? null;

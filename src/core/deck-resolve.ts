@@ -7,6 +7,7 @@ import { SITE_REACH_DECK_PREFIX, SITE_REACH_LATER_OPTION, SITE_REACH_OPEN_OPTION
 import { ATTACH_DECK_PREFIX } from './attach-report.js';
 import { LIMIT_NOTICE_DECK_PREFIX } from './limit-alerts.js';
 import { PLAYWRIGHT_NOTICE_DECK_PREFIX } from './playwright-managed.js';
+import { PHP_PATCH_DECK_PREFIX } from './php-releases.js';
 import { STALLED_DECK_PREFIX } from './hung-call.js';
 
 /**
@@ -46,6 +47,8 @@ export type DeckCommand =
     | { kind: 'dismiss-limit-alert'; id: string }
     /** A Playwright install Genie could not finish (main/playwright-auto.ts, Tynn #846): Retry installs it again, Dismiss puts it away. */
     | { kind: 'playwright-install'; id: string; retry: boolean }
+    /** A PHP security patch Genie installed by itself, or could not (main/php-patch-keeper.ts, Tynn #1066): the person has read it. */
+    | { kind: 'dismiss-php-patch'; id: string }
     /** Something a host could not restore on a rebuilt machine (core/attach-report.ts, Tynn #419): its action, or Dismiss. */
     | { kind: 'attach'; id: string; optionId: string }
     /** A turn Genie ended as stalled (core/hung-call.ts, Tynn #855): Stop the agent, Restart it, or put the item away. */
@@ -206,6 +209,7 @@ export function resolveDeckAnswer(item: DeckItem, optionId: string, note = ''): 
                 return { kind: 'stalled-turn', agentId, action: optionId === 'stop' ? 'stop' : optionId === 'restart' ? 'restart' : 'dismiss' };
             }
             if (item.id.startsWith(PLAYWRIGHT_NOTICE_DECK_PREFIX)) return { kind: 'playwright-install', id: item.id, retry: optionId === 'retry' };
+            if (item.id.startsWith(PHP_PATCH_DECK_PREFIX)) return { kind: 'dismiss-php-patch', id: item.id };
             if (item.id.startsWith(MAIN_ERROR_DECK_PREFIX)) {
                 // An action that does something (Tynn #693), beside Dismiss.
                 if (optionId === 'retry') return { kind: 'retry-host-copy', id: item.id };

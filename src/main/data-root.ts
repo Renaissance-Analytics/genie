@@ -150,7 +150,7 @@ export const DATA_ROOT_RULES: readonly DataRootRule[] = [
 
     // --- MACHINE: installed, downloaded or generated; made again when it is missing -----------------------------------
     machine('host/', 'the host’s own copy of its runtime and its code, made from the install', { live: true }),
-    machine('genie2-toolchain/', 'the runtimes and browsers Genie installed', { names: ['sets.json', 'toolchain-env.json', 'cacert.pem', 'zz-genie-ca.ini'] }),
+    machine('genie2-toolchain/', 'the runtimes and browsers Genie installed', { names: ['sets.json', 'toolchain-env.json', 'cacert.pem', 'zz-genie-ca.ini', 'php-releases.json'] }),
     machine('runtime/caddy-bin/', 'the front door’s program, copied from the install'),
     machine('runtime/caddy/', 'the front door’s configuration and its own storage'),
     machine('runtime/prism-supervisor/', 'an older supervisor build'),

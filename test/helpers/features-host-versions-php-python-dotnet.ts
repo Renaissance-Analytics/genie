@@ -48,7 +48,7 @@ export async function phpPythonDotnetVersionsFixture() {
         removeTree: path => { removals.push(path); events.push('remove:' + path); for (const file of [...files]) if (under(file, path)) { files.delete(file); texts.delete(file); } },
     };
     const badHash = { php: false, python: false, dotnet: false }, proofVersion = { ...versions };
-    const faults = { phpNts: true, phpModules: [...PHP_INI_EXTENSIONS], vcReason: null as string | null, pipFailure: false, dotnetSdkPath: null as string | null };
+    const faults = { phpNts: true, phpModules: [...PHP_INI_EXTENSIONS], vcReason: null as string | null, vcTooOld: null as string | null, noSystemPhp: false, pipFailure: false, dotnetSdkPath: null as string | null };
     const downloads: Array<{ lang: Lang; url: string }> = [], metadata: Array<{ lang: Lang; url: string }> = [];
     const commands: Array<{ binary: string; args: readonly string[] }> = [], progress: Array<string | null> = [];
     let vcCalls = 0;
@@ -67,6 +67,7 @@ export async function phpPythonDotnetVersionsFixture() {
             if (lang === 'dotnet') files.add(join(destination, 'sdk', versions.dotnet));
             return { stdout: '', exitCode: 0 };
         }
+        if (executable === 'php-cgi' && args.join(' ') === '-v' && faults.noSystemPhp) throw new Error('spawn php-cgi ENOENT');
         if (executable === 'php-cgi' && args.join(' ') === '-v') return { stdout: 'PHP 8.4.27 (cgi-fcgi) (NTS)\n', exitCode: 0 };
         if (executable === 'python' && args.join(' ') === '--version') return { stdout: 'Python was not found', exitCode: 9009 };
         if (executable === 'dotnet' && args.join(' ') === '--version') return { stdout: '8.0.426\n', exitCode: 0 };
@@ -94,10 +95,17 @@ export async function phpPythonDotnetVersionsFixture() {
         },
         progress: (step: string | null) => { progress.push(step); base.changed(); },
     });
-    const phpPorts: PhpVersionsPorts = { ...portsFor('php'), ensureVcRuntime: async () => { vcCalls++; return faults.vcReason === null ? { ok: true } : { ok: false, reason: faults.vcReason }; } };
+    const phpPorts: PhpVersionsPorts = { ...portsFor('php'), ensureVcRuntime: async (min?: string) => {
+        vcCalls++;
+        if (min !== undefined && faults.vcTooOld !== null) return { ok: false, reason: faults.vcTooOld };
+        return faults.vcReason === null ? { ok: true } : { ok: false, reason: faults.vcReason };
+    } };
+    // The runtime's own install, from a refusal's button (Tynn #1066): the fixture's brings it up to date.
+    const vcRuntimeInstalls: string[] = [];
+    const installVcRuntime = async (version: string) => { vcRuntimeInstalls.push(version); faults.vcTooOld = null; return { ok: true as const }; };
     const pythonPorts: PythonVersionsPorts = portsFor('python'), dotnetPorts: DotnetVersionsPorts = portsFor('dotnet');
     const managers = {
-        php: { list: (pins: readonly SitePin[] = []) => listPhpVersions(phpPorts, pins), install: (v: string, consent: boolean) => installPhpVersion(v, consent, phpPorts), remove: (v: string, pins: readonly SitePin[] = []) => removePhpVersion(v, pins, phpPorts) },
+        php: { list: (pins: readonly SitePin[] = []) => listPhpVersions(phpPorts, pins), install: (v: string, consent: boolean) => installPhpVersion(v, consent, phpPorts), remove: (v: string, pins: readonly SitePin[] = []) => removePhpVersion(v, pins, phpPorts), installVcRuntime },
         python: { list: () => listPythonVersions(pythonPorts), install: (v: string, consent: boolean) => installPythonVersion(v, consent, pythonPorts), remove: (v: string) => removePythonVersion(v, pythonPorts) },
         dotnet: { list: () => listDotnetVersions(dotnetPorts), install: (v: string, consent: boolean) => installDotnetVersion(v, consent, dotnetPorts), remove: (v: string) => removeDotnetVersion(v, dotnetPorts) },
     };
@@ -118,6 +126,6 @@ export async function phpPythonDotnetVersionsFixture() {
     const pinPhp = () => base.hosting.sites.declare({ name: 'php-fixture', workspaceId: 'work', repoPath: base.workspace, serve: { mode: 'php', root: 'public', version: versions.php } });
     return { ...base, managers, versions, otherVersions, roots, archives, urls, bytes, hashes, binary, seed, pinPhp, files, fs, removals, events, faults,
         writtenBytes, downloads, metadata, versionCommands: commands, versionProgress: progress, badHash, proofVersion, defaults, pipArgs,
-        vcCalls: () => vcCalls, defaultTarget: (lang: Lang) => links.get(currentLinkDir(toolchainDir, lang)) };
+        vcCalls: () => vcCalls, vcRuntimeInstalls, defaultTarget: (lang: Lang) => links.get(currentLinkDir(toolchainDir, lang)) };
 }
 export type PhpPythonDotnetVersionsFixture = Awaited<ReturnType<typeof phpPythonDotnetVersionsFixture>>;
