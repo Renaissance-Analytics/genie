@@ -101,7 +101,8 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
             if (r.kind !== 'installed' && r.kind !== 'already-installed') return { ok: false, reason: r.reason };
             // Tynn #1066: present is not enough — the build's toolset needs at least `min` (vs18: 14.50).
             return min ? ensureVcRuntimeAtLeast(min, {
-                run: longRunner, systemRoot: process.env.SystemRoot ?? 'C:\\Windows', progress: (step) => deps.busy(step),
+                // Ten minutes, not the build's thirty: an installer waiting on a permission nobody gives must end.
+                run: (binary, args, options) => execFileRunner(binary, args, { timeoutMs: 10 * 60_000, ...(options?.env ? { env: options.env } : {}) }), systemRoot: process.env.SystemRoot ?? 'C:\\Windows', progress: (step) => deps.busy(step),
                 // No winget (Windows Server): Microsoft's redistributable, run only with a valid Microsoft signature.
                 tempDir: toolchainDataDir(), download: httpFetch.bytes,
                 writeFile: (path, bytes) => { mkdirSync(toolchainDataDir(), { recursive: true }); writeFileSync(path, bytes); },
