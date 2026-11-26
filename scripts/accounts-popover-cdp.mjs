@@ -347,7 +347,11 @@ async function phase1070(active, tag) {
         const reach = `(() => { const el = document.querySelector(${JSON.stringify(CHIP)}); if (!el) return false; const r = el.getBoundingClientRect(); const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return Boolean(at && at.closest('[data-account-chip]')); })()`;
         for (let i = 0; i < 3 && !(await c.evaluate(reach)); i++) { await escape(c); await sleep(500); }
         check(await click(c, CHIP), `${tag} 2. a click on the chip`);
-        check(await waitFor(c, `(() => { const r = document.querySelector(${JSON.stringify(POP)})?.getBoundingClientRect(); return Boolean(r && r.left >= 0 && r.top >= 0); })()`, 8_000), `${tag} 3. opens the popover, on screen`);
+        // Measured (the weekly phase, Linux): a fresh window can take its first click as focus. A person clicks again; so does this.
+        const onScreen = `(() => { const r = document.querySelector(${JSON.stringify(POP)})?.getBoundingClientRect(); return Boolean(r && r.left >= 0 && r.top >= 0); })()`;
+        let shown = await waitFor(c, onScreen, 4_000);
+        for (let i = 0; i < 2 && !shown; i++) { console.log(`  the popover is not up after a click: clicking again (${i + 1})`); await click(c, CHIP); shown = await waitFor(c, onScreen, 4_000); }
+        check(shown, `${tag} 3. opens the popover, on screen`);
         const main = await windowsIn(c, MAIN), weekly = await windowsIn(c, WEEKLY), never = await windowsIn(c, NEVER);
         check(JSON.stringify(main) === JSON.stringify(['5h', '7d']), `${tag} 4. Main shows ITS windows: 5h and 7d`, JSON.stringify(main));
         check(JSON.stringify(weekly) === JSON.stringify(['7d', '7d fable']), `${tag} 5. Weekly shows its week and its per-model weekly cap, and NO 5h bar`, JSON.stringify(weekly));
