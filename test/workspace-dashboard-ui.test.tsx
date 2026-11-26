@@ -134,7 +134,9 @@ describe('the workspace route opens on its dashboard', () => {
         expect(count(html, 'data-agent-pill')).toBe(0);
         expect(html).not.toContain('data-agents-strip');
         expect(control(html, 'data-workspace-tab="home"')).toMatchObject({ tag: 'button', tab: true });
-        expect(control(html, 'data-workspace-tab="home"')!.text).toMatch(/^Dashboard(?![\w])/);
+        // An icon since Tynn #945, named Dashboard for a screen reader and in its tooltip.
+        expect(control(html, 'data-workspace-tab="home"')!.open).toContain('aria-label="Dashboard"');
+        expect(control(html, 'data-workspace-tab="home"')!.text).toBe('');
         expect(control(html, 'data-workspace-tab="home"')!.open).toContain('aria-selected="true"');
         expect(html).not.toContain('data-workspace-tab="terminals"');
         expect(html).toContain('data-workspace-tab="add"');

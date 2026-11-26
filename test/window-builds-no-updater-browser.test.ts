@@ -2,7 +2,6 @@ import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { runBrowserLink, type BrowserLinkClient } from '../src/main/browser-process-link.js';
 import { BrowserService, type BrowserEvent, type BrowserFacts } from '../src/main/browser-service.js';
-import { DeviceLinkReplica } from '../src/main/device-link-replica.js';
 
 /**
  * THE WINDOW BUILDS NO UPDATER, ISSUEWATCH, TYNN PAGE READER OR BROWSER WINDOWS OF ITS OWN (Tynn #585, host split P6,
@@ -67,12 +66,10 @@ describe('another workstation’s browser window goes through the host to the br
         expect(events.at(-1)).toEqual({ kind: 'remoteVia', key: 'relay:ws1', port: 6262, ca: 'NEWCA' });
     });
 
-    it('the host’s word about a door is heard from the device link', () => {
-        const replica = new DeviceLinkReplica(async () => null) as unknown as { onVia(l: (channel: string, port: number, ca: string | null) => void): () => void; deliver(event: unknown): void };
-        const heard: unknown[] = [];
-        replica.onVia((...via) => heard.push(via));
-        replica.deliver({ type: 'via', channel: 'c1', port: 6262, ca: 'NEWCA' });
-        expect(heard).toEqual([['c1', 6262, 'NEWCA']]);
+    it('the host’s word about a door reaches the browser from genie-host itself, never through a window (Tynn #941, 2f-2)', () => {
+        const host = code('src/main/genie-host.ts');
+        expect(host).toMatch(/remoteVia: \(key, port, ca\) => \{ void browserService\.call\('remoteVia', \[key, port, ca\], 'genie-host'\)/);
+        expect(code('src/main/main.ts')).not.toMatch(/'remoteVia'/);
     });
 
     it('CONTROL: this machine’s own open carries no remote', async () => {

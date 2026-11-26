@@ -10,12 +10,12 @@ import type { ProcessTree } from '../src/core/process-tree.js';
 import type { SessionDriverFactory } from '../src/core/session.js';
 import { hostAgentKeys } from '../src/main/host-agent-keys.js';
 import { Keychain, type KeyringModule } from '../src/main/keychain.js';
-import { migrateSecrets, type MigrationBook, type MigrationState } from '../src/main/keychain-migration.js';
+import type { MigrationBook, MigrationState } from '../src/main/keychain-migration.js';
+import { moveAll } from './helpers/move-secrets.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 import { tynnAgentIdentities, type AgentSecrets } from '../src/main/tynn-agent-identities.js';
-import { linkedAgentSecrets } from '../src/main/agent-secrets.js';
 import { until } from './helpers/until.js';
 
 /**
@@ -96,9 +96,8 @@ describe('THE BUG: the window process is killed, the host starts an agent, the a
         };
         const server = new SessionEngineServer({
             token: TOKEN, build: 'test',
-            mcp: { setView: () => {}, sessionServers: () => [{ type: 'http', name: 'genie', url: 'http://127.0.0.1:1/mcp', headers: [] }], status: () => null, runNative: async () => null } as never,
+            mcp: { setView: () => {}, sessionServers: () => [{ type: 'http', name: 'genie', url: 'http://127.0.0.1:1/mcp', headers: [] }], status: () => null } as never,
             ...(agentKeys ? { agentKeys: keys() } : {}),
-            keychain: lib.keychain,
         });
         const host = new SessionHost({ userData: dir, driverFor, processTree: noProcessTree, ...server.hostOptions() });
         server.attach(host);
@@ -219,8 +218,8 @@ describe('what the host may hand out with no window', () => {
 
 describe('the host holds, and what a window can ask of it', () => {
     /** A window on a real, attached host: with none attached every call answers "still starting", whatever the keychain would. */
-    async function linkedWindow(keychain?: Keychain) {
-        const server = new SessionEngineServer({ token: TOKEN, build: 'test', ...(keychain ? { keychain } : {}) });
+    async function linkedWindow() {
+        const server = new SessionEngineServer({ token: TOKEN, build: 'test' });
         const host = new SessionHost({ userData: dir, driverFor: () => null, processTree: { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) }, ...server.hostOptions() });
         server.attach(host);
         const [hostSide, windowSide] = memoryPair();
@@ -240,34 +239,21 @@ describe('the host holds, and what a window can ask of it', () => {
         };
     };
 
-    it('over the link: the secrets a window uses are the host’s keychain', async () => {
-        const client = await linkedWindow(lib.keychain);
-        const port = linkedAgentSecrets(client);
-        expect(await port.set(ENTRY, KEY)).toEqual({ ok: true });
-        expect(lib.held.get(ENTRY)).toBe(KEY);
-        expect(await port.get(ENTRY)).toEqual({ kind: 'value', value: KEY });
-        expect(await port.probe()).toEqual({ ok: true });
-    });
-
-    it('over the link: nothing but an agent’s key can be asked for (cut c widens this with its reader)', async () => {
-        const client = await linkedWindow(lib.keychain);
-        lib.held.set('tynn/pairing', 'the-pairing');
-        const read = await client.call('engine.secretRead', ['tynn/pairing']);
-        expect(read).toEqual({ ok: false, reason: 'A window can ask only for an agent\'s key.' });
-        expect(JSON.stringify(read)).not.toContain('the-pairing');
-    });
-
-    it('a host with no keychain says unavailable, never missing', async () => {
+    // Tynn #961 (2g-3c): the window no longer reaches the host's keychain at all. genie-host prepares an agent's Tynn server
+    // itself (host-agent-keys.ts), so the engine.secret* routes went with main's prepareMcpServers.
+    it('over the link: a window can ask the host’s keychain for nothing, an agent’s key included, and no value comes back', async () => {
         const client = await linkedWindow();
-        const read = await linkedAgentSecrets(client).get(ENTRY);
-        expect(read).toEqual({ kind: 'unavailable', reason: 'This host keeps no keychain.' });
-    });
-
-    it('a window with no link says unavailable: a dead link is not a signed-out agent', async () => {
-        const client = new SessionEngineClient();
-        expect((await linkedAgentSecrets(client).get(ENTRY)).kind).toBe('unavailable');
-        expect((await linkedAgentSecrets(client).set(ENTRY, KEY)).ok).toBe(false);
-        expect((await linkedAgentSecrets(client).probe()).ok).toBe(false);
+        lib.held.set(ENTRY, KEY);
+        lib.held.set('tynn/pairing', 'the-pairing');
+        for (const [method, args] of [['engine.secretRead', [ENTRY]], ['engine.secretRead', ['tynn/pairing']], ['engine.secretStore', [ENTRY, 'other']], ['engine.secretProbe', []]] as const) {
+            const answer = await client.call(method as never, [...args]);
+            expect(answer, method).toMatchObject({ ok: false, reason: expect.stringContaining('is not a bridge method') });
+            expect(JSON.stringify(answer)).not.toContain(KEY);
+            expect(JSON.stringify(answer)).not.toContain('the-pairing');
+        }
+        expect(lib.held.get(ENTRY)).toBe(KEY);
+        // CONTROL: the same link answers a method it carries.
+        expect(await client.call('engine.proxyRemember', [{}])).toMatchObject({ ok: false, reason: 'This host keeps no proxy answers.' });
     });
 
     it('what is already in the vault moves: keychain holds it, the vault holds no token, and the binding keeps working', async () => {
@@ -280,9 +266,9 @@ describe('the host holds, and what a window can ask of it', () => {
         const cipher = { decrypt: (bytes: Buffer) => bytes.toString().replace(/^sealed:/, '') };
         const states: Record<string, MigrationState> = {};
         const book: MigrationBook = { read: async () => ({ ...states }), write: async (name, state) => { states[name] = state; } };
-        const moved = await migrateSecrets(await vault.legacyKeys(cipher), {
+        const moved = await moveAll(await vault.legacyKeys(cipher), {
             store: async (name, value) => port.set(name, value),
-            compare: async (name, value) => (port.held.get(name) === value ? 'same' : 'different'),
+            compare: async (name, value) => (!port.held.has(name) ? 'missing' : port.held.get(name) === value ? 'same' : 'different'),
         }, book);
         expect(moved).toEqual([{ name: ENTRY, status: 'moved' }]);
         expect(port.held.get(ENTRY)).toBe(KEY);

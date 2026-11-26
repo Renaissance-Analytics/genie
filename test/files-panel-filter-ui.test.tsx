@@ -29,7 +29,7 @@ describe('the header', () => {
         expect(html).toMatch(/<button[^>]*role="radio"[^>]*aria-checked="true"[^>]*>All</);
         expect(html).toMatch(/<button[^>]*role="radio"[^>]*aria-checked="false"[^>]*>Changed 4</);
         expect(html).toContain('one per workspace');
-        expect(html).toContain('data-action="close-files"');
+        expect(html).toContain('data-action="files-view-menu"');
     });
 
     it('with nothing changed the chip reads `Changed`, not `Changed 0`', () => {

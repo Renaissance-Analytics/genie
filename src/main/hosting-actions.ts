@@ -5,7 +5,7 @@ import { siteFormDefaults, validateServiceForm, validateSiteForm, type Problem, 
 import { normalizeSiteName } from '../core/gen-name.js';
 import type { ProcessLog } from '../core/output-tail.js';
 import type { EngineChoice, ServiceInstance } from '../core/services.js';
-import type { WindowServices as ComposedServices } from './compose.js';
+import type { WindowServices as ComposedServices } from './host-services.js';
 import type { ProcessState, ProcessStatus } from './process-supervisor.js';
 import type { SiteActor } from './envelope-sites-host.js';
 import type { CreateSiteInput, SiteInfo } from './site-manager.js';
@@ -309,11 +309,3 @@ export function serviceLogs(s: HostingServices, id: string, tail?: number): Prom
     return s.engines.logs(id, tail);
 }
 
-/**
- * The env a workspace's terminal gets — the Terminals tab's and an agent's `manageTerminals create` alike: the
- * workspace's service engines (DB_*, REDIS_URL…), like its processes, then Genie's MCP endpoint (§6.9). The agent path
- * once opened terminals with neither, so a shell an agent opened could not reach the database the person's could.
- */
-export function terminalEnvFor(services: { readonly engines: Pick<HostingServices['engines'], 'envFor'> } | null, workspaceId: string, mcpEnv: Readonly<Record<string, string>>): Record<string, string> {
-    return { ...(services?.engines.envFor(workspaceId) ?? {}), ...mcpEnv };
-}

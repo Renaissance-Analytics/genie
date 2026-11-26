@@ -78,6 +78,8 @@ const FAMILIES: Record<string, readonly Row[]> = {
         row('agents.setAutoApprove', 'allow', [A, true], [[B, true]]),
         row('agents.setManageTabs', 'allow', [A, true], [[B, true]]),
         row('agents.setDrivePages', 'allow', [A, true], [[B, true]]),
+        // The app wake cap (Tynn #1053) is the host owner's to set: a share-link guest is refused, the owner reaches the host.
+        row('agents.setAppWakeCap', 'refuse', [A, 12]),
         row('agents.setMcpServer', 'allow', [A, 'genie', false], [[B, 'genie', false]]),
         row('agents.setIssueWatch', 'allow', [A, {}], [[B, {}]]),
         row('agents.setPermissions', 'allow', [A, 'ask'], [[B, 'ask']]),
@@ -121,6 +123,9 @@ const FAMILIES: Record<string, readonly Row[]> = {
         // The offers a clone's repo brings are the owner's to see and apply: never from a link to one workspace (Tynn #756).
         row('workspaces.cloneOffers', 'refuse', ['tynn']),
         row('workspaces.applyOffer', 'refuse', ['tynn', 'flow:.flows/a.json']),
+        // Where a workspace's folder is (host split P7): it points the workspace at any folder of the host's disk, so it is
+        // the owner's alone. Never from a link to one workspace, its own included.
+        row('workspaces.relocate', 'refuse', ['tynn', '/w/elsewhere']),
     ],
     'the shared workspace itself': [
         row('workspaces.listRepos', 'allow', ['tynn'], [['fancy']]),
@@ -177,6 +182,14 @@ const FAMILIES: Record<string, readonly Row[]> = {
         row('files.open', 'allow', ['tynn', 'a.txt'], [['fancy', 'a.txt']]),
         row('files.readMedia', 'allow', ['tynn', 'a.png'], [['fancy', 'a.png']]),
         row('files.upload', 'allow', ['tynn', '', STAGED], [['fancy', '', STAGED]]),
+        // Opened on the host's own screen (Tynn #912, 2f-1): the owner's; a guest never puts anything on it.
+        row('files.openExternal', 'refuse', ['tynn', 'a.txt']),
+        row('files.reveal', 'refuse', ['tynn', 'a.txt']),
+        // A question's named files and visuals (Tynn #912, 2f-1): read by the host from its own Deck, where the question's
+        // workspace is checked against the guest's (host-question-reads.ts; split-2f-question-window.test.ts).
+        row('questions.files', 'allow', ['q_1', ['a.md']]),
+        row('questions.file', 'allow', ['q_1', 'a.md']),
+        row('questions.visuals', 'allow', ['q_1']),
         row('host.listDir', 'allow', ['/w/tynn'], [['/w/fancy'], ['/w'], ['/w/tynn/../fancy']]),
         row('host.home', 'answer'),
         row('host.mkdir', 'refuse', ['/w/tynn', 'x']),
@@ -185,6 +198,8 @@ const FAMILIES: Record<string, readonly Row[]> = {
         row('features.snapshot', 'refuse'),
         row('features.act', 'refuse', [{ kind: 'settings.set', key: 'theme', value: 'dark' }]),
         row('features.setBrowserBounds', 'host-only', [{}]),
+        // Tynn #973: the password prompt is the host owner's; a share-link guest's answer is refused at the door.
+        row('elevation.answer', 'refuse', ['p1', null]),
     ],
     updates: [
         row('updates.state', 'refuse'),
@@ -357,11 +372,13 @@ describe('local methods are refused to every relay principal, the owner included
 });
 
 describe('connection controls for a workspace principal', () => {
-    const LOCAL_CONTROLS = CONTROL_METHODS.filter((m) => m.startsWith('blob.') || m.startsWith('localUpload.') || m.startsWith('page.') || m.startsWith('files.') || m.startsWith('tynn.') || m.startsWith('activity.') || m === 'content.release');
+    // deck.watch (Tynn #941, 2f-2): the host's Deck for this machine's own Genie (its question window and tray) only.
+    const LOCAL_CONTROLS = CONTROL_METHODS.filter((m) => m.startsWith('blob.') || m.startsWith('localUpload.') || m.startsWith('page.') || m.startsWith('files.') || m.startsWith('tynn.') || m.startsWith('activity.') || m === 'content.release' || m === 'deck.watch' || m === 'summary.watch' || m === 'remote.watch' || m === 'settings.watch' || m === 'registry.watch' || m === 'registry.read' || m === 'frontdoor.watch');
 
     it('every control is classified: local ones are refused to all relay principals', async () => {
         // `host.version` (anyone admitted) and `host.update` (the owner only), Tynn #894: protocol-versioning-894.test.ts.
-        const handled = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'host.lock', 'host.unlock', 'host.version', 'host.update', 'agent.watch', 'agent.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort'];
+        // `xstation.*` (P9): the owner's own workstation only, by the grant's `src_ws`; cross-station-wire.test.ts.
+        const handled = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'host.lock', 'host.unlock', 'host.version', 'host.update', 'agent.watch', 'agent.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', 'xstation.roster', 'xstation.deliver', 'xstation.read'];
         expect(CONTROL_METHODS.filter((m) => !handled.includes(m) && !LOCAL_CONTROLS.includes(m))).toEqual([]);
         for (const who of [WORKSPACE_GUEST, READONLY_GUEST, OWNER]) {
             const { c } = await admitted(who, false);

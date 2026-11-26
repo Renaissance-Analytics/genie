@@ -168,7 +168,7 @@ export type StreamEvent =
      * recorded). `resumed`: the provider was asked to continue its conversation, which it remembers in full —
      * including anything from before Genie recorded it.
      */
-    | { kind: 'run'; resumed: boolean }
+    | { kind: 'run'; resumed: boolean; /** A move to the active account (Tynn #1011): not shown, it is the same conversation. */ quiet?: true }
     /**
      * The ledger's history was cut to its most recent rows: `count` earlier recorded rows are not shown, `turns` of them
      * turn markers — what the turns shown number on from (core/turn-numbers.ts).
@@ -339,6 +339,19 @@ function outputField(update: Record<string, unknown>): { output?: string } {
     return text === null ? {} : { output: text };
 }
 
+/**
+ * prism-acp 0.48.0 opens every model-written plan title with "Step: " (`PLAN_TITLE_NEUTRAL`, G-362), so model text never
+ * stands where a host label (`[failed] `, `(you) `) does. Genie's plan views show the step (Tynn #1060): the prefix is taken
+ * off here, ONLY when it is exactly the leading "Step: " and something is left. Any other entry is passed through as it is.
+ */
+export const PLAN_STEP_PREFIX = 'Step: ';
+function withoutStepPrefix(entry: unknown): unknown {
+    if (!isRecord(entry)) return entry;
+    const content = entry['content'];
+    if (typeof content !== 'string' || !content.startsWith(PLAN_STEP_PREFIX) || content.length === PLAN_STEP_PREFIX.length) return entry;
+    return { ...entry, content: content.slice(PLAN_STEP_PREFIX.length) };
+}
+
 export function toStreamEvent(update: Record<string, unknown>): StreamEvent | null {
     const kind = update['sessionUpdate'];
     if (typeof kind !== 'string') return null;
@@ -387,9 +400,21 @@ export function toStreamEvent(update: Record<string, unknown>): StreamEvent | nu
             };
         }
 
+        // `plan` is ACP's own name for a plan update, and what prism-acp's CodexDriver sends for Codex's
+        // `turn/plan/updated` (`{ sessionUpdate: 'plan', entries: [{ content, status }] }`); `plan_update` is the
+        // older name. Unmapped, a Codex plan fell through to `unknown` and never reached the Dashboard (genie#2132).
+        case 'plan':
         case 'plan_update': {
-            const entries = update['entries'] ?? update['plan'];
-            return { kind: 'plan', entries: Array.isArray(entries) ? entries : [] };
+            // A plan is only what carries its steps. An explicit `entries: []` is still a plan, cleared.
+            const entries = Array.isArray(update['entries']) ? update['entries'] : update['plan'];
+            if (Array.isArray(entries)) return { kind: 'plan', entries: entries.map(withoutStepPrefix) };
+            // The same driver sends Codex's `turn/plan/delta` as a `plan_update` with only a `delta`: a fragment of
+            // the plan's text, many a second. Read as a plan it was one of NO steps and blanked the plan already
+            // shown; kept as `unknown` it was drawn as an "(unmapped: plan_update)" row per fragment. It is no row at
+            // all (as the slash-command menu below is none): the plan that follows carries everything.
+            if (typeof update['delta'] === 'string') return null;
+            // Neither steps nor a delta: something new, kept where it can be seen.
+            return { kind: 'unknown', sessionUpdate: kind, raw: update };
         }
 
         case 'compaction_update':

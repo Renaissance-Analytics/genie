@@ -12,9 +12,11 @@
 
 import { findBatchFile, type LookupPorts } from './program-lookup.js';
 import { phpAdvisoryText } from './php-advisories.js';
+import type { ElevatedStep } from './elevation.js';
+import { dockerServiceSteps, type DockerAccount, type DockerDaemon } from './docker-engine.js';
 
 export type Platform = 'win32' | 'darwin' | 'linux';
-export type PackageManager = 'winget' | 'brew' | 'apt' | 'dnf';
+export type PackageManager = 'winget' | 'brew' | 'apt' | 'dnf' | 'pacman';
 
 export interface HostTool {
     readonly name: string;
@@ -31,23 +33,24 @@ export interface HostTool {
 }
 
 export const HOST_TOOLS: readonly HostTool[] = [
-    { name: 'php', probe: { binary: 'php', args: ['--version'] }, packages: { winget: 'PHP.PHP.8.4', brew: 'php', apt: 'php', dnf: 'php' } },
-    { name: 'composer', probe: { binary: 'composer', args: ['--version'] }, packages: { winget: 'Composer.Composer', brew: 'composer', apt: 'composer', dnf: 'composer' }, ownUpdater: { manager: 'composer', command: 'composer self-update' } },
-    { name: 'node', probe: { binary: 'node', args: ['--version'] }, packages: { winget: 'OpenJS.NodeJS.LTS', brew: 'node', apt: 'nodejs', dnf: 'nodejs' } },
+    { name: 'php', probe: { binary: 'php', args: ['--version'] }, packages: { winget: 'PHP.PHP.8.4', brew: 'php', apt: 'php', dnf: 'php', pacman: 'php' } },
+    { name: 'composer', probe: { binary: 'composer', args: ['--version'] }, packages: { winget: 'Composer.Composer', brew: 'composer', apt: 'composer', dnf: 'composer', pacman: 'composer' }, ownUpdater: { manager: 'composer', command: 'composer self-update' } },
+    { name: 'node', probe: { binary: 'node', args: ['--version'] }, packages: { winget: 'OpenJS.NodeJS.LTS', brew: 'node', apt: 'nodejs', dnf: 'nodejs', pacman: 'nodejs' } },
     { name: 'npm', probe: { binary: 'npm', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'npm', command: 'npm install -g npm@latest' } },
-    { name: 'python', probe: { binary: 'python', args: ['--version'] }, packages: { winget: 'Python.Python.3.13', brew: 'python', apt: 'python3', dnf: 'python3' } },
-    { name: 'go', probe: { binary: 'go', args: ['version', '--version'] }, packages: { winget: 'GoLang.Go', brew: 'go', apt: 'golang-go', dnf: 'golang' } },
+    { name: 'python', probe: { binary: 'python', args: ['--version'] }, packages: { winget: 'Python.Python.3.13', brew: 'python', apt: 'python3', dnf: 'python3', pacman: 'python' } },
+    { name: 'go', probe: { binary: 'go', args: ['version', '--version'] }, packages: { winget: 'GoLang.Go', brew: 'go', apt: 'golang-go', dnf: 'golang', pacman: 'go' } },
     { name: 'rustc', probe: { binary: 'rustc', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'rustup', command: 'rustup update stable' } },
     { name: 'cargo', probe: { binary: 'cargo', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'rustup', command: 'rustup update stable' } },
-    { name: 'git', probe: { binary: 'git', args: ['--version'] }, packages: { winget: 'Git.Git', brew: 'git', apt: 'git', dnf: 'git' } },
+    { name: 'git', probe: { binary: 'git', args: ['--version'] }, packages: { winget: 'Git.Git', brew: 'git', apt: 'git', dnf: 'git', pacman: 'git' } },
     // The agent CLIs install and update the way their vendors document (Tynn #698): `npm install -g` on npm 12 skips Claude
     // Code's postinstall and leaves it a placeholder. `claude update` updates a native install; Codex's installer updates it.
     { name: 'claude-code', probe: { binary: 'claude', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'vendor', command: 'claude update' }, npmPackage: '@anthropic-ai/claude-code' },
     { name: 'codex', probe: { binary: 'codex', args: ['--version'] }, packages: {}, ownUpdater: { manager: 'vendor', command: 'the Codex installer' }, npmPackage: '@openai/codex' },
-    // Docker Desktop: what every hosted service engine runs on. No apt/dnf row on purpose: a distro's `docker.io` is not
-    // Docker Desktop, and installing it does not put the person in the `docker` group — a row that "installs" Docker and
-    // leaves it unusable is worse than none.
-    { name: 'docker', probe: { binary: 'docker', args: ['--version'] }, packages: { winget: 'Docker.DockerDesktop', brew: 'docker-desktop' } },
+    // Docker: what every hosted service engine runs on. Docker Desktop on Windows and macOS; on Linux the distro's ENGINE
+    // (Arch's `docker`, Tynn #968; apt `docker.io` and dnf `moby-engine`, Tynn #970; Genie 1 did the same), whose install
+    // also enables it and adds the person to the `docker` group in the same prompt (planInstall), because an engine that
+    // is installed and cannot be used is worse than none.
+    { name: 'docker', probe: { binary: 'docker', args: ['--version'] }, packages: { winget: 'Docker.DockerDesktop', brew: 'docker-desktop', pacman: 'docker', apt: 'docker.io', dnf: 'moby-engine' } },
 ];
 
 /**
@@ -164,6 +167,11 @@ export interface ToolStatus {
     readonly problem?: string;
     /** An agent CLI that runs and says it is signed out (Tynn #698): "Not signed in" and Log in, never Broken. */
     readonly signedOut?: boolean;
+    /**
+     * Docker on Linux (Tynn #970): its HEALTH beside its version, when it is not simply running. `not-running` and
+     * `no-access` offer Start; `needs-login` is a group just added that this session does not have yet.
+     */
+    readonly daemon?: Exclude<DockerDaemon, 'running'>;
 }
 
 /** The Toolchain row each agent provider's CLI is. */
@@ -256,9 +264,49 @@ export function vendorInstaller(tool: string, platform: Platform): { readonly ar
     return { argv: v[platform], label: `${v.name}’s installer: ${v.urls[platform]}` };
 }
 
+/**
+ * An Arch package name, as pacman's makepkg allows it (lowercase letters, digits, `@._+-`, not starting with `-` or
+ * `.`), and short. Anything else never reaches a step: no option, no shell, no path.
+ */
+const ARCH_PACKAGE_NAME = /^[a-z0-9@_+][a-z0-9@._+-]{0,99}$/;
+
+/**
+ * THE PACMAN BATCH (Tynn #968): the sync, then the install of exactly these packages, `--needed` so a package already
+ * current is left alone. The sync is safe only because the caller first checked, against a fresh copy of the same
+ * databases (main/pacman.ts), that the transaction upgrades nothing else installed: no partial upgrade.
+ */
+export function pacmanSteps(pkgs: readonly string[]): { readonly steps: readonly ElevatedStep[] } | { readonly refused: string } {
+    if (pkgs.length === 0) return { refused: 'nothing to install' };
+    const bad = pkgs.find((p) => !ARCH_PACKAGE_NAME.test(p));
+    if (bad !== undefined) return { refused: `${JSON.stringify(bad)} is not an Arch package name Genie will hand to pacman` };
+    return { steps: [{ command: 'pacman', args: ['-Sy'] }, { command: 'pacman', args: ['-S', '--needed', '--noconfirm', ...pkgs] }] };
+}
+
+/**
+ * What pacman installs for a tool: its package, and what Arch splits out that Genie needs with it. PHP: `php-cgi`, what
+ * Genie runs a site with and how it finds the system PHP (main/php-versions.ts asks `php-cgi -v`); the toolchain row
+ * 1125-195556-df6ca9 installed `php` alone and the card still read "not here".
+ */
+const PACMAN_ALSO: Readonly<Record<string, readonly string[]>> = { php: ['php-cgi'] };
+export const pacmanPackages = (tool: string, pkg: string): string[] => [pkg, ...(PACMAN_ALSO[tool] ?? [])];
+
+/** The packages a batch's `pacman -S` steps install: what the partial-upgrade check reads (main/pacman.ts). */
+export function pacmanInstalls(steps: readonly ElevatedStep[]): string[] {
+    return steps.filter((s) => s.command === 'pacman' && s.args[0] === '-S').flatMap((s) => s.args.slice(1).filter((a) => !a.startsWith('-')));
+}
+
 export type UpdatePlan =
     | { readonly command: string; readonly manager: PackageManager | 'rustup' | 'npm' | 'vendor' | 'composer'; readonly argv?: readonly string[] }
+    /**
+     * Tynn #973: run as administrator by the HOST (main/linux-elevation.ts), after the client the person clicked from asks
+     * for the password naming `items`. `steps` are programs and their arguments; no pkexec, sudo or shell. `command` is
+     * what the row shows.
+     */
+    | { readonly command: string; readonly manager: PackageManager; readonly elevated: true; readonly items: readonly string[]; readonly steps: readonly ElevatedStep[] }
     | { readonly refused: string };
+
+/** A Linux plan's elevated steps, said as the row shows them. */
+const asAdministrator = (steps: readonly ElevatedStep[]): string => `${steps.map((s) => [s.command, ...s.args].join(' ')).join(' && ')} (as administrator)`;
 
 /** The update command for THIS platform, from Genie's own tables — never a guess. */
 export function planUpdate(input: { tool: string; platform: Platform; packageManager: PackageManager | null }): UpdatePlan {
@@ -280,30 +328,56 @@ export function planUpdate(input: { tool: string; platform: Platform; packageMan
             return { command: `winget upgrade --id ${pkg} --silent --accept-package-agreements --accept-source-agreements`, manager: pm };
         case 'brew':
             return { command: `brew upgrade ${pkg}`, manager: pm };
-        // `pkexec`, not `sudo`: Genie runs commands with no terminal, so `sudo` could never ask for the password and a
-        // Linux update failed before it started. pkexec asks through the desktop's own polkit prompt.
+        // Tynn #973: not pkexec (omarchy-genie has polkitd and NO polkit agent, so it failed with no prompt anywhere), and
+        // not a sudo of our own here: the host runs these steps after the person's password, asked in their client.
         case 'apt':
-            return { command: `pkexec apt-get install --only-upgrade -y ${pkg}`, manager: pm };
-        case 'dnf':
-            return { command: `pkexec dnf upgrade -y ${pkg}`, manager: pm };
+        case 'dnf': {
+            if (!PACKAGE_NAME.test(pkg)) return { refused: `${pkg} is not a package name Genie will run as administrator` };
+            const steps: ElevatedStep[] = pm === 'apt' ? [{ command: 'apt-get', args: ['install', '--only-upgrade', '-y', pkg] }] : [{ command: 'dnf', args: ['upgrade', '-y', pkg] }];
+            return { command: asAdministrator(steps), manager: pm, elevated: true, items: [pkg], steps };
+        }
+        // pacman (Tynn #968): the same batch as an install; `--needed` leaves a current package alone.
+        case 'pacman': {
+            const pkgs = pacmanPackages(input.tool, pkg);
+            const batch = pacmanSteps(pkgs);
+            if ('refused' in batch) return batch;
+            return { command: `pacman ${batch.steps[1]!.args.join(' ')}`, manager: pm, elevated: true, items: pkgs, steps: batch.steps };
+        }
     }
 }
 
 /**
  * HOW A MISSING TOOL WOULD BE INSTALLED HERE — the exact argv, shown to the person BEFORE anything runs (their click on
  * it is the consent), from Genie's own tables and never a guess. The package manager Genie 1 used per platform: winget
- * on Windows, Homebrew on macOS, apt or dnf on Linux through `pkexec` (one polkit prompt; `apt-get update` rides in the
- * same prompt, because installing against a stale index is the classic "no installation candidate"). npm-distributed
- * agent CLIs install with npm. `elevated` says a system prompt will appear — never a surprise.
+ * on Windows, Homebrew on macOS, apt or dnf on Linux as elevated steps the host runs after Genie asks for the password in
+ * the client the person clicked from (Tynn #973; `apt-get update` rides in the same prompt). npm-distributed
+ * agent CLIs install with npm. `elevated` says a password will be asked for — never a surprise.
  */
 export type InstallPlan =
-    | { readonly argv: readonly string[]; readonly label: string; readonly manager: PackageManager | 'npm' | 'vendor'; readonly elevated: boolean }
+    | { readonly argv: readonly string[]; readonly label: string; readonly manager: PackageManager | 'npm' | 'vendor'; readonly elevated: false }
+    /** Tynn #973: run as administrator by the HOST, after the person's password is asked in their client naming `items`. */
+    | { readonly steps: readonly ElevatedStep[]; readonly items: readonly string[]; readonly label: string; readonly manager: PackageManager; readonly elevated: true }
     | { readonly refused: string };
 
-/** A Debian package name; anything else never reaches `sh -c`. */
+/** A package name Genie hands to a package manager as one argument; anything else is refused before anyone is asked. */
 const PACKAGE_NAME = /^[a-z0-9][a-z0-9.+-]*$/;
 
-export function planInstall(input: { tool: string; platform: Platform; packageManager: PackageManager | null }): InstallPlan {
+/**
+ * Docker on Linux (Tynn #970): the distro's engine, AND in the same prompt what makes it usable: enabled and started,
+ * and `account` added to the docker group when it is not in it (core/docker-engine.ts). The package stays `items[0]`,
+ * which the pacman preflight (#968) keys on. With no account to add, nothing is offered.
+ */
+export function planInstall(input: { tool: string; platform: Platform; packageManager: PackageManager | null; account?: DockerAccount }): InstallPlan {
+    const plan = planPackageInstall(input);
+    if (input.tool !== 'docker' || input.platform !== 'linux' || 'refused' in plan || !plan.elevated) return plan;
+    if (!input.account) return { refused: 'Genie could not tell which account to add to the docker group, so it did not install Docker' };
+    const service = dockerServiceSteps(input.account);
+    if ('refused' in service) return service;
+    const label = `${plan.label.replace(/ [(]as administrator[)]$/, '')} && ${service.steps.map((s) => [s.command, ...s.args].join(' ')).join(' && ')} (as administrator)`;
+    return { ...plan, label, items: [...plan.items, ...service.items], steps: [...plan.steps, ...service.steps] };
+}
+
+function planPackageInstall(input: { tool: string; platform: Platform; packageManager: PackageManager | null }): InstallPlan {
     const tool = HOST_TOOLS.find((t) => t.name === input.tool);
     const prereq = PREREQUISITES.find((p) => p.name === input.tool);
     if (!tool && !prereq) return { refused: `${input.tool} is not a tool Genie manages` };
@@ -324,11 +398,21 @@ export function planInstall(input: { tool: string; platform: Platform; packageMa
         }
         case 'brew':
             return { argv: ['brew', 'install', pkg], label: `brew install ${pkg}`, manager: pm, elevated: false };
+        // Tynn #973: elevated steps the host runs (no pkexec, no shell); apt's index refresh rides in the same prompt, because
+        // installing against a stale index is the classic "no installation candidate".
         case 'apt':
-            if (!PACKAGE_NAME.test(pkg)) return { refused: `${pkg} is not a package name Genie will hand to a shell` };
-            return { argv: ['pkexec', 'sh', '-c', `apt-get update && apt-get install -y ${pkg}`], label: `apt-get update && apt-get install -y ${pkg} (as administrator)`, manager: pm, elevated: true };
-        case 'dnf':
-            return { argv: ['pkexec', 'dnf', 'install', '-y', pkg], label: `dnf install -y ${pkg} (as administrator)`, manager: pm, elevated: true };
+        case 'dnf': {
+            if (!PACKAGE_NAME.test(pkg)) return { refused: `${pkg} is not a package name Genie will run as administrator` };
+            const steps: ElevatedStep[] = pm === 'apt' ? [{ command: 'apt-get', args: ['update'] }, { command: 'apt-get', args: ['install', '-y', pkg] }] : [{ command: 'dnf', args: ['install', '-y', pkg] }];
+            return { steps, items: [pkg], label: asAdministrator(steps), manager: pm, elevated: true };
+        }
+        // pacman (Tynn #968): the sync and the install in one prompt, only after main/pacman.ts's partial-upgrade check.
+        case 'pacman': {
+            const pkgs = pacmanPackages(input.tool, pkg);
+            const batch = pacmanSteps(pkgs);
+            if ('refused' in batch) return batch;
+            return { steps: batch.steps, items: pkgs, label: `pacman ${batch.steps[1]!.args.join(' ')} (as administrator)`, manager: pm, elevated: true };
+        }
     }
 }
 

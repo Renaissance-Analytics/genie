@@ -84,7 +84,10 @@ describe('a Take Over window bound to another host', () => {
         expect(app).toMatch(/const resolvedBridge = windowBridge\(\{ bound: remote\.bound, connected: remote\.state\?\.connected === true,/);
         expect(app).toMatch(/const askedRoute = routeFor\(address, addressContext\);/);
         expect(app).toMatch(/const route = routeInScope\(askedRoute, windowScope, snapshot\.agents\);/);
-        expect(app).toMatch(/const next = rewrittenAddress\(address, addressContext, readBefore\.current\);/);
+        // The rewrite lives in its hook (Tynn #1023), still decided by rewrittenAddress alone.
+        expect(app).toMatch(/useAddressQualifier\(address, shownAddress, addressContext\);/);
+        const hook = strip(readFileSync(new URL('../src/renderer/window-address.ts', import.meta.url), 'utf8'));
+        expect(hook).toMatch(/const next = rewrittenAddress\(\w+, ctx, readBefore\.current\);/);
     });
 });
 

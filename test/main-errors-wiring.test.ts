@@ -37,8 +37,10 @@ describe('main.ts wires the error policy', () => {
 
     it('what it records is on the Deck, refreshed at once, and the Deck’s Dismiss reaches it', () => {
         const src = main();
-        expect(src).toMatch(/registry\.setDeckSource\(\(\) => \[\.\.\.mainErrors\.deckItems\(\), \.\.\.composed\.deckItems\(\)\]\);/);
-        expect(src).toMatch(/mainErrors\.onChange\(\(\) => registry\?\.touch\(\)\);/);
+        // On the Deck through this window's own features (mainErrors.deckItems below), and at once on the tray's count: since
+        // Tynn #998 (2g-4b1) not through the window registry's Deck, which nothing read.
+        expect(src).toMatch(/mainErrors\.onChange\(\(\) => \{ refreshTrayWaiting\(\); \}\);/);
+        expect(src).not.toMatch(/registry\.setDeckSource\(/);
         const ports = src.slice(src.indexOf('const ownFeatureUi = featureWindow(localDoor, {'), src.indexOf('featureEffectNow = ownFeatureUi;'));
         expect(src).toContain('featureEffectNow = ownFeatureUi;');
         // Tynn #693: the Deck's actions on a recorded error, each reaching the book: Dismiss, the host copy made now, the log.

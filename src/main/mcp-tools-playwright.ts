@@ -4,6 +4,7 @@ import { callerFrom } from './mcp-callers.js';
 import { MIRRORED_TERMINAL_ID, type Caller, type McpCall, type Registration } from './mcp-tools.js';
 import type { PlaywrightInstallOutcome } from './playwright-browsers.js';
 import { MANAGED_BROWSERS, decideInstallAsk } from '../core/playwright-managed.js';
+import { refusalWords } from '../core/approval-words.js';
 
 /**
  * `playwright` — WHAT GENIE HAS FOR PLAYWRIGHT, AND ASKING IT FOR A VERSION (Tynn #846). Agents never install browsers
@@ -41,9 +42,12 @@ export interface PlaywrightToolPort {
 export interface PlaywrightToolDeps {
     readonly resolveCaller: (key: string) => Caller | null;
     readonly port: PlaywrightToolPort;
-    readonly approve: (caller: Caller, action: typeof PLAYWRIGHT_INSTALL_ACTION, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
-    /** Whether the caller's workspace is trusted (Tynn #846 review): an agent in one not yet trusted installs nothing. Absent = trusted. */
-    readonly trusted?: (workspaceId: string) => boolean;
+    readonly approve: (caller: Caller, action: typeof PLAYWRIGHT_INSTALL_ACTION, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied' | 'expired'>;
+    /**
+     * Whether the caller's workspace is trusted (Tynn #846 review): an agent in one not yet trusted installs nothing. Read
+     * when the install is asked (Tynn #364): a promise is waited for. Absent = trusted.
+     */
+    readonly trusted?: (workspaceId: string) => boolean | Promise<boolean>;
 }
 
 const ok = (payload: Record<string, unknown>): McpToolResult => ({ text: JSON.stringify({ ok: true, ...payload }), isError: false });
@@ -58,7 +62,7 @@ export function playwrightTools(deps: PlaywrightToolDeps): Registration[] {
             const action = typeof args.action === 'string' ? args.action : '';
             if (action === 'status') return ok({ ...deps.port.status(caller.workspaceId) });
             if (action !== 'install') return err('action is status or install');
-            if (deps.trusted?.(caller.workspaceId) === false) return err('this workspace is not trusted yet: Genie installs nothing for it until the person trusts it; nothing was installed');
+            if ((await deps.trusted?.(caller.workspaceId)) === false) return err('this workspace is not trusted yet: Genie installs nothing for it until the person trusts it; nothing was installed');
             const version = typeof args.version === 'string' ? args.version.trim() : '';
             const asked = Array.isArray(args.browsers) ? args.browsers.filter((b): b is string => typeof b === 'string') : [];
             const browsers = asked.length > 0 ? asked : MANAGED_BROWSERS;
@@ -67,7 +71,7 @@ export function playwrightTools(deps: PlaywrightToolDeps): Registration[] {
             if (decision.kind === 'ready') return ok({ version, browsers: deps.port.held(version), note: 'Genie has these already; nothing was installed' });
             if (decision.kind === 'ask') {
                 const verdict = await deps.approve(caller, PLAYWRIGHT_INSTALL_ACTION, `Install Playwright ${version}'s ${browsers.join(', ')}: ${decision.reason}`, context);
-                if (verdict !== 'allowed') return err(`installing Playwright ${version}'s ${browsers.join(', ')} was denied by the person; nothing was installed`);
+                if (verdict !== 'allowed') return err(refusalWords(verdict, `installing Playwright ${version}'s ${browsers.join(', ')}`, 'nothing was installed'));
             }
             const outcome = await deps.port.install(version, browsers);
             if (outcome.kind === 'installed' || outcome.kind === 'already-installed') return ok({ version: outcome.version, browsers: outcome.browsers });

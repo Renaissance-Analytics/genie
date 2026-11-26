@@ -27,6 +27,7 @@ import { applyHostingFeatureAction, hostingFeatureSnapshot, type HostingFeatureP
 import { trustSteps } from './hosting-trust.js';
 import { applyMachineFeatureAction, machineFeatureSnapshot, type MachineFeaturePorts, type MachineFeatureServices } from './feature-machine.js';
 import { applyToolchainCoreFeatureAction, toolchainSection, type ToolchainCheckControl } from './feature-toolchain.js';
+import type { Elevate } from '../core/elevation.js';
 
 /** Owned machine contributors. Supplying these ports never constructs another service graph. */
 export interface HostFeatureMachinePorts {
@@ -101,6 +102,16 @@ export interface HostFeaturesPorts {
      * window shows it (host-sign-ins.ts). Absent = this host cannot start one.
      */
     readonly signIn?: (provider: string, context: CallContext) => Promise<{ ok: true } | { ok: false; reason: string }>;
+    /**
+     * ELEVATION, ASKED IN THE CLIENT THAT CLICKED (Tynn #973; main/elevation-broker.ts): the host's elevation for one caller,
+     * which a toolchain install or update runs its elevated plan through; the answer to its password prompt; and a
+     * connection that left. Absent = this host elevates nothing (an elevated plan is refused with why).
+     */
+    readonly elevation?: {
+        elevateFor(context: CallContext): Elevate | undefined;
+        answer(connectionId: string, id: unknown, password: unknown): boolean;
+        dropConnection(connectionId: string): void;
+    };
 }
 
 const emptyState = (): FeatureState => ({ toolStatuses: null, knowledgeQuery: '' });
@@ -234,7 +245,17 @@ export class HostFeatures {
         }
         const machine = this.ports.machine?.effectsFor?.(context) ?? this.ports.machine?.effects;
         const tc = machine?.toolchain;
-        const effects: MachineFeaturePorts = { ...machine, ...(tc ? { toolchain: { ...tc,
+        // This caller's elevation (Tynn #973): an elevated install or update asks THIS connection for the password.
+        const elevate = this.ports.elevation?.elevateFor(context);
+        const keyring = machine?.keyring;
+        const effects: MachineFeaturePorts = { ...machine,
+            // The keyring's Install asks THIS connection for the password too (Tynn #973).
+            ...(keyring ? { keyring: { ...keyring, fix: () => keyring.fix(elevate), ...(keyring.press ? { press: () => keyring.press!(elevate) } : {}) } } : {}),
+            ...(tc ? { toolchain: { ...tc,
+            ...(tc.install ? { install: (tool: string, consent: boolean) => tc.install!(tool, consent, elevate) } : {}),
+            update: (tool: string, version?: string, progress?: (step: string | null) => void) => tc.update(tool, version, progress, elevate),
+            // Tynn #970: Docker's Start asks THIS connection too.
+            ...(tc.startDocker ? { startDocker: () => tc.startDocker!(elevate) } : {}),
             login: async provider => {
                 const started = await this.ports.signIn?.(provider, context);
                 if (!started) return { ok: false, reason: 'this host cannot start a sign-in' };
@@ -307,6 +328,13 @@ export class HostFeatures {
 
     releaseCaller(context: CallContext): void {
         this.#release(context.connectionId);
+        // A prompt this connection was asked is refused at once (Tynn #973): nothing waits on a window that left.
+        this.ports.elevation?.dropConnection(context.connectionId);
+    }
+
+    /** The client's answer to a password prompt (Tynn #973): taken only from the connection that was asked. */
+    elevationAnswer(context: CallContext, id: unknown, password: unknown): boolean {
+        return this.ports.elevation?.answer(context.connectionId, id, password) ?? false;
     }
 
     #release(connectionId: string): void {

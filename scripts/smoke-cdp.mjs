@@ -1,5 +1,6 @@
 import { mainWindow } from './cdp-main-window.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
+import { closeWhatsNew } from './cdp-whats-new.mjs';
 /**
  * THE SMOKE PATH — a real Electron window, driven over the Chrome DevTools Protocol.
  *
@@ -190,6 +191,8 @@ check(typeof route === 'string' && new RegExp(ADDRESS.dashboard).test(route), '3
 
 const features = await cdp.evaluate('document.querySelectorAll("[data-feature]").length');
 check(features === 4, '4. the four feature icons are in the title bar', `found ${features}`);
+// Nothing over the page before the clicks: the seed marks What's new seen; one open anyway is closed here (Tynn #1009).
+await closeWhatsNew((expression) => cdp.evaluate(expression));
 
 // 4b. THE AGENTINBOX among the header's system icons (beta.33 item 19): a press opens the flyout over the page, a second
 // closes it — in the real window, where the address layer carries `inbox=`.
@@ -1021,7 +1024,7 @@ if (!approvalEnabled) {
         dashboard: Boolean(document.querySelector('[data-workspace-dashboard]')),
         pills: document.querySelectorAll('[data-agent-pill]').length,
         agentTabs: document.querySelectorAll('[data-workspace-tab^="agent:"]').length,
-        tab: document.querySelector('[data-workspace-tab="home"]')?.textContent ?? null,
+        tab: document.querySelector('[data-workspace-tab="home"]')?.getAttribute('aria-label') ?? null,
         settings: Boolean(document.querySelector('[data-workspace-settings]')),
         terminals: Boolean(document.querySelector('[data-terminal-tabs]')),
     }))()`);
@@ -1067,6 +1070,12 @@ if (!approvalEnabled) {
             }
             if (line !== null) { wire.push(at + ' ' + line); if (wire.length > 300) wire.splice(0, wire.length - 300); }
         });
+        // FRAMES (Tynn #1032): the frames this window got in the first second after the pane mounted, counted without
+        // waiting on it. xterm draws its rows on animation frames; a window the compositor does not show gets none, and
+        // then only the cursor row is drawn (xterm's focus handler draws that row directly). Read on the 37 failure path,
+        // beside a second count taken then: the first is the control for the second.
+        watch.framesAtMount = null;
+        { let n = 0; const t0 = performance.now(); const tick = () => { n += 1; if (performance.now() - t0 < 1000) requestAnimationFrame(tick); else watch.framesAtMount = n; }; requestAnimationFrame(tick); setTimeout(() => { if (watch.framesAtMount === null) watch.framesAtMount = n; }, 1500); }
         if (!rows) return true;
         const seen = () => {
             const text = (rows.innerText ?? '').trim();
@@ -1087,6 +1096,13 @@ if (!approvalEnabled) {
 
     // Let the shell print its prompt, then focus xterm's textarea and type.
     await new Promise((r) => setTimeout(r, 1200));
+    // 36a. FRAMES FROM THE COMPOSITOR (Tynn #1032). xterm draws its rows on animation frames. On 7 Linux test VMs, every one
+    // a slow provision (SSH after 488-1361 s; 63 passing VMs: 100-127 s), no window got frames: not Genie's, and not a plain
+    // Electron window with none of Genie's code. There 37 and 38 failed with the keys delivered, echoed and in xterm's
+    // buffer, and nothing drawn: it read as "the terminal drops input". This says what it is before anything is typed.
+    await waitFor(cdp, `window.__smokeTerminal?.framesAtMount !== null && window.__smokeTerminal?.framesAtMount !== undefined`, 'the frame count at mount');
+    const framesAtMount = await cdp.evaluate(`window.__smokeTerminal?.framesAtMount ?? null`).catch(() => null);
+    check(typeof framesAtMount === 'number' && framesAtMount > 0, '36a. the window gets frames from the compositor (none = the machine draws nothing: 37 and 38 cannot draw what is typed)', `${framesAtMount} frame(s) in the first second after the pane mounted`);
     await cdp.evaluate(`document.querySelector('[data-terminal-pane] textarea')?.focus(); true`);
     await cdp.send('Input.insertText', { text: `echo ${token}` });
     // The rows JOINED, without the line breaks between them: a narrow pane WRAPS the typed command ("echo g" / "enie-…"),
@@ -1136,6 +1152,21 @@ if (!approvalEnabled) {
             return JSON.stringify(out);
         })()`).catch((e) => `(unread: ${e?.message ?? e})`);
         console.log(`  TERMINAL_LAYERS ${layers}`);
+        // FRAMES NOW, AND XTERM'S RENDERER (Tynn #1032): frames in one second now, beside the count at mount; whether
+        // xterm's renderer is paused (its IntersectionObserver), owes a full redraw, or waits on a frame that has not come.
+        const frames = await cdp.evaluate(`new Promise((done) => {
+            const el = document.querySelector('[data-terminal-pane]');
+            const key = el ? Object.keys(el).find((k) => k.startsWith('__reactFiber$')) : null;
+            let f = key ? el[key] : null, x = null;
+            for (let i = 0; f && i < 40 && !x; i++, f = f.return) if (f.ref && typeof f.ref === 'object' && f.ref.current && 'xterm' in f.ref.current) x = f.ref.current.xterm;
+            const rs = x?._core?._renderService ?? null;
+            const renderer = rs ? { isPaused: rs._isPaused ?? null, needsFullRefresh: rs._needsFullRefresh ?? null, framePending: rs._renderDebouncer?._animationFrame != null } : null;
+            let n = 0; const t0 = performance.now();
+            const tick = () => { n += 1; if (performance.now() - t0 < 1000) requestAnimationFrame(tick); else done(JSON.stringify({ framesAtMount: window.__smokeTerminal?.framesAtMount ?? null, framesNow: n, renderer })); };
+            requestAnimationFrame(tick);
+            setTimeout(() => done(JSON.stringify({ framesAtMount: window.__smokeTerminal?.framesAtMount ?? null, framesNow: n, renderer })), 1500);
+        })`).catch((e) => `(unread: ${e?.message ?? e})`);
+        console.log(`  TERMINAL_FRAMES ${frames}`);
         // INPUT OR OUTPUT (beta.61.1): the second token not showing means the keys never reached the shell OR the pane
         // stopped drawing what the shell printed. The workspace's terminal error says why a pane's stream ended, and a
         // REMOUNT (away to the Dashboard and back: a new watch, a fresh snapshot from the host) shows what the shell has
@@ -1496,8 +1527,7 @@ check(parsed.length === 0, '34. the console is clean', parsed.join(' | ') || 'no
 await cdp.evaluate(`document.querySelector('[data-nav="genie://dashboard"]')?.click(); true`);
 await waitFor(cdp, `Boolean(document.querySelector('[data-surface="dashboard"]')) && !document.querySelector('[data-surface="agent"]')`, 'the Dashboard, for its screenshot');
 // A first run shows What's new over the page (once per version); closed the way a person closes it, or the shot is of it.
-await cdp.evaluate(`document.querySelector('[data-action="whats-new-close"]')?.click(); true`);
-await waitFor(cdp, `!document.querySelector('[data-whats-new]')`, 'What’s new to close');
+await closeWhatsNew((expression) => cdp.evaluate(expression));
 const dashboardShown = await cdp.evaluate(`(() => {
     const surfaces = [...document.querySelectorAll('[data-surface]')].map((s) => s.getAttribute('data-surface'));
     return JSON.stringify({ dashboard: Boolean(document.querySelector('[data-surface="dashboard"]')), agent: Boolean(document.querySelector('[data-surface="agent"]')), whatsNew: Boolean(document.querySelector('[data-whats-new]')), surfaces });

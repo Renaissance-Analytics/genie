@@ -57,7 +57,6 @@ import { isPersonInbox, PERSON_INBOX, personItems, personUnread } from '../core/
 import { UNNAMED_AGENT } from '../core/inbox.js';
 import { EMPTY_FEATURES, type ActOutcome, type FeatureAction, type FeatureData } from './features.js';
 import type { MarketplaceApi } from '../core/marketplace.js';
-import { mayBrowse } from '../core/workstation-role.js';
 import type { ProviderStatus } from './components/FeatureSurfaces.js';
 import { openFileRoute } from '../core/files-panel.js';
 import { bindingsFrom } from '../core/hotkeys.js';
@@ -153,6 +152,8 @@ export interface ShellProps {
     workspaceFaults?: Readonly<Record<string, WorkspaceFault | null | undefined>> | undefined;
     /** The fault's fix: the host's folder picker and the manifest write. Absent = the registry door. */
     onLocateRepo?: ((workspaceId: string, repo: string) => void) | undefined;
+    /** "Locate folder" on a workspace whose own folder is not there (host split P7). Absent = the button does nothing. */
+    onLocateFolder?: ((workspaceId: string) => void) | undefined;
     /** Which surfaces this build renders. The rail's rows are DERIVED from it, not parallel. */
     servable: readonly Surface[];
     /** The agent the route names, when it names one. `null` while loading or if unknown. */
@@ -408,6 +409,7 @@ export function Shell({
     mailSignals,
     workspaceFaults,
     onLocateRepo,
+    onLocateFolder,
     servable,
     features = EMPTY_FEATURES,
     marketplace,
@@ -691,13 +693,15 @@ export function Shell({
                 workspace={onScreen ? { name: onScreen.name ?? folderName(onScreen.path), color: onScreen.color ?? null } : null}
                 flows={flowsLive.length > 0 || flowsEnded.length > 0 ? { live: flowsLive, ended: flowsEnded, now: Date.now(), workspaceId: scoped ? scoped.workspaceId : null, onOpen: (flowId) => { void onFeature({ kind: 'flows.openEditor', flowId }); }, onStop: (flowId) => { void onFeature({ kind: 'flows.stop', flowId }); } } : undefined}
                 // CONNECT TO ANOTHER MACHINE among the same icons (genie#1278 C1; Genie 1's Hosts button): not in a window that
-                // already shows another machine (Genie 1 hid it in a host window), and never on a drone (Tynn's role, W5).
-                connect={remote || scoped || !remoteConnect || !mayBrowse(features.remote?.tynnWorkstation?.role ?? null) ? undefined : { workstations: remoteConnect.tynnWorkstations ?? null, onOpenWorkstation: remoteConnect.onOpenWorkstation, onOpenLink: remoteConnect.onOpenLink, onRefresh: remoteConnect.onRefresh, refresh: remoteConnect.refresh, onOpenOther: onOpenConnectOther }}
+                // already shows another machine (Genie 1 hid it in a host window). Every machine has it, whatever its role (Tynn #423).
+                connect={remote || scoped || !remoteConnect ? undefined : { workstations: remoteConnect.tynnWorkstations ?? null, onOpenWorkstation: remoteConnect.onOpenWorkstation, onOpenLink: remoteConnect.onOpenLink, onRefresh: remoteConnect.onRefresh, refresh: remoteConnect.refresh, onOpenOther: onOpenConnectOther }}
                 // THE GAPP STORE (GApps D5, Tynn #468): the GApps icon opens it, over the host's book (V7) in a local window.
                 gapps={scoped ? undefined : gappStore}
                 // DO NOT DISTURB (Tynn #655): Settings → General's own setting, read from this window's host snapshot and
                 // written through its feature channel — so a window on another machine shows and sets that machine's.
                 dnd={dndView && !scoped ? { view: dndView, onToggle: () => onFeature(dndToggleAction(dndView.on)) } : undefined}
+                // THE ACCOUNT PILLS (Tynn #949): in the title bar, beside the workstation name, so they are on every view.
+                accountPills={scoped ? undefined : { limits: rateLimits ?? {}, accounts, onSwitchAccount, onDismissSwitchOffer, onDesignSignIn, onAccountsAct, now }}
             />
             {remoteShown?.onTakeControl ? (
                 <RemoteRefusalBar refusal={remoteShown.refusal ?? null} needsBaton={remoteShown.needsBaton === true && !remoteShown.driving} driver={remoteShown.driver} onTakeControl={remoteShown.onTakeControl} onDismiss={() => remoteShown.onDismissRefusal?.()} />
@@ -865,12 +869,8 @@ export function Shell({
                         <Dashboard
                             pulsing={pulsingWorkspaces}
                             rowEmoji={rowEmoji}
-                            rateLimits={rateLimits}
                             accounts={accounts}
                             onSwitchAccount={onSwitchAccount}
-                            onDismissSwitchOffer={onDismissSwitchOffer}
-                            onDesignSignIn={onDesignSignIn}
-                            now={now}
                             mailSignals={mailSignals}
                             rows={snapshot.agents}
                             // Genie's own row, its group first (the design mockup).
@@ -899,6 +899,7 @@ export function Shell({
                             faults={workspaceFaults}
                             // The fix: the host's picker and the manifest write; without a bridge for it, the registry's page.
                             onLocateRepo={onLocateRepo ?? ((id) => onNavigate(`genie://workspace/${id}`))}
+                            onLocateFolder={onLocateFolder}
                             onFix={(fix) => {
                                 // The board's fix buttons act (`fixRoute`): two verbs Genie performs, else the agent's page.
                                 if (fix.kind === 'restart') onRestartAgent?.(fix.agentId);

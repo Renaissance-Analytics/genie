@@ -48,7 +48,7 @@ function rig(over: Rig = {}) {
     const writes: [string, string][] = [];
     const settings: RestorePorts = {
         agentsOf: () => [], overridden: () => over.overridden ?? {}, setSetting: async (_w, k, v) => { log.push('settings'); void k; void v; },
-        defaultAgentOf: () => null, setDefaultAgent: async () => {}, envFileOf: () => null, defaultEnvFile: () => '.env', setEnvFile: async () => {}, mcpOff: () => [], setMcpServer: async () => {},
+        chosenDefaultAgentOf: () => null, setDefaultAgent: async () => {}, envFileOf: () => null, defaultEnvFile: () => '.env', setEnvFile: async () => {}, mcpOff: () => [], setMcpServer: async () => {},
     };
     const flows: FlowPorts = { list: () => [], create: async (input) => { log.push('flows'); created.push(input); return input; } };
     const processes: ProcessPorts = { list: () => [], keep: async (input) => { log.push('processes'); kept.push(input); return input; }, agentAddressOf: () => null };
@@ -194,5 +194,27 @@ describe('a workspace that appears', () => {
         roster = [{ id: 'ghost', asleep: true }];
         listener!();
         expect(heard).toEqual([]);
+    });
+});
+
+describe('the trust is asked at its step, and waited for (Tynn #955)', () => {
+    it('an answer that arrives later and is "no": what would run waits, listed, and nothing of it is created or kept', async () => {
+        const { ports, created, kept } = rig({ trusted: false });
+        (ports as unknown as { trusted: (id: string) => Promise<boolean> }).trusted = async () => false;
+        const out = await restoreClone(WS, ports);
+        expect(out.trusted).toBe(false);
+        expect(created.map((c) => c.name)).toEqual(['quiet']);
+        expect(out.flows?.waiting).toEqual([{ file: '.flows/nightly-backup.json', commands: ['npm run backup'] }]);
+        expect(out.processes?.waiting.map((w) => w.file).sort()).toEqual(['.processes/nightly-dump.json', '.processes/queue-worker.json']);
+        expect(kept).toEqual([]);
+    });
+
+    it('control: an answer that arrives later and is "yes": they are created and kept', async () => {
+        const { ports, created, kept } = rig({ trusted: false });
+        (ports as unknown as { trusted: (id: string) => Promise<boolean> }).trusted = async () => true;
+        const out = await restoreClone(WS, ports);
+        expect(out.trusted).toBe(true);
+        expect(created.map((c) => c.name).sort()).toEqual(['nightly-backup', 'quiet']);
+        expect(kept.length).toBe(2);
     });
 });

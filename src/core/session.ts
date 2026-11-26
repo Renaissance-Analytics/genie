@@ -173,6 +173,12 @@ export interface TurnOutcomeLike {
         readonly reason: string; readonly kind: string; readonly resetsAtMs?: number;
         /** prism-acp 0.43.0 (G-311): the provider's own message and allowlisted details. UNTRUSTED; see core/provider-stops.ts. */
         readonly providerMessage?: string; readonly providerDetails?: Readonly<Record<string, string | number>>;
+        /**
+         * prism-acp 0.48.0 (Tynn #1060), on `overloaded` and `rate_limit` only: waiting and sending the prompt again is the
+         * remedy (`retryable`); how long the PROVIDER asked to wait, when it said (`retryAfterMs`, never sent by today's
+         * CLIs); and whether the same session takes the next prompt and continues the conversation (`resumable`).
+         */
+        readonly retryable?: boolean; readonly retryAfterMs?: number; readonly resumable?: boolean;
     };
     /**
      * A TURN THE PROVIDER STARTED ITSELF ended (prism-acp G-313, Tynn #855): Claude began it with no prompt of Genie's (a
@@ -330,6 +336,36 @@ export function limitResumePrompt(task: string | null): string {
  */
 export const OVERLOAD_RETRY_MS: readonly number[] = [30_000, 60_000, 120_000, 240_000];
 export const OVERLOAD_RESUME_PROMPT = 'The provider was overloaded and your last turn did not finish. Continue where you left off.';
+/** The longest wait a provider's `retryAfterMs` is taken for: prism-acp 0.48.0's `MAX_RETRY_AFTER_MS`, one hour. */
+export const OVERLOAD_RETRY_AFTER_MAX_MS = 3_600_000;
+
+/**
+ * How long to wait before overload try `attempt` (0-based): the provider's own `retryAfterMs` when it stated one (prism-acp
+ * 0.48.0; a finite number of ms >= 0, capped at an hour), else Genie's backoff, OVERLOAD_RETRY_MS. The caller keeps
+ * `attempt` below OVERLOAD_RETRY_MS.length: a stated wait does not buy extra tries.
+ */
+export function overloadRetryMs(attempt: number, retryAfterMs: unknown): number {
+    if (typeof retryAfterMs === 'number' && Number.isFinite(retryAfterMs) && retryAfterMs >= 0) return Math.min(Math.ceil(retryAfterMs), OVERLOAD_RETRY_AFTER_MAX_MS);
+    return OVERLOAD_RETRY_MS[Math.min(Math.max(0, attempt), OVERLOAD_RETRY_MS.length - 1)]!;
+}
+
+/** An overload's retry waiting (Tynn #1060): when it fires (epoch ms), which try it is of how many, and the provider's code. */
+export interface OverloadRetryState {
+    readonly at: number;
+    readonly attempt: number;
+    readonly of: number;
+    readonly reason: string;
+}
+
+/** The prompt an overloaded turn failed, as it is sent again (Tynn #1060). */
+export interface OverloadedPrompt {
+    /** Exactly what the provider was handed. */
+    readonly payload: string | readonly PromptBlock[];
+    /** The same as text: for a reload that sends it through `redeliver`, and the echo it may come back as. */
+    readonly text: string;
+    readonly by: string | null;
+    readonly sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null;
+}
 
 /**
  * CLAUDE'S CANCEL STATE UNCERTAIN (prism-acp 0.37.0): its cancel receipt was missing (30 s) or did not account for the
@@ -486,6 +522,12 @@ export interface AgentSessionOptions {
     clock?: () => number;
     /** Run `fire` after `ms`; answers a cancel (an overload's retry, the Cooling wait). Injected so a test can fire it; default `setTimeout`. */
     retryLater?: (ms: number, fire: () => void) => () => void;
+    /**
+     * An overloaded turn's retry came, and the agent had EXITED meanwhile (Tynn #1060; prism-acp 0.48.0's `session_exited`,
+     * "reload with session/load"): the host starts it again on the same conversation and resends `failed`. Absent = the
+     * retry is dropped, as before.
+     */
+    onOverloadExited?: (failed: OverloadedPrompt) => void;
 }
 
 export class AgentSession {
@@ -506,6 +548,12 @@ export class AgentSession {
     /** Overloaded turns in a row (OVERLOAD_RETRY_MS); a turn that goes through resets it. */
     #overloads = 0;
     #overloadCancel: (() => void) | null = null;
+    /** The overload retry waiting (`overloadRetry`); `null` = none. Set and cleared with `#overloadCancel`. */
+    #overloadRetry: OverloadRetryState | null = null;
+    /** The prompt that retry sends again; `null` = it sends what waited, or "continue". */
+    #overloadFailed: OverloadedPrompt | null = null;
+    /** The prompt that opened the turn in flight (Tynn #1060): what an overload's retry sends again. `null` = none known. */
+    #turnPrompt: OverloadedPrompt | null = null;
     /** The Cooling wait (COOLING_MS) after a turn that ended cleanly, while it runs; `null` = not cooling. One per session. */
     #coolingCancel: (() => void) | null = null;
     #idleSince: number | null = null;
@@ -698,6 +746,8 @@ export class AgentSession {
     /** Per-agent provider reading; a turn end arms delivery with the next accepted input. */
     #latestHeadroom: Headroom | null = null;
     #rateWarningPending = false;
+    /** The account switch the next turn opens with (Tynn #1011): one line, once; `null` = none. */
+    #accountNote: string | null = null;
     /** The prompt just sent, while its echo may still arrive, and how much of the echo has arrived. */
     #echo: string | null = null;
     #echoSeen = '';
@@ -770,16 +820,14 @@ export class AgentSession {
             // is lifted and what waited goes when that turn ends (Tynn #749).
             if (!this.#cutByLimit && !this.#limitThisTurn) {
                 this.#held = false;
-                this.#overloadCancel?.();
-                this.#overloadCancel = null;
+                this.#cancelOverloadRetry();
                 this.#changed();
                 return;
             }
             const nudge = (this.#cutByLimit || this.#limitThisTurn) && this.#options.limitNudge !== false;
             this.#cutByLimit = false;
             this.#held = false;
-            this.#overloadCancel?.();
-            this.#overloadCancel = null;
+            this.#cancelOverloadRetry();
             if (nudge && !this.#afterTurn.some((p) => p.steer === undefined)) this.prompt(limitResumePrompt(this.#turnTask), 'genie');
             this.cancel('genie', 'interrupt');
             this.#changed();
@@ -790,12 +838,71 @@ export class AgentSession {
         this.#resumeHeld(nudge ? limitResumePrompt(this.#turnTask) : null);
     }
 
+    /** The overload retry waiting, if any (Tynn #1060): `Provider busy, retrying in N s` and its Stop. */
+    get overloadRetry(): OverloadRetryState | null {
+        return this.#overloadRetry;
+    }
+
+    #cancelOverloadRetry(): void {
+        this.#overloadCancel?.();
+        this.#overloadCancel = null;
+        this.#overloadRetry = null;
+        this.#overloadFailed = null;
+    }
+
+    /**
+     * AN OVERLOAD'S RETRY (Tynn #1060). With the failed prompt known, that prompt is sent again (prism-acp 0.48.0: "resend the
+     * failed prompt; Claude may or may not have kept it in history"): on the same session unless the driver said
+     * `resumable: false`; a session that refuses it, or an agent that exited, is reloaded by the host,
+     * and what the person sent meanwhile goes after it. An agent that EXITED during the wait is the host's to reload on the
+     * same conversation (`onOverloadExited`). Otherwise, as before: what waited, or "continue".
+     */
+    #retryOverload(failed: OverloadedPrompt | null, resumable: boolean | undefined): void {
+        this.#overloadCancel = null;
+        this.#overloadRetry = null;
+        this.#overloadFailed = null;
+        if (!this.running || (failed !== null && resumable === false)) {
+            this.#reloadForRetry(failed);
+            return;
+        }
+        if (failed === null || this.#inTurn || !this.#driver) { this.#resumeHeld(OVERLOAD_RESUME_PROMPT); return; }
+        this.#held = false;
+        try {
+            this.#driver.prompt(failed.payload as never);
+        } catch (error) {
+            // The same session refused it (prism-acp: `session_exited` once the agent is gone): reloaded and sent again.
+            if (!this.running || (error as { code?: unknown } | null)?.code === 'session_exited') { this.#reloadForRetry(failed); return; }
+            void this.#emitRow({ kind: 'notice', level: 'warning', message: `Genie could not send the last message again: ${error instanceof Error ? error.message : String(error)}.` });
+            this.#flushAfterTurn();
+            this.#changed();
+            return;
+        }
+        this.#queued = [];
+        void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: failed.by });
+        this.#turnPrompt = failed;
+        this.#inTurn = true;
+        this.#limitThisTurn = false;
+        this.#stopWindow = false;
+        void this.#emitRow({ kind: 'notice', level: 'info', message: `The provider was busy, so Genie sent ${failed.by === 'you' ? 'your' : 'the'} last message again (try ${this.#overloads} of ${OVERLOAD_RETRY_MS.length}).` });
+        this.#echo = failed.text;
+        this.#echoSeen = '';
+        this.#turnState = 'working';
+        this.#stopCooling();
+        this.#changed();
+    }
+
+    /** The agent is gone (or its driver says so): the host reloads the conversation and resends `failed` (`onOverloadExited`). */
+    #reloadForRetry(failed: OverloadedPrompt | null): void {
+        this.#held = false;
+        if (failed !== null && !this.#ended && !this.#needsNewDriver) this.#options.onOverloadExited?.(failed);
+        this.#changed();
+    }
+
     /** What waited goes out in order; nothing waited -> `nothingWaited`, as Genie's (`null`: nothing is sent). */
     #resumeHeld(nothingWaited: string | null): void {
         if (!this.#held || !this.running) return;
         this.#held = false;
-        this.#overloadCancel?.();
-        this.#overloadCancel = null;
+        this.#cancelOverloadRetry();
         // A prompt steered into the held turn and not yet settled is not waiting to go (Tynn #440).
         if (!this.#afterTurn.some((p) => p.steer === undefined)) {
             if (nothingWaited !== null) this.prompt(nothingWaited, 'genie');
@@ -1147,7 +1254,8 @@ export class AgentSession {
         const driver = this.#driver;
         const p = this.#afterTurn.find((q) => q.id === promptId);
         if (!p || !driver?.steer || driver.steeringState?.supported !== true) return;
-        if (!this.#inTurn || this.#held || this.#starting || this.#needsNewDriver || (p.context.mail?.length ?? 0) === 0) return;
+        // Work this run may not take (`mayTakeWork`, Tynn #364) is not steered in either: it waits as any held work does.
+        if (!this.#inTurn || this.#held || this.#starting || this.#needsNewDriver || (p.context.mail?.length ?? 0) === 0 || this.#options.mayTakeWork?.() === false) return;
         const clientId = randomUUID();
         p.steer = clientId;
         this.#steers.set(clientId, { promptId, acceptance: 'pending', kind: null });
@@ -1567,9 +1675,9 @@ export class AgentSession {
                 onExit: (code, signal) => {
                     this.#clearCancelWait();
                     this.#leaveQueuedAsDrafts();
-                    // A retry waiting out an overload has nobody to send to now.
-                    this.#overloadCancel?.();
-                    this.#overloadCancel = null;
+                    // A retry waiting out an overload has nobody to send to now — unless it resends a failed prompt and the
+                    // host reloads the conversation for it (Tynn #1060). A run Genie stopped is never brought back.
+                    if (this.#ended || this.#overloadFailed === null || !this.#options.onOverloadExited) this.#cancelOverloadRetry();
                     this.#stopCooling();
                     // Persist whatever of the last reply arrived. A provider dying mid-sentence
                     // should cost the rest of the sentence, not the part it already said.
@@ -1786,6 +1894,20 @@ export class AgentSession {
         return null;
     }
 
+    /**
+     * THE ACCOUNT CHANGED UNDER THIS AGENT (Tynn #1011; the owner: agents "keep getting stuck in holding patterns because they
+     * think the rate limit is about to hit"). Its headroom is the NEW account's from now on, so a warning armed from the old
+     * account's reading is never delivered; its next turn opens with `note` (the account and its room), once; and a hold on the
+     * limit goes, as when the limit resets.
+     */
+    accountSwitched(note: string, headroom: Headroom | null): void {
+        this.#latestHeadroom = headroom;
+        this.#rateWarningPending = false;
+        this.#accountNote = note;
+        if (this.#held) this.resumeAfterLimit();
+        this.#changed();
+    }
+
     /** A word from Genie held for the next turn this session opens (`holdForNextWork`); `null` = none. */
     #heldForNextWork: string | null = null;
     #heldSent: (() => void) | null = null;
@@ -1839,20 +1961,24 @@ export class AgentSession {
         const rateWarning = this.#rateWarningPending && !command ? rateLimitWarning(this.#latestHeadroom, this.#now()) : null;
         // The provider's last stop, named, goes FIRST (Tynn #859): one line, only on the next turn that opens.
         const stopNote = this.#inTurn || command ? null : this.#stopNote;
-        const above = `${stopNote ? `${stopNote}\n\n---\n\n` : ''}${rateWarning ? `${rateWarning}\n\n---\n\n` : ''}${carry ? `${carry.text}\n\n---\n\n` : ''}${redock ? `${redock}\n\n---\n\n` : ''}`;
+        // The account switch goes FIRST of all (Tynn #1011): the room the agent has now, before anything it might weigh it by.
+        const accountNote = this.#inTurn || command ? null : this.#accountNote;
+        const above = `${accountNote ? `${accountNote}\n\n---\n\n` : ''}${stopNote ? `${stopNote}\n\n---\n\n` : ''}${rateWarning ? `${rateWarning}\n\n---\n\n` : ''}${carry ? `${carry.text}\n\n---\n\n` : ''}${redock ? `${redock}\n\n---\n\n` : ''}`;
         // Not into a running turn: a prompt folded there is not the next work, and the turn is not told mid-way.
         // What Genie held for the next work goes between the carry-over and the person's words.
         const held = this.#inTurn || command ? null : this.#heldForNextWork;
         const heldShownAs = held === null ? null : this.#heldShownAs;
         const handed = held === null ? text : `${held}\n\n${text}`;
         const lead: PromptBlock[] = [...(above ? [{ type: 'text' as const, text: above }] : []), ...(held !== null ? [{ type: 'text' as const, text: held }] : [])];
-        const turnId = this.#driver.prompt(sent ? (lead.length > 0 ? [...lead, ...sent.content] : sent.content) : `${above}${handed}`);
+        const payload: string | readonly PromptBlock[] = sent ? (lead.length > 0 ? [...lead, ...sent.content] : sent.content) : `${above}${handed}`;
+        const turnId = this.#driver.prompt(payload);
         if (redockAt !== null) {
             this.#redockAt = null;
             this.#options.onRedockSent?.(redockAt);
         }
         if (!command) this.#rateWarningPending = false; // A refused prompt leaves it pending for the next accepted input.
         if (stopNote !== null) this.#stopNote = null;
+        if (accountNote !== null) this.#accountNote = null;
         if (carry) { this.#carryOver = null; this.#carryInFlight = carry; }
         if (held !== null) {
             const sentNow = this.#heldSent;
@@ -1869,6 +1995,7 @@ export class AgentSession {
             this.#queued = [];
             void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by });
             if (!command && !(by === 'genie' && (text.startsWith(LIMIT_RESUME_PROMPT) || text.startsWith(OVERLOAD_RESUME_PROMPT)))) this.#turnTask = text;
+            this.#turnPrompt = command ? null : { payload, text: `${above}${handed}`, by, sent };
             this.#inTurn = true;
             this.#limitThisTurn = false;
             this.#stopWindow = false;
@@ -1912,8 +2039,7 @@ export class AgentSession {
         if (this.#stopping) return this.#stopping;
         this.#clearCancelWait();
         this.#ended = true;
-        this.#overloadCancel?.();
-        this.#overloadCancel = null;
+        this.#cancelOverloadRetry();
         this.#stopCooling();
         this.#leaveQueuedAsDrafts();
 
@@ -2309,6 +2435,24 @@ export class AgentSession {
 
     /** `intent`: why (`CancelIntent`); only a Stop latches the session until the person acts (Tynn #672 part 3). */
     cancel(by: string | null = 'you', intent: CancelIntent = 'stop'): CancelOutcome {
+        // STOP WHILE AN OVERLOAD'S RETRY WAITS (Tynn #1060): no turn runs, so the wait is what is stopped. Nothing is sent
+        // again, and the chat says who stopped it; the person's own queued messages wait for them, as after any Stop.
+        if (this.#overloadRetry !== null && !this.#inTurn) {
+            this.#cancelOverloadRetry();
+            this.#held = false;
+            if (intent === 'stop' && by === 'you') {
+                this.#stoppedByYou = true;
+                this.#keepOnlyYours();
+            }
+            void this.#emitRow({ kind: 'stopped', n: Math.max(this.#marked, this.#turns), by });
+            // As a stopped turn's end does (genie#1143): what the person queued is them acting, and goes.
+            if (this.#afterTurn.length > 0 && this.running) {
+                this.#stoppedByYou = false;
+                this.#flushAfterTurn();
+            }
+            this.#changed();
+            return { ok: true };
+        }
         const driver = this.#driver;
         if (!driver || this.#exited || !this.#alive) return { ok: false, reason: 'not-running' };
         if (!this.#inTurn) return { ok: false, reason: 'no-turn' };
@@ -2642,6 +2786,9 @@ export class AgentSession {
         // Overloaded (the provider's, and it passes): waited out and sent on again, until OVERLOAD_RETRY_MS runs out.
         const byOverload = failed && !byLimit && paused === null && !bySignOut && outcome.failure?.kind === 'overloaded' && this.#overloads < OVERLOAD_RETRY_MS.length;
         this.#lastTurnEnd = byLimit || byOverload ? 'held' : bySignOut ? 'signed-out' : failed ? 'failed' : outcome.stopReason === 'cancelled' || endedByStop ? 'stopped' : 'replied';
+        // The prompt this turn opened with is an overload retry's to send again, and nobody else's (Tynn #1060).
+        const turnPrompt = outcome.unsolicited === true ? null : this.#turnPrompt;
+        this.#turnPrompt = null;
         // The carry-over this turn took: gone with a reply; otherwise the next prompt carries it again (Tynn story #380).
         if (this.#carryInFlight !== null) {
             const carried = this.#carryInFlight;
@@ -2684,14 +2831,21 @@ export class AgentSession {
             // A reading already told the gate; a failure alone has not, and it carries no reset of its own.
             if (!readingSaidSo && outcome.failure) this.#options.onLimitBreach?.(outcome.failure.reason);
         } else if (byOverload) {
-            const ms = OVERLOAD_RETRY_MS[this.#overloads]!;
+            const ms = overloadRetryMs(this.#overloads, outcome.failure?.retryAfterMs);
             this.#overloads += 1;
             this.#turnState = 'idle';
             this.#failure = null;
             this.#failedAt = null;
             this.#held = true;
             void this.#emitRow({ kind: 'notice', level: 'warning', message: `The provider is overloaded (${outcome.failure?.reason ?? 'overloaded'}). Genie retries in ${Math.round(ms / 1000)} s (attempt ${this.#overloads} of ${OVERLOAD_RETRY_MS.length}); anything you send meanwhile goes then.` });
-            this.#overloadCancel = this.#later(ms, () => { this.#overloadCancel = null; this.#resumeHeld(OVERLOAD_RESUME_PROMPT); });
+            // prism-acp 0.48.0: the failed prompt is what goes again (none for a turn the provider started itself). `resumable`
+            // is the driver's claim: true = the same session; false = the agent is gone, reload; absent = unknown, so the same
+            // session is tried once and a refusal (session_exited) reloads.
+            const failedPrompt = turnPrompt;
+            const resumable = outcome.failure?.resumable;
+            this.#overloadFailed = failedPrompt;
+            this.#overloadRetry = { at: this.#now() + ms, attempt: this.#overloads, of: OVERLOAD_RETRY_MS.length, reason: outcome.failure?.reason ?? 'overloaded' };
+            this.#overloadCancel = this.#later(ms, () => this.#retryOverload(failedPrompt, resumable));
         } else if (paused !== null) {
             // ACCOUNT PAUSED, not Broken and not Signed out: the provider refused the account itself. Said in
             // words with what to do; main alerts once per login and `Try again` brings every agent on it back.

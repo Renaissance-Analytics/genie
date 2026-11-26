@@ -12,15 +12,14 @@ import { nodeEnvelopePorts } from './envelope-fs.js';
 import { buildEnvelope, discardStaged, readSource, registerExisting, stageFromGit, type EnvelopePorts } from './envelope-wizard-host.js';
 import { gitAddSubmodule, gitClone, gitPushMain, gitSetOrigin } from './git-ports.js';
 import type { GithubAccount } from './github-account.js';
-import type { GithubAccountReplica } from './github-account-replica.js';
 import type { HostApiDeps } from './host-api.js';
 import type { Registry } from './registry.js';
 import { addRepoTo, commitsSinceIn, listReposOf, relocateRepoIn, removeRepoFrom, removeRepoLockOf, type RepoOpsPorts } from './repo-ops-host.js';
 import type { TynnAccount } from './tynn-account.js';
-import type { TynnAccountReplica } from './tynn-account-replica.js';
 import { nodeWorkspaceFs } from './workspace-fs.js';
 import { addWorkspace, addWorkspaceFromGit, addWorkspaceFromTynn, createTynnProject, createWorkspace, hibernateWorkspace, listTynnOwners, listTynnProjects, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, removeWorkspace, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 import { repoOpsPorts } from './workspace-reads-api.js';
+import { nodeRelocateFs, relocateWorkspaceIn } from './workspace-relocate-host.js';
 import type { AgentId } from '../core/identity.js';
 import type { WorkspaceSaveOps } from './workspace-save-host.js';
 
@@ -38,10 +37,12 @@ export interface WorkspaceLifecycleWiring {
     readonly engines: () => NonNullable<WorkspaceOpsPorts['engines']> | null;
     /** A fresh trust verdict before a workspace wakes: throws when there is no way to get one. */
     readonly reverifyTrust: (workspaceId: string) => Promise<void>;
-    readonly github: () => GithubAccount | GithubAccountReplica | null;
-    readonly tynn: () => TynnAccount | TynnAccountReplica | null;
+    readonly github: () => GithubAccount | null;
+    readonly tynn: () => TynnAccount | null;
     readonly defaultEnvFile: () => string;
     readonly stagingDirectory: () => string;
+    /** Look at the workspaces' folders again (missing-workspaces.ts), after "Locate folder". Absent: this process keeps no missing flag. */
+    readonly recheckMissing?: (() => Promise<void>) | undefined;
 }
 
 export interface WorkspaceLifecycle {
@@ -53,7 +54,7 @@ export interface WorkspaceLifecycle {
 
 export function workspaceLifecyclePorts(w: WorkspaceLifecycleWiring): WorkspaceLifecycle {
     const registry = () => w.registry()!;
-    const account = (): TynnAccount | TynnAccountReplica => { const a = w.tynn(); if (!a) throw new Error('this Genie has no Tynn account'); return a; };
+    const account = (): TynnAccount => { const a = w.tynn(); if (!a) throw new Error('this Genie has no Tynn account'); return a; };
     const signedInGithub = () => { const g = w.github(); return g && g.view().status === 'signed-in' ? g : null; };
     const workspaceOps: WorkspaceOpsPorts = {
         reverifyTrustBeforeRedock: w.reverifyTrust,
@@ -127,7 +128,7 @@ export function workspaceLifecyclePorts(w: WorkspaceLifecycleWiring): WorkspaceL
         register: async (input) => { const record = await registry().register(input); return { id: record.id, name: record.name }; },
         // What project.json says of an adopted agent (Tynn #756, PR8): its IssueWatch, and whether it is the workspace's default.
         setIssueWatch: async (id, setting) => { await registry().setIssueWatch(id as AgentId, setting); },
-        defaultAgentOf: (workspaceId) => w.registry()?.defaultAgentOf(workspaceId) ?? null,
+        chosenDefaultAgentOf: (workspaceId) => w.registry()?.chosenDefaultAgentOf(workspaceId) ?? null,
         setDefaultAgent: async (workspaceId, agentId) => { await registry().setDefaultAgent(workspaceId, agentId); },
         sacredName: async (workspaceId) => {
             const folder = w.registry()?.workspace(workspaceId)?.path;
@@ -140,7 +141,7 @@ export function workspaceLifecyclePorts(w: WorkspaceLifecycleWiring): WorkspaceL
     return { workspaceOps, envelopePorts, adoptionPorts, repoOps: repoOpsPorts((id) => w.registry()?.workspace(id) ?? null) };
 }
 
-type LifecycleKeys = 'previewAdd' | 'previewAddFromGit' | 'tynnProjects' | 'tynnOwnerOptions' | 'createTynnProject' | 'importedAgents' | 'adoptAgent' | 'previewAddFromTynn' | 'locateRepo' | 'confirmAdd' | 'create'
+type LifecycleKeys = 'previewAdd' | 'previewAddFromGit' | 'tynnProjects' | 'tynnOwnerOptions' | 'createTynnProject' | 'importedAgents' | 'adoptAgent' | 'previewAddFromTynn' | 'locateRepo' | 'relocate' | 'confirmAdd' | 'create'
     | 'confirmAddFromGit' | 'readSource' | 'stageFromGit' | 'registerExisting' | 'buildEnvelope' | 'discardStaged' | 'githubRepos' | 'confirmAddFromTynn' | 'hibernate' | 'wake' | 'remove' | 'listRepos' | 'addRepo'
     | 'removeRepo' | 'removeRepoLock' | 'commitsSince' | 'setGoverns' | 'setDefaultAgent' | 'setColor' | 'setMcpServer' | 'savePreview' | 'save' | 'cloneOffers' | 'applyOffer';
 
@@ -161,7 +162,7 @@ const NO_OFFER_OPS: CloneOfferOps = {
 
 export function workspaceLifecycleApi(
     parts: WorkspaceLifecycle,
-    wiring: Pick<WorkspaceLifecycleWiring, 'registry' | 'github'>,
+    wiring: Pick<WorkspaceLifecycleWiring, 'registry' | 'github' | 'recheckMissing'>,
     touch: () => void,
     setColor: (id: string, color: string) => Promise<unknown>,
     /** Save to repo (Tynn #756). Absent: the host refuses it in words. */
@@ -180,6 +181,12 @@ export function workspaceLifecycleApi(
         adoptAgent: (id, name) => adoptAgent(adoptionPorts, id, name),
         previewAddFromTynn: (projectId, parent) => previewAddFromTynn(workspaceOps, parent, projectId),
         locateRepo: (id, slug, path) => relocateRepoIn(repoOps, id, slug, path),
+        // "Locate folder" (host split P7): only the record's path changes; the missing look runs again at once.
+        relocate: (id, path) => {
+            const registry = wiring.registry();
+            if (!registry) return Promise.resolve({ ok: false as const, reason: 'the registry has not been read yet; try again in a moment' });
+            return relocateWorkspaceIn({ registry, fs: nodeRelocateFs(), recheck: wiring.recheckMissing }, id, path);
+        },
         confirmAdd: (path) => addWorkspace(workspaceOps, path),
         create: (name, parent, raw, tynnProjectId) => {
             const remote = remoteOf(raw);

@@ -34,8 +34,9 @@ export interface AppInboxBridge {
 /** The migrated owner operations; outgoing channel and window capabilities remain native until P5. */
 export interface LocalOwnerBridge {
     appInbox: AppInboxBridge;
-    deviceLink: Pick<DeviceLinkBridge, 'hosts' | 'forget' | 'adopt'>;
-    tynnNetwork: Pick<TynnNetworkBridge, 'workstations' | 'setRole' | 'shares'>;
+    /** Since 2f-2 (Tynn #941) the whole device link is the window's session's: a channel to another machine is genie-host's. */
+    deviceLink: DeviceLinkBridge;
+    tynnNetwork: Pick<TynnNetworkBridge, 'workstations' | 'setRole' | 'shares' | 'open' | 'onOpenStep' | 'send' | 'close' | 'onMessage' | 'onClosed' | 'openBrowser'>;
 }
 import type { LiveSession } from '../core/roster.js';
 import type { MarketplaceApi } from '../core/marketplace.js';
@@ -126,7 +127,7 @@ export interface GenieSnapshot {
  * history down the wire to redraw one line.
  */
 export interface AgentDetail {
-    agent: { id: string; name: string; workspaceId?: string | undefined; provider: string; fidelity: Fidelity; cwd: string; raisesApprovals?: boolean | null | undefined; dailyBudgetUsd?: number | null; mode?: 'automated' | 'manual'; accessScope?: 'none' | 'self' | 'specific' | 'all'; /** Chosen agents who may message it (Tynn #526). */ accessAgents?: readonly string[]; /** Autonomous (Tynn #801). */ autoApprove?: boolean; manageTabs?: boolean; /** May drive pages (browser rebuild step 7). */ drivePages?: boolean; /** Its MCP servers (Tynn #628): switched off, and ever reported. */ mcpOff?: readonly string[]; mcpSeen?: readonly string[]; /** On for it over its workspace's default; and that default. */ mcpOn?: readonly string[]; workspaceMcpOff?: readonly string[]; issueWatch?: IssueWatchPrefs; permissions?: AgentPermissions; /** The model CHOSEN for it; `null` = the provider's default. The one IN USE is `session.model`. */ model?: string | null; /** The persona file, workspace-relative (`.agents/<name>/AGENT.md`); `null` when the record names none. */ instructions?: string | null };
+    agent: { id: string; name: string; workspaceId?: string | undefined; provider: string; fidelity: Fidelity; cwd: string; raisesApprovals?: boolean | null | undefined; dailyBudgetUsd?: number | null; /** Its app wake cap in force (Tynn #1053): turns an hour an app's mail may give it, or no limit. */ appWakeCap?: number | 'unlimited'; mode?: 'automated' | 'manual'; accessScope?: 'none' | 'self' | 'specific' | 'all'; /** Chosen agents who may message it (Tynn #526). */ accessAgents?: readonly string[]; /** Autonomous (Tynn #801). */ autoApprove?: boolean; manageTabs?: boolean; /** May drive pages (browser rebuild step 7). */ drivePages?: boolean; /** Its MCP servers (Tynn #628): switched off, and ever reported. */ mcpOff?: readonly string[]; mcpSeen?: readonly string[]; /** On for it over its workspace's default; and that default. */ mcpOn?: readonly string[]; workspaceMcpOff?: readonly string[]; issueWatch?: IssueWatchPrefs; permissions?: AgentPermissions; /** The model CHOSEN for it; `null` = the provider's default. The one IN USE is `session.model`. */ model?: string | null; /** The persona file, workspace-relative (`.agents/<name>/AGENT.md`); `null` when the record names none. */ instructions?: string | null };
     /** `null` when the agent is registered but not running. Not an error. */
     session: LiveSession | null;
     rows: readonly TimedEvent[];
@@ -166,6 +167,8 @@ export interface ActivityBridge {
 }
 
 export interface GenieBridge {
+    /** The host's password prompt for an elevated step this client clicked (Tynn #973). Absent = this client is never asked. */
+    elevation?: import('../core/elevation.js').ElevationBridge;
     /** The admitted local window's Marketplace; absent on a remote bridge. */
     marketplace?: MarketplaceApi;
     /** The admitted local window's GApp store actions; absent on a remote bridge. */
@@ -423,6 +426,8 @@ export interface GenieBridge {
         removeRepo(workspaceId: string, slug: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** "Locate repo" on a Dashboard group fault: the host asks for the folder (inside the envelope) and moves the manifest's path. */
         locateRepo(workspaceId: string, slug: string, path: string): Promise<{ ok: true; path: string } | { ok: false; reason: string }>;
+        /** "Locate folder" on a workspace whose folder is not there (host split P7): the host's registry is told where it is. Optional: an older host has none. */
+        relocate?(workspaceId: string, path: string): Promise<{ ok: true; path: string } | { ok: false; reason: string }>;
         /** The commits in the workspace's repos since a moment, newest first — git's own account (an observed agent's index). */
         commitsSince(workspaceId: string, sinceMs: number): Promise<{ ok: true; commits: readonly RepoCommit[] } | { ok: false; reason: string; gitDidNotAnswer?: boolean }>;
         /** "Remove stale lock" on a red repo chip: unlinks `index.lock` only when it is stale; refuses with the reason otherwise. */
@@ -460,6 +465,8 @@ export interface GenieBridge {
         delete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[], handoff?: boolean): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
         switchDriver(agentId: string, to: string): Promise<SwitchDecision>;
         setBudget(agentId: string, dailyLimitUsd: number | null): Promise<{ ok: true; decision: BudgetDecision } | { ok: false; reason: string }>;
+        /** Its app wake cap (Tynn #1053): a whole number of wakes an hour, or `unlimited`. The host checks it and refuses in words. */
+        setAppWakeCap(agentId: string, cap: number | 'unlimited'): Promise<{ ok: true } | { ok: false; reason: string }>;
         diagnose(agentId: string): Promise<{ ok: true; diagnosis: Diagnosis } | { ok: false; reason: string }>;
         /**
          * A tool row's WHOLE output (Tynn story #386): the window holds a 16 KB preview; the host keeps the rest beside the
@@ -621,7 +628,7 @@ export interface GenieBridge {
      * click) and the ArtBoard. Absent on a bridge with no host (a window driving another machine): the panels say so.
      */
     repo?: {
-        call(op: 'list' | 'status' | 'diff' | 'stage' | 'unstage' | 'commit' | 'branch' | 'push' | 'pull', workspaceId: string, rel: string, a?: unknown, b?: unknown): Promise<{ ok: true; value: unknown } | { ok: false; error: string }>;
+        call(op: 'list' | 'status' | 'diff' | 'stage' | 'unstage' | 'commit' | 'branch' | 'push' | 'pull' | 'tagOptions' | 'tag', workspaceId: string, rel: string, a?: unknown, b?: unknown): Promise<{ ok: true; value: unknown } | { ok: false; error: string }>;
     } | undefined;
     artboard?: {
         read(workspaceId: string): Promise<import('../core/artboard.js').ResolvedBoard>;
@@ -632,6 +639,17 @@ export interface GenieBridge {
          */
         review(workspaceId: string, postId: string, verdict: 'approved' | 'rejected' | 'pin' | 'unpin' | 'delete' | 'clear-decided' | 'clear-all' | 'clear-everything' | 'restore', comment: string): Promise<{ ok: true; delivered: boolean; cleared?: number; trashId?: string | null } | { ok: false; error: string }>;
     } | undefined;
+
+    /**
+     * A QUESTION'S NAMED FILES AND ITS ARTBOARD VISUALS (the question window's drawer and gallery; Tynn #912, 2f-1), read by
+     * the host from its own Deck and the question's workspace: which named files are there (`null` = not known), one of
+     * them, and its visuals. Every client's wire bridge has it.
+     */
+    questions?: {
+        files(id: string, paths: string[]): Promise<string[] | null>;
+        file(id: string, path: string): Promise<{ ok: true; path: string; text: string } | { ok: true; path: string; media: import('../core/question-media.js').QuestionMedia } | { ok: false; reason: string }>;
+        visuals(id: string): Promise<{ ok: true; posts: import('../core/artboard.js').DisplayPost[] } | { ok: false; reason: string }>;
+    };
 
     /** A phone's upload (§6.8): only the remote bridge has it — the desktop picks files natively. */
     uploads?: {
@@ -718,10 +736,9 @@ export const NO_TERMINALS: GenieBridge['terminals'] = {
  */
 export type SignInResult = { ok: true; terminalId?: string; route?: string; ticket?: string } | { ok: false; reason: string };
 
-export type PreloadBridge = Omit<GenieBridge, 'snapshot' | 'subscribe' | 'agentDetail' | 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'host' | 'features' | 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'takeOver' | 'providerLogin' | 'switchAccount' | 'designLogin' | 'designSignIn' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'accounts' | 'accountsAct' | 'dismissSwitchOffer' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals' | 'marketplace' | 'gapps' | 'chooseProviderProgram' | 'scratchTerminal'> & {
+export type PreloadBridge = Omit<GenieBridge, 'snapshot' | 'subscribe' | 'agentDetail' | 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'host' | 'features' | 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'takeOver' | 'providerLogin' | 'switchAccount' | 'designLogin' | 'designSignIn' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'accounts' | 'accountsAct' | 'dismissSwitchOffer' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts' | 'artboard' | 'terminals' | 'marketplace' | 'gapps' | 'chooseProviderProgram' | 'scratchTerminal' | 'elevation'> & {
     files: Omit<GenieBridge['files'], import('./local-files-client.js').FilesProtocolKey>;
     features: Omit<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>;
-    deviceLink?: Omit<DeviceLinkBridge, keyof LocalOwnerBridge['deviceLink']>;
     tynnNetwork?: Omit<TynnNetworkBridge, keyof LocalOwnerBridge['tynnNetwork']>;
     workspaces: Omit<GenieBridge['workspaces'], WorkspaceProtocolKey>;
 };
@@ -792,12 +809,13 @@ export function pageBridge(preload: PreloadBridge): GenieBridge {
         marketplace: local.marketplace,
         gapps: local.gapps,
         appInbox: local.owner.appInbox,
-        deviceLink: { ...preload.deviceLink!, ...local.owner.deviceLink },
+        // A channel to another machine is the window's session's (Tynn #941, 2f-2); a pasted link (openLink) stays native.
+        deviceLink: local.owner.deviceLink,
         tynnNetwork: { ...preload.tynnNetwork!, ...local.owner.tynnNetwork },
         files: { ...preload.files, ...local.files }, repo: local.repo, chatDrafts: local.chatDrafts, artboard: local.artboard,
         ...local.agentCommands,
         ...local.reads,
-        terminals: local.terminals, host: local.host, features: { ...preload.features, ...local.features },
+        terminals: local.terminals, host: local.host, features: { ...preload.features, ...local.features }, elevation: local.elevation,
         subscribeAgent: (agentId, onChange) => views.subscribe(agentId, onChange) };
     pageBridges.set(preload, bridge);
     if (typeof window !== 'undefined' && window.genieTestMode === true) window.genieTest = bridge;

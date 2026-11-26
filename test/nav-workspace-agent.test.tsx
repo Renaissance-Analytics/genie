@@ -62,7 +62,9 @@ describe('the agent’s bar leads back', () => {
         const strip = (trailing: ReactNode) => <WorkspaceTabs designed={{ tabs: [] }} agents={[{ id: 'a1', name: 'atlas', state: 'idle' }]} current={{ kind: 'agent', id: 'a1' }} canDesign hasSettings onView={(v) => opened.push(workspaceViewRoute('tynn', v))} onAdd={() => {}} onOpenAgent={() => {}} trailing={trailing} />;
         const html = renderToStaticMarkup(<AgentView agent={agent} session={idle} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 2_000} workspace={{ id: 'tynn', name: 'Tynn.ai', path: '/w/tynn' }} bar={strip} />);
         const bar = html.slice(html.indexOf('data-top-bar'), html.indexOf('data-view-body'));
-        expect(control(bar, 'data-workspace-tab="home"')).toMatchObject({ tag: 'button', tab: true, text: 'Dashboard' });
+        // An icon since Tynn #945, named for a screen reader and in its tooltip.
+        expect(control(bar, 'data-workspace-tab="home"')).toMatchObject({ tag: 'button', tab: true, text: '' });
+        expect(control(bar, 'data-workspace-tab="home"')!.open).toContain('aria-label="Dashboard"');
         // Picking it: react-fancy Tabs' onTabChange with that tab's value; the strip asks for the workspace's home view.
         const el = WorkspaceTabs({ designed: { tabs: [] }, agents: [], current: { kind: 'agent', id: 'a1' }, canDesign: true, hasSettings: true, onView: (v) => opened.push(workspaceViewRoute('tynn', v)), onAdd: () => {}, onOpenAgent: () => {} });
         stripPick(el)('home');

@@ -12,7 +12,9 @@
  *   trusted. A second workspace nobody trusted is the control: the step still shows for it, in both runs.
  */
 import { mainWindow } from './cdp-main-window.mjs';
+import { closeWhatsNew, seedWhatsNewSeen } from './cdp-whats-new.mjs';
 import { execFileSync, spawn } from 'node:child_process';
+import { endOwnRun } from './end-own-tree.mjs';
 import { existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
@@ -20,8 +22,10 @@ import { join } from 'node:path';
 // The feature snapshot is read on the page's own bridge now (P4 family 11): window.genieTest needs this.
 process.env.GENIE_PAGE_PROBE ??= '1';
 
-const PORT = Number(process.env.TRUST_CDP_PORT ?? 9344);
+const PORT = Number(process.env.TRUST_CDP_PORT ?? 9411);
 const failures = [];
+/** When this row began: nothing older is ever taken for one of its own processes (end-own-tree.mjs). */
+const RUN_BEGAN = Date.now();
 function check(ok, label, detail = '') {
     console.log(`${ok ? '  PASS' : '  FAIL'}  ${label}${detail ? `  — ${detail}` : ''}`);
     if (!ok) failures.push(label);
@@ -32,6 +36,8 @@ const root = mkdtempSync(join(tmpdir(), 'trust-step-'));
 const home = join(root, 'home');
 mkdirSync(join(home, 'AppData', 'Roaming'), { recursive: true });
 mkdirSync(join(home, 'AppData', 'Local'), { recursive: true });
+// What's new for this version already seen: a fresh home would open it late, over the step (Tynn #1009).
+seedWhatsNewSeen(join(home, '.genie'));
 const log = join(root, 'electron.log');
 const env = {
     ...process.env,
@@ -74,7 +80,10 @@ async function stop(app) {
     const host = hostPid();
     const gone = new Promise((r) => { if (app.exitCode !== null) r(); else app.once('exit', r); });
     if (process.platform === 'win32') {
-        try { execFileSync('taskkill', ['/PID', String(app.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* it has gone */ }
+        // Tynn #1031: the app's tree, this run's genie-host and what they started (its updater helper is under neither the
+        // app nor a tree kill of the host's pid), ended, waited for and said by one helper (end-own-tree.mjs).
+        const ended = await endOwnRun({ app, hostPid: host, since: RUN_BEGAN });
+        check(ended.ok, 'nothing of this run is left running by its own cleanup', ended.ok ? '' : `LEFT RUNNING by this row's own cleanup: ${ended.words}`);
     } else {
         try { process.kill(-app.pid, 'SIGTERM'); } catch { /* it has gone */ }
     }
@@ -235,6 +244,7 @@ try {
 
     console.log(`  add: ${String(await addAll(cdp, [acme, other])).slice(0, 320)}`);
     check(await reconnect(cdp), '0b. the app has its own connection back');
+    await closeWhatsNew((expression) => cdp.evaluate(expression));
     const acmeId = await idOf(cdp, acme);
     const otherId = await idOf(cdp, other);
     check(typeof acmeId === 'string' && typeof otherId === 'string', '1. two workspaces added', `${acmeId}, ${otherId}`);

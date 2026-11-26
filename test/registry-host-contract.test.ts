@@ -2,8 +2,6 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { memoryPair } from '../src/core/line-transport.js';
-import type { ProcessTree } from '../src/core/process-tree.js';
 import { AgentStoresService } from '../src/main/agent-stores-host.js';
 import { HostRegistryStore } from '../src/main/agent-stores-replica.js';
 import { ApprovalQueue } from '../src/main/approval-queue.js';
@@ -12,20 +10,16 @@ import { InboxStore } from '../src/main/inbox-store.js';
 import { KnowledgeStore } from '../src/main/knowledge-store.js';
 import { Registry } from '../src/main/registry.js';
 import { HostRegistry } from '../src/main/host-registry.js';
-import { SessionEngineClient } from '../src/main/session-engine-client.js';
-import { SessionEngineServer } from '../src/main/session-engine-server.js';
-import { SessionHost } from '../src/main/session-host.js';
 import { Store } from '../src/main/store.js';
 
 /**
  * THE REGISTRY'S FILES ARE GENIE-HOST'S (the host split, P3.2: plan §11c). One writer of workspaces.json and agents.json:
- * the host. A window's Registry keeps its model and its snapshot, but reads and writes those files through the host
- * (HostRegistryStore), and the host keeps its OWN Registry over them — what its tools and approvals read with no window.
- * Two windows see one registry: what one registers, the other shows, without a restart.
+ * the host's stores (AgentStoresService). A Registry over HostRegistryStore — genie-host's phone registry, wired exactly
+ * so — reads and writes those files through that writer and follows its registry events; the host keeps its OWN model
+ * (HostRegistry) over them. Two such registries see one registry: what one registers, the other shows, without a restart.
+ * (Main's window registry reads the same files over the protocol, registry.read/write and registry.watch: split-2g4e.)
  */
 
-const TOKEN = 'registry-token';
-const noProcessTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 const tick = async (n = 8) => { for (let i = 0; i < n; i += 1) await new Promise((r) => setTimeout(r, 0)); };
 const WORKSTATION = { name: 'test', healthy: true };
 
@@ -48,17 +42,11 @@ async function rig() {
     const hostRegistry = new HostRegistry(store);
     await hostRegistry.refresh();
     const stores = new AgentStoresService({ inbox, attention, knowledge, approvals: new ApprovalQueue(), registry: { store, model: hostRegistry } });
-    const server = new SessionEngineServer({ token: TOKEN, build: 't', stores });
-    const host = new SessionHost({ userData: dir, driverFor: () => null, processTree: noProcessTree, ...server.hostOptions() });
-    server.attach(host);
     const window = async () => {
-        const [h, w] = memoryPair();
-        server.accept(h);
-        const client = new SessionEngineClient();
-        expect(await client.connect(w, TOKEN)).toMatchObject({ ok: true });
         const registry = new Registry(new Store(dir)); // a store it must NOT use: replaced before load
-        registry.useStore(new HostRegistryStore(client.stores()));
-        client.stores().onRegistryChanged(() => { void registry.refresh(); });
+        // genie-host's phone registry, as genie-host.ts wires it: the stores' call, and their registry events.
+        registry.useStore(new HostRegistryStore({ call: (s, method, args) => stores.call(s, method, args), registryDropped: () => store.dropped }));
+        stores.onEvent((event) => { if (event.store === 'registry') void registry.refresh(); });
         await registry.load(WORKSTATION);
         return registry;
     };

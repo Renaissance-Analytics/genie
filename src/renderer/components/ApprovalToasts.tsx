@@ -51,7 +51,9 @@ function workspaceOf(item: DeckItem, { workspaces, agents }: Pick<ApprovalToastS
     const own = item.workspaceName?.trim();
     if (own) return { name: own, color: item.workspaceColor };
     const id = item.workspaceId ?? agents?.find((a) => a.id === item.agentId)?.workspaceId ?? null;
-    const known = id === null ? undefined : workspaces?.find((w) => w.id === id);
+    // No workspace at all is Genie's own ask (approval-queue.ts): it is Genie's, never a workspace "not known here".
+    if (id === null) return { name: 'Genie', color: item.workspaceColor };
+    const known = workspaces?.find((w) => w.id === id);
     if (!known) return { name: 'a workspace not known here', color: item.workspaceColor };
     return { name: workspaceLabel(workspaces, known.id), color: item.workspaceColor ?? known.color };
 }

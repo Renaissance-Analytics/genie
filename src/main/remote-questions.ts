@@ -1,5 +1,6 @@
 import type { DeckItem } from '../core/deck.js';
 import { isWindowQuestion } from '../core/question-queue.js';
+import { REMOTE_QUESTION_PREFIX } from '../core/remote-question-id.js';
 
 /**
  * THE CONNECTED MACHINE'S QUESTIONS, FOR THIS MACHINE'S QUESTION WINDOW (Tynn #726 part 1; the owner's live trial,
@@ -58,7 +59,7 @@ interface Pending {
     readonly host: string;
 }
 
-const PREFIX = 'remote:';
+const PREFIX = REMOTE_QUESTION_PREFIX;
 const DEFAULT_TIMEOUT_MS = 60_000;
 
 /** A question as it can be shown: an object with an id and a form, nothing else assumed of what a window sent. */
@@ -175,5 +176,40 @@ export class RemoteQuestions {
         if (o && o.ok === true) p.resolve(o as Record<string, unknown>);
         else p.reject(new Error(o && o.ok === false && typeof o.reason === 'string' ? o.reason : `${p.host} did not say whether it took the answer`));
         return true;
+    }
+}
+
+type RemoteAnswer = { ok: true } | { ok: false; reason: string };
+
+/** What the question page asks of ANOTHER machine's question (`question:remote`), through the window driving that machine. */
+export interface RemoteQuestionPorts {
+    /** Is this (shown) id another machine's question? */
+    owns(id: string): boolean;
+    answer(selections: string[][], notes: string[], id: string): Promise<RemoteAnswer>;
+    dismiss(notes: string[], id: string): Promise<RemoteAnswer>;
+    visuals(id: string): Promise<{ posts: readonly unknown[] }>;
+}
+
+/** One note per question; anything that is not a string is no note. Picks are labels: anything else in a list is none. */
+const notesOf = (raw: unknown): string[] => (Array.isArray(raw) ? raw.map((n) => (typeof n === 'string' ? n : '')) : []);
+const selectionsOf = (raw: unknown): string[][] => (Array.isArray(raw) ? raw.map((s) => (Array.isArray(s) ? s.filter((x): x is string => typeof x === 'string') : [])) : []);
+
+/**
+ * THE QUESTION PAGE'S CALL FOR ANOTHER MACHINE'S QUESTION (Tynn #912, 2f-1). This machine's questions are answered by the
+ * page itself over the one protocol (features.act, questions.*); only a question RemoteQuestions shows from a connected
+ * machine comes here, and goes back through the window driving that machine, which holds THAT host's protocol connection.
+ * Anything else is refused in words, never answered here.
+ */
+export async function actOnRemoteQuestion(raw: unknown, ports: RemoteQuestionPorts): Promise<RemoteAnswer | { ok: true; posts: readonly unknown[] }> {
+    const r = (typeof raw === 'object' && raw !== null ? raw : {}) as { kind?: unknown; id?: unknown; selections?: unknown; notes?: unknown };
+    const id = typeof r.id === 'string' ? r.id : '';
+    if (r.kind !== 'answer' && r.kind !== 'dismiss' && r.kind !== 'visuals') return { ok: false, reason: 'not a question action' };
+    if (id === '' || !ports.owns(id)) return { ok: false, reason: 'this question is answered over Genie’s protocol, not through another machine’s window' };
+    if (r.kind === 'answer') return ports.answer(selectionsOf(r.selections), notesOf(r.notes), id);
+    if (r.kind === 'dismiss') return ports.dismiss(notesOf(r.notes), id);
+    try {
+        return { ok: true, posts: (await ports.visuals(id)).posts };
+    } catch (error) {
+        return { ok: false, reason: error instanceof Error ? error.message : String(error) };
     }
 }

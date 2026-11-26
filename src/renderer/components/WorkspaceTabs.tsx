@@ -1,4 +1,4 @@
-import { Button, Icon, Tabs } from '@particle-academy/react-fancy';
+import { Button, Icon, Tabs, Tooltip } from '@particle-academy/react-fancy';
 import type { ReactNode } from 'react';
 import { tabStrip, type TabsState } from '../../core/workspace-tabs.js';
 import { TynnLogo } from './TynnLogo.js';
@@ -9,7 +9,8 @@ import { BAR_ACTION, TopBar } from './TopBar.js';
  * A WORKSPACE'S TAB STRIP (Tynn #282, #805): Dashboard · every agent of the workspace · the tabs you designed · + · Settings — +
  * always just before Settings, Settings always last. The SAME strip on the workspace's own views and over an agent's
  * page: an agent opens INSIDE its workspace (the owner's choice, 2026-10-17 — as in Genie 1), so the workspace, its
- * tabs, Settings and the sibling agents are always one click away. Labelled tabs, never a shortcut-only door (§4.0).
+ * tabs, Settings and the sibling agents are always one click away. Named tabs, never a shortcut-only door (§4.0): a built-in
+ * tab is an icon named by aria-label and a Tooltip (Tynn #945), the others say their names.
  */
 export interface WorkspaceTabsProps {
     readonly designed: TabsState;
@@ -52,8 +53,21 @@ export interface WorkspaceTabsProps {
     readonly path?: string | null | undefined;
 }
 
-/** The selected tab's tooltip is the path (the owner: no path column eating space). */
-const pathTitle = (selected: boolean, path: string | null): Record<string, string> => (selected && path ? { title: path } : {});
+/**
+ * THE BUILT-IN TABS ARE ICONS (Tynn #945; the owner, 2026-11-20: "our hardcoded tabs should use icons with tooltips instead
+ * of labels"). Each is its icon, named for a screen reader (aria-label) and on hover or focus by a react-fancy Tooltip; the
+ * selected one's tooltip also carries the path (the owner on beta.64: no path column eating space). A tab you designed and
+ * an agent's tab keep their names. `icon: null` = drawn by its logo (Tynn: logos over words). Registered in icons.ts.
+ */
+export const BUILT_IN_TAB: Readonly<Record<'home' | 'files' | 'artboard' | 'tynn' | 'github' | 'storage' | 'settings', { readonly label: string; readonly icon: string | null }>> = {
+    home: { label: 'Dashboard', icon: 'layout-dashboard' },
+    files: { label: 'Files', icon: 'folder-tree' },
+    artboard: { label: 'ArtBoard', icon: 'palette' },
+    tynn: { label: 'Tynn', icon: null },
+    github: { label: 'GitHub', icon: 'github' },
+    storage: { label: 'Storage', icon: 'hard-drive' },
+    settings: { label: 'Settings', icon: 'settings' },
+};
 
 /**
  * THE SELECTED TAB STAYS IN VIEW (scripts/one-bar-proof.mjs, 1600px with the chat pinned: the agent's own tab was scrolled
@@ -118,12 +132,29 @@ export function WorkspaceTabs({ designed, agents, current, canDesign, hasSetting
                 }
                 const view = t.kind === 'dashboard' ? 'home' : t.kind === 'settings' ? 'settings' : t.kind === 'github' ? 'github' : t.kind === 'tynn' ? 'tynn' : t.kind === 'files' ? 'files' : t.kind === 'artboard' ? 'artboard' : t.kind === 'storage' ? 'storage' : `tab:${t.id}`;
                 const on = current.kind === 'view' && current.view === view;
+                const badge = t.kind === 'artboard' && artboardWaiting > 0 ? <span data-artboard-badge={String(artboardWaiting)} title={`${artboardWaiting} waiting for your verdict`} className="ml-1.5 inline-flex min-w-4 items-center justify-center rounded-full bg-[var(--warning)] px-1 text-[10px] font-semibold leading-4 text-[var(--bg-0)]">{artboardWaiting}</span> : null;
+                const marker = on ? <span ref={SHOW_SELECTED} aria-hidden="true" /> : null;
+                if (t.kind === 'designed') {
+                    return (
+                        <Tabs.Tab key={view} value={view} data-workspace-tab={view} {...(on && path ? { title: path } : {})} className={`shrink-0 ${tab(on)}`}>
+                            {t.name}
+                            {marker}
+                        </Tabs.Tab>
+                    );
+                }
+                const built = BUILT_IN_TAB[view as keyof typeof BUILT_IN_TAB];
+                // The ArtBoard's count is said in its name too: the badge is a number with no word beside it.
+                const name = t.kind === 'artboard' && artboardWaiting > 0 ? `${built.label} · ${artboardWaiting} waiting` : built.label;
+                const tip = on && path ? `${name} · ${path}` : name;
                 return (
-                    <Tabs.Tab key={view} value={view} data-workspace-tab={view} {...pathTitle(on, path)} {...(t.kind === 'artboard' && artboardWaiting > 0 ? { 'data-artboard-waiting': 'true' } : {})} className={`shrink-0 ${tab(on)}`}>
-                        {t.kind === 'tynn' ? <TynnLogo /> : t.kind === 'designed' ? t.name : t.kind === 'dashboard' ? 'Dashboard' : t.kind === 'github' ? 'GitHub' : t.kind === 'files' ? 'Files' : t.kind === 'artboard' ? 'ArtBoard' : t.kind === 'storage' ? 'Storage' : 'Settings'}
-                        {on ? <span ref={SHOW_SELECTED} aria-hidden="true" /> : null}
-                        {t.kind === 'artboard' && artboardWaiting > 0 ? <span data-artboard-badge={String(artboardWaiting)} title={`${artboardWaiting} waiting for your verdict`} className="ml-1.5 inline-flex min-w-4 items-center justify-center rounded-full bg-[var(--warning)] px-1 text-[10px] font-semibold leading-4 text-[var(--bg-0)]">{artboardWaiting}</span> : null}
-                    </Tabs.Tab>
+                    // The tooltip repeats the tab's accessible name, so it describes the tab only when it adds the path.
+                    <Tooltip key={view} content={tip} placement="bottom" describe={tip !== name}>
+                        <Tabs.Tab value={view} data-workspace-tab={view} aria-label={name} {...(t.kind === 'artboard' && artboardWaiting > 0 ? { 'data-artboard-waiting': 'true' } : {})} className={`flex shrink-0 items-center ${tab(on)}`}>
+                            {built.icon ? <Icon name={built.icon} size="xs" /> : <TynnLogo title={null} />}
+                            {marker}
+                            {badge}
+                        </Tabs.Tab>
+                    </Tooltip>
                 );
             })}
             </Tabs.List>

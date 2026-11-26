@@ -6,7 +6,7 @@ import { skewSentence } from './drone-version.js';
  * and said a bare red "workstation not connected" when the machine was offline. A person should see the machine's NAME,
  * what is happening, and — offline — a plain sentence with Retry.
  *
- * The three steps are the three things that really happen, in order (main/main.ts `genie:relay-open`, then the host's
+ * The three steps are the three things that really happen, in order (genie-host's `deviceLink.openRelay`, then the host's
  * welcome): Tynn mints a grant (`tynn`), the relay connects this machine to that one (`relay`), and that machine's Genie
  * checks the grant and lets this window in (`host`).
  *

@@ -56,9 +56,12 @@ $Rows = @(
     'deps', 'electron-binary',
     'unit-build', 'unit',
     'build', 'seed', 'no-pty', 'smoke', 'layout', 'app-stopped',
-    'local-door-break', 'local-door', 'host-late-ready', 'files-watch', 'chat-drafts', 'gapp-open', 'artboard', 'ui-lag',
-    'trust-step', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash',
-    'package', 'sign-plan', 'packed-tree', 'update-metadata', 'package-fuse', 'packaged-launcher'
+    'local-door-break', 'local-door', 'host-late-ready', 'files-watch', 'chat-drafts', 'gapp-open', 'artboard', 'ui-lag', 'plan-popover',
+    'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash', 'quit-keeps-host', 'rebuilt-machine',
+    'package', 'sign-plan', 'packed-tree', 'update-metadata', 'package-fuse', 'packaged-launcher',
+    'logon',
+    'client-only-update',
+    'host-update'
 )
 
 if ($List) { $Rows | ForEach-Object { Write-Output $_ }; exit 0 }
@@ -330,8 +333,11 @@ function Row-app-stopped {
 function Row-local-door-break {
     Need-Build; Need-TestMachine
     $log = Join-Path $Out 'local-door-break.out'
-    node scripts/local-door-cdp.mjs --break-admission *> $log
-    $probe = $LASTEXITCODE
+    # Ports of its own: local-door runs the same script on its defaults (test/ci-debug-ports-unique.test.ts). Put back after.
+    $own = @{ CDP_PORT = '9405'; LOCAL_DOOR_CDP_INSPECT = '9406' }
+    $before = @{}
+    foreach ($k in $own.Keys) { $before[$k] = [Environment]::GetEnvironmentVariable($k, 'Process'); [Environment]::SetEnvironmentVariable($k, $own[$k], 'Process') }
+    try { node scripts/local-door-cdp.mjs --break-admission *> $log; $probe = $LASTEXITCODE } finally { foreach ($k in $own.Keys) { [Environment]::SetEnvironmentVariable($k, $before[$k], 'Process') } }
     Get-Content $log
     if ($probe -ne 1 -or -not (Select-String -Path $log -Pattern 'FAIL 1:' -Quiet) -or -not (Select-String -Path $log -Pattern 'actual refusal:.*not an admitted' -Quiet)) { throw "the admission break control did not fail as it must (exit $probe)" }
 }
@@ -350,7 +356,15 @@ function Row-chat-drafts { Need-Build; Need-TestMachine; Run 'chat-drafts-cdp' {
 function Row-gapp-open { Need-Build; Need-TestMachine; Run 'gapp-open-cdp' { node scripts/gapp-open-cdp.mjs } }
 function Row-artboard { Need-Build; Need-TestMachine; Run 'artboard-cdp' { node scripts/artboard-cdp.mjs --trace-main } }
 function Row-ui-lag { Need-Build; Need-TestMachine; Run 'ui-lag-cdp' { node scripts/ui-lag-cdp.mjs --budget } }
+function Row-plan-popover { Need-Build; Need-TestMachine; Run 'plan-popover-cdp' { node scripts/plan-popover-cdp.mjs } }
 function Row-trust-step { Need-Build; Need-TestMachine; Run 'trust-step-cdp' { node scripts/trust-step-cdp.mjs } }
+function Row-accounts-popover { Need-Build; Need-TestMachine; Run 'accounts-popover-cdp' { node scripts/accounts-popover-cdp.mjs } }
+function Row-claude-accounts { Need-Build; Need-TestMachine; Run 'claude-accounts-cdp' { node scripts/claude-accounts-cdp.mjs } }
+function Row-sound-picker { Need-Build; Need-TestMachine; Run 'sound-picker-cdp' { node scripts/sound-picker-cdp.mjs } }
+# The whole question window maximized and restored, screenshots of both (Tynn #1019): the window's maximize is Windows' own here.
+function Row-question-maximize { Need-Build; Need-TestMachine; Run 'question-maximize-cdp' { node scripts/question-maximize-cdp.mjs } }
+# Esc unsends a message still in the send buffer, files and all, in the real chat with a real key press (Tynn #1029).
+function Row-esc-unsend { Need-Build; Need-TestMachine; Run 'esc-unsend-cdp' { node scripts/esc-unsend-cdp.mjs } }
 # The app opened for no-pty..layout wrote this log: the spawn host started, and never fell back.
 function Row-spawn-host {
     if (-not $script:AppHome) { Block 'the app was not opened in this run (the seed row opens it)' }
@@ -363,6 +377,26 @@ function Row-spawn-host {
 function Row-safe-mode { Need-Build; Need-TestMachine; Run 'safe-mode-cdp' { node scripts/safe-mode-cdp.mjs } }
 function Row-hang { Need-Build; Need-TestMachine; Run 'hang-cdp' { node scripts/hang-cdp.mjs } }
 function Row-renderer-crash { Need-Build; Need-TestMachine; Run 'renderer-crash-cdp' { node scripts/renderer-crash-cdp.mjs } }
+# QUIT KEEPS THE HOST (Tynn #1036, the host split's promise): three agents stream, the REAL window is closed ("Just close the
+# UI") and built again from the tray, then by a second launch, and every agent keeps streaming through it: the same
+# genie-host pid, the same provider pid per agent, every tick streamed while no window was open in its ledger, in order;
+# "Shut down everything" ends window, host and providers. A home, a lock and ports of its own (QUIT_CDP_OWN_HOME), its logs
+# under ci-out\quit-keeps-host, and its run ended through scripts/end-own-tree.mjs (Tynn #1031). Its watchdog is longer
+# than on Linux: every process-table read here is a PowerShell call (over 30 s measured on a loaded VM). What it sets is
+# put back whatever the row's result.
+function Row-quit-keeps-host {
+    Need-Build; Need-TestMachine
+    $own = @{ QUIT_CDP_OWN_HOME = '1'; QUIT_CDP_OUT = (Join-Path $Out 'quit-keeps-host'); CDP_PORT = '9414'; QUIT_CDP_INSPECT = '9415'; QUIT_CDP_DEADLINE_MS = '540000' }
+    $before = @{}
+    foreach ($k in $own.Keys) { $before[$k] = [Environment]::GetEnvironmentVariable($k, 'Process'); [Environment]::SetEnvironmentVariable($k, $own[$k], 'Process') }
+    try {
+        Run 'quit-keeps-host-cdp' { node scripts/quit-keeps-host-cdp.mjs }
+    } finally {
+        foreach ($k in $own.Keys) { [Environment]::SetEnvironmentVariable($k, $before[$k], 'Process') }
+    }
+}
+# A data root attached to a rebuilt machine (host split P7.3, Tynn #419): a real genie-host on Credential Manager, no window.
+function Row-rebuilt-machine { Need-Install; Need-TestMachine; Run 'rebuilt-machine' { node scripts/rebuilt-machine.mjs } }
 
 # IT PACKAGES, the Windows leg: the installers built unsigned, then what ci.yml checked in what was packaged.
 function Row-package {
@@ -382,6 +416,19 @@ function Row-package-fuse {
 }
 # The packaged app starts genie-host through genie-launch.exe, from its copy, with its supervisor ready. ci.yml's step,
 # command for command, on a home of its own under ci-out.
+# A CLIENT-ONLY UPDATE KEEPS GENIE-HOST AND ITS AGENT STREAMING (Tynn #1036 P6-1): two installers that carry the same host,
+# the base one installed and updated to the other through the real updater while an agent streams; the same host and
+# provider pids after, and every tick streamed while there was no window in the agent's ledger, in order. Everything it
+# starts is ended through scripts/end-own-tree.mjs (Tynn #1031). It builds and packages twice and replaces the install,
+# ~\.genie, release\ and dist\: last in the list, after every row that reads them.
+function Row-client-only-update { Need-Install; Need-Electron; Need-TestMachine; Run 'vm-client-only-update' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-client-only-update.ps1 } }
+# LOGON START, READ AT THE OS (Tynn #1036 P6-3): the packaged app (release\win-unpacked, packaged with --dir when this
+# shard did not package) in a home of its own; the HKCU Run value read back with reg query, the setting switched live with
+# no restart, and the four logon cases. HKCU is the machine's: the row takes its value away again. Before
+# client-only-update, which replaces dist\ and release\.
+function Row-logon { Need-Build; Need-TestMachine; Run 'vm-logon' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-logon-windows.ps1 -Mode table } }
+# A host update drains and swaps (Tynn #1036 P6-2): last, as it replaces the install, the home and the build once more.
+function Row-host-update { Need-Install; Need-Electron; Need-TestMachine; Run 'vm-windows-update' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-windows-update.ps1 } }
 function Row-packaged-launcher {
     Need-Packaged
     $saved = @{ USERPROFILE = $env:USERPROFILE; HOME = $env:HOME; APPDATA = $env:APPDATA; LOCALAPPDATA = $env:LOCALAPPDATA }
@@ -398,6 +445,8 @@ function Row-packaged-launcher {
         $otherArch = "release\win-unpacked\resources\app.asar.unpacked\node_modules\@particle-academy\prism-acp\native\win32-arm64\prism-acp-supervisor.exe"
         if (-not (Test-Path $otherArch)) { throw "the other architecture's supervisor is not in win-unpacked ($otherArch): this check no longer matches an install" }
         Remove-Item -Force $otherArch
+        # When the row's own Genie began: nothing older is ever taken for one of its processes (scripts/end-own-tree.mjs).
+        $began = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         $packaged = Start-Process -FilePath (Resolve-Path "release\win-unpacked\Genie.exe") -PassThru
         $log = "$h\.genie\runtime\lifecycle.log"
         $line = $null
@@ -416,8 +465,15 @@ function Row-packaged-launcher {
         $ready = $null
         for ($i = 0; $i -lt 60 -and $up -and -not $ready; $i++) { $ready = Select-String -Path $log -SimpleMatch "containment ready supervisor=" | Select-Object -Last 1; if (-not $ready) { Start-Sleep -Seconds 1 } }
         $unready = if (Test-Path $log) { Select-String -Path $log -SimpleMatch "containment unready" | Select-Object -Last 1 } else { $null }
-        if (Test-Path $hostJson) { $hp = (Get-Content $hostJson | ConvertFrom-Json).pid; if ($hp) { Stop-Process -Id $hp -Force -ErrorAction SilentlyContinue } }
-        if (-not $packaged.HasExited) { taskkill /PID $packaged.Id /T /F *> $null }
+        # THE WHOLE RUN, ENDED AND WAITED FOR (Tynn #1031): the app's tree, the host in the run's own record and what they
+        # started, by the helper every row script uses. It reads the process table before it ends anything, keeps what the
+        # tree kill answered, waits until nothing of this run is in the table, and exits 1 naming what is left.
+        $hp = $null
+        if (Test-Path $hostJson) { $hp = (Get-Content $hostJson | ConvertFrom-Json).pid }
+        $endArgs = @('--since', "$began", '--tree', "$($packaged.Id)")
+        if ($hp) { $endArgs += @('--root', "$hp") }
+        node scripts/end-own-tree.mjs @endArgs
+        $leftByCleanup = ($LASTEXITCODE -ne 0)
         if (-not $line) { throw "the packaged app logged no host spawn within 90 s" }
         Write-Output "the packaged app: $($line.Line)"
         if ($line.Line -notmatch "via=genie-launch") { throw "the packaged app started genie-host WITHOUT genie-launch.exe" }
@@ -426,12 +482,15 @@ function Row-packaged-launcher {
         if ($copyFailed) { throw "the packaged app could not make genie-host's copy: $($copyFailed.Line)" }
         Write-Output "genie-host runs from: $hostPath"
         if (-not $hostPath -or -not $hostPath.StartsWith("$h\.genie\host\", [System.StringComparison]::OrdinalIgnoreCase)) { throw "genie-host is not running from its copy under $h\.genie\host\ (it runs from '$hostPath')" }
+        # As genie-host.exe in runtime-<electron>-host (Tynn #1036 P6-1): never under the install's name, which an installer ends.
+        if (-not ($hostPath -like "$h\.genie\host\runtime-*-host\genie-host.exe")) { throw "genie-host's copy is not runtime-*-host\genie-host.exe (it runs from '$hostPath')" }
         if ($unready) { throw "genie-host's supervisor is not ready: $($unready.Line)" }
         if (-not $ready) { throw "genie-host did not say its supervisor is ready within 60 s" }
         Write-Output "the packaged app: $($ready.Line)"
         if ($ready.Line -notmatch [regex]::Escape("$h\.genie\host\")) { throw "genie-host's supervisor is not in its copy: $($ready.Line)" }
-        # taskkill above sets $LASTEXITCODE (part of the tree already gone), and the step's result is the last exit code:
-        # 3 of ~20 runs failed after both checks printed. Every failure above has thrown, so reaching here is a pass.
+        if ($leftByCleanup) { throw "the packaged app or its genie-host was left running by the row's own cleanup (the shutdown lines above name it)" }
+        # Every failure above has thrown, so reaching here is a pass: the row's result is never an exit code left behind
+        # by a command above (a tree kill's, once: 3 of ~20 runs failed after both checks printed).
     } finally {
         foreach ($k in $saved.Keys) { Set-Item -Path "env:$k" -Value $saved[$k] }
     }
@@ -450,11 +509,21 @@ function Ceiling([string]$name) {
         'unit' { return 1800 }
         { $_ -in 'spawn-host', 'app-stopped' } { return 120 }
         { $_ -in 'no-pty', 'smoke', 'layout', 'local-door-break', 'local-door', 'gapp-open', 'trust-step' } { return 360 }
+        'accounts-popover' { return 300 }
+        'plan-popover' { return 480 }
+        'claude-accounts' { return 300 }
+        'sound-picker' { return 300 }
+        'question-maximize' { return 300 }
+        'esc-unsend' { return 300 }
         'files-watch' { return 240 }
         { $_ -in 'chat-drafts', 'artboard' } { return 420 }
         { $_ -in 'ui-lag', 'renderer-crash' } { return 480 }
         { $_ -in 'safe-mode', 'hang' } { return 600 }
+        'quit-keeps-host' { return 660 }
         'package' { return 1500 }
+        'logon' { return 900 }
+        'client-only-update' { return 2400 }
+        'host-update' { return 2400 }
         default { return 600 }
     }
 }
@@ -570,6 +639,12 @@ function Invoke-Row([string]$name) {
         if ($left.Count -gt 0) {
             $leftover = (@($left | ForEach-Object { "$($_.Name) $($_.Id)" })) -join ', '
             Add-Content -Path $log -Value "LEFT RUNNING after the row: $leftover"
+            # WHAT each leftover was (Tynn #1011, the 4ac1f9c2 gate's packaged-launcher): its parent and its command line, read
+            # before it is stopped, so a leftover names its cause instead of only its pid.
+            foreach ($p in $left) {
+                $ci = Get-CimInstance Win32_Process -Filter "ProcessId=$($p.Id)" -ErrorAction SilentlyContinue
+                if ($ci) { Add-Content -Path $log -Value "LEFT RUNNING $($p.Id): parent $($ci.ParentProcessId), $($ci.CommandLine)" }
+            }
             Stop-GenieLeftovers $left
             $ok = $false
         }

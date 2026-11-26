@@ -175,3 +175,28 @@ describe('toStreamEvent', () => {
         expect(empties).toEqual([]);
     });
 });
+
+// DELTA-ONLY-2132: Codex streams its plan's text as `{ sessionUpdate: 'plan_update', delta }` (prism-acp's CodexDriver, for
+// `turn/plan/delta`): one per fragment, many a second. It is not a plan (no steps) and it is not news: the plan that
+// follows carries everything. Kept as `unknown` it was drawn as a "(unmapped: plan_update)" row per fragment.
+describe('a plan update that carries only a delta (genie#2132)', () => {
+    it('is no stream event at all: nothing is drawn for it', () => {
+        expect(toStreamEvent({ sessionUpdate: 'plan_update', delta: 'Next: open the PR' })).toBeNull();
+        expect(toStreamEvent({ sessionUpdate: 'plan_update', delta: '' })).toBeNull();
+        expect(toStreamEvent({ sessionUpdate: 'plan', delta: 'Next' })).toBeNull();
+    });
+
+    it('CONTROL: a plan with its steps still maps, under either name, and an explicit empty list is a cleared plan', () => {
+        const entries = [{ content: 'Read the driver', status: 'completed' }, { content: 'Map the update', status: 'in_progress' }];
+        expect(toStreamEvent({ sessionUpdate: 'plan', entries })).toEqual({ kind: 'plan', entries });
+        expect(toStreamEvent({ sessionUpdate: 'plan_update', entries })).toEqual({ kind: 'plan', entries });
+        expect(toStreamEvent({ sessionUpdate: 'plan_update', entries, delta: 'and its text' })).toEqual({ kind: 'plan', entries });
+        expect(toStreamEvent({ sessionUpdate: 'plan_update', entries: [] })).toEqual({ kind: 'plan', entries: [] });
+    });
+
+    it('CONTROL: a plan update with neither steps nor a delta is still kept as unknown, never dropped unseen', () => {
+        const odd = { sessionUpdate: 'plan_update', somethingNew: true };
+        expect(toStreamEvent(odd)).toEqual({ kind: 'unknown', sessionUpdate: 'plan_update', raw: odd });
+        expect(toStreamEvent({ sessionUpdate: 'plan_update', delta: 7 })).toMatchObject({ kind: 'unknown' });
+    });
+});

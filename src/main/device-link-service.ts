@@ -23,6 +23,9 @@ export interface DeviceSocket {
     onerror: ((ev: unknown) => void) | null;
     send(data: string): void;
     close(): void;
+    /** `ws`'s own: the relay's heartbeat pings, and a close with no handshake (relay-wire.ts `RelaySocket`, Tynn #940). */
+    on?(event: 'ping', listener: () => void): unknown;
+    terminate?(): void;
 }
 
 export type DeviceLinkEvent =
@@ -37,16 +40,19 @@ export type DeviceLinkEvent =
 export type ConnectGrant = Awaited<ReturnType<typeof mintConnectGrant>>;
 
 /**
- * A PILOT'S CONNECTION TO ANOTHER WORKSTATION (Tynn #552, host split P5d.4; audit M-e): genie-host mints the grant with its
- * own Tynn account, holds the proof key, opens the relay member and renews its grant. The window gets a channel.
+ * A CONNECTION TO ANOTHER WORKSTATION OVER THE TYNN RELAY (Tynn #552, host split P5d.4; audit M-e): genie-host mints the
+ * grant with its own Tynn account, holds the proof key, opens the relay member and renews its grant. The window gets a
+ * channel. There is no local role gate (Tynn #963): Tynn decides whether this machine gets a grant (a share link is how
+ * a drone opens another host), and its refusal is worded from the role read again (device-link-protocol.ts).
  */
 export interface RelayMemberPorts {
     readonly signedIn: () => boolean;
-    /** Why this machine may not connect out (a drone, from the role genie-host read from Tynn); `null` = it may. */
-    readonly refusal?: () => string | null | Promise<string | null>;
     readonly keypair: () => PopKeypair;
     readonly mint: (workstationId: string, jwk: PopJwk) => Promise<ConnectGrant>;
-    readonly open: (input: { relayUrl: string; workstationId: string; grant: string; pop: PopKeypair; renew: () => Promise<ConnectGrant> }) => Promise<RelayMemberResult>;
+    /** `hostPublicKey`: the key Tynn named for the workstation with this grant, which the member checks the host against (audit M-a). */
+    readonly open: (input: { relayUrl: string; workstationId: string; grant: string; hostPublicKey: string | null; name: string | null; pop: PopKeypair; renew: () => Promise<ConnectGrant> }) => Promise<RelayMemberResult>;
+    /** The workstation's name, for the words a refusal is said in; absent or failing = no name. */
+    readonly name?: (workstationId: string) => Promise<string | null>;
 }
 
 /** What a window is told when its relay connection could not open: where, and Tynn's own refusal for it to word. */
@@ -142,19 +148,29 @@ export class DeviceLinkService {
         const relay = this.#options.relay;
         if (!relay) return { ok: false, reason: 'this Genie connects to no Tynn workstations' };
         if (typeof workstationId !== 'string' || workstationId.length === 0 || relayWorkstationOf(`relay:${workstationId}`) === null) return { ok: false, reason: 'not a Tynn workstation' };
-        const refused = (await relay.refusal?.()) ?? null;
-        if (refused) return { ok: false, reason: refused };
         if (!relay.signedIn()) return { ok: false, reason: 'sign in to Tynn to connect to a Tynn workstation' };
         const pop = relay.keypair();
         // Each step is said where it fails (core/relay-connect.ts): Tynn's way in, then the relay to the machine.
+        const naming = relay.name ? relay.name(workstationId).catch(() => null) : Promise.resolve(null);
         const grant = await relay.mint(workstationId, pop.publicJwk);
-        if (!grant.ok) return { ok: false, stage: 'tynn', refusal: grant };
+        // EVERY OPEN IS IN THIS HOST'S LOG (Tynn #423): which workstation, how far it got and why it stopped, never the
+        // grant. The owner's desktop reached none of his machines and its logs held no trace of an attempt.
+        if (!grant.ok) {
+            this.#options.log(`relay open ${workstationId}: Tynn gave no way in: ${grant.reason}`);
+            return { ok: false, stage: 'tynn', refusal: grant };
+        }
+        const name = await naming;
         this.#options.send(owner, { type: 'step', workstationId, step: 'relay' });
         // A fresh grant for the SAME key before each one expires (genie#1401): the session lasts while the window stays.
         const renew = (): Promise<ConnectGrant> => (relay.signedIn() ? relay.mint(workstationId, pop.publicJwk) : Promise.resolve({ ok: false, reason: 'signed out of Tynn' }));
-        const opened = await relay.open({ relayUrl: grant.relayEndpoint, workstationId, grant: grant.token, pop, renew });
-        if (!opened.ok) return { ok: false, stage: 'relay', reason: opened.reason };
+        // The host key is the one Tynn named with THIS grant, for the life of the session: a renewal's answer never changes it.
+        const opened = await relay.open({ relayUrl: grant.relayEndpoint, workstationId, grant: grant.token, hostPublicKey: grant.hostPublicKey, name: typeof name === 'string' && name.trim() !== '' ? name : null, pop, renew });
+        if (!opened.ok) {
+            this.#options.log(`relay open ${workstationId}: the relay did not reach it: ${opened.reason}`);
+            return { ok: false, stage: 'relay', reason: opened.reason };
+        }
         const id = `relay_${++this.#nextRelay}`;
+        this.#options.log(`relay open ${workstationId}: open (${id})`);
         const channel: RelayChannel = { id, owner, workstationId, transport: opened.transport, via: null, closed: false };
         this.#relays.set(id, channel);
         opened.transport.onMessage((text) => { if (!channel.closed) this.#options.send(owner, { type: 'frame', channel: id, text }); });
@@ -167,13 +183,19 @@ export class DeviceLinkService {
         return { ok: true, channel: id };
     }
 
+    /** Whether a window here has that workstation open over the relay now: the person is connected to it (P9). */
+    connectedTo(workstationId: string): boolean {
+        for (const r of this.#relays.values()) if (r.workstationId === workstationId && !r.closed) return true;
+        return false;
+    }
+
     /** The browser's door to a relay channel's workstation: its port and that host's CA, as now (Tynn #552). */
-    async browserVia(owner: string, id: string): Promise<{ ok: true; port: number; ca: string | null } | { ok: false; reason: string }> {
+    async browserVia(owner: string, id: string): Promise<{ ok: true; workstationId: string; port: number; ca: string | null } | { ok: false; reason: string }> {
         const r = this.#relays.get(id);
         if (!r || r.owner !== owner || r.closed) return { ok: false, reason: 'This window is not connected to its workstation right now. Reconnect, then open the browser again.' };
         if (!this.#options.browsers) return { ok: false, reason: 'this Genie opens no browser doors' };
         r.via = await this.#options.browsers.connect(r.workstationId, r.transport);
-        return { ok: true, port: r.via.port(), ca: r.via.ca() };
+        return { ok: true, workstationId: r.workstationId, port: r.via.port(), ca: r.via.ca() };
     }
 
     open(owner: string, url: string): Promise<DeviceLinkOpened> {

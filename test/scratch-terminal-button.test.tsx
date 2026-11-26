@@ -40,18 +40,17 @@ describe('the button, drawn', () => {
         expect(button!.open).toMatch(/\stitle="[^"]+"/);
     });
 
-    it('it sits immediately left of Files', () => {
+    // Files left the bar (Tynn #945: Terminal, Share and Clean up); the terminal is the first of the bar's actions.
+    it('it is the first action of the bar', () => {
         const terminal = html.indexOf('data-action="open-scratch-terminal"');
-        const filesAt = html.indexOf('data-action="toggle-files"');
         expect(terminal).toBeGreaterThan(-1);
-        expect(filesAt).toBeGreaterThan(terminal);
-        // Nothing else that acts sits between them.
-        expect(html.slice(terminal, filesAt).match(/data-action="/g)).toHaveLength(1);
+        expect(html.indexOf('data-action="')).toBe(terminal);
+        expect(html).not.toContain('data-action="toggle-files"');
     });
 
     it('CONTROL: a window that cannot open one (no action given) draws no button that would do nothing', () => {
         const without = header(renderToStaticMarkup(<Workspace view="home" workspace={ws} terminals={NO_TERMINALS} files={files} />));
-        expect(without).toContain('data-action="toggle-files"');
+        expect(without).toContain('data-workspace-tab="home"');
         expect(without).not.toContain('open-scratch-terminal');
     });
 });

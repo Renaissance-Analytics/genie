@@ -32,7 +32,7 @@ export interface AllToolsDeps {
     /** `mail` (Genie Mail G6). Absent = no Genie Mail here, and the tool says so. */
     readonly mail?: MailToolsDeps;
     readonly plugins: PluginToolsDeps;
-    /** `createAgent`, visible to a workspace's default agent only (mcp-tools-agents.ts). Absent = not registered (doctor mode). */
+    /** `createAgent`, for every agent (mcp-tools-agents.ts, Tynn #1015). Absent = not registered (doctor mode). */
     readonly agents?: AgentToolsDeps;
     /** `workspaceTabs`, visible to the default agent and agents allowed to manage tabs (mcp-tools-workspace-tabs.ts). Absent = not registered (doctor mode). */
     readonly workspaceTabs?: WorkspaceTabsToolDeps;

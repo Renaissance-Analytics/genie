@@ -52,7 +52,7 @@ describe('story 394: a hibernated workspace supplies no data', () => {
         off(); await registry.setAsleep('ghost', false); expect(seen).toHaveBeenCalledTimes(2);
     });
     it('a failed redock metadata write leaves the workspace hidden in memory and on disk', async () => {
-        vi.spyOn(store, 'writeWorkspaces').mockRejectedValueOnce(new Error('disk refused the redock'));
+        vi.spyOn(store, 'changeWorkspaces').mockRejectedValueOnce(new Error('disk refused the redock'));
         await expect(registry.setAsleep('ghost', false)).rejects.toThrow('disk refused');
         expect(registry.workspace('ghost')?.asleep).toBe(true);
         expect(registry.listAgents().map((a) => a.id)).not.toContain(ghost.id);

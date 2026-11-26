@@ -41,6 +41,12 @@ export interface WorkspaceRecord {
     governs?: string[];
     /** Its DEFAULT AGENT (Genie 1's): one of its own agents, the one an action uses when it names none. Absent = none. */
     defaultAgentId?: string;
+    /**
+     * The default was given AUTOMATICALLY (Tynn #1015, the owner: "the first or only agent in a workspace is automatically
+     * the default agent"), not chosen. A chosen one (the person, project.json on adopt or restore, Genie 1's import)
+     * replaces it; nothing automatic replaces a chosen one. Absent = chosen (or none).
+     */
+    defaultAgentAuto?: true;
     /** MCP servers off by default for every agent here (Tynn #628); an agent's own switch wins. Absent = none. */
     mcpOff?: string[];
     /**
@@ -384,8 +390,30 @@ export class Store {
         );
     }
 
+    /** The whole list, for a first seed (genie-host's own boot, tests). Every registry write is `changeWorkspaces`. */
     async writeWorkspaces(workspaces: readonly WorkspaceRecord[]): Promise<void> {
-        await writeJsonAtomic(this.workspacesFile, workspaces);
+        await underRecordLock(this.workspacesFile, () => writeJsonAtomic(this.workspacesFile, workspaces));
+    }
+
+    /**
+     * ONE RECORD AT A TIME (Tynn #1007): the change is applied to the file as it is NOW, under its lock: records added
+     * (an id already there is kept as it is), fields set and removed on the records named (a record no longer there is
+     * not brought back), records removed (and the governors' lists left by them). What the caller did not name is never
+     * written from the caller's copy, so a stale copy cannot clobber anything. Answers the list as it is after.
+     */
+    changeWorkspaces(change: RecordChange<WorkspaceRecord>): Promise<readonly WorkspaceRecord[]> {
+        return underRecordLock(this.workspacesFile, async () => {
+            const rows = await readJson<unknown[]>(this.workspacesFile, []);
+            const next = applyRecordChange(rows, change, WORKSPACE_RECORD_FIELDS);
+            const gone = new Set(change.remove ?? []);
+            const after = gone.size === 0 ? next : next.map((row) => {
+                const governs = (row as { governs?: unknown }).governs;
+                if (!Array.isArray(governs) || !governs.some((id) => gone.has(id as string))) return row;
+                return { ...(row as object), governs: governs.filter((id) => !gone.has(id as string)) };
+            });
+            if (JSON.stringify(after) !== JSON.stringify(rows)) await writeJsonAtomic(this.workspacesFile, after);
+            return this.readWorkspaces();
+        });
     }
 
     async readAgents(): Promise<readonly AgentRecord[]> {
@@ -400,9 +428,92 @@ export class Store {
         });
     }
 
+    /** The whole list, for a first seed (genie-host's own boot, tests). Every registry write is `changeAgents`. */
     async writeAgents(records: readonly AgentRecord[]): Promise<void> {
         await (this.#accountsReady ??= migrateAgentAccounts(this.#dir));
         await (this.#inboxAccessReady ??= migrateAgentInboxAccess(this.#dir));
-        await writeJsonAtomic(this.agentsFile, records);
+        await underRecordLock(this.agentsFile, () => writeJsonAtomic(this.agentsFile, records));
     }
+
+    /**
+     * ONE RECORD AT A TIME (Tynn #1007), as `changeWorkspaces`: read-modify-write of the records named, under the file's
+     * lock. A removed agent also leaves every chosen-agents list it was on (Tynn #526). A row that does not parse is kept
+     * as it is. Answers the agents as they are after.
+     */
+    async changeAgents(change: RecordChange<AgentRecord>): Promise<readonly AgentRecord[]> {
+        await (this.#accountsReady ??= migrateAgentAccounts(this.#dir));
+        await (this.#inboxAccessReady ??= migrateAgentInboxAccess(this.#dir));
+        return underRecordLock(this.agentsFile, async () => {
+            const rows = await readJson<unknown[]>(this.agentsFile, []);
+            const next = applyRecordChange(rows, change, AGENT_RECORD_FIELDS);
+            const gone = new Set(change.remove ?? []);
+            const after = gone.size === 0 ? next : next.map((row) => {
+                const chosen = (row as { accessAgents?: unknown }).accessAgents;
+                if (!Array.isArray(chosen) || !chosen.some((id) => gone.has(id as string))) return row;
+                return { ...(row as object), accessAgents: chosen.filter((id) => !gone.has(id as string)) };
+            });
+            if (JSON.stringify(after) !== JSON.stringify(rows)) await writeJsonAtomic(this.agentsFile, after);
+            return this.readAgents();
+        });
+    }
+}
+
+/** One record's change: the fields set, and the fields removed. Never its id. */
+export interface RecordPatch {
+    readonly id: string;
+    readonly set?: Readonly<Record<string, unknown>>;
+    readonly unset?: readonly string[];
+}
+
+/** A change to one of the registry's lists, by record (Tynn #1007): never the whole list. */
+export interface RecordChange<T> {
+    readonly add?: readonly T[];
+    readonly patch?: readonly RecordPatch[];
+    readonly remove?: readonly string[];
+}
+
+/** Field names no patch may name: the record's identity, and what would reach an object's prototype. */
+export const UNPATCHABLE_FIELDS: readonly string[] = ['id', '__proto__', 'constructor', 'prototype'];
+
+const idOf = (row: unknown): string | null => (typeof row === 'object' && row !== null && typeof (row as { id?: unknown }).id === 'string' ? (row as { id: string }).id : null);
+
+/** What every workspace record has: without them a row is not read (readWorkspaces). */
+const WORKSPACE_RECORD_FIELDS: readonly string[] = ['id', 'path'];
+
+/**
+ * The change on the rows as they are. A field every record must have (`required`) is never taken away: a row without it
+ * is dropped by the reader as malformed, so removing it would lose the record.
+ */
+function applyRecordChange(rows: readonly unknown[], change: RecordChange<{ readonly id: string }>, required: readonly string[]): unknown[] {
+    const gone = new Set(change.remove ?? []);
+    let next: unknown[] = rows.filter((row) => { const id = idOf(row); return id === null || !gone.has(id); });
+    for (const p of change.patch ?? []) {
+        next = next.map((row) => {
+            if (idOf(row) !== p.id) return row;
+            const out: Record<string, unknown> = { ...(row as Record<string, unknown>) };
+            for (const key of p.unset ?? []) if (!UNPATCHABLE_FIELDS.includes(key) && !required.includes(key)) delete out[key];
+            for (const [key, value] of Object.entries(p.set ?? {})) {
+                if (UNPATCHABLE_FIELDS.includes(key)) continue;
+                if (value === undefined) { if (!required.includes(key)) delete out[key]; }
+                else Object.defineProperty(out, key, { value, enumerable: true, writable: true, configurable: true });
+            }
+            return out;
+        });
+    }
+    for (const record of change.add ?? []) if (!gone.has(record.id) && !next.some((row) => idOf(row) === record.id)) next.push(record);
+    return next;
+}
+
+/**
+ * Each registry file's read-modify-writes, one at a time, across every Store object over it in this process: the lock a
+ * per-record change holds from its read to its rename.
+ */
+const recordLocks = new Map<string, Promise<unknown>>();
+function underRecordLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
+    const previous = recordLocks.get(file) ?? Promise.resolve();
+    const mine = previous.catch(() => undefined).then(fn);
+    recordLocks.set(file, mine);
+    const settle = (): void => { if (recordLocks.get(file) === mine) recordLocks.delete(file); };
+    void mine.then(settle, settle);
+    return mine;
 }

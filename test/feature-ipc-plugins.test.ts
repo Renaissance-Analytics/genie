@@ -38,7 +38,10 @@ beforeEach(async () => {
     host.onEvent((dump) => replica.rebase(dump));
     replica.rebase(host.dump());
     // The host's catalog, as the window's replica of it reads (ADF A5: the editors and panels are the catalog's).
-    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, plugins: replica, catalog: { list: () => hostCatalog(host.plugins()).list() } });
+    // The feature machine reads the plugins and the catalog where it runs: in genie-host, over genie-host's own services
+    // (features-host.ts). Since Tynn #961 (2g-3c) compose takes neither, so they are handed to the machine beside it.
+    const composed = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0 });
+    services = { ...composed, plugins: replica, catalogDefinitions: () => hostCatalog(host.plugins()).list(), pluginsRefresh: () => replica.refresh() };
     publisherChecksOff = () => services.settings.snapshot().publisher_checks_off === true;
 });
 afterEach(async () => {

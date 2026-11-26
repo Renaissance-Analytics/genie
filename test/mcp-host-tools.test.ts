@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { HOST_NATIVE_TOOLS, hostRegistrations, windowClosedRefusal, type ForwardedToolCall } from '../src/main/mcp-host-tools.js';
 import { NO_PAGES_HERE, notAvailableHere } from '../src/core/host-runtime.js';
 import type { Caller, Registration } from '../src/main/mcp-tools.js';
-import { windowToolRunner, withHostTools } from '../src/main/window-tools.js';
+import { windowToolRunner } from '../src/main/window-tools.js';
 import type { AgentId } from '../src/core/identity.js';
 
 /**
@@ -25,7 +25,7 @@ function rig(window: { connected: boolean; answer?: (c: ForwardedToolCall) => Pr
     const ran: string[] = [];
     const forwarded: ForwardedToolCall[] = [];
     const queuedOpens: unknown[] = [];
-    const all = ['agentinbox', 'ForceTheQuestion', 'sites', 'services', 'checkIssues', 'workspaceTabs', 'openFileForUser', 'spreadsheet.createWorkbook'].map((n) => local(n, ran));
+    const all = ['agentinbox', 'ForceTheQuestion', 'sites', 'services', 'checkIssues', 'pages', 'workspaceTabs', 'openFileForUser', 'spreadsheet.createWorkbook'].map((n) => local(n, ran));
     const regs = hostRegistrations(all, {
         resolveCaller: (id) => (id === 'session-1' ? CALLER : null),
         window: {
@@ -41,8 +41,18 @@ function rig(window: { connected: boolean; answer?: (c: ForwardedToolCall) => Pr
 describe('the host keeps its own tools; the rest are the window\'s', () => {
     it('the host-native list is the stores-and-sessions tools', () => {
         // processes joined in P3.3c (the book, its scheduler and the supervisor are the host's), flows in P3.3d, manageTerminals in P3.3e,
-        // sites and services with Tynn #444 (P5a moved the sites, the supervisor and the engines into the host).
-        expect([...HOST_NATIVE_TOOLS].sort()).toEqual(['ForceTheQuestion', 'agentinbox', 'flows', 'imDone', 'knowledge', 'lists', 'manageTerminals', 'mail', 'plan', 'playwright', 'processes', 'services', 'sites', 'thumbsUp'].sort());
+        // sites and services with Tynn #444 (P5a moved the sites, the supervisor and the engines into the host), createAgent
+        // with Tynn #1015 (the host's approval queue and registry), checkIssues with Tynn #934 task #1474 (IssueWatch is the host's).
+        expect([...HOST_NATIVE_TOOLS].sort()).toEqual(['ForceTheQuestion', 'agentinbox', 'checkIssues', 'createAgent', 'flows', 'imDone', 'knowledge', 'lists', 'manageTerminals', 'mail', 'plan', 'playwright', 'processes', 'services', 'sites', 'thumbsUp'].sort());
+    });
+
+    it('checkIssues runs in the host, window or not, and is never forwarded (Tynn #934 task #1474)', async () => {
+        for (const connected of [false, true]) {
+            const r = rig({ connected, answer: async (c) => ({ text: `window ran ${c.name}`, isError: false }) });
+            expect(await r.byName('checkIssues').handler({ refresh: true } as JsonObject, ctx())).toEqual({ text: 'checkIssues ran here', isError: false });
+            expect(r.ran).toEqual(['checkIssues']);
+            expect(r.forwarded).toEqual([]);
+        }
     });
 
     it('a host-native tool runs in the host, window or not', async () => {
@@ -53,17 +63,17 @@ describe('the host keeps its own tools; the rest are the window\'s', () => {
 
     it('every tool keeps its definition (same name, schema, title): the agent\'s tool list does not change shape', () => {
         const r = rig({ connected: true });
-        expect(r.regs.map((x) => x.definition.name)).toEqual(['agentinbox', 'ForceTheQuestion', 'sites', 'services', 'checkIssues', 'workspaceTabs', 'openFileForUser', 'spreadsheet.createWorkbook']);
+        expect(r.regs.map((x) => x.definition.name)).toEqual(['agentinbox', 'ForceTheQuestion', 'sites', 'services', 'checkIssues', 'pages', 'workspaceTabs', 'openFileForUser', 'spreadsheet.createWorkbook']);
     });
 });
 
 describe('a window tool', () => {
     it('with a window: forwarded with its arguments, headers and the caller the host resolved, and the window\'s answer is the answer', async () => {
         const r = rig({ connected: true, answer: async (c) => ({ text: `window ran ${c.name}`, isError: false }) });
-        const result = await r.byName('checkIssues').handler({ action: 'list' } as JsonObject, ctx());
-        expect(result).toEqual({ text: 'window ran checkIssues', isError: false });
+        const result = await r.byName('pages').handler({ action: 'list' } as JsonObject, ctx());
+        expect(result).toEqual({ text: 'window ran pages', isError: false });
         // With its id in the host while forwarded: an approval the window's tool asks is tied to this very call (genie#1360).
-        expect(r.forwarded).toEqual([{ name: 'checkIssues', args: { action: 'list' }, headers: { 'genie-session': 'session-1' }, caller: CALLER, callId: expect.stringMatching(/^fwd-/) }]);
+        expect(r.forwarded).toEqual([{ name: 'pages', args: { action: 'list' }, headers: { 'genie-session': 'session-1' }, caller: CALLER, callId: expect.stringMatching(/^fwd-/) }]);
         expect(r.ran).toEqual([]); // not run in the host
     });
 
@@ -107,14 +117,15 @@ describe('openFileForUser with no window', () => {
  * forwarded, run or kept for later. The host's own tools are unchanged.
  */
 describe('window tools on a host with no window and no browser', () => {
-    // Every tool genie-host forwards to a window whole: the window's tools (checkIssues, workspaceTabs, createAgent,
-    // openFileForUser), pages, and a plugin's tool. `sites open` and `services exec` are pinned below.
-    const WINDOW_TOOLS = ['checkIssues', 'workspaceTabs', 'createAgent', 'openFileForUser', 'ai.genie.spreadsheet.createWorkbook'];
+    // Every tool genie-host forwards to a window whole: the window's tools (workspaceTabs, openFileForUser),
+    // pages, and a plugin's tool. `sites open` and `services exec` are pinned below. createAgent is the host's own since
+    // Tynn #1015 (test/create-agent-every-agent-1015.test.ts), checkIssues since Tynn #934 task #1474.
+    const WINDOW_TOOLS = ['workspaceTabs', 'openFileForUser', 'ai.genie.spreadsheet.createWorkbook'];
     const rigHere = (connected: boolean, capabilities?: { window: boolean; browser: boolean }) => {
         const ran: string[] = [];
         const forwarded: ForwardedToolCall[] = [];
         const kept: unknown[] = [];
-        const regs = hostRegistrations(['agentinbox', 'pages', 'sites', 'services', ...WINDOW_TOOLS].map((n) => local(n, ran)), {
+        const regs = hostRegistrations(['agentinbox', 'checkIssues', 'pages', 'sites', 'services', ...WINDOW_TOOLS].map((n) => local(n, ran)), {
             resolveCaller: (id) => (id === 'session-1' ? CALLER : null),
             window: { connected: () => connected, call: async (c) => { forwarded.push(c); return { text: `window ran ${c.name}`, isError: false }; } },
             openFileLater: (c) => { kept.push(c); },
@@ -148,38 +159,40 @@ describe('window tools on a host with no window and no browser', () => {
         expect(await r.byName('agentinbox').handler({}, ctx())).toEqual({ text: 'agentinbox ran here', isError: false });
         expect(await r.byName('sites').handler({ action: 'list' } as JsonObject, ctx())).toEqual({ text: 'sites ran here', isError: false });
         expect(await r.byName('services').handler({ action: 'list' } as JsonObject, ctx())).toEqual({ text: 'services ran here', isError: false });
+        // checkIssues too (Tynn #934 task #1474): a host with no window answers it from its own IssueWatch.
+        expect(await r.byName('checkIssues').handler({} as JsonObject, ctx())).toEqual({ text: 'checkIssues ran here', isError: false });
+        expect(r.forwarded).toEqual([]);
     });
 
-    it.each([['sites', 'open']])('%s %s needs a window: not available on this host, and nothing is forwarded or run', async (name, action) => {
+    it.each([['sites', 'open']])('%s %s runs in the host here too (Tynn #1046 D2): its own browser says whether it can open', async (name, action) => {
         const r = rigHere(true, NONE);
-        expect(await r.byName(name).handler({ action } as JsonObject, ctx())).toEqual({ text: notAvailableHere(name, 'a Genie window'), isError: true });
+        expect(await r.byName(name).handler({ action } as JsonObject, ctx())).toEqual({ text: `${name} ran here`, isError: false });
         expect(r.forwarded).toEqual([]);
-        expect(r.ran).toEqual([]);
+        expect(r.ran).toEqual([name]);
     });
 
     it.each([['given', { window: true, browser: true }], ['absent', undefined]] as const)('CONTROL: capabilities %s on an Electron host — today\'s wording and forwarding, unchanged', async (_how, capabilities) => {
         const closed = rigHere(false, capabilities);
-        expect(await closed.byName('checkIssues').handler({} as JsonObject, ctx())).toEqual({ text: windowClosedRefusal('checkIssues'), isError: true });
+        expect(await closed.byName('workspaceTabs').handler({} as JsonObject, ctx())).toEqual({ text: windowClosedRefusal('workspaceTabs'), isError: true });
         expect(await closed.byName('pages').handler({} as JsonObject, ctx())).toEqual({ text: windowClosedRefusal('pages'), isError: true });
         const opened = await closed.byName('openFileForUser').handler({ path: 'a' } as JsonObject, ctx());
         expect(opened).toEqual({ text: "Genie's window is closed; the file opens when Genie is next opened.", isError: false });
         expect(closed.kept).toHaveLength(1);
         const open = rigHere(true, capabilities);
         expect(await open.byName('pages').handler({} as JsonObject, ctx())).toEqual({ text: 'window ran pages', isError: false });
-        expect(await open.byName('checkIssues').handler({} as JsonObject, ctx())).toEqual({ text: 'window ran checkIssues', isError: false });
+        expect(await open.byName('workspaceTabs').handler({} as JsonObject, ctx())).toEqual({ text: 'window ran workspaceTabs', isError: false });
     });
 });
 
 /**
  * SITES AND SERVICES ARE GENIE-HOST'S (Tynn #444). P5a moved the sites, the supervisor and the service engines into the
  * host, but the tools were still forwarded to a window: on beta.60 `sites` and `services` failed for every agent while
- * `processes` (the host's since P3.3c) answered. They run in the host now, window or not. Only the two actions that need
- * the window go to it: `sites open` (Genie's browser, in front of the person) and `services exec` (a command the window
- * runs), forwarded with the caller the host resolved, like any window tool.
+ * `processes` (the host's since P3.3c) answered. They run in the host now, window or not, every action of them: `sites
+ * open` was the last forwarded to the window, until it opened in genie-host's own browser (Tynn #1046 D2).
  */
-describe('sites and services run in the host; only their window actions are forwarded', () => {
+describe('sites and services run in the host, every action of them', () => {
     it.each([
-        ['sites', 'list'], ['sites', 'status'], ['sites', 'add'], ['sites', 'update'], ['sites', 'remove'],
+        ['sites', 'list'], ['sites', 'status'], ['sites', 'add'], ['sites', 'update'], ['sites', 'remove'], ['sites', 'open'],
         ['services', 'list'], ['services', 'exec'], ['services', 'add'], ['services', 'remove'],
     ])('%s %s runs in the host with NO window, and nothing is forwarded', async (name, action) => {
         const r = rig({ connected: false });
@@ -188,53 +201,42 @@ describe('sites and services run in the host; only their window actions are forw
         expect(r.forwarded).toEqual([]);
     });
 
-    it.each([['sites', 'open']])('%s %s is forwarded to the window with the caller, and the window\'s answer is the answer', async (name, action) => {
-        const r = rig({ connected: true, answer: async (c) => ({ text: `window ran ${c.name} ${String(c.args.action)}`, isError: false }) });
-        expect(await r.byName(name).handler({ action } as JsonObject, ctx())).toEqual({ text: `window ran ${name} ${action}`, isError: false });
-        expect(r.forwarded).toEqual([{ name, args: { action }, headers: { 'genie-session': 'session-1' }, caller: CALLER, callId: expect.stringMatching(/^fwd-/) }]);
-        expect(r.ran).toEqual([]);
+    it('sites open with a window connected runs in the host too: the window is never asked (Tynn #1046 D2)', async () => {
+        const r = rig({ connected: true, answer: async (c) => ({ text: `window ran ${c.name}`, isError: false }) });
+        expect(await r.byName('sites').handler({ action: 'open' } as JsonObject, ctx())).toEqual({ text: 'sites ran here', isError: false });
+        expect(r.forwarded).toEqual([]);
+        expect(r.ran).toEqual(['sites']);
     });
 
-    it.each([['sites', 'open']])('%s %s with no window says the window is closed, at once', async (name, action) => {
-        const r = rig({ connected: false });
-        expect(await r.byName(name).handler({ action } as JsonObject, ctx())).toEqual({ text: windowClosedRefusal(name), isError: true });
-        expect(r.forwarded).toEqual([]);
-        expect(r.ran).toEqual([]);
+    it('CONTROL: a window tool with a window connected is still forwarded (the gauge sees a forward)', async () => {
+        const r = rig({ connected: true, answer: async (c) => ({ text: `window ran ${c.name}`, isError: false }) });
+        expect(await r.byName('pages').handler({ action: 'list' } as JsonObject, ctx())).toEqual({ text: 'window ran pages', isError: false });
+        expect(r.forwarded.map((c) => c.name)).toEqual(['pages']);
     });
 });
 
 /**
- * THE WINDOW'S SIDE OF IT (window-tools.ts). A forwarded `sites open` runs the window's own handler; a `sites list` the
- * host forwarded by mistake is refused as the host's. Inside the window, a flow step's `sites list` goes to the host, and
- * its `sites open` runs here — never back to the host, which would only forward it here again.
+ * THE WINDOW'S SIDE OF IT (window-tools.ts). The window runs none of the sites and services tools: any action of them
+ * the host forwarded by mistake, `sites open` too since Tynn #1046 D2, is refused as the host's. Inside the window, a flow
+ * step's sites and services calls go to the host.
  */
 describe('the window runs only the window actions of the host\'s tools', () => {
-    const windowRegs = (ran: string[]) => ['sites', 'services', 'checkIssues'].map((n): Registration => ({
+    const windowRegs = (ran: string[]) => ['sites', 'services', 'checkIssues', 'pages'].map((n): Registration => ({
         definition: def(n),
         handler: async (args) => { ran.push(`${n} ${String(args.action)}`); return { text: `window ran ${n}`, isError: false }; },
     }));
 
-    it('windowToolRunner: sites open runs here; services exec, sites list and services list are refused as the host\'s', async () => {
+    it('windowToolRunner: sites open, services exec, sites list, services list and checkIssues are all refused as the host\'s', async () => {
         const ran: string[] = [];
         const run = windowToolRunner(() => windowRegs(ran), new Map());
         const asked = (name: string, action: string) => run({ name, args: { action }, headers: { 'genie-session': 'session-1' }, caller: CALLER });
-        expect(await asked('sites', 'open')).toEqual({ text: 'window ran sites', isError: false });
+        expect((await asked('sites', 'open')).isError).toBe(true);
         expect((await asked('services', 'exec')).isError).toBe(true);
         expect((await asked('sites', 'list')).isError).toBe(true);
         expect((await asked('services', 'list')).isError).toBe(true);
-        expect(await asked('checkIssues', 'list')).toEqual({ text: 'window ran checkIssues', isError: false });
-        expect(ran).toEqual(['sites open', 'checkIssues list']);
-    });
-
-    it('withHostTools: sites list goes to the host with the caller; sites open runs here', async () => {
-        const ran: string[] = [];
-        const toHost: ForwardedToolCall[] = [];
-        const regs = withHostTools(windowRegs(ran), { runHostTool: async (c) => { toHost.push(c); return { text: `host ran ${c.name}`, isError: false }; } }, (id) => (id === 'session-1' ? CALLER : null));
-        const byName = (n: string) => regs.find((r) => r.definition.name === n)!;
-        expect(await byName('sites').handler({ action: 'list' } as JsonObject, ctx())).toEqual({ text: 'host ran sites', isError: false });
-        expect(await byName('sites').handler({ action: 'open' } as JsonObject, ctx())).toEqual({ text: 'window ran sites', isError: false });
-        expect(await byName('services').handler({ action: 'exec' } as JsonObject, ctx())).toEqual({ text: 'host ran services', isError: false });
-        expect(toHost.map((c) => [c.name, c.args.action, c.caller])).toEqual([['sites', 'list', CALLER], ['services', 'exec', CALLER]]);
-        expect(ran).toEqual(['sites open']);
+        // checkIssues is genie-host's own since Tynn #934 task #1474: forwarded by mistake, the window refuses it too.
+        expect((await asked('checkIssues', 'list')).isError).toBe(true);
+        expect(await asked('pages', 'list')).toEqual({ text: 'window ran pages', isError: false });
+        expect(ran).toEqual(['pages list']);
     });
 });

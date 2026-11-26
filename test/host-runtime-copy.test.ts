@@ -62,7 +62,7 @@ describe('the copy', () => {
         const input = install();
         const got = await materializeHostRuntime(input);
         expect(got.error).toBeNull();
-        expect(got.execPath).toBe(join(input.genieHome, 'host', 'runtime-45.2.2', 'genie'));
+        expect(got.execPath).toBe(join(input.genieHome, 'host', 'runtime-45.2.2-host', 'genie-host'));
         expect(got.hostScript).toBe(join(input.genieHome, 'host', 'abc123', 'dist', 'main', 'host.js'));
         expect(read(got.execPath, 'utf8')).toBe('binary');
         expect(read(got.hostScript, 'utf8')).toBe('host');
@@ -101,7 +101,7 @@ describe('the copy', () => {
     it('not what it doesn’t: Electron files the runtime does not need', async () => {
         const input = install();
         await materializeHostRuntime(input);
-        expect(existsSync(join(input.genieHome, 'host', 'runtime-45.2.2', 'locales'))).toBe(false);
+        expect(existsSync(join(input.genieHome, 'host', 'runtime-45.2.2-host', 'locales'))).toBe(false);
     });
 
     it('Linux: the binary and the helper can run', async () => {
@@ -121,8 +121,12 @@ describe('CI: what was packaged really comes up (Tynn #597; scripts/ci/windows.p
         expect(run).toContain('agent host (started|replaced|adopted) pid=');
         expect(run).toContain('did not come up');
         expect(run).toContain('genie-host.log');
-        // Read before anything is killed: the kill is what makes a host's own log stop.
-        expect(run.indexOf('agent host (started')).toBeLessThan(run.indexOf('Stop-Process'));
+        // Read before anything is killed: the kill is what makes a host's own log stop. The kill is the rows' one cleanup
+        // (Tynn #1031, scripts/end-own-tree.mjs), which ends the app's tree and the host; nothing else in the step ends them.
+        const kill = run.indexOf('node scripts/end-own-tree.mjs');
+        expect(kill, 'the step ends what it started').toBeGreaterThan(-1);
+        expect(run).not.toMatch(/Stop-Process|taskkill/);
+        expect(run.indexOf('agent host (started')).toBeLessThan(kill);
     });
 });
 
@@ -150,7 +154,7 @@ describe('the second launch', () => {
         const input = install();
         const first = await materializeHostRuntime(input);
         const next = await materializeHostRuntime({ ...input, electronVersion: '46.0.0' });
-        expect(next.execPath).toContain('runtime-46.0.0');
+        expect(next.execPath).toContain('runtime-46.0.0-host');
         expect(existsSync(first.execPath)).toBe(true);
     });
 });
@@ -159,7 +163,7 @@ describe('a torn copy', () => {
     it('with no marker is never run: copied again', async () => {
         const input = install();
         const first = await materializeHostRuntime(input);
-        rmSync(join(input.genieHome, 'host', 'runtime-45.2.2', '.complete'));
+        rmSync(join(input.genieHome, 'host', 'runtime-45.2.2-host', '.complete'));
         write(first.execPath, 'torn');
         const second = await materializeHostRuntime(input);
         expect(read(second.execPath, 'utf8')).toBe('binary');
@@ -169,7 +173,7 @@ describe('a torn copy', () => {
         const input = install();
         const order: string[] = [];
         await materializeHostRuntime({ ...input, onWrite: (file) => order.push(file) });
-        const runtime = order.filter((f) => f.includes('runtime-45.2.2'));
+        const runtime = order.filter((f) => f.includes('runtime-45.2.2-host'));
         expect(runtime.at(-1)).toMatch(/\.complete$/);
         const app = order.filter((f) => f.includes('abc123'));
         expect(app.at(-1)).toMatch(/\.complete$/);
@@ -204,7 +208,7 @@ describe('old copies', () => {
         const next = await materializeHostRuntime({ ...input, hostHash: 'def456' });
         expect(existsSync(first.hostScript)).toBe(false);
         expect(existsSync(next.hostScript)).toBe(true);
-        expect(readdirSync(join(input.genieHome, 'host')).sort()).toEqual(['def456', 'runtime-45.2.2']);
+        expect(readdirSync(join(input.genieHome, 'host')).sort()).toEqual(['def456', 'runtime-45.2.2-host']);
     });
 });
 

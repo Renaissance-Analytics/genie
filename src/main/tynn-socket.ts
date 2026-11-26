@@ -2,7 +2,7 @@ import type { SocketLike } from './issue-watch-client.js';
 
 /**
  * THE ONE WAY GENIE DIALS TYNN'S SOCKET SERVER (genie#1478): IssueWatch and the live board, so they cannot diverge. Since
- * the host split's P5c they run in genie-host (issue-watch-host.ts), and in the window only on the emergency no-host path.
+ * the host split's P5c they run in genie-host (issue-watch-host.ts), never in the window.
  *
  * Production's Reverb answers only `Origin: https://tynn.ai`; anything else, or none, gets `pusher:error` 4009 and then
  * silence. A browser sets that header for itself; Genie is a native client, so it declares the origin of the Tynn it is

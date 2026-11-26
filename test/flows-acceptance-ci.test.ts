@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { linuxRow, linuxRows, linuxSh } from './helpers/ci-scripts.js';
-import { WINDOW_PATH, flowsDependencySet, importGraph, runtimeImports, srcFiles, touchedFlows } from '../scripts/flows-paths.mjs';
+import { FLOW_NAME, WINDOW_PATH, WIRING, flowsDependencySet, importGraph, runtimeImports, srcFiles, touchedFlows } from '../scripts/flows-paths.mjs';
 
 /**
  * THE FLOWS ACCEPTANCE SUITE IS WIRED (the owner, 2026-10-27: test every trigger and node "only when we make changes to
@@ -97,7 +97,7 @@ describe('the Flows dependency set', () => {
             'src/core/cron.ts', 'src/core/file-trigger.ts', 'src/main/mcp-registrations.ts', 'src/main/mcp-tools.ts',
             // the editor window's route and window (genie#1302)
             'src/core/address.ts', 'src/core/route.ts', 'src/core/window-activation.ts', 'src/core/view-requests.ts', 'src/main/preload.ts',
-            // wiring: the files that import a flow file
+            // wiring: the files that import a flow file, and the window's main.ts, which plugs Flows in and imports none (WIRING)
             'src/main/compose.ts', 'src/main/feature-personal.ts', 'src/main/genie-host.ts', 'src/main/main.ts', 'src/renderer/App.tsx', 'src/renderer/components/FeatureSurfaces.tsx',
         ]) expect(set, path).toContain(path);
         // …and not the rest of Genie: the hubs' own imports are not followed.
@@ -105,6 +105,24 @@ describe('the Flows dependency set', () => {
             expect(set, path).not.toContain(path);
         }
         expect(set.length).toBeLessThan(srcFiles().length / 4);
+    });
+
+    it('main.ts is wiring the graph cannot see: it imports no flow file, and still opens the editor window and hands compose genie-host\'s flows (Tynn #1043)', () => {
+        expect(WIRING).toEqual(['src/main/main.ts']);
+        // The reason it is named: no import of main.ts is a flow file, so the importers' rule does not find it.
+        expect(graph.get('src/main/main.ts')!.filter((dep) => FLOW_NAME.test(dep))).toEqual([]);
+        // CONTROL: a hub that does import a flow file is found by the graph, and needs no entry here.
+        expect(graph.get('src/main/compose.ts')!.filter((dep) => FLOW_NAME.test(dep)).length).toBeGreaterThan(0);
+        expect(WIRING).not.toContain('src/main/compose.ts');
+        // What makes it Flows' wiring, in code and not in a comment.
+        const main = source('src/main/main.ts').split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+        expect(main).toMatch(/function openFlowEditorWindow\(/);
+        expect(main).toMatch(/openFlowEditor: route => openFlowEditorWindow\(route, 'user-gesture'\),/);
+        // The flows engine is genie-host's alone (Tynn #955): main hands compose none, and composes nothing.
+        expect(main).not.toMatch(/flowsEngine:|composeWindowServices/);
+        // The file itself, never what it imports: the app's hub would bring the whole of Genie.
+        expect(set).toContain('src/main/main.ts');
+        expect(set).not.toContain('src/main/window-tools.ts');
     });
 
     it('the editor window\'s path is what App.tsx and main.ts really use to route and open it', () => {

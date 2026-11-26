@@ -67,7 +67,7 @@ export class ProcessesService {
 
 /**
  * The process book as the window, its Processes view and the `processes` tool use it (P3.3c): genie-host's through the
- * replica, or the book itself on the emergency path. `prepare` answers later from the host.
+ * replica (or, in a test, the book itself). `prepare` answers later from the host.
  */
 export type ProcessBookApi = Pick<ProcessBookReplica, 'list' | 'owns' | 'create' | 'start' | 'restart' | 'stop' | 'remove' | 'enableSchedule' | 'pauseSchedule' | 'onChange'> & {
     prepare(input: CreateProcessInput): ReturnType<ProcessBook['prepare']> | Promise<ReturnType<ProcessBook['prepare']>>;

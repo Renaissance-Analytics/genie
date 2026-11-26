@@ -87,9 +87,9 @@ describe('planning an update for THIS platform — Genie builds the command from
     it('Windows → winget; macOS → brew; Debian → apt; Fedora → dnf; agent TUIs → npm -g everywhere', () => {
         expect(planUpdate({ tool: 'git', platform: 'win32', packageManager: 'winget' })).toEqual({ command: 'winget upgrade --id Git.Git --silent --accept-package-agreements --accept-source-agreements', manager: 'winget' });
         expect(planUpdate({ tool: 'git', platform: 'darwin', packageManager: 'brew' })).toEqual({ command: 'brew upgrade git', manager: 'brew' });
-        // pkexec, not sudo: Genie runs commands with no terminal, so sudo could never ask for the password.
-        expect(planUpdate({ tool: 'git', platform: 'linux', packageManager: 'apt' })).toEqual({ command: 'pkexec apt-get install --only-upgrade -y git', manager: 'apt' });
-        expect(planUpdate({ tool: 'git', platform: 'linux', packageManager: 'dnf' })).toEqual({ command: 'pkexec dnf upgrade -y git', manager: 'dnf' });
+        // Tynn #973: an elevated step, asked in the client and run by the host; no pkexec (no polkit agent on omarchy-genie).
+        expect(planUpdate({ tool: 'git', platform: 'linux', packageManager: 'apt' })).toEqual({ command: 'apt-get install --only-upgrade -y git (as administrator)', manager: 'apt', elevated: true, items: ['git'], steps: [{ command: 'apt-get', args: ['install', '--only-upgrade', '-y', 'git'] }] });
+        expect(planUpdate({ tool: 'git', platform: 'linux', packageManager: 'dnf' })).toEqual({ command: 'dnf upgrade -y git (as administrator)', manager: 'dnf', elevated: true, items: ['git'], steps: [{ command: 'dnf', args: ['upgrade', '-y', 'git'] }] });
         // Agent CLIs update the way their vendor documents (Tynn #698): `npm install -g` on npm 12 left Claude Code a placeholder.
         expect(planUpdate({ tool: 'claude-code', platform: 'linux', packageManager: 'apt' })).toEqual({ command: 'claude update', manager: 'vendor' });
     });

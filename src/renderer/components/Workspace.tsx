@@ -19,7 +19,7 @@ import { SitePanel } from './SitePanel.js';
 import { siteWebviewLayerFor, tabsChanged, type SeenTabs } from '../site-webview-layer.js';
 import { TerminalCell } from './TerminalCell.js';
 import { TrustStep } from './TrustStep.js';
-import type { FeatureAction, TrustStepView } from '../features.js';
+import type { ActOutcome, FeatureAction, TrustStepView } from '../features.js';
 import type { StorageView } from '../../core/workspace-storage.js';
 import { StoragePanel } from './StoragePanel.js';
 import { addTab, clearCell, panelKey, parseTabs, placePanel, removeTab, renameTab, serializeTabs, setLayout, sitePanelKeys, type TabsState } from '../../core/workspace-tabs.js';
@@ -198,7 +198,7 @@ export interface WorkspaceProps {
     onRefreshIssueWatch?: (() => void) | undefined;
     /** The Storage tab (Tynn #697): this workspace's view, as main holds it, and how it asks main. Absent `onStorageAction` = no tab. */
     storage?: StorageView | null | undefined;
-    onStorageAction?: ((action: FeatureAction) => void) | undefined;
+    onStorageAction?: ((action: FeatureAction) => void | Promise<ActOutcome | void>) | undefined;
     /** The Tynn tab's door to Tynn (genie#1295): the board of THIS workspace's linked project. Absent = no Tynn tab. */
     tynnBoard?: TynnTabHost | undefined;
     /** The Tynn tab's Issues page (genie#1295 I1); absent = the tab has no Issues page. */
@@ -651,6 +651,9 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
 
     // THE BAR'S RIGHT END (TopBar.tsx; the owner on beta.64: one bar, tabs along the top, no wasted space): a LOCKED repo,
     // the one problem worth a chip ("I don't need all of the repos listed in the workspace header"), then the actions as icons.
+    // THREE ACTIONS, NO MORE (Tynn #945; the owner, 2026-11-20: "the only icon that should be in the header of the workspace
+    // dashboard is terminal, share, and garbage clean up"): Terminal, Share (drawn by the strip) and Clean up (the trash).
+    // What used to sit here stays one step away: Files is its own tab (and ⌘B), Hibernate / Wake is a card on Settings.
     const barEnd = (
         <>
             {ops?.repos?.list ? lockedRepos(ops.repos.list).map((r) => {
@@ -667,14 +670,6 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
             }) : null}
             <span data-bar-actions="" className="flex shrink-0 items-center">
                 {onOpenScratchTerminal ? <ScratchTerminalButton open={onOpenScratchTerminal} /> : null}
-                {files ? (
-                    <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-action="toggle-files" data-panel-open={panel === 'files' ? 'true' : 'false'} onClick={onTogglePanel} aria-label="Files" title="Files (⌘B)" className={`${BAR_ACTION}${panel === 'files' ? ' bg-[var(--bg-3)] text-[var(--fg-1)]' : ''}`}><Icon name="folder-tree" size="xs" /></Button>
-                ) : null}
-                {ops ? (ops.asleep ? (
-                    <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-action="wake" aria-label="Wake" title="Wake: agents and services start again" onClick={ops.onWake} className={BAR_ACTION}><Icon name="play" size="xs" /></Button>
-                ) : (
-                    <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-action="hibernate" aria-label="Hibernate" title="Hibernate: ask every agent for a handoff, then stop everything here; nothing starts until woken" onClick={ops.onHibernate} className={BAR_ACTION}><Icon name="moon" size="xs" /></Button>
-                )) : null}
                 {ops ? <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-action="remove-workspace" aria-label="Remove from Genie" title="Remove from Genie…" onClick={ops.onPreviewRemove} className={BAR_ACTION}><Icon name="trash-2" size="xs" /></Button> : null}
             </span>
         </>
@@ -717,6 +712,7 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
             {ops?.asleep ? (
                 <p data-asleep className="shrink-0 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-5 py-2 text-xs text-[var(--fg-2)]">
                     {workspace.name ?? workspace.id} is hibernating: nothing starts here until you wake it. It stays asleep through restarts and upgrades.
+                    <Button size="xs" type="button" icon="play" data-action="wake-from-banner" onClick={ops.onWake} className="ml-2">Wake</Button>
                 </p>
             ) : null}
             {ops?.lastOutcome ? <p data-ops-outcome className="shrink-0 border-b border-[var(--border-1)] px-5 py-2 text-xs text-[var(--fg-2)]">{ops.lastOutcome}</p> : null}
@@ -769,7 +765,8 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
                                         <div className="text-[var(--fg-3)]">The agent here that an action uses when it names none, and the one that hears GitHub by default.</div>
                                     </div>
                                     <div data-setting-control="" className="flex w-64 shrink-0 items-center justify-end gap-2">
-                                        <Select data-default-agent="" aria-label="Default agent" list={[{ value: '', label: 'None' }, ...ops.defaultAgent.agents.map((a) => ({ value: a.id, label: a.name }))]} value={ops.defaultAgent.current ?? ''} onValueChange={(v) => ops.defaultAgent!.onSet(v === '' ? null : v)} />
+                                        {/* The first or only agent IS the default (Tynn #1015): one of the agents, never "None" while there are any. */}
+                                        <Select data-default-agent="" aria-label="Default agent" list={ops.defaultAgent.agents.length > 0 ? ops.defaultAgent.agents.map((a) => ({ value: a.id, label: a.name })) : [{ value: '', label: 'None' }]} value={ops.defaultAgent.current ?? ops.defaultAgent.agents[0]?.id ?? ''} onValueChange={(v) => ops.defaultAgent!.onSet(v === '' ? null : v)} />
                                     </div>
                                 </li>
                             ) : null}
@@ -863,6 +860,7 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
                     </form>
                 </section>
             ) : null}
+            {onScreen === 'settings' && ops ? <HibernateCard asleep={ops.asleep} onHibernate={ops.onHibernate} onWake={ops.onWake} /> : null}
             {onScreen === 'settings' && onUntrust && !trustStep ? <UntrustCard workspaceId={workspace.id} onUntrust={onUntrust} /> : null}
             {onScreen === 'settings' && ops?.agentFiles ? (
                 <section data-ws-agent-files="" data-ws-card="agent-files" className="flex flex-col gap-2 border-b border-[var(--border-1)] px-6 py-4 text-sm">
@@ -1068,6 +1066,24 @@ function ScratchTerminalButton({ open }: { open: () => Promise<{ ok: true } | { 
                 <Icon name="square-terminal" size="xs" />
             </Button>
         </span>
+    );
+}
+
+/**
+ * HIBERNATE, ON SETTINGS (Tynn #945). It left the bar (the owner, 2026-11-20: the bar is Terminal, Share and Clean up), and
+ * sits here with what it does said in full: every agent is asked for a handoff, then everything here stops until woken.
+ * Asleep, the same card wakes it (and the asleep banner offers Wake on every view).
+ */
+function HibernateCard({ asleep, onHibernate, onWake }: { asleep: boolean; onHibernate: () => void; onWake: () => void }) {
+    return (
+        <section data-ws-card="hibernate" className="flex items-center gap-3 border-b border-[var(--border-1)] px-6 py-4 text-sm">
+            <h2 className="text-sm font-semibold">{asleep ? 'Hibernating' : 'Hibernate'}</h2>
+            <span className="text-[var(--fg-4)]">{asleep ? 'Nothing starts here until you wake it. Waking starts its agents and services again.' : 'Ask every agent here for a handoff, then stop everything; nothing starts again until you wake it, through restarts and upgrades too.'}</span>
+            <span className="ml-auto" />
+            {asleep
+                ? <Button data-action="wake" size="sm" icon="play" onClick={onWake}>Wake</Button>
+                : <Button data-action="hibernate" size="sm" icon="moon" onClick={onHibernate}>Hibernate</Button>}
+        </section>
     );
 }
 

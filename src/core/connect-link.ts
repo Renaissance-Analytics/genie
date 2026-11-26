@@ -15,7 +15,7 @@
  * `src = owner`. Nothing here decides access; Tynn and the host do.
  */
 import { workstationOpenFrom } from './tynn-sign-in.js';
-import { droneRefusal, type WorkstationRole } from './workstation-role.js';
+import type { WorkstationRole } from './workstation-role.js';
 
 export type ConnectLink =
     | { readonly kind: 'invite'; readonly url: string }
@@ -66,12 +66,11 @@ export type ConnectLinkDecision =
     | { readonly ok: true; readonly link: Exclude<ConnectLink, { kind: 'unknown' }> };
 
 /**
- * DECIDE (the host's, `tynnNetwork.classifyLink`): `tynnHost` null = signed out of Tynn; `role` is the one Tynn gave
- * this machine, read by the host (never one a window sends).
+ * DECIDE (the host's, `tynnNetwork.classifyLink`): `tynnHost` null = signed out of Tynn. The role is NOT a gate here
+ * (Tynn #963): a share link is the way a drone opens another host (the owner: remote access is never refused any
+ * feature), and Tynn decides the grant the link leads to. An invite only opens in the browser; it dials nothing.
  */
-export function decideConnectLink(pasted: string, tynnHost: string | null, role: WorkstationRole | null): ConnectLinkDecision {
-    const refused = droneRefusal(role);
-    if (refused) return { ok: false, note: refused };
+export function decideConnectLink(pasted: string, tynnHost: string | null, _role?: WorkstationRole | null): ConnectLinkDecision {
     if (tynnHost === null) return { ok: false, note: 'Sign in to Tynn first: a share link opens through your Tynn account.' };
     const link = classifyConnectLink(pasted, tynnHost);
     if (link.kind === 'unknown') return { ok: false, note: link.reason };

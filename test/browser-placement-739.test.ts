@@ -99,7 +99,10 @@ describe('the wiring (source)', () => {
     it('the rail’s Browser: main sends the asking window’s bounds with the open', () => {
         expect(main).toMatch(/const anchor = BrowserWindow\.fromWebContents\(event\.sender\)\?\.getBounds\(\) \?\? null;/);
         expect(main).toMatch(/openLocalBrowser\(at, 'user-gesture', anchor\)/);
-        expect(main).toMatch(/askBrowser\(\[at \?\? null, 'user-gesture', \{[^\]]*\}, anchor\]\)/);
+        // A relay window's browser is genie-host's to open since 2f-2 (Tynn #941): the window sends where it is, and the host
+        // opens the browser over it (device-link-protocol.ts anchorOf; App.tsx browserView).
+        expect(readFileSync('src/main/device-link-protocol.ts', 'utf8')).toMatch(/hosts \}, anchorOf\(view\.anchor\)\]\)/);
+        expect(readFileSync('src/renderer/App.tsx', 'utf8')).toMatch(/anchor: \{ x: window\.screenX, y: window\.screenY, width: window\.outerWidth, height: window\.outerHeight \}/);
     });
 
     it('a site row’s Open (the person’s click): the focused Genie window is the anchor', () => {

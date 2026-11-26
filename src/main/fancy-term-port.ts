@@ -1,10 +1,13 @@
 import { randomUUID } from 'node:crypto';
+import { statSync } from 'node:fs';
+import { win32 } from 'node:path';
 import { PROGRAM_LOOKUP_VARIABLE, findBatchFile, findProgram, notFoundWords, unsafeBatchArgument, type LookupPorts } from '../core/program-lookup.js';
 import { ptyShellLaunch } from '../core/shell-launch.js';
 import { fanOut } from '../core/fan-out.js';
 import { TerminalOutputCounter, type TerminalDataPosition, type TerminalPosition } from '../core/terminal-stream.js';
 import {
     configureInProcessBackend,
+    detectShells,
     inProcessBackend,
     parseCommandLine,
     resolveDefaultShell,
@@ -65,6 +68,45 @@ export interface FancyTermPortOptions {
     platform?: NodeJS.Platform;
     /** Where a program is looked for. Defaults to this machine's. */
     lookup?: LookupPorts;
+    /**
+     * WINDOWS: what a bare `bash` starts (Tynn #1044), the Git Bash Terminals open; `null` = none here. Absent = no
+     * override, and `bash` is looked up on PATH like any program. Elsewhere it is never asked.
+     */
+    gitBash?: () => string | null;
+}
+
+export interface GitBashPorts {
+    /** The Git Bash Terminals open (fancy-term-host's own detection: fixed install folders), or `null`. */
+    readonly installed: () => string | null;
+    /** Where `git` is looked for: this machine's PATH, absolute entries only, never the working folder. */
+    readonly lookup: LookupPorts;
+}
+
+const realIsFile = (path: string): boolean => { try { return statSync(path).isFile(); } catch { return false; } };
+
+/**
+ * WINDOWS' GIT BASH: the one Terminals open (fixed install folders under Program Files and LocalAppData), else the bash.exe
+ * beside the `git` on PATH (Git\cmd\git.exe or Git\bin\git.exe → Git\bin\bash.exe: Git installed elsewhere, C:\tools\git,
+ * scoop), else `null`. Never the working folder: neither source looks there.
+ */
+export function detectedGitBash(ports: GitBashPorts = { installed: () => detectShells().find((s) => s.id === 'git-bash')?.command ?? null, lookup: { platform: process.platform, env: process.env } }): string | null {
+    const installed = ports.installed();
+    if (installed) return installed;
+    const git = findProgram('git', ports.lookup);
+    if (git === null || !win32.isAbsolute(git)) return null;
+    const bash = win32.join(win32.dirname(git), '..', 'bin', 'bash.exe');
+    return (ports.lookup.isFile ?? realIsFile)(bash) ? bash : null;
+}
+
+/**
+ * A BARE `bash` ON WINDOWS IS GIT BASH (Tynn #1044). Looked up on PATH it is System32's bash.exe, WSL's launcher, because
+ * System32 comes before Git: a kept process's or a flow's `bash -c …` ran in Linux, with Linux's PHP, beside a workspace
+ * whose toolchain is Windows'. The Git Bash Terminals open runs it instead; with none installed, PATH as before. Never a
+ * bash.exe in the working folder: this path comes from fixed install folders, and the PATH lookup skips the working folder.
+ */
+function bareBash(command: string, platform: NodeJS.Platform, gitBash: (() => string | null) | undefined): string | null {
+    if (platform !== 'win32' || !gitBash || !/^bash(\.exe)?$/i.test(command)) return null;
+    return gitBash();
 }
 
 export function fancyTermPort(backend: HostBackend, options: FancyTermPortOptions): PtyPort {
@@ -105,7 +147,7 @@ export function fancyTermPort(backend: HostBackend, options: FancyTermPortOption
 
             // A whole path, always: the engine's own search must never see a bare name, whichever engine this is. Nothing found starts nothing, and the words say so.
             const lookup = options.lookup ?? { platform: options.platform ?? process.platform, env: process.env };
-            const program = findProgram(command, lookup) ?? findBatchFile(command, lookup);
+            const program = bareBash(command, lookup.platform, options.gitBash) ?? findProgram(command, lookup) ?? findBatchFile(command, lookup);
             if (program === null) throw new Error(notFoundWords(command, lookup));
             const unsafe = unsafeBatchArgument(program, args);
             if (unsafe !== null) throw new Error(`${command} is a batch file, and Windows would read part of its argument "${unsafe}" as a command. Nothing was started.`);
@@ -190,5 +232,5 @@ export function realFancyTermPort(settingsValues: () => Readonly<Record<string, 
         settings,
         snapshots: NO_SNAPSHOTS,
     });
-    return fancyTermPort(inProcessBackend(), { defaultShell: () => resolveDefaultShell(settings) });
+    return fancyTermPort(inProcessBackend(), { defaultShell: () => resolveDefaultShell(settings), gitBash: detectedGitBash });
 }

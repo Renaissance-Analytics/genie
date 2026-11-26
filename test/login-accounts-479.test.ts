@@ -9,8 +9,8 @@ import { afterSignedIn, LoginHost } from '../src/main/login-host.js';
  * window, signing in B resumed every agent the provider had signed out (A's too), and nothing killed the sign-in terminal
  * when the person closed or cancelled the step. Every account here is a fixture; there are no real people in them.
  */
-const A = { id: `account_${'a'.repeat(32)}`, provider: 'claude', home: '/profiles/a', legacy: false } as const;
-const B = { id: `account_${'b'.repeat(32)}`, provider: 'claude', home: '/profiles/b', legacy: false } as const;
+const A = { id: `account_${'a'.repeat(32)}`, provider: 'codex', home: '/profiles/a', legacy: false } as const;
+const B = { id: `account_${'b'.repeat(32)}`, provider: 'codex', home: '/profiles/b', legacy: false } as const;
 const roots: string[] = [];
 const close: Array<() => void> = [];
 afterEach(() => {
@@ -55,18 +55,18 @@ function fakes(options: { statusExit?: number; statusThrows?: boolean; openThrow
 describe('a sign-in is keyed by the ACCOUNT', () => {
     it('CONTROL: a second click on the same account joins the one sign-in', () => {
         const f = fakes();
-        const first = f.host.start('claude', A.id);
-        const second = f.host.start('claude', A.id);
+        const first = f.host.start('codex', A.id);
+        const second = f.host.start('codex', A.id);
         expect(first).toEqual({ ok: true, terminalId: 't1' });
         expect(second).toEqual(first);
         expect(f.opened).toHaveLength(1);
-        expect(f.windows).toEqual(['genie://takeover/t1?login=claude', 'genie://takeover/t1?login=claude']);
+        expect(f.windows).toEqual(['genie://takeover/t1?login=codex', 'genie://takeover/t1?login=codex']);
     });
 
     it('different accounts of one provider sign in at once, each in its own terminal, in the one normal provider home (Tynn #753)', () => {
         const f = fakes();
-        expect(f.host.start('claude', A.id)).toEqual({ ok: true, terminalId: 't1' });
-        expect(f.host.start('claude', B.id)).toEqual({ ok: true, terminalId: 't2' });
+        expect(f.host.start('codex', A.id)).toEqual({ ok: true, terminalId: 't1' });
+        expect(f.host.start('codex', B.id)).toEqual({ ok: true, terminalId: 't2' });
         expect(f.opened).toHaveLength(2);
         expect(f.opened[0]!.env).toBeUndefined();
         expect(f.opened[1]!.env).toBeUndefined();
@@ -74,7 +74,7 @@ describe('a sign-in is keyed by the ACCOUNT', () => {
 
     it('an account Genie does not have opens nothing', () => {
         const f = fakes();
-        const r = f.host.start('claude', `account_${'f'.repeat(32)}`);
+        const r = f.host.start('codex', `account_${'f'.repeat(32)}`);
         expect(r.ok).toBe(false);
         expect(f.opened).toHaveLength(0);
         expect(readdirSync(f.scratch)).toEqual([]);
@@ -82,12 +82,12 @@ describe('a sign-in is keyed by the ACCOUNT', () => {
 
     it('B finishing signs B in while A’s sign-in stays open', async () => {
         const f = fakes();
-        f.host.start('claude', A.id);
-        f.host.start('claude', B.id);
+        f.host.start('codex', A.id);
+        f.host.start('codex', B.id);
         f.exit('t2');
         await flush();
         expect(f.statuses).toHaveLength(1);
-        expect(f.signedIn).toEqual([['claude', B.id]]);
+        expect(f.signedIn).toEqual([['codex', B.id]]);
         expect(f.closed).toEqual(['t2']);
     });
 });
@@ -95,7 +95,7 @@ describe('a sign-in is keyed by the ACCOUNT', () => {
 describe('cancelling leaves the agent on its old account', () => {
     it('cancel kills the terminal and removes the folder; its exit signs nobody in; the next click starts afresh', async () => {
         const f = fakes();
-        f.host.start('claude', A.id);
+        f.host.start('codex', A.id);
         f.host.cancel(A.id);
         expect(f.closed).toEqual(['t1']);
         expect(readdirSync(f.scratch)).toEqual([]);
@@ -103,7 +103,7 @@ describe('cancelling leaves the agent on its old account', () => {
         await flush();
         expect(f.statuses).toEqual([]);
         expect(f.signedIn).toEqual([]);
-        expect(f.host.start('claude', A.id)).toEqual({ ok: true, terminalId: 't2' });
+        expect(f.host.start('codex', A.id)).toEqual({ ok: true, terminalId: 't2' });
     });
 });
 
@@ -114,7 +114,7 @@ describe('no sign-in terminal outlives the step', () => {
         ['the status command fails', { statusThrows: true }],
     ] as const)('%s: the terminal is closed and its folder removed', async (_name, options) => {
         const f = fakes(options);
-        f.host.start('claude', A.id);
+        f.host.start('codex', A.id);
         f.exit('t1');
         await flush();
         expect(f.closed).toEqual(['t1']);
@@ -123,8 +123,8 @@ describe('no sign-in terminal outlives the step', () => {
 
     it('closing Genie’s host closes every sign-in that is open', () => {
         const f = fakes();
-        f.host.start('claude', A.id);
-        f.host.start('claude', B.id);
+        f.host.start('codex', A.id);
+        f.host.start('codex', B.id);
         f.host.dispose();
         expect([...f.closed].sort()).toEqual(['t1', 't2']);
         expect(readdirSync(f.scratch)).toEqual([]);
@@ -132,7 +132,7 @@ describe('no sign-in terminal outlives the step', () => {
 
     it('CONTROL: a terminal that would not open leaves no folder and nothing live', () => {
         const f = fakes({ openThrows: true });
-        expect(f.host.start('claude', A.id).ok).toBe(false);
+        expect(f.host.start('codex', A.id).ok).toBe(false);
         expect(readdirSync(f.scratch)).toEqual([]);
         expect(existsSync(f.scratch)).toBe(true);
     });

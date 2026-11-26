@@ -231,6 +231,8 @@ export type TynnRelayState =
     | { readonly state: 'off' }
     | { readonly state: 'connecting' }
     | { readonly state: 'reachable'; readonly relay: string }
+    /** The link was up and was lost at `since` (epoch ms), for `reason`; it is being redialled (Tynn #940). */
+    | { readonly state: 'reconnecting'; readonly since: number; readonly reason: string }
     | { readonly state: 'unavailable'; readonly reason: string };
 
 /** Whether this machine is registered with Tynn as a workstation, and with which Tynn; or why not. */
@@ -555,6 +557,8 @@ export type FeatureAction =
     | { kind: 'toolchain.install'; tool: string; consent: boolean }
     /** An agent CLI's row says Not signed in (Tynn #698): open the provider's own login, the same one the Agent view's Log in opens. */
     | { kind: 'toolchain.login'; tool: string }
+    /** Docker on Linux reads Not running or No access (Tynn #970): enable and start it, and add the account to the docker group, under one password prompt. */
+    | { kind: 'toolchain.startDocker' }
     /** A Broken agent CLI's one action (Tynn #698): Genie repairs it with the vendor's installer, step by step. */
     | { kind: 'toolchain.repairCli'; tool: string }
     | { kind: 'toolchain.repair' }
@@ -680,6 +684,7 @@ export type FeatureAction =
 export function toolchainRefusalOf(action: FeatureAction, data: FeatureData): ToolchainRefusal | null {
     const refusals = data.toolchain?.refusals ?? [];
     if (action.kind === 'toolchain.update' || action.kind === 'toolchain.install') return refusals.find((r) => r.tool === action.tool && r.version === undefined) ?? null;
+    if (action.kind === 'toolchain.startDocker') return refusals.find((r) => r.tool === 'docker' && r.version === undefined) ?? null;
     if (action.kind === 'toolchain.installPhp' || action.kind === 'toolchain.removePhp') return refusals.find((r) => r.tool === 'php' && r.version === action.version) ?? null;
     if (action.kind === 'toolchain.installNode' || action.kind === 'toolchain.removeNode') return refusals.find((r) => r.tool === 'node' && r.version === action.version) ?? null;
     if (action.kind === 'toolchain.installGo' || action.kind === 'toolchain.removeGo') return refusals.find((r) => r.tool === 'go' && r.version === action.version) ?? null;

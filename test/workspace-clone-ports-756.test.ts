@@ -19,7 +19,7 @@ function deps(over: Partial<CloneRestoreDeps> = {}) {
         files: { read: async () => null, list: async () => [] },
         registry: {
             agentsOf: () => [{ id: 'agent_1', name: 'lift' }],
-            defaultAgentOf: () => 'agent_1',
+            chosenDefaultAgentOf: () => 'agent_1',
             setDefaultAgent: async (ws, id) => { calls.push(`default ${ws} ${id}`); },
             listWorkspaces: () => [{ id: 'ws', envFile: '.env.mine' }],
             setWorkspaceEnvFile: async (ws, file) => { calls.push(`envFile ${ws} ${file}`); },
@@ -59,7 +59,7 @@ describe('the settings ports', () => {
         await p.settings.setEnvFile('ws', '.env.local');
         await p.settings.setMcpServer('ws', 'notion', false);
         expect(calls).toEqual(['set ws agent_cap=8', 'default ws agent_1', 'envFile ws .env.local', 'mcp ws notion false']);
-        expect(p.settings.defaultAgentOf('ws')).toBe('agent_1');
+        expect(p.settings.chosenDefaultAgentOf('ws')).toBe('agent_1');
         expect(p.settings.envFileOf('ws')).toBe('.env.mine');
         expect(p.settings.envFileOf('nowhere')).toBeNull();
         expect(p.settings.mcpOff('ws')).toEqual(['slack']);
@@ -127,8 +127,9 @@ describe('in the hosts', () => {
         for (const word of ['watchNewWorkspaces(', 'restoreClone(', 'cloneRestorePorts(']) expect(host, word).toContain(word);
     });
 
-    it('both hosts hand the flow store and the process book to Save to repo', () => {
-        for (const file of ['src/main/main.ts', 'src/main/genie-host.ts']) {
+    it('genie-host hands the flow store and the process book to Save to repo (main builds no save of its own, Tynn #953)', () => {
+        expect(src('src/main/main.ts')).not.toContain('elementSourcesFor(');
+        for (const file of ['src/main/genie-host.ts']) {
             const text = src(file);
             const at = text.indexOf('elementSourcesFor(');
             const call = text.slice(at, at + 900);

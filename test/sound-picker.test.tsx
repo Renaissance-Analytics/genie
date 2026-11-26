@@ -88,6 +88,30 @@ describe('the popover', () => {
         expect(name('sparkle').getAttribute('aria-pressed')).toBe('false');
     });
 
+    it('the selected row is shown INVERTED, not with a check (Tynn #996; the owner: "instead of a check, invert the colors")', () => {
+        render('winddown');
+        open();
+        const row = (v: string) => document.querySelector(`[data-sound-row="${v}"]`) as HTMLElement;
+        const cls = (el: Element) => (el.getAttribute('class') ?? '').split(/\s+/);
+        // The accent pair (tokens.css): solid --selected-bg behind --selected-fg, set for light and dark.
+        for (const el of [row('winddown'), name('winddown'), play('winddown')]) {
+            expect(cls(el), el.outerHTML.slice(0, 80)).toContain('bg-[var(--selected-bg)]');
+            expect(cls(el)).toContain('text-[var(--selected-fg)]');
+        }
+        for (const c of SOUND_CHOICES.filter((x) => x.value !== 'winddown')) {
+            for (const el of [row(c.value), name(c.value), play(c.value)]) {
+                expect(cls(el), c.value).not.toContain('bg-[var(--selected-bg)]');
+                expect(cls(el), c.value).not.toContain('text-[var(--selected-fg)]');
+            }
+        }
+        // No check mark, and nothing but the label inside a name button: one line, one row height.
+        for (const c of SOUND_CHOICES) {
+            expect(name(c.value).querySelector('svg, [data-icon], [data-react-fancy-icon]'), c.value).toBeNull();
+            expect(name(c.value).textContent!.trim()).toBe(c.label);
+        }
+        expect(popover()!.innerHTML).not.toMatch(/check/i);
+    });
+
     it("a row's play button previews THAT sound without selecting it and leaves the popover open", () => {
         render('winddown');
         open();

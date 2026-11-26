@@ -60,7 +60,8 @@ export class CloneWatch {
         if (offer.change === 'changed') return { ok: false, reason: `${offer.file} differs from what you have here, so Genie does not replace it: change it by hand, or remove it here and apply the new one` };
         const text = await this.#ports.restore.files.read(this.#abs(workspace, offer.file));
         if (text === null) return { ok: false, reason: `${offer.file} is not there any more` };
-        const trusted = this.#ports.restore.trusted(workspace.id);
+        // Asked now, and waited for (Tynn #955): the offer's own file is what would run, and the kept verdict may be older than it.
+        const trusted = (await this.#ports.restore.trusted(workspace.id)) === true;
         const done = await this.#restoreOne(workspace, offer, text, trusted);
         if (done.ok) { this.#prints.delete(workspace.id); await this.#scan(workspace, true); }
         return done;

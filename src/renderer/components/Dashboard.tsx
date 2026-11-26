@@ -13,6 +13,7 @@ import { MailSignalLayer } from './MailSignalLayer.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
 import { AccountsChip } from './AccountsChip.js';
 import type { AccountsSnapshot } from '../../core/accounts-view.js';
+import type { AccountsAction, AccountsActResult } from '../../core/account-settings.js';
 import type { SwitchOffer } from '../../core/switch-offer.js';
 import { WORKSPACE_PULSE } from './Sidebar.js';
 import { WorkspaceSwatch } from '../workspace-colors.js';
@@ -33,6 +34,7 @@ import {
     windowEntriesFor,
     WINDOW_ENTRIES,
     type FixRoute,
+    faultTextParts,
     summaryChips,
     targetOf,
     type AgentRow,
@@ -277,13 +279,14 @@ function useTerminalOpener(onTerminal: (() => void | Promise<WindowOpened>) | un
     return { failed, open };
 }
 
-function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, workspacePulsed = false, onLocateRepo, onOpenWorkspace, onOpen, onFix, focused = false, reveal = null, onReveal, onArc, emoji, windows, waiting, switchOffer }: {
+function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, workspacePulsed = false, onLocateRepo, onLocateFolder, onOpenWorkspace, onOpen, onFix, focused = false, reveal = null, onReveal, onArc, emoji, windows, waiting, switchOffer }: {
     row: AgentRow;
     workspaceName: string;
     workspaceColor?: string | undefined;
     workspaceFault?: WorkspaceFault | null | undefined;
     workspacePulsed?: boolean | undefined;
     onLocateRepo?: ((workspaceId: string, repo: string) => void) | undefined;
+    onLocateFolder?: ((workspaceId: string) => void) | undefined;
     onOpenWorkspace?: ((workspaceId: string) => void) | undefined;    /** What the agent just did with Genie (genie#1209), shown beside its name for a moment. */
     emoji?: string | undefined;
     onOpen: (id: string) => void;
@@ -344,7 +347,9 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
                 {onOpenWorkspace ? (
                     <Button type="button" variant="ghost" size="xs" data-open-workspace={row.workspaceId} className="min-w-0 px-0 text-xs font-normal text-[var(--fg-2)]" labelClassName="truncate" onClick={(event) => { event.stopPropagation(); onOpenWorkspace(row.workspaceId); }} title={workspaceName}>{workspaceName}</Button>
                 ) : <span className="truncate text-xs text-[var(--fg-3)]">{workspaceName}</span>}
-                {workspaceFault ? <Button type="button" variant="ghost" size="xs" icon="triangle-alert" data-workspace-fault={workspaceFault.repo} data-action="locate-repo" aria-label="Locate repo" title={workspaceFault.text} className="shrink-0 px-1 text-[var(--warning)]" onClick={(event) => { event.stopPropagation(); onLocateRepo?.(row.workspaceId, workspaceFault.repo); }} /> : null}
+                {workspaceFault?.kind === 'folder'
+                    ? <Button type="button" variant="ghost" size="xs" icon="triangle-alert" data-workspace-missing={row.workspaceId} data-action="locate-folder" aria-label="Locate folder" title={`Locate folder (${workspaceFault.text})`} className="shrink-0 px-1 text-[var(--warning)]" onClick={(event) => { event.stopPropagation(); onLocateFolder?.(row.workspaceId); }} />
+                    : workspaceFault ? <Button type="button" variant="ghost" size="xs" icon="triangle-alert" data-workspace-fault={workspaceFault.repo} data-action="locate-repo" aria-label="Locate repo" title={workspaceFault.text} className="shrink-0 px-1 text-[var(--warning)]" onClick={(event) => { event.stopPropagation(); onLocateRepo?.(row.workspaceId, workspaceFault.repo); }} /> : null}
             </div>
             <div className="flex min-w-0 items-center gap-1.5">
                 <span className={`shrink-0 font-medium ${STATUS_TONE[status.tone]}`}>{status.word}</span>
@@ -498,6 +503,8 @@ export interface DashboardProps {
     faults?: Readonly<Record<string, WorkspaceFault | null | undefined>> | undefined;
     /** The fault's fix: the workspace's registry, where the path is edited. */
     onLocateRepo?: ((workspaceId: string, repo: string) => void) | undefined;
+    /** The fix for a workspace whose own folder is not there (host split P7): the host's picker, then its registry is told. */
+    onLocateFolder?: ((workspaceId: string) => void) | undefined;
     /** A broken row's fix button (`core/dashboard-view.ts` `fixRoute`); absent = the button opens the agent. */
     onFix?: ((route: FixRoute) => void) | undefined;
     /** Genie's own agent's row; `null` = none. Alphabetical alongside workspace agents. */
@@ -514,18 +521,13 @@ export interface DashboardProps {
     onNavigate?: ((route: string) => void) | undefined;
     /** What each agent just did with Genie (genie#1209): 👍 thumbsUp, ✅ imDone, 🧞 a Genie action — by agent id. */
     rowEmoji?: Readonly<Record<string, string>> | undefined;
-    /** Each provider's rate limit, buffered in main (the header's pills). */
-    rateLimits?: Readonly<Record<string, Headroom>> | undefined;
-    /** Every known account and the standing switch offers (Tynn #483): the header's account chips. Absent = the pills alone. */
+    /**
+     * The standing switch offers (Tynn #483), drawn on each agent row of that provider. The account pills themselves are in
+     * Genie's title bar (Tynn #949), not this header.
+     */
     accounts?: AccountsSnapshot | undefined;
     /** One click to switch a provider's account (S9): the provider's own login, in its one home. */
     onSwitchAccount?: ((provider: string, choose?: string) => void) | undefined;
-    /** Not now on a switch offer. */
-    onDismissSwitchOffer?: ((id: string) => void) | undefined;
-    /** Design sign-in for the machine (Tynn #480). */
-    onDesignSignIn?: (() => void) | undefined;
-    /** The clock the rate limits are read against (a window past its reset reads Refreshed); tests pin it. */
-    now?: number | undefined;
     /** Mail between agents, drawn from the sender's row to the recipient's (genie#1209). */
     mailSignals?: readonly MailSignal[] | undefined;
     /** Workspaces an agent acted in that the person has not visited since: their Workspace cells pulse. */
@@ -674,7 +676,7 @@ export const GENIE_ROW = 'genie:';
 
 const HEADER_BUTTON = 'rounded-md border border-[var(--border-1)] px-2 py-1 text-xs text-[var(--fg-2)] hover:bg-[var(--bg-2)]';
 
-export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, hasHibernatedWorkspaces = false, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji, rateLimits, accounts, onSwitchAccount, onDismissSwitchOffer, onDesignSignIn, now, mailSignals, pulsing, onOpenTerminalWindow, onOpenFilesWindow, scopeWorkspaceId, waiting }: DashboardProps) {
+export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, hasHibernatedWorkspaces = false, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, onOpenWorkspace, faults, onLocateRepo, onLocateFolder, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji, accounts, onSwitchAccount, mailSignals, pulsing, onOpenTerminalWindow, onOpenFilesWindow, scopeWorkspaceId, waiting }: DashboardProps) {
     const workspaces = knownWorkspaces?.filter((workspace) => workspace.asleep !== true) ?? null;
     const hibernatedIds = new Set((knownWorkspaces ?? []).filter((workspace) => workspace.asleep === true).map((workspace) => workspace.id));
     const rows = reportedRows.filter((row) => !hibernatedIds.has(row.workspaceId));
@@ -835,7 +837,7 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
                 <span data-key-hints="" className="flex items-center gap-1 text-[10px] text-[var(--fg-4)]" title="J / K move the cursor · ↵ opens the agent">
                     {['J', 'K', '↵'].map((key) => <kbd key={key} className="rounded border border-[var(--border-1)] px-1 font-mono">{key}</kbd>)}
                 </span>
-                <RateLimitPills limits={rateLimits ?? {}} accounts={accounts} onSwitchAccount={onSwitchAccount} onDismissSwitchOffer={onDismissSwitchOffer} onDesignSignIn={onDesignSignIn} {...(now !== undefined ? { now } : {})} />
+                {/* The account pills are in Genie's title bar, on every view (Tynn #949), not here. */}
                 <Button type="button" size="xs" icon="message-square" data-action="chat-genie" onClick={() => onChat?.()} title="Chat with genie">Chat <span className="ml-1.5 font-mono text-[11px] text-[var(--fg-4)]">⌘J</span></Button>
             </div>
             {/* "Dismiss all stale" or "Dismiss all older" refused: said under the header (Tynn #600). */}
@@ -864,7 +866,7 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
             </div>
             <div data-dashboard-list="">
                 {shown.map((row) => <Fragment key={row.id}>
-                    <AgentRowView waiting={groups.byAgent.has(row.id) ? { badges: waitingBadges(groups.byAgent.get(row.id)!), open: isOpen(row.id), onToggle: () => toggleOpen(row.id) } : undefined} row={row} workspaceName={nameOf(row)} workspaceColor={workspaceOf(row)?.color} workspaceFault={faults?.[row.workspaceId]} workspacePulsed={pulsing?.has(row.workspaceId)} onLocateRepo={onLocateRepo} onOpenWorkspace={row.id === genie?.id ? undefined : onOpenWorkspace} emoji={rowEmoji?.[row.id]} switchOffer={(() => { const offer = onSwitchAccount ? accounts?.offers.find((o) => o.provider === row.provider) : undefined; return offer && onSwitchAccount ? { offer, onSwitch: onSwitchAccount } : undefined; })()} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} onReveal={setOwnReveal} onArc={arcHandlers} windows={opensWindows(row) ? { onTerminal: terminalOpenerFor(row), onFiles: onOpenFilesWindow ? () => onOpenFilesWindow(row.workspaceId) : undefined } : undefined} />
+                    <AgentRowView waiting={groups.byAgent.has(row.id) ? { badges: waitingBadges(groups.byAgent.get(row.id)!), open: isOpen(row.id), onToggle: () => toggleOpen(row.id) } : undefined} row={row} workspaceName={nameOf(row)} workspaceColor={workspaceOf(row)?.color} workspaceFault={faults?.[row.workspaceId]} workspacePulsed={pulsing?.has(row.workspaceId)} onLocateRepo={onLocateRepo} onLocateFolder={onLocateFolder} onOpenWorkspace={row.id === genie?.id ? undefined : onOpenWorkspace} emoji={rowEmoji?.[row.id]} switchOffer={(() => { const offer = onSwitchAccount ? accounts?.offers.find((o) => o.provider === row.provider) : undefined; return offer && onSwitchAccount ? { offer, onSwitch: onSwitchAccount } : undefined; })()} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} onReveal={setOwnReveal} onArc={arcHandlers} windows={opensWindows(row) ? { onTerminal: terminalOpenerFor(row), onFiles: onOpenFilesWindow ? () => onOpenFilesWindow(row.workspaceId) : undefined } : undefined} />
                     {openTray === row.id ? <RowTrayView row={row} onNavigate={go} onTerminal={terminalOpenerFor(row)} /> : null}
                     {rowProps && groups.byAgent.has(row.id) && isOpen(row.id) ? <WaitingItems owner={row.id} items={groups.byAgent.get(row.id)!} row={rowProps} /> : null}
                 </Fragment>)}
@@ -884,10 +886,20 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
             {workspaces.length === 0 ? <p data-dashboard-no-active-workspaces="" role="status" className="px-7 py-5 text-[13px] text-[var(--fg-3)]">No active workspaces. Redock a hibernated workspace from the sidebar to see it here.</p>
                 : waiting && needsYou.on && shown.length === 0 && groups.genie.length === 0 ? <p data-needs-you="empty" role="status" className="px-7 py-5 text-[13px] text-[var(--fg-3)]">Nothing needs you.</p>
                 : shown.length === 0 && !(waiting && needsYou.on) ? <p role="status" className="px-7 py-5 text-[13px] text-[var(--fg-3)]">No agents shown. Use Sleeping or Stopped to include those agents.</p> : null}
-            {workspaces.filter((workspace) => !rows.some((row) => row.workspaceId === workspace.id)).map((workspace) => <div key={workspace.id} data-empty-workspace={workspace.id} data-workspace={workspace.id} {...(pulsing?.has(workspace.id) ? { 'data-workspace-pulse': 'true' } : {})} className={`flex items-center gap-3 border-b border-[var(--border-1)] px-7 py-3 text-xs text-[var(--fg-3)]${pulsing?.has(workspace.id) ? ` ${WORKSPACE_PULSE}` : ''}`}>
+            {workspaces.filter((workspace) => !rows.some((row) => row.workspaceId === workspace.id)).map((workspace) => <div key={workspace.id} data-empty-workspace={workspace.id} data-workspace={workspace.id} {...(pulsing?.has(workspace.id) ? { 'data-workspace-pulse': 'true' } : {})} className={`@container flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-[var(--border-1)] px-7 py-3 text-xs text-[var(--fg-3)]${pulsing?.has(workspace.id) ? ` ${WORKSPACE_PULSE}` : ''}`}>
                 {workspace.color ? <WorkspaceSwatch color={workspace.color} /> : null}
-                <span>{workspace.name ?? workspace.id} has no agents yet.</span><Button type="button" size="xs" icon="plus" data-add-agent={workspace.id} onClick={() => onAddAgent(workspace.id)}>Add an agent</Button>
-                {faults?.[workspace.id] ? <><span data-workspace-fault={faults[workspace.id]!.repo} className="text-[var(--warning)]">{faults[workspace.id]!.text}</span><Button type="button" size="xs" variant="ghost" icon="triangle-alert" data-action="locate-repo" onClick={() => onLocateRepo?.(workspace.id, faults[workspace.id]!.repo)}>Locate repo</Button></> : null}
+                <span className="min-w-0 truncate">{workspace.name ?? workspace.id} has no agents yet.</span>
+                {/* The folder is not there: the message takes the width that is left, its path cut in the middle (the whole text
+                    is its title); in a narrow Dashboard it drops to its own line under the name, the buttons at the right. */}
+                {faults?.[workspace.id]?.kind === 'folder' ? (() => { const text = faults[workspace.id]!.text; const parts = faultTextParts(text); return (
+                    <span data-workspace-missing={workspace.id} title={text} className="order-last flex min-w-0 flex-1 basis-full text-[var(--warning)] @2xl:order-none @2xl:basis-0"><span className="truncate">{parts.head}</span><span className="shrink-0 whitespace-nowrap">{parts.tail}</span></span>
+                ); })() : null}
+                <span data-workspace-actions={workspace.id} className={`flex shrink-0 items-center gap-2${faults?.[workspace.id]?.kind === 'folder' ? ' ml-auto' : ''}`}>
+                    <Button type="button" size="xs" icon="plus" data-add-agent={workspace.id} className="shrink-0 whitespace-nowrap" onClick={() => onAddAgent(workspace.id)}>Add an agent</Button>
+                    {faults?.[workspace.id]?.kind === 'folder' ? <Button type="button" size="xs" variant="ghost" icon="triangle-alert" data-action="locate-folder" title="Locate folder" className="shrink-0 whitespace-nowrap" onClick={() => onLocateFolder?.(workspace.id)}>Locate folder</Button> : null}
+                </span>
+                {faults?.[workspace.id]?.kind === 'folder' ? null
+                    : faults?.[workspace.id] ? <><span data-workspace-fault={faults[workspace.id]!.repo} className="text-[var(--warning)]">{faults[workspace.id]!.text}</span><Button type="button" size="xs" variant="ghost" icon="triangle-alert" data-action="locate-repo" onClick={() => onLocateRepo?.(workspace.id, faults[workspace.id]!.repo)}>Locate repo</Button></> : null}
             </div>)}
             <MailSignalLayer signals={mailSignals ?? []} />
             {arcs.paths ? <FlightPaths arcs={arcs.paths.arcs} size={arcs.paths.size} pointer={arcs.paths.pointer} reducedMotion={arcs.paths.reducedMotion} /> : null}
@@ -896,19 +908,23 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
 }
 
 /**
- * ONE RATE-LIMIT PILL PER PROVIDER in the Dashboard header (the owner, 2026-10-26): its logo and its most constrained
+ * ONE RATE-LIMIT PILL PER PROVIDER in Genie's title bar (the owner, 2026-10-26; moved off the Dashboard header, Tynn #949): its logo and its most constrained
  * window. A click or Enter opens a POPOVER with every window (the owner, 2026-10-31: "can we make these cleaner? this
  * should be a popover not a tooltip"). Buffered in main, so this redraws at most once per provider per buffer.
  */
-export function RateLimitPills({ limits, now: pinned, accounts, onSwitchAccount, onDismissSwitchOffer, onDesignSignIn }: {
+export interface RateLimitPillsProps {
     limits: Readonly<Record<string, Headroom>>;
-    now?: number;
+    now?: number | undefined;
     /** Every known account and the standing offers (Tynn #483): a provider with accounts draws its account chip instead. */
     accounts?: AccountsSnapshot | undefined;
     onSwitchAccount?: ((provider: string, choose?: string) => void) | undefined;
     onDismissSwitchOffer?: ((id: string) => void) | undefined;
     onDesignSignIn?: (() => void) | undefined;
-}) {
+    /** Tynn #1011: add a Claude account of its own, or make one active. */
+    onAccountsAct?: ((action: AccountsAction) => Promise<AccountsActResult>) | undefined;
+}
+
+export function RateLimitPills({ limits, now: pinned, accounts, onSwitchAccount, onDismissSwitchOffer, onDesignSignIn, onAccountsAct }: RateLimitPillsProps) {
     // Re-read twice a minute: a window that resets while the header is open turns Refreshed without a new reading.
     const now = useNow(true, pinned, 30_000);
     const viewOf = (p: string) => accounts?.providers.find((v) => v.provider === p) ?? null;
@@ -918,7 +934,7 @@ export function RateLimitPills({ limits, now: pinned, accounts, onSwitchAccount,
         <div data-rate-limits="" className="flex items-center gap-1.5">
             {providers.map((p) => {
                 const view = viewOf(p);
-                if (view) return <AccountsChip key={p} view={view} offer={accounts?.offers.find((o) => o.provider === p) ?? null} now={now} onSwitch={onSwitchAccount} onDismissOffer={onDismissSwitchOffer} design={accounts?.design} onDesignSignIn={onDesignSignIn} />;
+                if (view) return <AccountsChip key={p} view={view} offer={accounts?.offers.find((o) => o.provider === p) ?? null} now={now} onSwitch={onSwitchAccount} onDismissOffer={onDismissSwitchOffer} design={accounts?.design} onDesignSignIn={onDesignSignIn} onAccountsAct={onAccountsAct} signIns={accounts?.signIns} />;
                 return limits[p] ? <RateLimitPill key={p} provider={p} limit={limits[p]!} now={now} /> : null;
             })}
         </div>

@@ -75,7 +75,9 @@ describe('the strip, drawn', () => {
         expect(html.match(/aria-selected="true"/g)).toHaveLength(1);
         // The first tab is the workspace DASHBOARD, and says so (the owner: not "Agents").
         expect(control(html, 'data-workspace-tab="home"')).toMatchObject({ tag: 'button', tab: true });
-        expect(control(html, 'data-workspace-tab="home"')!.text).toMatch(/^Dashboard(?![\w])/);
+        // An icon since Tynn #945, named Dashboard for a screen reader and in its tooltip.
+        expect(control(html, 'data-workspace-tab="home"')!.open).toContain('aria-label="Dashboard"');
+        expect(control(html, 'data-workspace-tab="home"')!.text).toBe('');
         expect(html).not.toMatch(/>Agents</);
     });
 });

@@ -1,38 +1,18 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { FLOW_SCHEMA_URL } from '../src/core/flow-form.js';
-import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity.js';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { describe, expect, it } from 'vitest';
 import { type SafeModeView } from '../src/core/safe-mode.js';
-import { composeServices } from './helpers/compose-alone.js';
-import { type ComposedServices } from '../src/main/compose.js';
-import type { FlowScheduler } from '../src/main/flow-scheduler.js';
-import { FlowStore } from '../src/main/flow-store.js';
-import type { PtyPort, PtySpawnOptions } from '../src/main/terminal-host.js';
 import { WindowSafeMode, type LinkSafeMode } from '../src/main/window-safe-mode.js';
-import { windowWake } from '../src/main/window-wake.js';
 
 /**
- * SAFE MODE ON THE EMERGENCY NO-HOST PATH (Tynn #386; the coordinator's ruling for beta.60). When genie-host cannot start,
- * this window runs the agents, flows, scheduled tasks, kept processes, sites and engines itself. A host that keeps
- * crashing falls back to that path every time — so it must honour safe mode too, or the loop the owner hit comes back
- * through the fallback. The state is read WITHOUT a host: the same runtime files, read by the window, which then also
- * writes the clean-exit marker at its own clean end (it is the run).
- *
- * Every path is a spy with a normal-mode control in this file.
+ * SAFE MODE AS THE WINDOW HAS IT (Tynn #386): genie-host's, read over the link. The window has no safe mode of its own,
+ * because it runs nothing of its own: a window whose host cannot start says so and stops (Tynn #415). What this file
+ * covered besides, the window running agents, flows and sites itself when no host could start (its own wake, compose's
+ * own flows and sites under safe mode), was deleted in the host split's P6-4 (Tynn #1036): nothing reached it.
+ * genie-host's gates are safe-mode-gates.test.ts's.
  */
 
-const dirs: string[] = [];
-const cleanups: Array<() => Promise<void> | void> = [];
-afterEach(async () => {
-    for (const c of cleanups.splice(0).reverse()) await c();
-    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
-});
-const tempDir = (prefix: string): string => { const d = mkdtempSync(join(tmpdir(), prefix)); dirs.push(d); return d; };
-const settle = async (n = 20) => { for (let i = 0; i < n; i += 1) await new Promise((r) => setTimeout(r, 0)); };
-
-// ─── the state, read by the window with no host ──────────────────────────────────────────────────────────────────────────
+// ─── the state, read by the window from the host ─────────────────────────────────────────────────────────────────────────
 
 describe('the window reads genie-host’s safe mode', () => {
     it('the host’s view, the host’s Leave, and what the host says next', async () => {
@@ -57,136 +37,23 @@ describe('the window reads genie-host’s safe mode', () => {
     });
 });
 
-// ─── the window's own wake (mail and IssueWatch's push) ──────────────────────────────────────────────────────────────────
-
-function wakeRig(safe: boolean) {
-    const atlas = agentRecord({ id: mintAgentId(), workspaceId: 'ws', provider: 'claude', name: 'atlas' });
-    const started: string[] = [];
-    const log: string[] = [];
-    const wake = windowWake({
-        safeMode: () => safe,
-        find: (id) => (id === atlas.id ? atlas : null),
-        running: () => false,
-        refusal: () => null,
-        start: async (r: AgentRecord) => { started.push(r.id); return true; },
-        log: (l) => log.push(l),
-    });
-    return { atlas, wake, started, log };
-}
-
-describe('the window’s own wake', () => {
-    it('SAFE MODE: mail or IssueWatch to a stopped agent starts nothing, and says why', async () => {
-        const r = wakeRig(true);
-        expect(await r.wake(r.atlas.id)).toBe(false);
-        expect(r.started).toEqual([]);
-        expect(r.log.join('\n')).toMatch(/safe mode/i);
-    });
-
-    it('CONTROL, normal mode: it starts the agent', async () => {
-        const r = wakeRig(false);
-        expect(await r.wake(r.atlas.id)).toBe(true);
-        expect(r.started).toEqual([r.atlas.id]);
-    });
-});
-
-// ─── compose's own flows and sites (the window's hosting, with no host) ──────────────────────────────────────────────────
-
-function scriptedPty() {
-    const opened: Array<PtySpawnOptions & { id: string }> = [];
-    let n = 0;
-    const port: PtyPort = {
-        open(o) { const id = `pty_${++n}`; opened.push({ ...o, id }); return { id, pid: 8000 + n, shell: 'sh', scrollback: '' }; },
-        write: () => true, resize: () => true, kill: () => true, scrollback: () => '',
-        onData: () => () => {}, onExit: () => () => {},
-    };
-    return { port, opened };
-}
-const scheduleDoc = {
-    $schema: FLOW_SCHEMA_URL, version: 1,
-    graph: { nodes: [{ id: 't', kind: 'schedule_trigger', position: { x: 0, y: 0 }, config: { cron: '0 3 * * *' } }, { id: 'l', kind: 'log', position: { x: 240, y: 0 }, config: { message: 'tick' } }], edges: [{ id: 'e1', source: 't', target: 'l' }] },
-};
-const site = { repo: 'shop', runMode: 'host', kind: 'http', enabled: true, name: 'shop', genName: 'shop.gen', command: ['npm', 'run', 'dev', '--', '--port', '5173'] };
-
-async function composeRig(safe: boolean) {
-    const dir = tempDir('fallback-compose-');
-    const ws = join(dir, 'ws');
-    mkdirSync(join(ws, 'repos', 'shop'), { recursive: true });
-    writeFileSync(join(ws, 'project.json'), JSON.stringify({ $schema: 'https://example.invalid/project.schema.json', name: 'Acme', repos: [{ name: 'shop', slug: 'shop', path: 'repos/shop' }], sites: { k1: site } }));
-    // The run before this one left a flow armed on a schedule, and a run of it interrupted.
-    const before = await FlowStore.open(dir);
-    const armed = await before.create({ workspaceId: 'ws-example', name: 'nightly', document: scheduleDoc, by: { kind: 'user' }, armed: true });
-    // RESUMABLE (flow-store.ts `resumable`): the trigger ran and left its output, the log step was running — a store that
-    // opens on anything else records it stopped and there would be nothing to resume.
-    await before.markInFlight(armed.id, { at: new Date().toISOString(), trigger: 'manual', nodes: { t: 'ran', l: 'running' }, outputs: { t: {} }, entry: 't' });
-    const pty = scriptedPty();
-    const held: string[] = [];
-    let leftListener: (() => void) | null = null;
-    // As WindowSafeMode reads it: on until the person leaves it.
-    let on = safe;
-    const services: ComposedServices = await composeServices({
-        userData: dir,
-        pty: pty.port,
-        v1Settings: () => null,
-        caddyBin: null,
-        frontDoorPort: 0,
-        roster: () => [],
-        workspaces: () => [{ id: 'ws-example', path: ws }],
-        safeMode: () => on,
-        heldSite: (siteId) => { held.push(siteId); },
-        safeModeLeft: (listener) => { leftListener = listener; },
-    });
-    cleanups.push(() => services.shutdown());
-    const scheduler = services.flowScheduler as unknown as FlowScheduler;
-    await settle();
-    await scheduler.settled();
-    return { services, scheduler, pty, held, armedId: armed.id, leave: () => { on = false; leftListener?.(); } };
-}
-const devServers = (opened: ReadonlyArray<{ command?: string | undefined }>) => opened.filter((o) => (o.command ?? '').includes('npm run dev'));
-
-describe('compose’s own flows and sites (no host)', () => {
-    it('SAFE MODE: no flow is armed, the interrupted run is kept, the site stays down (named as held)', async () => {
-        const r = await composeRig(true);
-        expect(r.scheduler.nextDue()).toBeNull();
-        expect(r.services.flows.get(r.armedId)?.inFlight).toBeDefined();
-        expect(devServers(r.pty.opened)).toEqual([]);
-        expect(r.held).toEqual(['site_shop']);
-    });
-
-    it('SAFE MODE, then Leave: the flow clock plans again, and nothing is started by the leave', async () => {
-        const r = await composeRig(true);
-        r.leave();
-        expect(r.scheduler.nextDue()).toMatchObject({ flowId: r.armedId });
-        await settle();
-        expect(devServers(r.pty.opened)).toEqual([]);
-    });
-
-    it('CONTROL, normal mode: the flow is armed, the interrupted run resumes, the site is started', async () => {
-        const r = await composeRig(false);
-        expect(r.scheduler.nextDue()).toMatchObject({ flowId: r.armedId });
-        expect(r.services.flows.get(r.armedId)?.inFlight).toBeUndefined();
-        // It really RESUMED (not recorded stopped at open): the run is marked resumed.
-        expect(r.services.flows.get(r.armedId)?.runs.at(-1)).toMatchObject({ resumed: true });
-        expect(devServers(r.pty.opened)).toHaveLength(1);
-        expect(r.held).toEqual([]);
-    });
-});
-
-// ─── main.ts on the no-host path: every own clock and restore asks the window's safe mode ────────────────────────────────
+// ─── main.ts: the boot restore asks genie-host's safe mode ─────────────────────────────────────────────────────────────
 
 describe('main.ts reads genie-host’s safe mode', () => {
     const main = readFileSync(resolve('src/main/main.ts'), 'utf8');
     const code = main.split('\n').filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*')).join('\n');
 
-    it('opens it from the link, after the link is known and before anything is composed', () => {
+    it('opens it from the link, after the link is known and before the tools are built', () => {
         const opened = code.indexOf('WindowSafeMode.open({ link: agentEngineLink.client })');
         expect(opened).toBeGreaterThan(code.indexOf('agentEngineLink = await connectAgentEngine('));
-        expect(opened).toBeLessThan(code.indexOf('composeWindowServices('));
+        // The window composes nothing (Tynn #955): the first thing after it is the tools.
+        expect(opened).toBeLessThan(code.indexOf('withActionSignal(allGenieTools(genieToolDeps({'));
     });
 
-    it('the boot restore and compose read it; the window wakes no agent (the mail wake is genie-host’s, Tynn #896 2b-3)', () => {
+    it('the boot restore reads it; the window wakes no agent (the mail wake is genie-host’s, Tynn #896 2b-3) and composes nothing (Tynn #955)', () => {
         expect(code).toMatch(/restoreAfterRelaunch\(\{\s*safeMode: windowSafeNow,/);
         expect(code).not.toMatch(/windowWake\(/);
-        expect(code).toMatch(/composeWindowServices\(\{[\s\S]{0,4000}safeMode: windowSafeNow,/);
+        expect(code).not.toMatch(/composeWindowServices\(/);
     });
 
     it('the window never writes the marker: it is the host’s', () => {

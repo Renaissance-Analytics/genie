@@ -7,6 +7,7 @@ import { ACP_PROVIDERS, isAcpProvider, type AcpProvider } from '../core/engine.j
 import { buildCarryOver, type CarryOver } from '../core/carry-over.js';
 import type { StreamEvent } from '../core/stream-event.js';
 import { withMcpServer } from '../core/agent-mcp.js';
+import { appWakeCapOf, parseAppWakeCap, type AppWakeCap } from '../core/app-inbox.js';
 import type { AgentPermissions, AgentRecord } from '../core/identity.js';
 import { parseIssueWatchSetting, type IssueWatchSetting } from '../core/issue-watch.js';
 import type { LiveSession } from '../core/roster.js';
@@ -34,6 +35,7 @@ export interface AgentOpsPorts {
         clearThread(id: AgentRecord['id']): Promise<AgentRecord | null>;
         setProvider(id: AgentRecord['id'], provider: AcpProvider, options: { keepModel: boolean; carryOver?: CarryOver | null }): Promise<{ ok: true; record: AgentRecord } | { ok: false; reason: string }>;
         setBudget(id: AgentRecord['id'], usd: number | null): Promise<AgentRecord | null>;
+        setAppWakeCap(id: AgentRecord['id'], cap: AppWakeCap): Promise<AgentRecord | null>;
         setMode(id: AgentRecord['id'], mode: AgentRecord['mode']): Promise<AgentRecord | null>;
         setAccessScope(id: AgentRecord['id'], scope: AgentRecord['accessScope']): Promise<AgentRecord | null>;
         setAccessAgents(id: AgentRecord['id'], ids: readonly string[] | null): Promise<AgentRecord | null>;
@@ -109,6 +111,8 @@ export interface AgentOpsPorts {
     signedIn(provider: string): boolean;
     /** A setting read at start changed: when it takes effect (`SettingApplier.requested`). Absent = the next start, said so. */
     applyOnStart?(id: AgentRecord['id']): ApplyWhen;
+    /** The host's lifecycle log: a changed setting is one line (Tynn #1053). Absent = nothing is logged; it is never why a write fails. */
+    log?(line: string): void;
 }
 
 type Refusal = { ok: false; reason: string };
@@ -339,6 +343,25 @@ export async function setBudget(ports: AgentOpsPorts, agentId: string, dailyLimi
     // No provider reports a cost over ACP today, so a dollar budget is UNENFORCEABLE — said, not silent.
     const decision = budgetDecision({ dailyLimitUsd, spentTodayUsd: 0, turnInFlight: session?.turnState === 'working', costReported: false, agentName: record.name });
     return { ok: true, record: updated, decision };
+}
+
+/**
+ * THE APP WAKE CAP (Tynn #1053): how many turns an hour an app's mail may give this agent, or no limit. Checked before
+ * it is kept — a whole number of 1 or more, or the word `unlimited` — and refused in words otherwise. Every change is one
+ * lifecycle line: the agent's id, the old value and the new one, never anything of its mail. A value equal to the one in
+ * force changes nothing, so an agent nobody set stays without the field. Applies to its next turn; nothing restarts.
+ */
+export async function setAppWakeCap(ports: AgentOpsPorts, agentId: string, value: unknown): Promise<{ ok: true; record: AgentRecord } | Refusal> {
+    const parsed = parseAppWakeCap(value);
+    if (!parsed.ok) return parsed;
+    const record = ports.registry.find(agentId);
+    if (!record) return UNKNOWN;
+    const before = appWakeCapOf(record);
+    if (before === parsed.cap) return { ok: true, record };
+    const updated = await ports.registry.setAppWakeCap(record.id, parsed.cap);
+    if (!updated) return UNKNOWN;
+    ports.log?.(`agent setting agent=${record.id} appWakeCap old=${before} new=${parsed.cap}`);
+    return { ok: true, record: updated };
 }
 
 /** Mode is wording for the agent, not a permission boundary (§6.2). */

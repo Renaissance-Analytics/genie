@@ -67,7 +67,12 @@ describe('the window serves nothing (step 2e)', () => {
     const reach = valueReach('src/main/main.ts');
 
     it('POSITIVE CONTROL: the walk follows main.ts into what the window really loads', () => {
-        for (const file of ['src/main/window-pages.ts', 'src/main/local-protocol-door.ts', 'src/main/window-tunnel.ts', 'src/main/session-engine-client.ts', 'src/main/compose.ts']) expect(reach, file).toContain(file);
+        // compose.ts left the window in 2g-4d E (Tynn #955): window-tools.ts is the window's own module it reaches instead.
+        for (const file of ['src/main/window-pages.ts', 'src/main/local-protocol-door.ts', 'src/main/window-tunnel.ts', 'src/main/session-engine-client.ts', 'src/main/window-tools.ts']) expect(reach, file).toContain(file);
+    });
+
+    it('the window loads no composition: compose.ts is the tests’ (2g-4d E, Tynn #955)', () => {
+        expect(reach.has('src/main/compose.ts')).toBe(false);
     });
 
     it('no remote-serving module is loaded by the window', () => {
@@ -113,11 +118,21 @@ describe('the window serves nothing (step 2e)', () => {
     });
 });
 
-/** Every use main.ts makes of its engine client: the member, or `call:<method>` for a raw call. */
+/**
+ * Every use main.ts makes of its engine client: the member, or `call:<method>` for a raw call. An ALIAS of the client
+ * (`const engineLink = agentEngineLink.client`) is followed, and a client handed whole to a function is `whole:<alias>`,
+ * which no list may hold (Tynn #1007, 2g-4e: main.ts read the registry as `engineLink.stores()`, unseen).
+ */
 export function engineUses(text: string): string[] {
     const uses = new Set<string>();
-    for (const m of code(text).matchAll(/(?<![\w$-])client\??\.(\w+)(\s*\(\s*'([^']*)')?/g)) {
-        uses.add(m[1] === 'call' ? `call:${m[3] ?? '?'}` : m[1]!);
+    const source = code(text);
+    const add = (member: string, method: string | undefined) => uses.add(member === 'call' ? `call:${method ?? '?'}` : member);
+    for (const m of source.matchAll(/(?<![\w$-])client\??\.(\w+)(\s*\(\s*'([^']*)')?/g)) add(m[1]!, m[3]);
+    const aliases = [...source.matchAll(/\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*[\w$.?]*\bclient\b(?!\s*\??\.)/g)].map((m) => m[1]!);
+    for (const alias of new Set(aliases)) {
+        for (const m of source.matchAll(new RegExp(`(?<![\\w$./-])${alias}\\??\\.(\\w+)(\\s*\\(\\s*'([^']*)')?`, 'g'))) add(m[1]!, m[3]);
+        // Handed whole: an argument of a call, never an `if (alias)` test.
+        if (new RegExp(`(?<!\\b(?:if|while|switch)\\s*)\\(\\s*${alias}\\s*[,)]|,\\s*${alias}\\s*[,)]`).test(source)) uses.add(`whole:${alias}`);
     }
     return [...uses].sort();
 }
@@ -139,28 +154,40 @@ describe('the window\'s engine link carries only the link, window capabilities, 
 
     /** Frozen (the coordinator, 2026-11-19): each leaves in the PR that moves it, and nothing joins. */
     const STILL_TO_MOVE: Readonly<Record<string, string>> = {
-        // Re-labelled 2c -> 2g by the coordinator (2026-11-19, 2c-5): the crash report (2c-2) and the scratch terminal (2c-4)
-        // left; what still reads main's `terminals` replica is main's own MCP tool server (genieToolDeps, 2g) and the tray
-        // count, the Restart/Shut-down list, the quit plan and quit's closeAll. Those read it synchronously, so they move
-        // with the replica in 2g, never as a second copy beside it.
-        terminals: '2g',
-        // 2f (#912): the question window's answers, and the device link's frames.
-        'call:engine.featureQuestion': '2f', deviceLink: '2f',
-        // Re-labelled from 2b by the coordinator (2026-11-19): main's deck liveness until the question window and the tray
-        // badge read the host's deck. Take Over moved in 2b-1.
-        takeOvers: '2f',
-        // 2g (#913): the services the window still composes over genie-host's replicas.
-        appInbox: '2g', catalog: '2g', flows: '2g', github: '2g', hosting: '2g', keyring: '2g', plugins: '2g', processBook: '2g',
-        recordsChanged: '2g', relayHost: '2g', remoteAccess: '2g', stores: '2g', supervisor: '2g', tynn: '2g', tynnPage: '2g',
-        workstation: '2g',
+        // terminals and processBook left in 2g-2 (#953): the tray, its Restart/Shut-down list and the quit read genie-host's
+        // summary (summary.watch), and main's tool server keeps no host-native deps.
+        // 2f is done: the question window's answers moved in 2f-1 (#912); the device link's frames and main's Deck liveness
+        // (takeOvers: the question window and the tray read genie-host's Deck) in 2f-2 (#941).
+        // 2g (#913): the services the window still composes over genie-host's replicas. appInbox, tynnPage and workstation
+        // left in 2g-1 (#952): main held them and nothing read them.
+        // github, keyring, relayHost and tynn left in 2g-3b (#959): the accounts, the keyring card and the registration are
+        // genie-host's; main unseals an older Genie's secrets once and hands them over (keychain.adoptLegacy).
+        // catalog and plugins left in 2g-3c (#961): compose read nothing from them in the window.
+        // flows, hosting, stores and supervisor left in 2g-4d E (#955): the window composes nothing.
+        // Seen in 2g-4e (#1007) once the scanner followed main's `engineLink` alias; each is a task on 2g-4d (#955).
+        // pushWindowView and v1Import left in 2g-4d B (#1044).
+        // spawnLink and onSpawnFrame are the link's own since 2g-4d-A (#1043: the processes child's exec route is live);
+        // runHostTool and the Files watch (onFilesEvent, filesWatch, filesUnwatch) left with it: nothing in the window read them.
+        // IssueWatch and the Tynn panels' watches left in #934 task #1474: the nine watch uses were read by nothing (the Tynn
+        // tab's tynn.watch is genie-host's own), checkIssues is genie-host's own tool, and a batch's sound is a tool signal.
+        // NOTHING IS LEFT TO MOVE: the list is empty, and it stays frozen, so no use can join it.
+        // recordsChanged left in 2g-3 (#954): genie-host reads its own registry.
+        // remoteAccess left in 2g-4a (#997): main's notifications read genie-host's remote.watch.
     };
-    const ratchet = (rows: readonly (readonly [string, string])[], usedNow: readonly string[]) => ({
-        joined: rows.filter(([u, d]) => d.startsWith('move:') && STILL_TO_MOVE[u] !== d.slice('move:'.length)).map(([u]) => u).sort(),
-        relabelled: Object.keys(STILL_TO_MOVE).filter((u) => usedNow.includes(u) && !rows.some(([r, d]) => r === u && d.startsWith('move:'))).sort(),
+    const ratchet = (rows: readonly (readonly [string, string])[], usedNow: readonly string[], frozen: Readonly<Record<string, string>> = STILL_TO_MOVE) => ({
+        joined: rows.filter(([u, d]) => d.startsWith('move:') && frozen[u] !== d.slice('move:'.length)).map(([u]) => u).sort(),
+        relabelled: Object.keys(frozen).filter((u) => usedNow.includes(u) && !rows.some(([r, d]) => r === u && d.startsWith('move:'))).sort(),
     });
 
     it('THE RATCHET: every still-to-move use is on the frozen list under its step, and none was re-labelled while still used', () => {
         expect(ratchet(WINDOW_ENGINE_INVENTORY, used)).toEqual({ joined: [], relabelled: [] });
+    });
+
+    it('NOTHING IS LEFT TO MOVE (Tynn #934 task #1474): the frozen list is empty and the inventory has no `move:` row', () => {
+        expect(Object.keys(STILL_TO_MOVE)).toEqual([]);
+        expect(WINDOW_ENGINE_INVENTORY.filter(([, destination]) => destination.startsWith('move:'))).toEqual([]);
+        // CONTROL: the same filter finds a move row when there is one.
+        expect([['welcome', 'link'], ['someUse', 'move:2g']].filter(([, destination]) => destination!.startsWith('move:'))).toEqual([['someUse', 'move:2g']]);
     });
 
     it('CONTROL: the scanner reads members and raw calls, not comments or import paths, and the ratchet notices a newcomer', () => {
@@ -169,6 +196,22 @@ describe('the window\'s engine link carries only the link, window capabilities, 
         expect(engineUses("import { X } from './session-engine-client.js';\n// client.flows()\nagentEngineLink.client.hosting();\nvoid client.call('engine.thing', []);\nlink?.client?.heartbeat(b);"))
             .toEqual(['call:engine.thing', 'heartbeat', 'hosting']);
         expect(ratchet([['newThing', 'move:2g']], []).joined).toEqual(['newThing']);
-        expect(ratchet([['hosting', 'window:chrome']], ['hosting']).relabelled).toEqual(['hosting']);
+        // With a use on a frozen list (none is now): re-labelled while still used is named; on the list under its step it is not.
+        expect(ratchet([['someUse', 'window:chrome']], ['someUse'], { someUse: '2g' }).relabelled).toEqual(['someUse']);
+        expect(ratchet([['someUse', 'move:2g']], ['someUse'], { someUse: '2g' })).toEqual({ joined: [], relabelled: [] });
+        expect(ratchet([['someUse', 'move:2f']], ['someUse'], { someUse: '2g' }).joined).toEqual(['someUse']);
+    });
+
+    it('CONTROL: the scanner follows an alias of the engine client, and names a client handed over whole (Tynn #1007, 2g-4e)', () => {
+        // main.ts:1471 read the registry as `engineLink.stores()` through `const engineLink = agentEngineLink.client`: unseen.
+        expect(engineUses("const engineLink = agentEngineLink.client;\nengineLink.stores();\nconst e = agentEngineLink?.client ?? null;\nif (e) e.onLink(a, b);\n// e.flows()\nvoid e?.mcpStatus();"))
+            .toEqual(['mcpStatus', 'onLink', 'stores']);
+        // A client handed to another module is every member at once: it is named, so no list can leave it unseen.
+        expect(engineUses("const e = agentEngineLink.client;\nconst r = e ? withHostTools(all, e, resolve) : all;\nif (e) {}\nf({ run: (c) => e.runHostTool(c) });"))
+            .toEqual(['runHostTool', 'whole:e']);
+        // CONTROL: `.client` read for something else is no alias.
+        expect(engineUses("const c = this.client.other;\nc.thing();")).toEqual(['other']);
+        // CONTROL: an import path that ends in the alias's name is no use of it.
+        expect(engineUses("import { x } from './window-tunnel-link.js';\nconst link = agentEngineLink.client;\nlink.filesWatch(v);")).toEqual(['filesWatch']);
     });
 });

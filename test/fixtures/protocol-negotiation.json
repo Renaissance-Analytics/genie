@@ -1,0 +1,130 @@
+{
+  "$comment": "THE SHARED VERSION-NEGOTIATION TABLE (Tynn #1058 L1). Read by test/protocol-negotiation-table.test.ts against src/core/protocol-version.ts (negotiate, windowFloor, parseTrackBuild, compareTrackBuilds) and src/core/track-manifest.ts (semverOf), and by the Rust launcher's cargo test (native/launcher, L2), so the two languages cannot drift. A case's `mine` is the side running negotiate. `reason` is prose and is never compared. Capabilities are sorted by byte order (ASCII). buildOrder compares by sign only. Change an answer here only with the TypeScript and the Rust code in the same PR.",
+  "format": 1,
+  "supportWindowDays": 30,
+  "securityFloor": "0000.01.01",
+  "windowFloor": [
+    { "schema": "2026.11.18", "floor": "2026.10.19" },
+    { "schema": "2026.12.31", "floor": "2026.12.01" },
+    { "schema": "2026.01.15", "floor": "2025.12.16" },
+    { "schema": "2026.03.01", "floor": "2026.01.30" },
+    { "schema": "2024.03.01", "floor": "2024.01.31" }
+  ],
+  "cases": [
+    {
+      "name": "client and host on the same schema and capabilities",
+      "mine": { "track": "client", "build": "2026.11.18-1", "schema": "2026.11.18", "minSchema": "2026.10.19", "capabilities": ["unsupported-result@1", "catalog@1", "relay-e2e@1"] },
+      "theirs": { "track": "host", "build": "2026.11.18-1", "schema": "2026.11.18", "minSchema": "2026.10.19", "capabilities": ["unsupported-result@1", "catalog@1", "relay-e2e@1"] },
+      "answer": { "ok": true, "negotiated": { "schema": "2026.11.18", "capabilities": ["catalog@1", "relay-e2e@1", "unsupported-result@1"] } }
+    },
+    {
+      "name": "client newer, host inside the client's window: the host's schema, shared capabilities at the lower level",
+      "mine": { "track": "client", "build": "2026.12.01-1", "schema": "2026.12.01", "minSchema": "2026.11.01", "capabilities": ["catalog@2", "new-thing@1", "relay-e2e@1", "unsupported-result@1"] },
+      "theirs": { "track": "host", "build": "2026.11.18-1", "schema": "2026.11.18", "minSchema": "2026.10.19", "capabilities": ["catalog@1", "relay-e2e@1", "unsupported-result@1"] },
+      "answer": { "ok": true, "negotiated": { "schema": "2026.11.18", "capabilities": ["catalog@1", "relay-e2e@1", "unsupported-result@1"] } }
+    },
+    {
+      "name": "host newer, client inside the host's window",
+      "mine": { "track": "client", "build": "2026.11.18-1", "schema": "2026.11.18", "minSchema": "2026.10.19", "capabilities": ["catalog@1", "relay-e2e@1"] },
+      "theirs": { "track": "host", "build": "2026.12.10-1", "schema": "2026.12.10", "minSchema": "2026.11.10", "capabilities": ["catalog@1", "relay-e2e@1", "unsupported-result@1"] },
+      "answer": { "ok": true, "negotiated": { "schema": "2026.11.18", "capabilities": ["catalog@1", "relay-e2e@1"] } }
+    },
+    {
+      "name": "host exactly at the client's floor is accepted (the boundary)",
+      "mine": { "track": "client", "build": "2026.12.18-1", "schema": "2026.12.18", "minSchema": "2026.11.18", "capabilities": ["catalog@1"] },
+      "theirs": { "track": "host", "build": "2026.11.18-1", "schema": "2026.11.18", "minSchema": "2026.10.19", "capabilities": ["catalog@1"] },
+      "answer": { "ok": true, "negotiated": { "schema": "2026.11.18", "capabilities": ["catalog@1"] } }
+    },
+    {
+      "name": "host one day older than the client's floor is refused: the peer is too old",
+      "mine": { "track": "client", "build": "2026.12.19-1", "schema": "2026.12.19", "minSchema": "2026.11.19", "capabilities": ["catalog@1"] },
+      "theirs": { "track": "host", "build": "2026.11.18-1", "schema": "2026.11.18", "minSchema": "2026.10.19", "capabilities": ["catalog@1"] },
+      "answer": { "ok": false, "code": "version", "peerTooOld": true }
+    },
+    {
+      "name": "client older than the host's window, seen from the client: this side is too old",
+      "mine": { "track": "client", "build": "2026.10.01-1", "schema": "2026.10.01", "minSchema": "2026.09.01", "capabilities": ["catalog@1"] },
+      "theirs": { "track": "host", "build": "2026.11.18-1", "schema": "2026.11.18", "minSchema": "2026.10.19", "capabilities": ["catalog@1"] },
+      "answer": { "ok": false, "code": "version", "peerTooOld": false }
+    },
+    {
+      "name": "client older than the host's window, seen from the host: the peer is too old",
+      "mine": { "track": "host", "build": "2026.11.18-1", "schema": "2026.11.18", "minSchema": "2026.10.19", "capabilities": ["catalog@1"] },
+      "theirs": { "track": "client", "build": "2026.10.01-1", "schema": "2026.10.01", "minSchema": "2026.09.01", "capabilities": ["catalog@1"] },
+      "answer": { "ok": false, "code": "version", "peerTooOld": true }
+    },
+    {
+      "name": "a host whose floor a security fix raised above its window refuses a client inside the window",
+      "mine": { "track": "client", "build": "2026.11.05-1", "schema": "2026.11.05", "minSchema": "2026.10.06", "capabilities": ["catalog@1"] },
+      "theirs": { "track": "host", "build": "2026.11.18-1.1", "schema": "2026.11.18", "minSchema": "2026.11.10", "capabilities": ["catalog@1"] },
+      "answer": { "ok": false, "code": "version", "peerTooOld": false }
+    },
+    {
+      "name": "a legacy peer (no schema said: 2026.11.01, no floor, no capabilities) inside the window",
+      "mine": { "track": "host", "build": "2026.11.18-1", "schema": "2026.11.18", "minSchema": "2026.10.19", "capabilities": ["catalog@1", "relay-e2e@1"] },
+      "theirs": { "track": null, "build": null, "schema": "2026.11.01", "minSchema": "0000.01.01", "capabilities": [] },
+      "answer": { "ok": true, "negotiated": { "schema": "2026.11.01", "capabilities": [] } }
+    },
+    {
+      "name": "a legacy peer outside the window",
+      "mine": { "track": "host", "build": "2026.12.18-1", "schema": "2026.12.18", "minSchema": "2026.11.18", "capabilities": ["catalog@1"] },
+      "theirs": { "track": null, "build": null, "schema": "2026.11.01", "minSchema": "0000.01.01", "capabilities": [] },
+      "answer": { "ok": false, "code": "version", "peerTooOld": true }
+    },
+    {
+      "name": "no capability in common",
+      "mine": { "track": "client", "build": "2026.11.18-1", "schema": "2026.11.18", "minSchema": "2026.10.19", "capabilities": ["a@1"] },
+      "theirs": { "track": "host", "build": "2026.11.18-1", "schema": "2026.11.18", "minSchema": "2026.10.19", "capabilities": ["b@2"] },
+      "answer": { "ok": true, "negotiated": { "schema": "2026.11.18", "capabilities": [] } }
+    },
+    {
+      "name": "a capability said twice counts at its highest level; the pair takes the lower of the two sides",
+      "mine": { "track": "client", "build": "2026.11.18-1", "schema": "2026.11.18", "minSchema": "2026.10.19", "capabilities": ["catalog@3", "catalog@1", "x@2"] },
+      "theirs": { "track": "host", "build": "2026.11.18-1", "schema": "2026.11.18", "minSchema": "2026.10.19", "capabilities": ["x@5", "catalog@2"] },
+      "answer": { "ok": true, "negotiated": { "schema": "2026.11.18", "capabilities": ["catalog@2", "x@2"] } }
+    },
+    {
+      "name": "launcher to host on the control wire, the launcher newer",
+      "mine": { "track": "launcher", "build": "2026.11.25-1", "schema": "2026.11.25", "minSchema": "2026.10.26", "capabilities": ["launcher@1"] },
+      "theirs": { "track": "host", "build": "2026.11.18-1", "schema": "2026.11.18", "minSchema": "2026.10.19", "capabilities": ["launcher@1", "catalog@1"] },
+      "answer": { "ok": true, "negotiated": { "schema": "2026.11.18", "capabilities": ["launcher@1"] } }
+    },
+    {
+      "name": "a launcher older than the host's window: this side is too old",
+      "mine": { "track": "launcher", "build": "2026.09.30-1", "schema": "2026.09.30", "minSchema": "2026.08.31", "capabilities": ["launcher@1"] },
+      "theirs": { "track": "host", "build": "2026.11.18-1", "schema": "2026.11.18", "minSchema": "2026.10.19", "capabilities": ["launcher@1"] },
+      "answer": { "ok": false, "code": "version", "peerTooOld": false }
+    },
+    {
+      "name": "hotfix and release builds of the same schema speak it",
+      "mine": { "track": "client", "build": "2026.11.18-1.1", "schema": "2026.11.18", "minSchema": "2026.10.19", "capabilities": ["catalog@1"] },
+      "theirs": { "track": "host", "build": "2026.11.18-2", "schema": "2026.11.18", "minSchema": "2026.10.19", "capabilities": ["catalog@1"] },
+      "answer": { "ok": true, "negotiated": { "schema": "2026.11.18", "capabilities": ["catalog@1"] } }
+    }
+  ],
+  "trackBuilds": [
+    { "build": "2026.11.25-1", "parsed": { "schema": "2026.11.25", "release": 1, "hotfix": 0 }, "semver": "2026.11.25-1" },
+    { "build": "2026.01.05-1", "parsed": { "schema": "2026.01.05", "release": 1, "hotfix": 0 }, "semver": "2026.1.5-1" },
+    { "build": "2026.11.18-1.1", "parsed": { "schema": "2026.11.18", "release": 1, "hotfix": 1 }, "semver": "2026.11.18-1.1" },
+    { "build": "2026.10.02-12.3", "parsed": { "schema": "2026.10.02", "release": 12, "hotfix": 3 }, "semver": "2026.10.2-12.3" },
+    { "build": "2026.11.18-1+ci.7", "parsed": { "schema": "2026.11.18", "release": 1, "hotfix": 0 }, "semver": "2026.11.18-1" },
+    { "build": "2026.02.30-1", "parsed": null, "semver": null },
+    { "build": "2026.11.18-0", "parsed": null, "semver": null },
+    { "build": "2026.11.18", "parsed": null, "semver": null },
+    { "build": "2026.1.5-1", "parsed": null, "semver": null },
+    { "build": "2.0.0-beta.62.1", "parsed": null, "semver": null },
+    { "build": "2.0.0", "parsed": null, "semver": null }
+  ],
+  "buildOrder": [
+    { "a": "2026.11.18-1", "b": "2026.11.18-2", "sign": -1 },
+    { "a": "2026.11.18-2", "b": "2026.11.18-1.1", "sign": 1 },
+    { "a": "2026.11.18-1.1", "b": "2026.11.18-1", "sign": 1 },
+    { "a": "2026.11.18-9", "b": "2026.11.19-1", "sign": -1 },
+    { "a": "2026.11.18-10", "b": "2026.11.18-9", "sign": 1 },
+    { "a": "2026.11.18-1", "b": "2026.11.18-1", "sign": 0 },
+    { "a": "2.0.0-beta.62.1", "b": "2026.11.18-1", "sign": -1 },
+    { "a": "2.0.0", "b": "2026.11.25-1", "sign": -1 },
+    { "a": "2026.11.18-1", "b": "not-a-build", "sign": 1 },
+    { "a": "not-a-build", "b": "2.0.0-beta.62.1", "sign": 0 }
+  ]
+}

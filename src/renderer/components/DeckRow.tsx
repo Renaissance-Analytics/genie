@@ -13,6 +13,8 @@ import {
     type DeckItem,
 } from '../../core/deck.js';
 import { ApprovalCard, ApprovalMarker } from './ApprovalCard.js';
+import { MaximizeButton, usePreviewFull } from './PreviewFull.js';
+import { previewFullClass } from '../../core/preview-full.js';
 
 /**
  * ONE WAITING ITEM, AS A ROW - what used to be the Deck page's row, now drawn under its agent's row on the Dashboard (Tynn #730,
@@ -68,6 +70,8 @@ export function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, f
     const dismissable = onDismiss !== undefined && isDismissable(item);
     const focused = item.id === focusId;
     const showForm = item.answer.kind === 'form' && questions !== null && (stale === undefined || opened);
+    // THE QUESTION MAXIMIZED (Tynn #1019): it fills the window below the title bar; Esc (taken first) or its button restores it.
+    const max = usePreviewFull();
     // This row's own flight: an agent parks one approval at a time, so the agent is the identity (core/approval-answering.ts).
     // Any other row stays live — one answer used to grey every row in the window for good.
     const answeringHere = answeringFor(answering, item.agentId ?? '', null);
@@ -178,7 +182,13 @@ export function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, f
                 <p data-deck-refusal={item.id} role="alert" className="mt-2 text-xs text-[var(--danger)]">{formRefusal.reason}</p>
             ) : null}
             {showForm && questions ? (
-                <div className="mt-2 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-3">
+                // The same element maximized or not — only its class changes — so the form in it keeps what is typed.
+                <div data-deck-question-max={item.id} data-maximized={max.full ? 'on' : 'off'}
+                    className={max.full ? `${previewFullClass('main')} overflow-y-auto px-8 py-5` : 'relative mt-2 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-3 pr-10'}>
+                    <div className={max.full ? 'sticky top-0 z-10 -mx-8 -mt-5 mb-3 flex items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-8 py-2' : 'absolute right-2 top-2'}>
+                        {max.full ? <span className="min-w-0 flex-1 truncate text-[14px] font-semibold">{item.agentName ? `${item.agentName}: ` : ''}{title}</span> : null}
+                        <MaximizeButton maximized={max.full} onToggle={max.toggle} action="deck-question-maximize" className="shrink-0" />
+                    </div>
                     <QuestionForm
                         key={`${item.id}:${item.revision ?? 0}`}
                         item={item}
@@ -187,6 +197,7 @@ export function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, f
                         onSubmit={(selections, notes) => onAnswerForm?.(item, selections, notes)}
                         onDismiss={dismissable ? (notes) => onDismiss?.(item, notes) : undefined}
                         showHeaders={questions.length > 1}
+                        wide={max.full}
                     />
                 </div>
             ) : null}

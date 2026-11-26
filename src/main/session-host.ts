@@ -4,7 +4,7 @@ import { type AccountRecord, type ProviderAccountHome } from '../core/accounts.j
 import { askedWhy, codexDecisionFor, permissionDecisionFor } from '../core/agent-ops.js';
 import { PROGRAM_LOOKUP_VARIABLE } from '../core/program-lookup.js';
 import { listModels, type ListModelsOptions, type McpServer, type SessionModelState } from '@particle-academy/prism-acp';
-import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { ListProviderModels } from '../core/provider-models.js';
 import type { SessionStore } from '@particle-academy/prism-harness';
 import { LiveReadings, planStepsOf } from '../core/live-readings.js';
@@ -19,8 +19,11 @@ import { readFileSync, statSync } from 'node:fs';
 import { providerProgramProblem, resolveProviderProgram, type ProviderProgramPorts } from '../core/provider-program.js';
 import { providerChoiceFile, readProviderChoice } from './provider-choice.js';
 import { deferredDriverFactory } from './deferred-driver.js';
-import { mcpOffFor } from '../core/agent-mcp.js';
-import { CLAUDE_DRIVER_CAPABILITIES, CODEX_DRIVER_CAPABILITIES, ClaudeDriver, CodexDriver } from '@particle-academy/prism-acp';
+import { McpPreparationError } from './mcp-preparation-error.js';
+import { mcpOffFor, sameMcpServer } from '../core/agent-mcp.js';
+import { CLAUDE_DRIVER_CAPABILITIES, CODEX_DRIVER_CAPABILITIES, ClaudeDriver, CodexDriver, claudeAccounts, probeSessionStore } from '@particle-academy/prism-acp';
+import { respawnDecision, stayedWords } from '../core/claude-accounts.js';
+import { accountSwitchNote } from '../core/account-switch.js';
 
 /**
  * Whether an agent can ask for approval — the DRIVER's published claim (`permissionRequests`), read from prism-acp's
@@ -126,7 +129,7 @@ import {
     type StopVerdict,
     type TurnOutcomeLike,
 } from '../core/session.js';
-import type { NativeStopVerdict } from '../core/session.js';
+import type { NativeStopVerdict, OverloadedPrompt } from '../core/session.js';
 import type { StreamEvent } from '../core/stream-event.js';
 import type { CommandRunRef } from '../core/command-run.js';
 import type { TimedEvent } from '../core/stream-view.js';
@@ -137,7 +140,7 @@ import type { AttachmentReply } from '../core/thread-store.js';
 import { promptDeliveries, type PromptAction, type PromptDelivery } from '../core/prompt-delivery.js';
 import { isProviderCommand, slashCommandOf, unsupportedSlashCommand } from '../core/provider-commands.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
-import { sessionsDir } from './paths.js';
+import { sessionsDir, userHome } from './paths.js';
 
 /**
  * THE RUNNING AGENTS — one place that owns sessions, and counts them.
@@ -418,7 +421,23 @@ export function listModelsOptionsFor(
     account?: ProviderAccountHome,
 ): ListModelsOptions {
     if (account && account.provider !== provider) throw new Error('The model probe needs an account of its provider');
-    return { ...providerLaunchOptions(providerBinary(provider, env, ports), {}, runtime, account), cwd: homedir(), timeoutMs: MODEL_LIST_TIMEOUT_MS };
+    // The models the ACTIVE account offers (Tynn #1011): a Claude account's own directory, as its launches use it.
+    const dir = provider === 'claude' && account ? claudeDriverAccountOptions(account, env) : {};
+    return { ...providerLaunchOptions(providerBinary(provider, env, ports), {}, runtime, account), cwd: userHome(), timeoutMs: MODEL_LIST_TIMEOUT_MS, ...dir };
+}
+
+/**
+ * WHAT IS SIGNED IN, IN ONE CLAUDE DIRECTORY (Tynn #1011): prism-acp's `describe`, with the CLI a launch would run, from the
+ * home folder (no project's settings choose for it). It reads no file; the CLI's own status carries no credential.
+ */
+export function realDescribeClaude(configDir: string | null): ReturnType<typeof claudeAccounts.describe> {
+    return claudeAccounts.describe(configDir, { ...realClaudeCliOptions(), cwd: userHome() });
+}
+
+/** The Claude CLI Genie runs (a configured binary included), for prism-acp's describe, login and logout (Tynn #1011). */
+export function realClaudeCliOptions(): { binary?: string; binaryArgs?: readonly string[]; parentEnv?: Readonly<Record<string, string | undefined>>; allowEnv?: readonly string[] } {
+    const o = listModelsOptionsFor('claude', process.env, { execPath: process.execPath, electron: Boolean(process.versions.electron) });
+    return { ...(o.binary ? { binary: o.binary } : {}), ...(o.binaryArgs ? { binaryArgs: o.binaryArgs } : {}), ...(o.parentEnv ? { parentEnv: o.parentEnv } : {}), ...(o.allowEnv ? { allowEnv: o.allowEnv } : {}) };
 }
 
 /** The real ask, for `ProviderModelCache`: a short-lived CLI, no turn, ended when it has answered. */
@@ -484,6 +503,27 @@ export function mcpPolicyOptions(record: { readonly mcpOff?: readonly string[] |
     return disabled.length > 0 ? { disabledMcpServers: disabled } : {};
 }
 
+/**
+ * WHICH CLAUDE ACCOUNT A LAUNCH USES (Tynn #1011): prism-acp's `ClaudeDriver({ configDir })`. An account with a directory of its
+ * own launches in it; the default account launches in the CLI's default (`null`), or, when Genie's own environment names one
+ * with CLAUDE_CONFIG_DIR, in that one: the home `legacyProviderHomes` calls the default, so nothing about it changes. With no
+ * account book (a bare host), the option is left out: the old behaviour.
+ */
+export function claudeDriverAccountOptions(account: { readonly legacy: boolean; readonly configDir?: string } | undefined, env: Readonly<Record<string, string | undefined>> = process.env): { configDir?: string | null } {
+    if (account === undefined) return {};
+    return { configDir: claudeLaunchConfigDir(account, env) };
+}
+
+/** The directory a launch on that account is in: its own, or the default's (see `claudeDriverAccountOptions`). */
+export function claudeLaunchConfigDir(account: { readonly configDir?: string }, env: Readonly<Record<string, string | undefined>> = process.env): string | null {
+    return account.configDir ?? (env.CLAUDE_CONFIG_DIR || null);
+}
+
+/** prism-acp's own answer to "is this thread in that account's store" (it looks for the file; it reads none). */
+export function realThreadInAccount(threadId: string, configDir: string | null): 'present' | 'absent' | 'indeterminate' {
+    return probeSessionStore(threadId, { configDir: configDir ?? join(userHome(), '.claude') }).existence;
+}
+
 export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) => {
     // Said in Genie's words, naming the file, before the driver refuses in its own.
     const problem = providerStartProblem(record.provider);
@@ -497,7 +537,7 @@ export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) =
 
     switch (record.provider) {
         case 'claude':
-            return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...launch, ...claudeTrustOptions(extras?.untrusted ?? null), ...mcp, ...mcpPolicyOptions(record, extras?.mcpServers ?? [], extras?.workspaceMcpOff ?? []) }, driverEvents(options.events));
+            return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...launch, ...claudeDriverAccountOptions(extras?.account),...claudeTrustOptions(extras?.untrusted ?? null), ...mcp, ...mcpPolicyOptions(record, extras?.mcpServers ?? [], extras?.workspaceMcpOff ?? []) }, driverEvents(options.events));
 
         case 'codex':
             return (options) => new CodexDriver({ ...codexOptionsFor(codexRecordFor(record, extras?.untrusted ?? null), cwd, resumeSessionId, extras?.mcpServers ?? []), ...launch, ...codexTrustOptions(extras?.untrusted ?? null), ...mcpPolicyOptions(record, extras?.mcpServers ?? [], extras?.workspaceMcpOff ?? []) }, driverEvents(options.events));
@@ -546,6 +586,29 @@ interface Running {
     numbered: { base: number; n: number; rows: TimedEvent[] } | null;
     /** The ledger last served, for the history it was served with: ONE array per run, grown in place as rows arrive (see `rowAdded`); `null` = rebuild it. */
     ledger: { history: object | null; rows: TimedEvent[] } | null;
+    /** The account this run was launched on (Tynn #1011), and its Claude directory; absent when no book is composed. */
+    account?: AccountRecord;
+    launchedConfigDir?: string | null;
+    /** A move to a new active account (Tynn #1011): the account it came from, to go back to if this run does not come up. */
+    movedFrom?: AccountRecord;
+    /** The record and folder this run was started with: what a move to another account starts again (Tynn #1011). */
+    startRecord?: AgentRecord;
+    cwd?: string;
+    /**
+     * A FRESH READ OF THE VERDICT FOUND THIS RUN'S WORKSPACE TRUSTED (Tynn #364), and no turn has started since: the work
+     * that waited for that read may go. A turn starting spends it, so the next work reads again.
+     */
+    freshTrust?: boolean;
+    /** The read of the verdict in flight for this run, if any: one at a time. */
+    readingVerdict?: boolean;
+}
+
+/** The workspace's verdict read now (Tynn #364): the person's own yes as it is, or a fresh read of everything else. */
+export interface VerdictNow {
+    /** The person's own yes stands: no read is needed. */
+    durable(record: AgentRecord): boolean;
+    /** Read the verdict again, now. `true` = trusted. */
+    read(record: AgentRecord): Promise<boolean>;
 }
 
 /** A stopped agent's ledger before its history is read: one empty array, so two reads are the same ledger. */
@@ -558,13 +621,25 @@ export class SessionHost {
     readonly #store: () => SessionStore;
     readonly #driverFor: DriverFor;
     readonly #activeAccount: ((provider: string) => AccountRecord | null) | undefined;
+    readonly #threadInAccount: (threadId: string, configDir: string | null) => 'present' | 'absent' | 'indeterminate';
+    readonly #launchBlocked: ((account: AccountRecord) => string | null) | undefined;
+    /** Starts a sign-in in their account's folder refused (Tynn #1011), as they were asked: started when the sign-in is over (`launchUnblocked`). */
+    readonly #blockedStarts = new Map<AgentId, { readonly record: AgentRecord; readonly cwd: string; readonly how: { readonly account?: AccountRecord; readonly quiet?: boolean; readonly movedFrom?: AccountRecord }; readonly reason: string }>();
+    /** The Claude folder of each run that is stopping, or that a stop could not end: its process is in that folder until it has ended. */
+    readonly #stoppingIn = new Map<AgentId, string>();
+    /** Agents being moved to the active account now (Tynn #1011): one move at a time per agent. */
+    readonly #moving = new Set<AgentId>();
+    /** The account each agent was last told it could not move to: told once per account, not on every turn. */
+    readonly #toldStayed = new Map<AgentId, string>();
     readonly #mcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
     readonly #untrustedFilesFor: ((record: AgentRecord) => Promise<GenieInstructionFiles | null>) | undefined;
     readonly #endToolCalls: ((agentId: AgentId, intent: CancelIntent) => number) | undefined;
     readonly #workspaceMcpOffFor: ((record: AgentRecord) => readonly string[]) | undefined;
     readonly #untrustedNow: ((record: AgentRecord) => boolean) | undefined;
+    readonly #verdictNow: VerdictNow | undefined;
     readonly #markGenieWords: ((agentId: AgentId) => void) | undefined;
     readonly #prepareMcpServers: ((record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>) | undefined;
+    readonly #builtInMcpServers: readonly McpServer[];
     readonly #onTurnNumbered: ((agentId: AgentId, n: number) => void) | undefined;
     readonly #onPlan: ((agentId: AgentId, steps: readonly { content: string; status: string }[]) => void) | undefined;
     readonly #onAction: ((agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void) | undefined;
@@ -610,6 +685,8 @@ export class SessionHost {
 
     readonly #processTree: ProcessTree | undefined;
     readonly #stopGraceMs: number;
+    /** The sessions' retry timer (an overload's wait); injected by a test, else each session's own `setTimeout`. */
+    readonly #retryLater: ((ms: number, fire: () => void) => () => void) | undefined;
     readonly #lifecycle: SessionLifecycle | undefined;
     readonly #startReportMs: number;
     /** Stops still in their grace or verification, by agent: a start waits for them (hosting plan 1.3). */
@@ -675,8 +752,20 @@ export class SessionHost {
         markGenieWords?: (agentId: AgentId) => void;
         /** The workspace's verdict as last read, for what is decided per call: a shell call's answer. Absent = what the launch read. */
         untrustedNow?: (record: AgentRecord) => boolean;
+        /**
+         * THE VERDICT READ NOW, for work reaching a run launched trusted (Tynn #364): the verdict kept can be up to a slow
+         * pass old (15 s on Windows), and a workspace trusted only because nothing in it would run may hold something that
+         * would by now. Absent = the verdict as last read (`untrustedNow`) decides alone.
+         */
+        verdictNow?: VerdictNow;
         /** Private session credentials, prepared before constructing or starting either provider. */
         prepareMcpServers?: (record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>;
+        /**
+         * THE SERVERS GENIE PROVIDES (Tynn #1017; core/agent-mcp.ts BUILT_IN_MCP_SERVERS, the Fancy Dev Kit's `fancy-ui`).
+         * Handed to every session after the servers above, except one switched off for the agent or its workspace
+         * (mcpOffFor): off, the provider is not given it at all, so it costs the agent no context. Absent = none.
+         */
+        builtInMcpServers?: readonly McpServer[];
         /**
          * A turn STARTED and took its number — main writes it to the record (`lastTurn`) for the next start. At the start,
          * not the end: a turn cut off by an exit or a quit had already taken its number, and the next run numbered it again.
@@ -700,6 +789,13 @@ export class SessionHost {
          * (an interrupt the provider did not confirm). The plan keepalive nudges both; a reply is `onAction`'s `replied`.
          */
         onTurnEnd?: (agentId: AgentId, cause: 'interrupted' | 'restarted') => void;
+        /**
+         * WHETHER A THREAD CAN BE RESUMED UNDER AN ACCOUNT (Tynn #1011): prism-acp's `probeSessionStore(threadId, { configDir })`
+         * by default. Asked before an agent is moved to a new active account; anything but `present` keeps it where it is.
+         */
+        threadInAccount?: (threadId: string, configDir: string | null) => 'present' | 'absent' | 'indeterminate';
+        /** Why nothing may launch in that account's folder now (a sign-in is running there, Tynn #1011), or `null`. */
+        launchBlocked?: (account: AccountRecord) => string | null;
         /** The person wrote to an agent (a message of their own starts a turn): the plan keepalive's count starts again. */
         onPersonTurn?: (agentId: AgentId) => void;
         /** Each agent's headroom reading, with its provider: the Dashboard header's one-per-provider indicator (main buffers). */
@@ -739,6 +835,8 @@ export class SessionHost {
         store?: () => SessionStore;
         /** A graceful stop's grace for a provider that has one (`gracefulEndFor`). Default `STOP_GRACE_MS`. */
         stopGraceMs?: number;
+        /** Every session's retry timer (`AgentSessionOptions.retryLater`); for tests. */
+        retryLater?: (ms: number, fire: () => void) => () => void;
         /** Every run's processes and how it ended — the ledger, the log, the Deck. Absent = told to nobody. */
         lifecycle?: SessionLifecycle;
         /** How long before a start that has not come up is reported. Absent = `START_REPORT_MS`. */
@@ -751,13 +849,17 @@ export class SessionHost {
         this.#store = options.store ?? (() => (shared ??= openDurableStore(sessionsDir(this.#userData))));
         this.#driverFor = options.driverFor ?? realDriverFor;
         this.#activeAccount = options.activeAccount;
+        this.#threadInAccount = options.threadInAccount ?? realThreadInAccount;
+        this.#launchBlocked = options.launchBlocked;
         this.#mcpServersFor = options.mcpServersFor;
         this.#untrustedFilesFor = options.untrustedFilesFor;
         this.#endToolCalls = options.endToolCalls;
         this.#workspaceMcpOffFor = options.workspaceMcpOffFor;
         this.#untrustedNow = options.untrustedNow;
+        this.#verdictNow = options.verdictNow;
         this.#markGenieWords = options.markGenieWords;
         this.#prepareMcpServers = options.prepareMcpServers;
+        this.#builtInMcpServers = options.builtInMcpServers ?? [];
         this.#onTurnNumbered = options.onTurnNumbered;
         this.#onPlan = options.onPlan;
         this.#onAction = options.onAction;
@@ -770,6 +872,7 @@ export class SessionHost {
         this.#clock = options.clock ?? (() => Date.now());
         this.#processTree = options.processTree;
         this.#stopGraceMs = options.stopGraceMs ?? STOP_GRACE_MS;
+        this.#retryLater = options.retryLater;
         this.#lifecycle = options.lifecycle;
         this.#startReportMs = options.startReportMs ?? START_REPORT_MS;
         this.#onThreadId = options.onThreadId;
@@ -1050,8 +1153,10 @@ export class SessionHost {
         for (const [id, entry] of this.#running) { entry.session.releaseWork(); this.#emit(id); }
     }
 
-    start(record: AgentRecord, cwd: string): { ok: true } | { ok: false; reason: string } {
+    start(record: AgentRecord, cwd: string, how: { readonly account?: AccountRecord; readonly quiet?: boolean; readonly movedFrom?: AccountRecord } = {}): { ok: true } | { ok: false; reason: string } {
         const existing = this.#running.get(record.id);
+        // This start is the newest word on the agent: one a sign-in refused earlier no longer waits to be started.
+        this.#blockedStarts.delete(record.id);
         if (existing) return { ok: true };
         // A setting/crash replacement of an existing identity must still get its session in the
         // host, so the final restore record cannot drop it. Its work remains held by mayTakeWork.
@@ -1079,20 +1184,34 @@ export class SessionHost {
                 return { ok: false, reason };
             }
             this.#leftovers.delete(record.id);
+            this.#stoppingIn.delete(record.id);
         }
 
         // Two processes driving one workspace's agents is how a conversation forks: a hold is a refusal, said.
         const held = this.#heldElsewhere?.(record) ?? null;
         if (held !== null) return { ok: false, reason: held };
 
-        let account: AccountRecord | undefined;
-        if (this.#activeAccount) {
+        let account: AccountRecord | undefined = how.account;
+        if (account === undefined && this.#activeAccount) {
             const found = this.#activeAccount(record.provider);
             const reason: string | null = !found || found.provider !== record.provider ? 'This provider has no active account; choose its account before starting.' : null;
             if (found && reason === null) account = found;
             if (reason !== null) { this.refusals.set(record.id, reason); this.#emit(record.id); return { ok: false, reason }; }
         }
-        const mcpServers = this.#mcpServersFor?.(record) ?? [];
+        // Never a launch in a folder a sign-in is running in (prism-acp: one process per folder at a time; Tynn #1011).
+        const blocked = account ? this.#launchBlocked?.(account) ?? null : null;
+        if (blocked !== null) {
+            // "It starts once the sign-in is over": kept as it was asked, and started then (`launchUnblocked`).
+            this.#blockedStarts.set(record.id, { record, cwd, how, reason: blocked });
+            this.refusals.set(record.id, blocked); this.#emit(record.id);
+            return { ok: false, reason: blocked };
+        }
+        // Genie's provided servers after the rest (Tynn #1017), unless off for this agent or its workspace, read per launch.
+        const withBuiltIn = (servers: readonly McpServer[]): readonly McpServer[] => {
+            const off = new Set(mcpOffFor(record, this.#workspaceMcpOffFor?.(record) ?? []));
+            return [...servers, ...this.#builtInMcpServers.filter((b) => !off.has(b.name) && !servers.some((s) => sameMcpServer(s, b)))];
+        };
+        const mcpServers = withBuiltIn(this.#mcpServersFor?.(record) ?? []);
         const serviceEnv = this.#serviceEnvFor?.(record.workspaceId) ?? {};
         // WHERE A START HAS GOT TO (Tynn #558): told to the lifecycle log, and to the person if it does not come up.
         const startPhase = (phase: AgentStartPhase): void => { const run = this.#running.get(record.id)?.run; if (run !== undefined) this.#lifecycle?.phase?.(record.id, run, phase); };
@@ -1103,8 +1222,17 @@ export class SessionHost {
         const driverFactory = deferred ? deferredDriverFactory(async (signal) => {
             const untrusted = (await this.#untrustedFilesFor?.(record)) ?? null;
             if (signal.aborted) throw new Error('Preparation was cancelled.');
-            const prepared = this.#prepareMcpServers ? await this.#prepareMcpServers(record, cwd, signal) : mcpServers;
+            // CODEX IN A WORKSPACE NOT TRUSTED (Tynn #364): Codex documents only one switch for a folder's own `.codex/`
+            // layer (its MCP servers, hooks and rules): the person's own trust of that folder, in their own Codex config. No
+            // documented flag or override turns that layer off for one launch, so Codex does not start here until the
+            // person trusts the workspace. Claude Code has those flags (claudeTrustOptions) and starts restricted.
+            if (untrusted !== null && record.provider === 'codex') throw new McpPreparationError('codexUntrusted');
+            const prepared = this.#prepareMcpServers ? withBuiltIn(await this.#prepareMcpServers(record, cwd, signal)) : mcpServers;
             if (signal.aborted) throw new Error('Preparation was cancelled.');
+            // THE VERDICT AGAIN, JUST BEFORE THE SPAWN (Tynn #364): preparing MCP servers can take a while on the network, and
+            // the person's Untrust can land meanwhile. A start read as trusted that is not trusted now starts nothing. The
+            // other way (read as not trusted, trusted now) starts restricted, which runs nothing of the folder's.
+            if (untrusted === null && this.#untrustedNow?.(record) === true) throw new McpPreparationError('trustMoved');
             const factory = this.#driverFor(record, cwd, record.threadId, { ...(account ? { account } : {}), mcpServers: prepared, serviceEnv, workspaceMcpOff: this.#workspaceMcpOffFor?.(record) ?? [], ...(untrusted ? { untrusted } : {}) });
             if (!factory) throw new Error('The provider is unsupported.');
             const current = this.#running.get(record.id);
@@ -1186,7 +1314,9 @@ export class SessionHost {
         const rows: TimedEvent[] = [];
         const startedAt = this.#clock();
         const runId = randomUUID();
-        const entry: Running = { session: null as unknown as AgentSession, provider: record.provider, rows, startedAt, runId, nextRowId: 0, sounded: new Set<string>(), mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), cancelDeclared: turnCancelFor(record.provider) === true, run: ++this.#runs, readings: new LiveReadings(), background: new BackgroundCount(), marker: { id: `${record.id}:run`, event: { kind: 'run', resumed: Boolean(record.threadId) }, at: startedAt }, numbered: null, ledger: null };
+        const entry: Running = { session: null as unknown as AgentSession, provider: record.provider, rows, startedAt, runId, nextRowId: 0, sounded: new Set<string>(), mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), cancelDeclared: turnCancelFor(record.provider) === true, run: ++this.#runs, readings: new LiveReadings(), background: new BackgroundCount(), marker: { id: `${record.id}:run`, event: { kind: 'run', resumed: Boolean(record.threadId), ...(how.quiet === true ? { quiet: true } : {}) }, at: startedAt }, numbered: null, ledger: null,
+            ...(account ? { account, launchedConfigDir: claudeLaunchConfigDir(account) } : {}), ...(how.movedFrom ? { movedFrom: how.movedFrom } : {}),
+            startRecord: record, cwd };
 
         // The plan kept from before this run: shown at once, until the run reports its own (identity.ts `plan`).
         if (record.plan && record.plan.length > 0) entry.readings.seedPlan(record.plan);
@@ -1211,16 +1341,21 @@ export class SessionHost {
             onStartSettled: (ok) => {
                 if (startReport !== null) clearTimeout(startReport);
                 if (this.#running.get(record.id)?.session === session) startPhase(ok ? 'ready' : 'failed');
+                // A move to a new account that did not come up goes back to the account it came from, same thread (Tynn #1011).
+                if (!ok && entry.movedFrom && this.#running.get(record.id)?.session === session) this.#moveBack(record, cwd, entry.movedFrom, entry.account);
             },
             onReadingFailed: (pids) => this.#lifecycle?.readingFailed?.(record.id, entry.run, pids),
             onStraggler: () => this.#lifecycle?.straggler(record.id, entry.run),
             // Its turns so far, known at start: the first turn after a relaunch numbers on at once (identity.ts lastTurn).
             ...(record.lastTurn !== undefined ? { turnsBefore: record.lastTurn } : {}),
             onRateLimit: (readings, message) => this.#limitReport(this.#loginFor(record.provider), readings, message),
-            ...(this.#onHeadroom ? { onHeadroom: (room: Headroom) => this.#onHeadroom!(record.provider, room, { accountId: this.#activeId(record.provider), runId }) } : {}),
+            ...(this.#onHeadroom ? { onHeadroom: (room: Headroom) => this.#onHeadroom!(record.provider, room, { accountId: this.#readingAccount(entry), runId }) } : {}),
             onMcpServers: (reports) => this.#onMcpServers?.(record.id, reports),
             ...(this.#onDesignAuth && record.provider === 'claude' ? { onDesignAuth: (event: import('../core/design-auth.js').DesignAuthEvent) => this.#onDesignAuth!(record.id, event) } : {}),
             onRestartForQueue: () => this.#restartForQueue(record, cwd),
+            // An overloaded agent that exited during the wait (Tynn #1060): reloaded on the same conversation, the failed prompt resent.
+            onOverloadExited: (failed) => this.#restartToResend(record, cwd, failed),
+            ...(this.#retryLater ? { retryLater: this.#retryLater } : {}),
             // A Claude agent's tool setting, read when each shell call asks — so a change needs no restart (genie#1188).
             // Autonomous answers the same questions, at the same moment (Tynn #439): Claude's shell calls, and what Codex asks.
             // Where it does not apply, the card says why (`askedWhy`).
@@ -1232,7 +1367,8 @@ export class SessionHost {
                 askWhy: () => askedWhy(this.#approvalWhere(record)),
             } : {}),
             // THE ONE PLACE THAT DECIDES IT: a run launched in a trusted workspace takes no work once it no longer is. It goes to the next run.
-            mayTakeWork: () => !this.#shutdownPending && !(this.#running.get(record.id)?.launchedUntrusted === false && this.#untrustedNow?.(record) === true),
+            // And READ NOW (Tynn #364): work for a run launched trusted waits for a fresh read unless the person's own yes stands.
+            mayTakeWork: () => !this.#shutdownPending && !(this.#running.get(record.id)?.launchedUntrusted === false && this.#untrustedNow?.(record) === true) && this.#readNow(record),
             onLimitBreach: (reason) => this.#limitBreach(record.id, this.#loginFor(record.provider), reason),
             /*
              * A change the UI renders — a parked approval, an answered one, a turn ending.
@@ -1260,6 +1396,9 @@ export class SessionHost {
                     }
                     entry.sounded.clear();
                 }
+                // If the active account changed under it, the agent moves once it is quiet (Tynn #1011): after its turn and
+                // the Cooling wait, which this change may be the end of.
+                if (this.#awaitsMove(entry)) this.#scheduleMove(record.id);
                 this.#emit(record.id);
             },
             /*
@@ -1281,6 +1420,9 @@ export class SessionHost {
                 // A TURN TOOK ITS NUMBER: kept on the record now, so a turn cut off before it ends is never numbered again.
                 if (event.kind === 'turn' && event.n > numberedTurn) {
                     numberedTurn = event.n;
+                    // The fresh read covered the work that waited for it, which this turn now carries; the next work reads again.
+                    const running = this.#running.get(record.id);
+                    if (running) running.freshTrust = false;
                     this.#onTurnNumbered?.(record.id, event.n);
                 }
                 // A PLAN ARRIVED: kept on the record now, so the next run — after a relaunch, a restart, a new conversation — shows it.
@@ -1397,9 +1539,164 @@ export class SessionHost {
         }
 
         this.#emit(record.id);
-        // It started (Tynn #766 C): its own sound, if the person chose one.
-        this.#onAction?.(record.id, 'started');
+        // It started (Tynn #766 C): its own sound, if the person chose one. A move to the active account is not a start (Tynn #1011).
+        if (how.quiet !== true) this.#onAction?.(record.id, 'started');
         return { ok: true };
+    }
+
+    /**
+     * A SIGN-IN IN AN ACCOUNT'S FOLDER IS OVER, however it ended (Tynn #1011; the review of #2139). A start it refused said "it
+     * starts once the sign-in is over", so it starts now: as it was asked, for the agent's record as it is now (one removed
+     * meanwhile is not started), under every refusal a start has; its sign-in refusal is gone either way. One whose folder is
+     * signing in again waits for that one's end. And an agent that waited to MOVE to that account is asked again. The owner's
+     * rule: an agent never sits waiting on a person once the cause is gone.
+     */
+    launchUnblocked(): void {
+        const waiting = [...this.#blockedStarts];
+        this.#blockedStarts.clear();
+        for (const [id, asked] of waiting) {
+            if (this.#running.has(id)) continue;
+            if (this.refusals.get(id) === asked.reason) this.refusals.delete(id);
+            const record = this.#currentRecord ? this.#currentRecord(id) : asked.record;
+            if (record) this.start(record, asked.cwd, asked.how);
+            this.#emit(id);
+        }
+        for (const [id, entry] of this.#running) if (entry.provider === 'claude') this.#scheduleMove(id);
+    }
+
+    /**
+     * HOW MANY RUNS ARE IN A CLAUDE ACCOUNT'S FOLDER NOW (Tynn #1011): every run launched there, whichever account is active
+     * (after a switch an agent stays in the old account's folder until its turn is over), and one that is still stopping or
+     * that a stop could not end. "Sign out and remove" never takes the folder while this is not zero.
+     */
+    runningIn(configDir: string): number {
+        let count = 0;
+        for (const entry of this.#running.values()) if (entry.launchedConfigDir === configDir) count += 1;
+        for (const dir of this.#stoppingIn.values()) if (dir === configDir) count += 1;
+        return count;
+    }
+
+    /**
+     * THE ACTIVE ACCOUNT OF A PROVIDER CHANGED (Tynn #1011). The owner: "agents keep running when we switch. provider accounts
+     * never dictate agent operations, only rate limits." Each running agent of the provider draws on the new account from its
+     * next clean idle: one idle now moves now; one in a turn, a tool, an approval or with work queued moves when that is over.
+     */
+    accountChanged(provider: string): void {
+        for (const [id, entry] of this.#running) if (entry.provider === provider) this.#scheduleMove(id);
+    }
+
+    /**
+     * A SWITCH TELLS EVERY AGENT ITS NEW ROOM (Tynn #1011; the owner: "whenever we have an account switch make sure to post the
+     * updated rate limit status so agents know it is reset"). At once: the new account's last reading is published as the
+     * provider's headroom (fresh: no earlier window carried over), the provider is asked for a live one where it can answer,
+     * the new account's hold opens unless its own reading says it is spent, and every running agent of the provider has its
+     * headroom replaced (no stale "N% until you hit your rate limit"), a line naming the account and its room ahead of its next
+     * turn, and any limit hold lifted.
+     */
+    accountSwitched(provider: string, input: { readonly account: AccountRecord; readonly headroom: Headroom | null }): void {
+        const now = this.#clock();
+        const note = accountSwitchNote(input.account.label, input.headroom, now);
+        if (input.headroom) this.#onHeadroom?.(provider, input.headroom, { accountId: input.account.id, runId: 'account-switch', fresh: true });
+        const login = this.#loginOf(provider, input.account.id);
+        if (!this.#gate.limitedByReading(login, now)) this.#gate.resumeNow(login);
+        let reader: Running | null = null;
+        for (const [id, entry] of this.#running) {
+            if (entry.provider !== provider) continue;
+            entry.session.accountSwitched(note, input.headroom);
+            if (reader === null && entry.session.canReadRateLimits) reader = entry;
+            this.#emit(id);
+        }
+        reader?.session.readRateLimits()?.catch(() => { /* no reading: the published one stands */ });
+        this.#wake();
+    }
+
+    /**
+     * WHOSE READING IT IS (Tynn #478/#751, #1011). In ONE directory the account can change under a running process (a sign-in
+     * again in the default home, #753), so a reading there is the active account's. A run in a directory of its OWN keeps
+     * its account until it moves, so a reading from it is that account's, whichever is active now.
+     */
+    #readingAccount(entry: Running): string {
+        const active = this.#activeAccount?.(entry.provider);
+        if (entry.account && active && entry.launchedConfigDir !== undefined && claudeLaunchConfigDir(active) !== entry.launchedConfigDir) return entry.account.id;
+        return this.#activeId(entry.provider);
+    }
+
+    /** Cheap, for every state change: a Claude run on another account than the active one, not already moving. */
+    #awaitsMove(entry: Running): boolean {
+        if (entry.provider !== 'claude' || entry.account === undefined || entry.session.quiet !== true) return false;
+        const active = this.#activeAccount?.(entry.provider);
+        if (active === null || active === undefined || claudeLaunchConfigDir(active) === (entry.launchedConfigDir ?? null)) return false;
+        // Told it cannot move to this account: not asked again on every change (a switch, `accountChanged`, asks again).
+        return this.#toldStayed.get(entry.session.agentId as AgentId) !== active.id;
+    }
+
+    /** After the turn's own end handling (what was queued is handed over first), see whether the agent moves. */
+    #scheduleMove(agentId: AgentId): void {
+        setTimeout(() => { void this.#considerMove(agentId); }, 0);
+    }
+
+    async #considerMove(agentId: AgentId): Promise<void> {
+        const entry = this.#running.get(agentId);
+        if (!entry || entry.provider !== 'claude' || entry.account === undefined || this.#moving.has(agentId)) return;
+        const active = this.#activeAccount?.(entry.provider);
+        if (!active || active.provider !== entry.provider) return;
+        const activeConfigDir = claudeLaunchConfigDir(active);
+        const record = this.#currentRecord?.(agentId) ?? entry.startRecord ?? null;
+        const threadId = record?.threadId ?? entry.session.cliSessionId ?? null;
+        const session = entry.session;
+        const base = {
+            launchedConfigDir: entry.launchedConfigDir ?? null, activeConfigDir,
+            // QUIET (core/session.ts): promptable, not held, and past Cooling, in which Claude may still open a turn for a
+            // prompt it took mid-turn. A move while it is not would cut that prompt's work.
+            inTurn: session.inTurn || session.starting || !session.quiet, pendingApproval: session.pendingApproval !== null,
+            // A question to the person parks as an approval (`pendingApproval`); an answer arrives as queued work.
+            pendingQuestion: false,
+            backgroundRunning: session.runningCall !== null || entry.background.count(entry.rows) > 0,
+            queued: session.queuedPromptIds.length + (session.workWaiting ? 1 : 0), threadId,
+        };
+        const first = respawnDecision({ ...base, store: 'absent' });
+        if (first.kind === 'stay' || first.kind === 'wait') return;
+        // The new account's folder is signing in: the move waits for its end (the next change asks again).
+        if (this.#launchBlocked?.(active) != null) return;
+        // Only now is the store asked: it is the one look before anything is stopped.
+        const decision = threadId === null ? first : respawnDecision({ ...base, store: this.#threadInAccount(threadId, activeConfigDir) });
+        if (decision.kind === 'note') { this.#tellStayed(agentId, entry.account, active, decision.text); return; }
+        if (decision.kind !== 'respawn') return;
+        const from = entry.account;
+        const cwd = entry.cwd;
+        if (record === null || cwd === undefined) return;
+        // The SAME thread, always: the one the provider reported, if the record has not caught up with it yet.
+        const runRecord: AgentRecord = { ...record, threadId };
+        this.#moving.add(agentId);
+        try {
+            this.stop(agentId, { graceful: false });
+            const verdict = await this.ended(agentId);
+            if (verdict && !verdict.verified && verdict.survivors.length > 0) return;
+            const started = this.start(runRecord, cwd, { account: active, quiet: true, movedFrom: from });
+            if (!started.ok) { this.#moveBack(runRecord, cwd, from, active); return; }
+            this.#toldStayed.delete(agentId);
+            await this.deliverOwed(agentId);
+        } finally {
+            this.#moving.delete(agentId);
+        }
+    }
+
+    /** A move that did not come up: the agent runs again on the account it came from, on its thread, and is told. */
+    #moveBack(record: AgentRecord, cwd: string, from: AccountRecord, to: AccountRecord | undefined): void {
+        const id = record.id;
+        setTimeout(() => {
+            void (async () => {
+                if (this.#running.get(id)) { this.stop(id, { graceful: false }); await this.ended(id); }
+                const again = this.start(this.#currentRecord?.(id) ?? record, cwd, { account: from, quiet: true });
+                if (again.ok && to) this.#tellStayed(id, from, to, `it could not start on ${to.label}`, true);
+            })().catch(() => { /* the refusal is on the agent's row (start says why) */ });
+        }, 0);
+    }
+
+    #tellStayed(agentId: AgentId, from: AccountRecord, to: AccountRecord, why: string, always = false): void {
+        if (!always && this.#toldStayed.get(agentId) === to.id) return;
+        this.#toldStayed.set(agentId, to.id);
+        this.#running.get(agentId)?.session.notice(stayedWords({ from: from.label, to: to.label, why }));
     }
 
     /**
@@ -1427,6 +1724,30 @@ export class SessionHost {
      * = not running, or nothing parked.
      */
     /** What answers an agent's approval now: its CURRENT record's autonomy, and the workspace's verdict now (else at launch). */
+    /**
+     * WORK FOR A RUN LAUNCHED TRUSTED READS THE VERDICT NOW (Tynn #364). The person's own yes stands as it is (only their
+     * Untrust ends it). Otherwise the work waits, held by the session, while one fresh read is made: trusted, it goes, and
+     * that read covers what waited until a turn starts; not trusted, it stays held, and the verdict's move restarts the run
+     * (trust-verdict.ts). A run launched untrusted is not this rule's: it was given nothing of the workspace's own.
+     */
+    #readNow(record: AgentRecord): boolean {
+        const entry = this.#running.get(record.id);
+        const ports = this.#verdictNow;
+        if (!ports || !entry || entry.launchedUntrusted !== false) return true;
+        if (entry.freshTrust === true || ports.durable(record)) return true;
+        if (entry.readingVerdict !== true) {
+            entry.readingVerdict = true;
+            void ports.read(record).catch(() => false).then((trusted) => {
+                entry.readingVerdict = false;
+                if (this.#running.get(record.id) !== entry || !trusted) return;
+                entry.freshTrust = true;
+                entry.session.releaseWork();
+                this.#emit(record.id);
+            });
+        }
+        return false;
+    }
+
     #approvalWhere(record: AgentRecord): { untrusted: boolean; autonomous: boolean } {
         return {
             untrusted: this.#untrustedNow?.(record) ?? this.#running.get(record.id)?.launchedUntrusted === true,
@@ -1906,6 +2227,33 @@ export class SessionHost {
     }
 
     /**
+     * AN OVERLOADED AGENT THAT EXITED DURING THE WAIT (Tynn #1060; prism-acp 0.48.0 answers such a retry `session_exited`,
+     * "reload with session/load"). Genie drives the driver in-process, so its reload is this: the old run is ended, the
+     * agent starts again on the same conversation (the record's thread), and the prompt the overload failed is sent to the
+     * new run, once — not written again as a message. A start refused leaves it unsent, and the chat says so.
+     */
+    #restartToResend(record: AgentRecord, cwd: string, failed: OverloadedPrompt): void {
+        const id = record.id;
+        const old = this.#running.get(id)?.session;
+        setTimeout(() => {
+            void (async () => {
+                if (old === undefined || this.#running.get(id)?.session !== old) return;
+                this.stop(id, { graceful: false });
+                const verdict = await this.ended(id);
+                if (verdict && !verdict.verified && verdict.survivors.length > 0) return;
+                const started = this.start(this.#currentRecord?.(id) ?? record, cwd);
+                if (!started.ok) return;
+                this.#onTurnEnd?.(id, 'restarted');
+                const session = this.#running.get(id)?.session;
+                if (!session?.running) return;
+                session.redeliver(randomUUID(), failed.text, failed.by, failed.sent);
+                session.notice('The provider was busy and this agent had exited, so Genie started it again on the same conversation and sent the last message again.');
+                this.#emit(id);
+            })().catch(() => { /* the failed prompt is not sent; the person sends it again */ });
+        }, 0);
+    }
+
+    /**
      * Stop means stop.
      *
      * The session kills the driver and reaps its own subtree. The slot frees here, which is
@@ -1921,13 +2269,15 @@ export class SessionHost {
         const graceMs = options.graceful !== false && gracefulEndFor(entry.provider) ? this.#stopGraceMs : 0;
         const ending = entry.session.stop('SIGTERM', { graceMs });
         this.#running.delete(agentId);
+        // Its process is in its account's folder until the stop is over (`runningIn`).
+        if (typeof entry.launchedConfigDir === 'string') this.#stoppingIn.set(agentId, entry.launchedConfigDir);
         // Its last rows (a cancelled approval, the reply the exit closes) are still on their way to the thread.
         this.#stopped.add(entry.session);
         const done = (verdict: StopVerdict): void => {
             if (this.#ending.get(agentId) === ending) this.#ending.delete(agentId);
             this.#verdicts.set(agentId, verdict);
             if (!verdict.verified && verdict.survivors.length > 0) this.#leftovers.set(agentId, verdict.survivors);
-            else this.#leftovers.delete(agentId);
+            else { this.#leftovers.delete(agentId); this.#stoppingIn.delete(agentId); }
             this.#lifecycle?.ended(agentId, entry.run, verdict);
         };
         // Known at once when no grace and no retry was needed (and then a start right after is not refused).
@@ -2091,7 +2441,10 @@ export class SessionHost {
         if (entry.ledger !== null && entry.ledger.history === loaded) return entry.ledger.rows;
         // Where this run begins: said once, when there is something before it to tell it from — recorded rows, or a
         // conversation the provider resumed (which it remembers even when Genie recorded none of it).
-        const marker: TimedEvent[] = history.length > 0 || entry.resumed ? [entry.marker] : [];
+        // A move to the active account (Tynn #1011) says nothing: it is the same conversation, between two of its turns, and it
+        // only happens at a clean idle (no shell, tool, approval or queued message a run boundary would end).
+        const quiet = entry.marker.event.kind === 'run' && entry.marker.event.quiet === true;
+        const marker: TimedEvent[] = !quiet && (history.length > 0 || entry.resumed) ? [entry.marker] : [];
         // This run's turns number on from the history's — once it is read; until then they keep the session's own numbers.
         let run: readonly TimedEvent[] = entry.rows;
         if (loaded) {
@@ -2241,6 +2594,7 @@ export class SessionHost {
             signedOut: entry.session.signedOut,
             // The turn its provider stopped, explained and counted (Tynn #859): the red stop line's words.
             providerStop: entry.session.providerStop,
+            overloadRetry: entry.session.overloadRetry,
             // Its turn may have ended while what it started runs on: the header, the Dashboard and the chat say so.
             background: entry.background.count(rows),
             accountPaused: entry.session.accountPaused,
@@ -2379,3 +2733,4 @@ export interface EngineLiveness {
 export function commsFields(c: Comms | null): { collaborators: number | null; commsAgeSeconds: number | null; links: Comms['links'] | null } {
     return { collaborators: c?.collaborators ?? null, commsAgeSeconds: c?.commsAgeSeconds ?? null, links: c?.links ?? null };
 }
+

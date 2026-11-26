@@ -20,6 +20,7 @@ const RELAY = 'wss://relay.example.com';
 const tynnKey = generateKeyPairSync('ed25519');
 const tynnJwk = { ...(tynnKey.publicKey.export({ format: 'jwk' }) as { kty: string; crv: string; x: string }), kid: 'tynn-1', alg: 'EdDSA' } as TynnJwk;
 const hostKey = generateKeyPairSync('ed25519');
+const HOST_PUBLIC_KEY = (hostKey.publicKey.export({ type: 'spki', format: 'der' }) as Buffer).toString('base64');
 const hostFingerprint = createHash('sha256').update(hostKey.publicKey.export({ type: 'spki', format: 'der' })).digest('hex');
 const thumbprint = (jwk: { crv: string; kty: string; x: string }) =>
     createHash('sha256').update(`{"crv":"${jwk.crv}","kty":"${jwk.kty}","x":"${jwk.x}"}`, 'utf8').digest('base64url');
@@ -39,7 +40,7 @@ let jti = 0;
 const request = async (path: string, init: { method: string; body?: unknown }) => {
     if (!path.endsWith('/connect-grant') || init.method !== 'POST') return { ok: false, status: 404, json: async () => ({}) };
     const token = signGrant({ jti: `g${++jti}`, cnf: { jkt: thumbprint((init.body as { pop_jwk: PopJwk }).pop_jwk) } });
-    return { ok: true, status: 201, json: async () => ({ token, relay_endpoint: RELAY }) };
+    return { ok: true, status: 201, json: async () => ({ token, relay_endpoint: RELAY, host_public_key: HOST_PUBLIC_KEY }) };
 };
 
 let relay: ReturnType<typeof fakeRelay>;
@@ -56,6 +57,7 @@ beforeEach(async () => {
         relayUrl: RELAY,
         workstationId: WS_ID,
         hello: async () => buildTicketHostHello({ ticket: 'ticket-1', workstationId: WS_ID, fingerprint: hostFingerprint, sign: (d) => sign(null, d, hostKey.privateKey) }),
+        fingerprint: hostFingerprint, sign: (d) => sign(null, d, hostKey.privateKey),
         signedInHere: () => 'user_1',
         validateGrant: async (token) => verifyMemberGrant(token, { keys: [tynnJwk], workstationId: WS_ID }),
         revalidateMs: 30_000,
@@ -73,7 +75,7 @@ async function guest(): Promise<{ transport: RelayMemberTransport; received: str
     const pop = PopKeypair.generate();
     const grant = await mintConnectGrant(request, WS_ID, pop.publicJwk);
     if (!grant.ok) throw new Error(grant.reason);
-    const opening = openRelayMember({ socket: relay.socket, relayUrl: grant.relayEndpoint, workstationId: WS_ID, grant: grant.token, pop });
+    const opening = openRelayMember({ socket: relay.socket, relayUrl: grant.relayEndpoint, workstationId: WS_ID, grant: grant.token, hostPublicKey: grant.hostPublicKey, pop });
     await settle();
     const opened = await opening;
     if (!opened.ok) throw new Error(opened.reason);

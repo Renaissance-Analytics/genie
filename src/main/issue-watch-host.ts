@@ -1,5 +1,6 @@
 import type { BoardLiveSignal } from '../core/tynn-board.js';
 import { issueWatchSoundKinds, PANEL_RECENT, type IssueWatchSummary, type IwEntry, type IwEvent, type WatchedReposView } from '../core/issue-watch.js';
+import type { IssueWatchSoundKind } from '../core/issue-watch-signal.js';
 import { IssueWatchDelivery, type IssueWatchDeliveryPorts } from './issue-watch-delivery.js';
 import { IssueWatchClient, type SocketLike } from './issue-watch-client.js';
 import { TynnBoardLive, type TynnLiveFeed } from './tynn-board-live.js';
@@ -11,13 +12,14 @@ import type { TynnResponse } from './tynn-account.js';
  * Tynn account (P3.4), the agents and their one wake (P3.2), so it listens here:
  *
  *  - `IssueWatchService`: the client on the host's account (started at boot, started over when the account changes), the
- *    delivery queue the host's mail wake reads as its second source (host-mail-wake.ts), and the state a LOCAL window's
- *    features read — the latest entry, when it arrived, what happened lately and the repo switches, per Tynn project. A
- *    window asks Refresh, a repo load and a repo switch by call. A batch's sounds are events: an open window plays them,
- *    and with none nothing plays and nothing is kept for later.
- *  - `TynnBoardHub`: one `TynnBoardLive` (one socket for every board) followed per VIEW, as the file watcher is: a
- *    connection's views watch a workspace, its rings and states go to the connections watching it, and a connection that
- *    closes releases its views — the socket closes with the last.
+ *    delivery queue the host's mail wake reads as its second source (host-mail-wake.ts), and the state the host's own
+ *    features and tools read — the latest entry, when it arrived, what happened lately and the repo switches, per Tynn
+ *    project. Refresh, a repo load and a repo switch are calls (the feature machine's, and `checkIssues`'s refresh). A
+ *    batch's sounds are events the host says to its open windows as tool signals (issue-watch-tools.ts): with no window
+ *    nothing plays and nothing is kept for later. Nothing of it rides the engine link (Tynn #934 task #1474).
+ *  - `TynnBoardHub`: one `TynnBoardLive` (one socket for every board) followed per VIEW, as the file watcher is: an
+ *    owner's views watch a workspace, its rings and states go to the owner watching it, and the socket closes with the
+ *    last view. The owner is genie-host's own (host-local-watches.ts): RemoteHost releases a closing connection's views.
  *
  * Tynn answers every unauthorized call with 404; the client reads that as signed out with the sign-in kept, and so does
  * the host (issue-watch-client.ts, tynn-account.ts). Everything outside is a port: the whole life is tested with a fake
@@ -48,9 +50,9 @@ export interface IssueWatchDump {
     readonly projects: Readonly<Record<string, IssueWatchProject>>;
 }
 
-export type IssueWatchSound = 'ghissue' | 'ghpr' | 'ghsecurity' | 'ghci';
+export type IssueWatchSound = IssueWatchSoundKind;
 
-/** What the host tells local windows: the state changed (whole), or a sound to play now (never kept for later). */
+/** What the service says: the state changed (whole), or a sound to play now (never kept for later). */
 export type IssueWatchHostEvent =
     | { readonly kind: 'dump'; readonly dump: IssueWatchDump }
     | { readonly kind: 'sound'; readonly sound: IssueWatchSound };
@@ -158,7 +160,7 @@ export class IssueWatchService {
         return () => { this.#listeners.delete(listener); };
     }
 
-    /** A local window's call: `refresh` [workspaceId], `loadRepos` [workspaceId], `setRepo` [workspaceId, owner, repo, change]. */
+    /** A call of the host's features or tools: `refresh` [workspaceId], `loadRepos` [workspaceId], `setRepo` [workspaceId, owner, repo, change]. */
     async call(method: string, args: readonly unknown[]): Promise<unknown> {
         const workspaceId = typeof args[0] === 'string' ? args[0] : '';
         const projectId = workspaceId === '' ? null : this.#ports.projectFor(workspaceId);
@@ -273,14 +275,6 @@ export class TynnBoardHub {
         views.delete(viewId);
         if (views.size === 0) this.#views.delete(owner);
         view.stop();
-    }
-
-    /** The connection closed: every view it held is released. */
-    dropOwner(owner: string): void {
-        const views = this.#views.get(owner);
-        if (!views) return;
-        this.#views.delete(owner);
-        for (const view of views.values()) view.stop();
     }
 
     /** A project's ring or state: once to each connection, for each workspace of its views on that project. */

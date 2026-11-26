@@ -1,7 +1,9 @@
 import { Button, ContentRenderer, Icon, Sidebar } from '@particle-academy/react-fancy';
+import { sliceStateLabel, type ShownSliceState } from '../../core/slice-state.js';
 import { startPlan, type BoardActionInput, type BoardClaims, type LiveState } from '../../core/tynn-board.js';
 import { WIP_LENSES, wipRef, wipWhen, type TynnPageState, type WipLens, type WipStory, type WipTask, type WipView } from '../../core/tynn-pages.js';
 import { genieClipboardWriter } from '../clipboard.js';
+import { ReleaseKindMark } from './ReleaseKindMark.js';
 import { Avatar, LiveMark, OpLine } from './TynnBoardPanel.js';
 
 /**
@@ -44,6 +46,19 @@ const STATUS_LOOK: Readonly<Record<string, { label: string; className: string }>
     done: { label: 'Done', className: 'bg-[var(--success)]/15 text-[var(--success)]' },
 };
 
+/** A story is a Slice (Tynn #933): its chip is its Slice state, in the colour its legacy status had. Tasks keep StatusChip. */
+const SLICE_LOOK: Readonly<Record<ShownSliceState, string>> = {
+    proposed: STATUS_LOOK.backlog!.className, ready: STATUS_LOOK.backlog!.className, running: STATUS_LOOK.in_progress!.className,
+    awaiting_review: STATUS_LOOK.qa!.className, accepted: STATUS_LOOK.done!.className, blocked: STATUS_LOOK.blocked!.className,
+    rejected: STATUS_LOOK.blocked!.className, failed: STATUS_LOOK.blocked!.className, cancelled: STATUS_LOOK.backlog!.className,
+    unknown: STATUS_LOOK.backlog!.className,
+};
+
+function SliceChip({ status, state }: { status: string; state: ShownSliceState | null }) {
+    if (state === null) return null;
+    return <span data-wip-status={status} data-wip-state={state} className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${SLICE_LOOK[state]}`}>{sliceStateLabel(state)}</span>;
+}
+
 function StatusChip({ status }: { status: string }) {
     const look = STATUS_LOOK[status];
     if (!look) return null;
@@ -75,6 +90,7 @@ function Versions({ view, version, onVersion }: { view: WipView; version: string
                         <Icon name="circle-play" size="xs" />
                         <span className="font-mono">{v.number ?? ''}</span>
                         <span className="max-w-[160px] truncate">{v.title}</span>
+                        <ReleaseKindMark release={v.release} />
                         {v.total !== null ? <span data-wip-version-progress="" className="text-[10px] opacity-80">{`${v.done ?? 0}/${v.total}`}</span> : null}
                     </Button>
                 );
@@ -89,6 +105,7 @@ function Banner({ view, live }: { view: WipView; live: LiveState | undefined }) 
             {view.version ? (
                 <>
                     <span className="inline-flex items-center gap-1 rounded-full bg-[var(--accent)]/15 px-2 py-0.5 text-[10px] font-medium text-[var(--accent)]"><Icon name="circle-play" size="xs" /> Active</span>
+                    <ReleaseKindMark release={view.version.release} />
                     <span className="font-mono text-[var(--fg-2)]">{view.version.number}</span>
                     <span className="min-w-0 truncate font-medium text-[var(--fg-1)]">{view.version.title}</span>
                     {view.progress.total > 0 ? (
@@ -161,7 +178,7 @@ function Rail({ view, onLens, onStory, now }: { view: WipView; onLens: TynnWipPa
                             className={`flex w-full flex-col gap-1 rounded-md px-2 py-1.5 text-left ${selected ? 'bg-[var(--bg-2)]' : 'hover:bg-[var(--bg-2)]'}`}
                         >
                             <span className="flex min-w-0 flex-col gap-1 whitespace-normal">
-                                <span className="flex items-center gap-1.5"><span className="font-mono text-[10px] text-[var(--fg-3)]">{story.number}</span><StatusChip status={story.status} /></span>
+                                <span className="flex items-center gap-1.5"><span className="font-mono text-[10px] text-[var(--fg-3)]">{story.number}</span><SliceChip status={story.status} state={story.state} /></span>
                                 <span className="text-[12px] text-[var(--fg-1)]">{story.title}</span>
                                 {story.progress ? <span className="flex items-center gap-1.5 text-[10px] text-[var(--fg-3)]"><Bar done={story.tasksDone} total={story.taskCount} />{story.progress}</span> : null}
                                 <CardMeta story={story} now={now} />
@@ -253,7 +270,7 @@ function Tasks({ story, view, onAction, now }: { story: WipStory; view: WipView;
         <div data-wip-state="story-selected" className="flex min-w-0 flex-col gap-3">
             <h2 className="flex min-w-0 items-start gap-1.5 text-[15px] font-semibold break-words text-[var(--fg-1)] [overflow-wrap:anywhere]"><Icon name="book-open" size="sm" />{story.title}</h2>
             <div className="flex flex-wrap items-center gap-2 text-[11px] text-[var(--fg-3)]">
-                <StatusChip status={story.status} />
+                <SliceChip status={story.status} state={story.state} />
                 <RefLink value={story.pr} url={story.prUrl} icon="git-pull-request" kind="pr" />
                 <RefLink value={story.commit} url={story.commitUrl} icon="git-commit-horizontal" kind="commit" />
                 {when ? <span data-wip-changed="" className="inline-flex items-center gap-1"><Icon name="clock" size="xs" /><time dateTime={story.updatedAt ?? undefined}>{`Changed ${when}`}</time></span> : null}
@@ -301,7 +318,7 @@ function DoneSummary({ view }: { view: WipView }) {
                 <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-2">
                     {view.stories.map((s) => (
                         <div key={s.id} data-wip-done={s.id} className="flex flex-col gap-1 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] p-2.5">
-                            <div className="flex items-center gap-1.5"><span className="font-mono text-[10px] text-[var(--fg-3)]">{s.number}</span><StatusChip status="done" /></div>
+                            <div className="flex items-center gap-1.5"><span className="font-mono text-[10px] text-[var(--fg-3)]">{s.number}</span><SliceChip status="done" state="accepted" /></div>
                             <div className="text-[12px] text-[var(--fg-1)]">{s.title}</div>
                             <div className="text-[11px] text-[var(--fg-3)]">{`${s.taskCount} ${s.taskCount === 1 ? 'task' : 'tasks'} completed`}</div>
                         </div>

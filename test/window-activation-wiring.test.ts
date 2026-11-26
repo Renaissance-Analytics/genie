@@ -16,8 +16,8 @@ const main = code('../src/main/main.ts');
 describe('no raw activation anywhere in src/main', () => {
     it('no window.focus() / restore() / moveTop() / app.focus() — only bringUp may (core/window-activation.ts)', () => {
         // The process book's restore() is not a window's; it is the only other `.restore()` in src/main — called
-        // `processBook` in genie-host and `ownBook` in a window's emergency path (the host split, P3.3c).
-        const found = sources.flatMap(({ file, text }) => (text.match(/\b[\w!.]+\.(focus|restore|moveTop)\(\)|\bapp\.focus\(/g) ?? []).filter((m) => m !== 'processBook.restore()' && m !== 'ownBook.restore()').map((m) => `${file}: ${m}`));
+        // `processBook`, in genie-host (the host split, P3.3c).
+        const found = sources.flatMap(({ file, text }) => (text.match(/\b[\w!.]+\.(focus|restore|moveTop)\(\)|\bapp\.focus\(/g) ?? []).filter((m) => m !== 'processBook.restore()').map((m) => `${file}: ${m}`));
         expect(found).toEqual([]);
     });
 
@@ -53,13 +53,13 @@ describe('the paths an agent or a job can reach are BACKGROUND', () => {
         expect(openFile).toMatch(/attractMainWindow\('openFileForUser'\)/);
     });
 
-    it('an agent’s `sites open` opens the Genie browser in the background; the Hosting row’s Open is the person’s', () => {
-        expect(main).toMatch(/openInBrowserFor\('background'\)/);
+    it('an agent’s `sites open` opens the Genie browser in the background, in genie-host; the Hosting row’s Open is the person’s', () => {
         expect(main).toMatch(/openInBrowserFor\('user-gesture'\)/);
-        // The agents' tools get the background one; the feature ports (the Hosting tab's buttons) the person's.
-        // ...through agentOpensSite, which also pulses the site's workspace (genie#1265).
-        expect(main).toMatch(/hosting: composed,\s*openInBrowser: agentOpensSite,/);
-        expect(main).toMatch(/const agentOpensSite: OpenInBrowser = async \(url\) => \{\s*const r = await openInBrowserFor\('background'\)\(url\);/);
+        // The agents' `sites open` is genie-host's, in the background (Tynn #1046 D2); here the site's workspace only pulses
+        // (genie#1265), and no window hands an agent an opener.
+        expect(main).not.toMatch(/agentOpensSite|openInBrowserFor\('background'\)/);
+        const host = readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8');
+        expect(host).toMatch(/browserService\.call\('open', \[url, 'background'\], 'genie-host'\)/);
         expect(main).toMatch(/featureWindow\(localDoor, \{[\s\S]*?openInBrowser: openInBrowserFor\('user-gesture'\),/);
     });
 

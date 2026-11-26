@@ -3,6 +3,8 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { ACP_PROVIDERS, isAcpProvider, type AcpProvider } from '../core/engine.js';
 import { accountIdentityOf, accountLabel, accountLabelOf, legacyAccountId, unknownAccountIdentity, type AccountIdentity, type AccountRecord } from '../core/accounts.js';
 import { forgetRefusal } from '../core/account-settings.js';
+import { isClaudeLoginMethod } from '../core/claude-accounts.js';
+import { prepareAccountDir, syncCleanupPeriod, type PreparedAccountDir } from './claude-account-dirs.js';
 import { runtimeDir } from './paths.js';
 import { readJson, writeJsonAtomic } from './store.js';
 
@@ -11,6 +13,8 @@ export interface AccountsOptions {
     readonly legacyHomes: Readonly<Record<AcpProvider, string>>;
     readonly now?: () => string;
     readonly mintId?: () => string;
+    /** The ONE session store every Claude account directory links its history to (Tynn #1011): the default home's `projects`. */
+    readonly sharedSessionStore?: string;
 }
 
 const MANAGED_ID = /^account_[0-9a-f]{32}$/;
@@ -33,8 +37,12 @@ function parseBook(value: unknown): Parsed {
         const provider = a.provider as AcpProvider;
         if (a.legacy ? a.id !== legacyAccountId(provider) : !MANAGED_ID.test(a.id)) throw new Error('Invalid account id');
         seen.add(a.id);
+        // A Claude account of its own (Tynn #1011): an absolute directory and the method chosen, both or neither; never on Codex.
+        const own = a.configDir !== undefined || a.method !== undefined;
+        if (own && (provider !== 'claude' || a.legacy || typeof a.configDir !== 'string' || !isAbsolute(a.configDir) || !isClaudeLoginMethod(a.method))) throw new Error('Invalid account directory');
         return { id: a.id, provider, label: accountLabelOf(a.label), labelEdited: a.labelEdited, home: a.home, legacy: a.legacy,
-            identity: accountIdentityOf(a.identity), createdAt: a.createdAt };
+            identity: accountIdentityOf(a.identity), createdAt: a.createdAt,
+            ...(own ? { configDir: a.configDir as string, method: a.method as 'subscription' | 'console' } : {}) };
     });
     for (const provider of ACP_PROVIDERS) if (!seen.has(legacyAccountId(provider))) throw new Error('Invalid account book: missing legacy default');
     const active: Partial<Record<AcpProvider, string>> = {};
@@ -119,6 +127,60 @@ export class AccountsHost {
     }
 
     /**
+     * A CLAUDE ACCOUNT OF ITS OWN (Tynn #1011): a configuration directory under Genie's data, made now with its session history
+     * linked to the one shared store (claude-account-dirs.ts), and the method the person chose. Nothing is signed in yet: the
+     * person signs in with Claude Code's own login in a terminal they see. No credential is written, read or kept here.
+     */
+    addClaude(input: { method: 'subscription' | 'console'; label?: string }): Promise<AccountRecord> {
+        return this.#queue(async () => {
+            if (!isClaudeLoginMethod(input.method)) throw new Error('Invalid sign-in method');
+            const base = this.#newAccount('claude', input.label, null);
+            const configDir = resolve(this.#options.root, 'accounts', 'claude', base.id);
+            const prepared = prepareAccountDir(configDir, this.#sharedStore());
+            if (!prepared.ok) throw new Error(prepared.reason);
+            syncCleanupPeriod(configDir, this.#options.legacyHomes.claude);
+            const account: AccountRecord = { ...base, configDir, method: input.method };
+            const next = [...this.#accounts, account];
+            await this.#write(next, this.#active); this.#accounts = next;
+            return detached(account);
+        });
+    }
+
+    /**
+     * KEEP EVERY DIRECTORY GENIE MADE IN STEP (at the host's start): its history still shared, and its `cleanupPeriodDays` the
+     * default account's, so no account prunes the shared store sooner than the default does. A directory that refuses is left
+     * as it is; its account still works on its own history.
+     */
+    syncClaudeDirs(): void {
+        // At the host's start only, before any sign-in can be running in one of them.
+        for (const a of this.#accounts) if (a.provider === 'claude' && a.configDir !== undefined) this.prepareClaudeDir(a.configDir);
+    }
+
+    /**
+     * ONE ACCOUNT'S DIRECTORY MADE READY AGAIN: before a sign-in runs in it (the review of #2139), so a folder whose removal
+     * stopped half-way has its shared-history link back and the account never grows a history of its own. Only the directory
+     * of an account in this book; anything else is refused and nothing is made. Never throws: a refusal comes back in words.
+     */
+    prepareClaudeDir(configDir: string): PreparedAccountDir {
+        if (!this.#accounts.some((a) => a.provider === 'claude' && a.configDir === configDir)) {
+            return { ok: false, code: 'unknown', reason: 'That is not the folder of an account Genie knows, so Genie leaves it as it is.' };
+        }
+        try {
+            const prepared = prepareAccountDir(configDir, this.#sharedStore());
+            // Its cleanup period follows the default account's either way (a directory that is not there is left alone).
+            try { syncCleanupPeriod(configDir, this.#options.legacyHomes.claude); } catch { /* left as it is */ }
+            return prepared;
+        } catch (error) {
+            return { ok: false, code: 'unknown', reason: `The folder for this account could not be made ready: ${error instanceof Error ? error.message : String(error)}` };
+        }
+    }
+
+    /** The one store every Claude account directory shares: the default home's own `projects`. */
+    #sharedStore(): string {
+        return this.#options.sharedSessionStore ?? join(this.#options.legacyHomes.claude, 'projects');
+    }
+
+    /**
      * THE ACCOUNT SIGNED IN TO THE PROVIDER'S ONE HOME NOW (Tynn #753): matched by email to a known account, which becomes the
      * provider's active one; a new email becomes a new known account (labelled by its email until renamed). A placeholder that
      * has never been told who it is (the legacy account on a fresh book) is the account that was in use, so it takes the first
@@ -131,7 +193,9 @@ export class AccountsHost {
             const reported = accountIdentityOf(identity);
             const email = reported.email?.toLowerCase() ?? null;
             if (email === null) return null;
-            const mine = this.#accounts.filter(a => a.provider === provider);
+            // Only the accounts that live in the provider's ONE default home: one with its own directory (Tynn #1011) is chosen,
+            // never taken over by whoever signs in to the default home, even with the same email.
+            const mine = this.#accounts.filter(a => a.provider === provider && a.configDir === undefined);
             const match = mine.find(a => a.identity.email?.toLowerCase() === email) ?? mine.find(a => a.identity.email === null);
             let accounts: readonly AccountRecord[];
             let account: AccountRecord;

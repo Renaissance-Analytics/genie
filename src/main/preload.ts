@@ -99,32 +99,10 @@ const bridge: PreloadBridge = {
     // The Genie browser window (beta.35 item 36): the rail's Browser row opens it.
     browserWindow: { open: (address, hosts) => ipcRenderer.invoke('genie:browser-window-open', address, hosts) as Promise<never> },
     // This machine's disk, one folder at a time, for every picker (Tynn #835).
-    // The Tynn network (Tynn #837): main holds the grant, the proof key and the relay socket; the window gets a channel.
-    // P5 retains outgoing channel ownership in main; device memory and Tynn reads/actions use the local client.
-    deviceLink: {
-        open: (url) => ipcRenderer.invoke('genie:device-open', url) as Promise<never>,
-    },
+    // The Tynn network (Tynn #837): genie-host holds the grant, the proof key and every socket to another machine; a window's
+    // channel is its own protocol session's since 2f-2 (Tynn #941, renderer/device-channels.ts). Only a pasted link is here.
     tynnNetwork: {
-        open: (workstationId) => ipcRenderer.invoke('genie:relay-open', workstationId) as Promise<never>,
-        // Where an open stands: main says when Tynn gave the way in and it is reaching the machine.
-        onOpenStep: (listener) => {
-            const handler = (_e: unknown, workstationId: string, step: 'relay') => listener(workstationId, step);
-            ipcRenderer.on('genie:relay-open-step', handler);
-            return () => { ipcRenderer.removeListener('genie:relay-open-step', handler); };
-        },
         openLink: (text) => ipcRenderer.invoke('genie:connect-link', text) as Promise<never>,
-        send: (channel, text) => ipcRenderer.send('genie:relay-send', channel, text),
-        close: (channel) => ipcRenderer.send('genie:relay-close', channel),
-        onMessage: (listener) => {
-            const handler = (_e: unknown, channel: string, text: string) => listener(channel, text);
-            ipcRenderer.on('genie:relay-message', handler);
-            return () => { ipcRenderer.removeListener('genie:relay-message', handler); };
-        },
-        onClosed: (listener) => {
-            const handler = (_e: unknown, channel: string, reason: string | null) => listener(channel, reason);
-            ipcRenderer.on('genie:relay-closed', handler);
-            return () => { ipcRenderer.removeListener('genie:relay-closed', handler); };
-        },
     },
 
     files: {

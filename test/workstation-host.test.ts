@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { memoryPair } from '../src/core/line-transport.js';
-import { migrateSecrets, type HostVault, type MigrationBook, type MigrationState } from '../src/main/keychain-migration.js';
+import type { HostVault, MigrationBook, MigrationState } from '../src/main/keychain-migration.js';
+import { moveAll } from './helpers/move-secrets.js';
 import { buildTicketHostHello, hostHelloSigningString } from '../src/main/relay-wire.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
@@ -254,17 +255,24 @@ describe('a window asks the host to sign, and never holds the key', () => {
         expect(JSON.stringify(asked)).not.toContain('PRIVATE KEY');
     });
 
-    it('over the keychain link too: a window can hand a key over in the move, and cannot read one back', async () => {
+    // What an older Genie sealed reaches genie-host on the protocol's keychain.adoptLegacy (Tynn #959, 2g-3b), and since Tynn #961
+    // (2g-3c) the engine link carries no key at all, an agent's included: genie-host prepares its agents itself.
+    it('over the engine link: a window can neither hand this machine’s key over, nor compare, read or store any key', async () => {
         const { k } = await enrolled();
-        const server = new SessionEngineServer({ token: TOKEN, build: 'test', keychain: k });
+        const server = new SessionEngineServer({ token: TOKEN, build: 'test' });
         const host = new SessionHost({ userData: dir, driverFor: () => null, processTree: { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) }, ...server.hostOptions() });
         server.attach(host);
         const [hostSide, windowSide] = memoryPair();
         server.accept(hostSide);
         const client = new SessionEngineClient();
         await client.connect(windowSide, TOKEN);
-        expect(await client.call('engine.secretCompare', [ENTRY, 'nope'])).toMatchObject({ ok: true, value: 'different' });
-        expect((await client.call('engine.secretRead', [ENTRY])).ok).toBe(false);
+        expect(await client.call('engine.secretStore' as never, [ENTRY, 'a-key'])).toMatchObject({ ok: false, reason: expect.stringContaining('is not a bridge method') });
+        expect((await client.call('engine.secretCompare' as never, [ENTRY, 'nope'])).ok).toBe(false);
+        expect(await client.call('engine.secretRead' as never, [ENTRY])).toMatchObject({ ok: false, reason: expect.stringContaining('is not a bridge method') });
+        expect(await client.call('engine.secretStore' as never, ['tynn/agent/01ARZ3NDEKTSV4RRFFQ69G5FAV', 'rpk_x'])).toMatchObject({ ok: false, reason: expect.stringContaining('is not a bridge method') });
+        expect(JSON.stringify(await k.get(ENTRY))).toContain('PRIVATE KEY');
+        // CONTROL: the link is up, and answers a method it carries.
+        expect(await client.call('engine.proxyRemember', [{}])).toMatchObject({ ok: false, reason: 'This host keeps no proxy answers.' });
     });
 
     it('with no link it refuses, and never reads as not registered', async () => {
@@ -289,13 +297,13 @@ describe('what an older Genie sealed moves to the keychain', () => {
     const cipher = { decrypt: (bytes: Buffer) => { const text = bytes.toString(); if (!text.startsWith('sealed:')) throw new Error('another OS user'); return text.slice('sealed:'.length); } };
     const seal = (text: string) => Buffer.from(`sealed:${text}`).toString('base64');
     const memoryBook = (): MigrationBook => { const states: Record<string, MigrationState> = {}; return { read: async () => ({ ...states }), write: async (name, state) => { states[name] = state; } }; };
-    const vaultOver = (k: Lockable): HostVault => ({ store: (name, value) => k.set(name, value) as never, compare: async (name, value) => (k.held.get(name) === value ? 'same' : 'different') });
+    const vaultOver = (k: Lockable): HostVault => ({ store: (name, value) => k.set(name, value) as never, compare: async (name, value) => (!k.held.has(name) ? 'missing' : k.held.get(name) === value ? 'same' : 'different') });
 
     it('each host’s key moves; the row keeps its id and what is settled; and the store reads it with no enrolling', async () => {
         const pair = generateHostKeypair();
         writeFileSync(file, JSON.stringify({ [HOST]: { workstationId: 'ws_1', keyEnc: seal(pair.privateKeyPem), legacyDone: 'ws_old' } }));
         const k = keychain();
-        const moved = await migrateSecrets(await workstationSealedSources({ file, cipher }), vaultOver(k), memoryBook());
+        const moved = await moveAll(await workstationSealedSources({ file, cipher }), vaultOver(k), memoryBook());
         expect(moved).toEqual([{ name: ENTRY, status: 'moved' }]);
         expect(rows()[HOST]).toEqual({ workstationId: 'ws_1', legacyDone: 'ws_old' });
         const store = workstationKeyStore(file, k);
@@ -323,8 +331,9 @@ describe('where it is wired', () => {
     const strip = (text: string) => text.split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
     it('with a host, main asks it; only its own engine holds a key here', () => {
         const main = strip(readFileSync('src/main/main.ts', 'utf8'));
-        // The crash report signs with genie-host's own identity now (Tynn #897, 2c-2); main keeps the replica for its own uses.
-        expect(main).toMatch(/const machineIdentity: WorkstationPort = agentEngineLink\.client\.workstation\(\)/);
+        // The crash report signs with genie-host's own identity (Tynn #897, 2c-2), and main read the replica for nothing else:
+        // it holds no machine identity at all since 2g-1 (Tynn #952).
+        expect(main).not.toMatch(/machineIdentity|client\.workstation\(\)/);
         expect(main).not.toMatch(/crashReportMachine/);
         expect(main).toMatch(/sources: \(\) => workstationSealedSources\(/);
         expect(strip(readFileSync('src/main/genie-host.ts', 'utf8'))).toMatch(/new WorkstationService\(/);

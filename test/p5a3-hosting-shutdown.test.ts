@@ -20,7 +20,7 @@ import { closedTrust } from './helpers/closed-trust.js';
  *  (b) It never stops or removes an engine's container: databases and Redis outlive a quit (`--restart unless-stopped`)
  *      and are reconciled at the next boot. CONTROL: the person's Stop of an engine does stop its container.
  *  (c) A linked window's quit stops nothing of the hosting it does not own: compose handed the host's hosting and
- *      supervisor calls none of their stops or closes. CONTROL (e): the emergency path (no host) still stops its own.
+ *      supervisor calls none of their stops or closes. CONTROL (e): a composition with its own (a test's) still stops it.
  *  (d) A new host ADOPTS the running containers: its boot reconcile finds them running and starts nothing for them.
  */
 
@@ -138,7 +138,7 @@ describe('(c)+(e) the window’s quit', () => {
         expect(called).toEqual([]);
     });
 
-    it('(e) CONTROL, the emergency path (no host): the window stops its own supervised processes, as today', async () => {
+    it('(e) CONTROL, a composition that runs its own supervisor (a test that composes alone): it stops its own supervised processes', async () => {
         dir = await mkdtemp(join(tmpdir(), 'genie-p5a3-own-'));
         services = await composeServices({ userData: dir, pty: pty(), v1Settings: () => null, caddyBin: null });
         services.supervisor.start({ id: 'proc:queue', workspaceId: 'ws', name: 'queue', command: 'worker', cwd: dir, restart: 'always' });

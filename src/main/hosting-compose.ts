@@ -45,7 +45,7 @@ import { LIVE_STATUS_PAUSED } from './linked-stream.js';
  * THE HOSTING HALF OF THE COMPOSITION (the host split, P5a): the shared port allocator, the service engines on the Docker
  * driver (Genie 1's taken over, the boot reconcile), the site manager and the workspaces' declared sites, the `.env`
  * sync, Genie's `.gen` CA, the in-app front door and the external one (Caddy, the hosts block, Trust). Built by
- * genie-host when it runs, and by the window's compose.ts only on the emergency path (no host) — the same code both ways.
+ * genie-host, and by a test that composes alone (compose.ts) — the same code both ways. The window never builds it.
  *
  * Electron-free (test/genie-host-no-electron.test.ts): what only Electron can say (the bundled Caddy's path, Genie 1's
  * CA folders) is computed by the caller and handed in.
@@ -158,7 +158,7 @@ export interface HostingComposeInput extends HostingOptions {
     readonly workspaces?: () => readonly WorkspaceRef[];
     /** Fires when the registered workspaces change — one added, removed, hibernated or woken. */
     readonly onWorkspacesChange?: (listener: () => void) => () => void;
-    /** The process supervisor the sites and the front door run under (genie-host's own, or the window's on the emergency path). */
+    /** The process supervisor the sites and the front door run under (genie-host's own, or a test's composition's). */
     readonly supervisor: SupervisorApi;
     /** The settings, for the one that moves a site's env: "Apps and scripts may message agents here" (`app_inbox`). */
     readonly settings: Pick<SettingsApi, 'onChange'>;
@@ -171,8 +171,8 @@ export interface HostingComposeInput extends HostingOptions {
     /** False = no folder watchers, the slow pass alone. Absent = watch. */
     readonly trustWatchFolders?: boolean | undefined;
     /**
-     * Genie Mail G5: the host keychain, for the workspaces' default inbox passwords. Absent (the emergency path): no inbox
-     * book, and Genie's shared Mailpit asks no one for credentials.
+     * Genie Mail G5: the host keychain, for the workspaces' default inbox passwords. Absent (a test's composition): no
+     * inbox book, and Genie's shared Mailpit asks no one for credentials.
      */
     readonly mailSecrets?: MailServicePorts['secrets'] | undefined;
     /** GApps v2 V4: the installed apps' routes, and a way to hear that they changed. */

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { inMemoryPair, type ServerConnection } from '../src/core/remote-protocol.js';
 import { runtimeDir } from '../src/main/paths.js';
 import { LocalStagingArea } from '../src/main/local-staging-area.js';
+import { scheduleStagingSweep } from '../src/main/host-staging-sweep.js';
 import { hostRemoteApi, RemoteAccessHost } from '../src/main/remote-access-host.js';
 import { systemProcessTree, type ProcessInfo } from '../src/core/process-tree.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
@@ -14,6 +15,7 @@ import { connectRemote } from '../src/renderer/remote-bridge.js';
 import { composeTracker } from './support/compose-tracker.js';
 import { resourceDoor } from './support/local-resource-door.js';
 import { StagingPermissionsClient } from '../src/main/staging-permissions.js';
+import { LOADS_PROBE, loadsOf } from './support/windows-powershell-loads.js';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { vi.restoreAllMocks(); for (const cleanup of cleanups.splice(0)) await cleanup(); });
@@ -27,17 +29,20 @@ async function homeFixture() {
     const root = join(runtimeDir(home), 'local-staging');
     let accept!: (connection: ServerConnection) => void;
     let scheduledSweep: (() => Promise<void>) | undefined;
+    let stopSweep: () => void = () => {};
     /*
      * A LOCAL CONNECTION STAGES ITS UPLOADS WITH GENIE-HOST (Tynn #898 step 2d-4b2): compose serves no connection; the window's
      * is admitted by genie-host's RemoteAccessHost, which stages under the same home as genie-host does (genie-host.ts). The
-     * composition still owns the staging area's startup sweep.
+     * startup sweep of old staging is genie-host's too (host-staging-sweep.ts, Tynn #955), scheduled here as genie-host
+     * schedules it, over LocalStagingArea.sweepOld.
      */
     const start = async () => {
         access ??= await RemoteAccessHost.open({ home, hostName: 'composition-box', api: hostRemoteApi({ hostName: 'composition-box', own: {} }),
             transport: { onConnection: (listener: (connection: ServerConnection) => void) => { accept = listener; return () => {}; } },
             createLocalUploads: async () => (await LocalStagingArea.open(home)).createConnection(Date.now) });
-        const input = { userData: home, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0,
-            scheduleStagingSweep: (work: () => Promise<void>) => { scheduledSweep = work; return () => { if (scheduledSweep === work) scheduledSweep = undefined; }; } };
+        const input = { userData: home, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0 };
+        stopSweep = scheduleStagingSweep(home, { sweep: (h, d) => LocalStagingArea.sweepOld(h, d),
+            schedule: (work) => { scheduledSweep = work; return () => { if (scheduledSweep === work) scheduledSweep = undefined; }; } });
         return tracker.compose(input);
     };
     const sweepAfterStartup = async () => { expect(scheduledSweep).toBeTypeOf('function'); const work = scheduledSweep!; scheduledSweep = undefined; await work(); };
@@ -47,7 +52,7 @@ async function homeFixture() {
         const c = connectRemote(pair.client, { kind: 'local' }, 'composition fixture'); clients.push(() => c.close());
         expect(await c.ready).toEqual({ ok: true }); return c;
     };
-    return { home, root, start, client, sweepAfterStartup, hasScheduledSweep: () => !!scheduledSweep };
+    return { home, root, start, client, sweepAfterStartup, hasScheduledSweep: () => !!scheduledSweep, stopSweep: () => stopSweep() };
 }
 async function areaModule() { const path: string = '../src/main/local-staging-area.js'; return import(path); }
 async function heldProcess() {
@@ -166,9 +171,9 @@ describe('7B owned staging at real host composition startup', () => {
         expect((await stat(f.root)).mode & 0o777).toBe(0o700); expect((await stat(sibling)).mode & 0o777).toBe(mode);
         await c.uploads!.abort(uploaded.id);
     });
-    it('shutdown cancels a deferred sweep; the next composition can still perform it', async () => {
+    it('genie-host’s shutdown cancels a deferred sweep; the next start can still perform it', async () => {
         const f = await homeFixture(), stale = join(f.root, `${process.pid}-1`); await mkdir(stale, { recursive: true }); await writeFile(join(stale, 'keep-until-sweep'), 'old bytes');
-        const services = await f.start(); expect(f.hasScheduledSweep()).toBe(true); await services.shutdown(); expect(f.hasScheduledSweep()).toBe(false);
+        await f.start(); expect(f.hasScheduledSweep()).toBe(true); f.stopSweep(); expect(f.hasScheduledSweep()).toBe(false);
         expect(await readFile(join(stale, 'keep-until-sweep'), 'utf8')).toBe('old bytes');
         await f.start(); await f.sweepAfterStartup(); await expect(stat(stale)).rejects.toMatchObject({ code: 'ENOENT' });
     });
@@ -195,11 +200,23 @@ describe('7B owned staging at real host composition startup', () => {
         for (const name of paths) if ((await stat(join(f.root, String(name)))).isFile()) file = join(f.root, String(name));
         expect(file).not.toBe('');
         const targets = [f.root, file, broad].map(path => `[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${Buffer.from(path, 'utf16le').toString('base64')}'))`);
-        const script = `$ErrorActionPreference='Stop';$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;$out=@();foreach($p in @(${targets.join(',')})){$a=Get-Acl -LiteralPath $p;$rules=@($a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]));$out+=@{protected=$a.AreAccessRulesProtected;owner=$a.GetOwner([Security.Principal.SecurityIdentifier]).Value;rules=@($rules|%{@{sid=$_.IdentityReference.Value;allow=($_.AccessControlType -eq 'Allow');full=($_.FileSystemRights -eq 'FullControl')}})}};@{sid=$sid;targets=$out}|ConvertTo-Json -Depth 6 -Compress`;
+        /*
+         * The ACL read the way the product reads it (private-credentials.ts): .NET only, one line per target. Get-Acl and
+         * ConvertTo-Json made this child import two modules and load System.Web.Extensions, whose first read on a new VM
+         * ran past this check's 15 s in two gates (Tynn #989; test/support/windows-powershell-loads.ts).
+         */
+        const script = `$ErrorActionPreference='Stop';[Console]::Out.WriteLine('SID '+[Security.Principal.WindowsIdentity]::GetCurrent().User.Value);foreach($p in @(${targets.join(',')})){if([IO.Directory]::Exists($p)){$a=[IO.Directory]::GetAccessControl($p)}else{$a=[IO.File]::GetAccessControl($p)};$rules=@($a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]));[Console]::Out.WriteLine('TARGET '+$a.AreAccessRulesProtected+' '+$a.GetOwner([Security.Principal.SecurityIdentifier]).Value+' '+(@($rules|ForEach-Object{$_.IdentityReference.Value+':'+($_.AccessControlType -eq 'Allow')+':'+($_.FileSystemRights -eq 'FullControl')}) -join ','))}${LOADS_PROBE}`;
         const env = { ...process.env }; for (const key of Object.keys(env)) if (key.toUpperCase() === 'PSMODULEPATH') delete env[key];
-        const { stdout } = await promisify(execFile)(join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env, windowsHide: true, timeout: 15_000 });
-        const acl = JSON.parse(stdout); expect(acl.targets[0].protected).toBe(true);
+        const { stdout, stderr } = await promisify(execFile)(join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env, windowsHide: true, timeout: 15_000 });
+        // Nothing a new VM reads cold for the first time (Tynn #989): no module import, no ConvertTo-Json serializer.
+        expect(loadsOf(stderr), 'what the check had to load').toEqual([]);
+        const lines = stdout.split(/\r?\n/), sid = lines.find(line => line.startsWith('SID '))?.slice(4);
+        const acl = { sid, targets: lines.filter(line => line.startsWith('TARGET ')).map(line => {
+            const [, guarded, owner, rules = ''] = line.split(' ');
+            return { protected: guarded === 'True', owner, rules: rules.split(',').filter(Boolean).map(rule => { const [ruleSid, allow, full] = rule.split(':'); return { sid: ruleSid, allow: allow === 'True', full: full === 'True' }; }) };
+        }) };
+        expect(acl.sid).toMatch(/^S-1-/); expect(acl.targets).toHaveLength(3); expect(acl.targets[0]!.protected).toBe(true);
         for (const [index, target] of acl.targets.slice(0, 2).entries()) { expect(target.owner, index === 0 ? 'staging root owner' : 'stage file owner').toBe(acl.sid); expect(target.rules).toEqual([{ sid: acl.sid, allow: true, full: true }]); }
-        expect(acl.targets[2].rules.some((r: { sid: string }) => r.sid !== acl.sid)).toBe(true);
+        expect(acl.targets[2]!.rules.some(r => r.sid !== acl.sid)).toBe(true);
     });
 });

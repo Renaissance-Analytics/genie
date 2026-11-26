@@ -45,7 +45,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'agents.delete': ['agent_a', 'unmount', [], false], 'agents.switchDriver': ['agent_a', 'codex'],
     'agents.setBudget': ['agent_a', null], 'agents.setMode': ['agent_a', 'manual'],
     'agents.setAccessScope': ['agent_a', 'self'], 'agents.setAccessAgents': ['agent_a', null], 'agents.setAutoApprove': ['agent_a', false],
-    'agents.setManageTabs': ['agent_a', false], 'agents.setDrivePages': ['agent_a', false], 'agents.setMcpServer': ['agent_a', 'slack', false],
+    'agents.setManageTabs': ['agent_a', false], 'agents.setDrivePages': ['agent_a', false], 'agents.setAppWakeCap': ['agent_a', 12], 'agents.setMcpServer': ['agent_a', 'slack', false],
     activity: ['work'], 'agents.setIssueWatch': ['agent_a', null], 'agents.setPermissions': ['agent_a', 'ask'],
     'agents.setModel': ['agent_a', null], 'agents.models': ['agent_a', false], 'agents.diagnose': ['agent_a'], 'agents.toolOutput': ['agent_a', 'call_1'], 'agents.attachment': ['agent_a', '0123456789abcdef0123456789abcdef'], 'agents.typing': ['agent_a', 'hello', 'window-1'],
     'workspaces.previewAdd': [ROOT], 'workspaces.confirmAdd': [ROOT],
@@ -66,6 +66,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'workspaces.tynnPageAction': ['work', { action: 'details.update', body: { vision: 'Ship it' } }],
     'workspaces.addRepo': ['work', { name: 'repo', path: 'repos/repo' }], 'workspaces.removeRepo': ['work', 'repo'],
     'workspaces.removeRepoLock': ['work', 'repo'], 'workspaces.locateRepo': ['work', 'repo', ROOT],
+    'workspaces.relocate': ['work', ROOT],
     'workspaces.commitsSince': ['work', 0], 'workspaces.settings': ['work'],
     'workspaces.setSetting': ['work', 'theme', 'dark'], 'workspaces.resetSetting': ['work', 'theme'],
     'workspaces.setGoverns': ['work', []], 'workspaces.setDefaultAgent': ['work', null], 'workspaces.setMcpServer': ['work', 'slack', false],
@@ -105,8 +106,16 @@ Object.assign(ROWS, {
     'appInbox.state': ['work'], 'appInbox.createKey': ['work', 'fixture'], 'appInbox.revokeKey': ['work', 'key_fixture'],
     'appInbox.source': ['work', 'allow', 'site', 'site_fixture'],
     'deviceLink.hosts': [], 'deviceLink.forget': ['wss://example.test/genie'], 'deviceLink.adopt': ['wss://example.test/genie', 'synthetic-token'],
-    'tynnNetwork.workstations': [], 'tynnNetwork.classifyLink': ['https://tynn.example/invites/accept/tok_fixture'], 'crashReport.draft': [], 'crashReport.send': ['the report', 'my notes'], 'providers.chooseProgram': ['claude', 'C:\\fixture\\claude.exe'], 'terminals.scratch': ['work'], 'tynnNetwork.setRole': ['ws_fixture', 'pilot', 'synthetic-code'],
+    'tynnNetwork.workstations': [], 'tynnNetwork.classifyLink': ['https://tynn.example/invites/accept/tok_fixture'], 'crashReport.draft': [], 'crashReport.send': ['the report', 'my notes'], 'providers.chooseProgram': ['claude', 'C:\\fixture\\claude.exe'], 'terminals.scratch': ['work'], 'questions.files': ['q_1', ['a.md']], 'questions.file': ['q_1', 'a.md'], 'questions.visuals': ['q_1'], 'files.openExternal': ['work', 'a.txt'], 'files.reveal': ['work', 'a.txt'], 'deviceLink.open': ['wss://example.test/genie'], 'deviceLink.openRelay': ['ws_fixture'], 'deviceLink.send': ['device_1', 'x', false], 'deviceLink.close': ['device_1'], 'deviceLink.openBrowser': ['relay_1', null, [], {}], 'tynnNetwork.setRole': ['ws_fixture', 'pilot', 'synthetic-code'],
     'tynnNetwork.shares.list': [null], 'tynnNetwork.shares.mint': [{ workspaceId: null, capability: 'readonly', expiresInDays: 7 }], 'tynnNetwork.shares.revoke': ['share_fixture'],
+    // Tynn #959 (2g-3b): no value in the row; this host has no adopter and no Tynn account, and says so the same both ways.
+    'keychain.adoptLegacy': [{ phase: 'removed', names: [] }], 'tynn.recheck': [],
+    'approvals.gate': [{ agentId: 'agent_01ARZ3NDEKTSV4RRFFQ69G5FAV', agentName: 'a', workspaceId: 'ws', workspacePath: '/w' }, 'agents.create', 'x', null],
+    'window.view': [{ userActive: true }],
+    // Tynn #973: no prompt is open on this host, so the answer is not taken, the same both ways.
+    'elevation.answer': ['prompt_none', null],
+    // Tynn #1007 (2g-4e): this host has no registry files, and says so the same both ways.
+    'registry.write': ['changeAgents', [{}]],
 });
 type ResultFrame = Extract<WireMessage, { kind: 'result' }>;
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));

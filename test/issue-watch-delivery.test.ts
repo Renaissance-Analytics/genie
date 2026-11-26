@@ -164,7 +164,7 @@ describe('through the same delivery as mail', () => {
     });
 });
 
-describe('genie-host runs it (P5c; the window only on the emergency no-host path)', () => {
+describe('genie-host runs it (P5c; never the window)', () => {
     const src = readFileSync('src/main/issue-watch-host.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
     const push = readFileSync('src/main/issue-watch-push.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
     it('one client listening with the signed-in account’s key and host, one delivery, through the inbox delivery', () => {

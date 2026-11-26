@@ -5,7 +5,7 @@ import { Baton, PairingPins, type PinEnded } from '../core/remote.js';
 import { LOCAL_EVENTS, type CallContext, type RemoteMethod, type ServerTransport } from '../core/remote-protocol.js';
 import type { LocalUploads } from './local-uploads.js';
 import { DeviceStore, type Device } from './remote-devices.js';
-import { RemoteHost, type HostApi } from './remote-host.js';
+import { RemoteHost, type CrossStationPort, type HostApi } from './remote-host.js';
 import type { ProtocolOffer } from '../core/protocol-version.js';
 import { HOST_WORKSPACE_READ_METHODS } from './host-alone-api.js';
 
@@ -42,6 +42,33 @@ export interface HostRemoteApiPorts {
     readonly workspaceOfTerminal?: (terminalId: string) => string | null;
     /** Each workspace's folder (Tynn #691): how far a guest may browse. Absent = a guest browses nothing. */
     readonly workspacePaths?: () => Readonly<Record<string, string>>;
+    /**
+     * GENIE-HOST'S REGISTRY, FROM THE START (Tynn #1007, 2g-4e; registry-protocol.ts hostRegistryAnswers): what main's own
+     * client says registry.read and registry.watch for, and the local-registry event, ahead of the built answers (main's
+     * registry loads before they are). Absent = refused.
+     */
+    readonly registry?: { read(method: import('./registry-protocol.js').RegistryRead): Promise<unknown>; readonly watch: import('./registry-protocol.js').RegistryFeed };
+    /**
+     * GENIE-HOST'S FRONT DOOR, FROM THE START (Tynn #1046, 2g-4d-D1; core/front-door-watch.ts): what main's own client says
+     * frontdoor.watch for, and the local-frontdoor event, ahead of the built answers. Absent = nothing.
+     */
+    readonly frontdoor?: { now(): import('../core/front-door-watch.js').FrontDoorWatchView; subscribe(listener: (view: import('../core/front-door-watch.js').FrontDoorWatchView) => void): () => void };
+    /**
+     * genie-host's settings, for main's own client saying settings.watch, from this host's start (P6-3, Tynn #1501): the store is
+     * open long before the host's own answers are built, and the window's boot reads start minimised and the login item from it.
+     */
+    readonly settings?: { now(): import('./settings-watch.js').SettingsWatchView; subscribe(listener: (view: import('./settings-watch.js').SettingsWatchView) => void): () => void };
+    /**
+     * WHAT GENIE-HOST RUNS, FROM ITS START (Tynn #953; P6-3 follow-up): what main's own client says summary.watch for, and the
+     * local-summary event. Its feed is open before the host's own answers are built, and the window's tray, its quit and its
+     * Tynn account read it at boot. Absent = the built answers' (null until they are).
+     */
+    readonly summary?: { now(): import('../core/host-summary.js').HostSummary; subscribe(listener: (summary: import('../core/host-summary.js').HostSummary) => void): () => void };
+    /**
+     * WHO IS AT THIS MACHINE, FROM ITS START (Tynn #997; P6-3 follow-up): what main's own client says remote.watch for, and the
+     * local-remote event: who is connected and who asks to pair, which the window's notifications read at boot. Absent = null.
+     */
+    readonly remote?: { now(): import('../core/remote-watch.js').RemoteWatchView; subscribe(listener: (view: import('../core/remote-watch.js').RemoteWatchView) => void): () => void };
 }
 
 export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
@@ -50,6 +77,9 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
     const api: HostApi = {
         get ownsFeatures() { return alone()?.ownsFeatures === true; },
         releaseCaller: context => alone()?.releaseCaller?.(context),
+        // What this host runs, for this machine's tray and quit (Tynn #953): from this host's start when it gives the feed (P6-3
+        // follow-up: summary.watch answered null until the answers were built, and the window read nothing running).
+        hostSummary: () => (ports.summary ? ports.summary.now() : alone()?.hostSummary?.() ?? null),
         // THE PORTS RemoteHost READS OFF THE API (Tynn #898 step 2d-3a): genie-host's own, once its answers are built.
         marketplace: () => alone()?.marketplace?.() ?? null,
         gapps: (context) => alone()?.gapps?.(context) ?? null,
@@ -70,9 +100,23 @@ export function hostRemoteApi(ports: HostRemoteApiPorts): HostApi {
             let offAlone: (() => void) | null = null;
             const bind = () => { if (!offAlone) offAlone = alone()?.onEvent(listener, options) ?? null; };
             const offReady = ports.onAloneReady?.(bind); bind();
-            return () => { offReady?.(); offAlone?.(); };
+            // genie-host's registry is said from the start, not once its answers are built (Tynn #1007).
+            const offRegistry = ports.registry?.watch.subscribe((view) => listener(LOCAL_EVENTS.registry, view));
+            // genie-host's front door too, from the start (Tynn #1046).
+            const offFrontDoor = ports.frontdoor?.subscribe((view) => listener(LOCAL_EVENTS.frontdoor, view));
+            // genie-host's settings too, from the start (P6-3).
+            const offSettings = ports.settings?.subscribe((view) => listener(LOCAL_EVENTS.settings, view));
+            // What it runs, and who is at it, too (P6-3 follow-up).
+            const offSummary = ports.summary?.subscribe((view) => listener(LOCAL_EVENTS.summary, view));
+            const offRemote = ports.remote?.subscribe((view) => listener(LOCAL_EVENTS.remote, view));
+            return () => { offReady?.(); offAlone?.(); offRegistry?.(); offFrontDoor?.(); offSettings?.(); offSummary?.(); offRemote?.(); };
         },
         workspaceOfAgent: (agentId) => ports.workspaceOfAgent?.(agentId) ?? null,
+        ...(ports.registry ? { registryRead: (method: string) => ports.registry!.read(method as import('./registry-protocol.js').RegistryRead), registryWatch: () => ports.registry!.watch.now() } : {}),
+        ...(ports.frontdoor ? { frontDoorWatch: () => ports.frontdoor!.now() } : {}),
+        ...(ports.settings ? { settingsWatch: () => ports.settings!.now() } : {}),
+        // remote.watch answered null: hostRemoteApi never carried remoteWatch (P6-3 follow-up), so the window's boot heard nobody.
+        ...(ports.remote ? { remoteWatch: () => ports.remote!.now() } : {}),
         ...(ports.workspaceOfTerminal ? { workspaceOfTerminal: ports.workspaceOfTerminal } : {}),
         ...(ports.workspacePaths ? { workspacePaths: ports.workspacePaths } : {}),
         ...(ports.takeOverEnded ? { takeOverEnded: ports.takeOverEnded } : {}),
@@ -117,6 +161,8 @@ export interface RemoteAccessHostOptions {
     readonly createLocalUploads?: () => LocalUploads | Promise<LocalUploads>;
     /** What one of this machine's windows adds to its own snapshot (its renderer notice); null = nothing. Never a remote connection's. */
     readonly localSnapshot?: (connectionId: string) => Readonly<Record<string, unknown>> | null;
+    /** Mail between the owner's workstations (P9): given to the RemoteHost as it is made, so no call finds it missing. */
+    readonly crossStation?: CrossStationPort;
 }
 
 export class RemoteAccessHost {
@@ -148,6 +194,7 @@ export class RemoteAccessHost {
             ...(options.protocol ? { protocol: options.protocol } : {}),
             ...(options.createLocalUploads ? { createLocalUploads: options.createLocalUploads } : {}),
             ...(options.localSnapshot ? { localSnapshot: options.localSnapshot } : {}),
+            ...(options.crossStation ? { crossStation: options.crossStation } : {}),
         });
         return new RemoteAccessHost(remote, pairing, devices);
     }

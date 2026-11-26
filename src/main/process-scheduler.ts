@@ -1,6 +1,6 @@
 import { nextCronAfter } from '../core/cron.js';
 import type { LastRunStatus, ScheduledRun } from '../core/scheduled-task.js';
-import type { KeptProcess, ProcessBook } from './process-book.js';
+import { UNTRUSTED_REASON, type KeptProcess, type ProcessBook } from './process-book.js';
 import type { ProcessStatus, ProcessSupervisor } from './process-supervisor.js';
 
 /**
@@ -44,6 +44,11 @@ export interface ProcessSchedulerDeps {
     readonly schedule: (fn: () => void, ms: number) => () => void;
     /** SAFE MODE (Tynn #386): while on, no scheduled task is armed or fired; Run now is the person's and still runs. */
     readonly safeMode?: () => boolean;
+    /**
+     * THE WORKSPACE'S VERDICT, READ WHEN IT ACTS (Tynn #364): a task of a workspace not trusted is not armed, and a fire or a
+     * Run now is held, kept with why. Absent = trusted.
+     */
+    readonly trust?: (workspaceId: string) => 'trusted' | 'untrusted' | 'unread';
 }
 
 export class ProcessScheduler {
@@ -73,7 +78,7 @@ export class ProcessScheduler {
         let at: number | null = null;
         let due: string[] = [];
         for (const p of this.#deps.book.scheduledTasks()) {
-            if (!p.wanted || this.#deps.asleep(p.workspaceId)) continue;
+            if (!p.wanted || this.#deps.asleep(p.workspaceId) || this.#untrusted(p.workspaceId)) continue;
             const t = nextCronAfter(p.schedule!.cron, now, undefined);
             if (t === null) continue;
             if (at === null || t < at) { at = t; due = [p.id]; } else if (t === at) due.push(p.id);
@@ -122,9 +127,18 @@ export class ProcessScheduler {
         for (const p of tasks) void this.#run(p).catch((error: unknown) => console.error(`[genie] scheduled task ${p.name}: ${error instanceof Error ? error.message : String(error)}`));
     }
 
+    #untrusted(workspaceId: string): boolean {
+        return this.#deps.trust?.(workspaceId) === 'untrusted';
+    }
+
     async #run(p: KeptProcess): Promise<RunNowResult> {
         if (this.#deps.asleep(p.workspaceId)) return 'held';
         const at = this.#deps.now();
+        // Not trusted now (Tynn #364): nothing runs, and the run is kept saying why.
+        if (this.#untrusted(p.workspaceId)) {
+            await this.#record(p.id, { at, endedAt: at, status: 'skipped', reason: UNTRUSTED_REASON });
+            return 'held';
+        }
         const schedule = p.schedule!;
         const live = this.#deps.supervisor.status(p.id);
         if (this.#inFlight.has(p.id) || live?.state === 'running' || live?.state === 'restarting') {

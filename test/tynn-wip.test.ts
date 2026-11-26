@@ -29,7 +29,7 @@ describe('reading WIP', () => {
     it('reads the version, the lens, its counts and stories, the chosen story and its tasks', () => {
         const wip = parseWip(ANSWER)!;
         expect(wip.lens).toBe('active');
-        expect(wip.version).toEqual({ id: 'v1', number: '0.4.0', title: 'The line' });
+        expect(wip.version).toEqual({ id: 'v1', number: '0.4.0', title: 'The line', release: null });
         expect(wip.counts).toEqual({ active: 1, attention: 2, done: 3, backlog: 1 });
         // The version's progress is the web banner's: done of all four counts.
         expect(wip.progress).toEqual({ done: 3, total: 7, percent: 43 });

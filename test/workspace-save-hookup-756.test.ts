@@ -82,8 +82,9 @@ describe('workspaceSaveOps with the workspace’s declarations', () => {
 });
 
 describe('both hosts', () => {
-    it('the window’s process and genie-host give the save the registries the declarations are read from', () => {
-        for (const file of ['src/main/main.ts', 'src/main/genie-host.ts']) {
+    it('genie-host gives the save the registries the declarations are read from; main builds no save (Tynn #953, 2g-2)', () => {
+        expect(src('src/main/main.ts')).not.toContain('workspaceSaveOps(');
+        for (const file of ['src/main/genie-host.ts']) {
             const text = src(file);
             expect(text, file).toContain('elementSourcesFor(');
             expect(text, file).toMatch(/workspaceSaveOps\(\{[^]*elements:/);

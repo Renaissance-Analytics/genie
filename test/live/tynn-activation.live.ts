@@ -1,6 +1,6 @@
-/** VM-only: production composition through both actual Prism adapters; fixture providers, no model or Tynn traffic. */
+/** VM-only: genie-host's agent preparation (agent-tynn-prep.ts, as host-agent-keys.ts builds it) through both actual Prism adapters; fixture providers, no model or Tynn traffic. Since Tynn #961 the window's composition prepares nothing. */
 import assert from 'node:assert/strict';
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import { createCipheriv, createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { agentRecord, mintAgentId } from '../../src/core/identity.js';
 import { composeServices } from '../helpers/compose-alone.js';
+import { agentTynnPrep } from '../../src/main/agent-tynn-prep.js';
 import { SessionHost } from '../../src/main/session-host.js';
 
 if (process.env.GENIE_TEST_VM !== '1') throw new Error('Run this gate in a test VM through the shared FIFO.');
@@ -26,16 +27,15 @@ type Remote = { id: string; name: string; external_id: string; status: string; t
 const remote: Remote[] = []; const auth = new Map<string, string>();
 let requests = 0; let release!: () => void;
 const lookup = new Promise<void>((yes) => { release = yes; });
-// Fixture encryption exercises compose's private vault. Native safeStorage/DPAPI is a separate maintained gate.
-const encryptionKey = randomBytes(32);
 const held = new Map<string, string>();
+const workspaces = () => [{ id: 'linked', path: linked }, { id: 'unlinked', path: unlinked }];
 const composed = await composeServices({ userData: join(dir, 'home'), caddyBin: null, frontDoorPort: 0, v1Settings: () => null,
     pty: { open: () => { throw new Error('No terminal expected'); }, write: () => false, resize: () => false, kill: () => false, scrollback: () => '', onData: () => () => {}, onExit: () => () => {} },
-    workspaces: () => [{ id: 'linked', path: linked }, { id: 'unlinked', path: unlinked }],
-    tynnSecrets: { probe: async () => (true ? { ok: true as const } : { ok: false as const, reason: 'locked' }), get: async (name: string) => { const value = held.get(name); return !(true) ? { kind: 'unavailable' as const, reason: 'locked' } : value === undefined ? { kind: 'missing' as const } : { kind: 'value' as const, value }; }, set: async (name: string, value: string) => { if (!(true)) return { ok: false as const, reason: 'locked' }; held.set(name, value); return { ok: true as const }; } },
-    tynnCipher: {
-        decrypt: (bytes) => { const decipher = createDecipheriv('aes-256-gcm', encryptionKey, bytes.subarray(0, 12)); decipher.setAuthTag(bytes.subarray(12, 28)); return Buffer.concat([decipher.update(bytes.subarray(28)), decipher.final()]).toString('utf8'); } },
-    tynn: () => ({ status: () => ({ signedIn: true }), userId: () => 'fixture-account', request: async (path, init) => {
+    workspaces,
+});
+const prep = agentTynnPrep({ vaultFile: join(dir, 'home', 'agent-credentials', 'agents.json'), workspaces,
+    secrets: { probe: async () => (true ? { ok: true as const } : { ok: false as const, reason: 'locked' }), get: async (name: string) => { const value = held.get(name); return !(true) ? { kind: 'unavailable' as const, reason: 'locked' } : value === undefined ? { kind: 'missing' as const } : { kind: 'value' as const, value }; }, set: async (name: string, value: string) => { if (!(true)) return { ok: false as const, reason: 'locked' }; held.set(name, value); return { ok: true as const }; } },
+    tynn: () => ({ status: () => ({ signedIn: true }), userId: () => 'fixture-account', savedUserId: () => null, request: async (path: string, init: { method: string; body?: unknown }) => {
         requests++; await lookup;
         const answer = (body: unknown) => ({ ok: true, status: 200, json: async () => body });
         if (init.method === 'GET') return answer({ project_id: 'fixture-project', agents: remote });
@@ -47,7 +47,7 @@ const composed = await composeServices({ userData: join(dir, 'home'), caddyBin: 
         return answer({ token, agent: { id: row.id }, mcp_url: 'https://tynn.ai/mcp/tynn' });
     } }),
 });
-const host = new SessionHost({ userData: join(dir, 'sessions'), prepareMcpServers: (record, _cwd, signal) => composed.prepareAgentMcp(record, signal) });
+const host = new SessionHost({ userData: join(dir, 'sessions'), prepareMcpServers: (record, _cwd, signal) => prep.prepare(record, signal) });
 const until = async (check: () => boolean | Promise<boolean>, label: string) => {
     const deadline = Date.now() + 45_000;
     while (!await check()) { if (Date.now() > deadline) throw new Error(`Timed out: ${label}`); await delay(25); }

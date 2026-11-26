@@ -72,13 +72,14 @@ describe('abandonment', () => {
         expect(q.lastCancelled()).toEqual([{ action: 'write', detail: 'one', reason: 'Genie is shutting down' }, { action: 'create', detail: 'two', reason: 'Genie is shutting down' }]);
     });
 
-    it('a request older than the timeout is denied as abandoned, by `sweep`, never silently allowed', async () => {
+    // EXPIRED, not denied (Tynn #1006, the coordinator's ruling): nobody answered, and both the agent and the Deck say so.
+    it('a request older than the timeout EXPIRES, by `sweep`, never silently allowed', async () => {
         const q = new ApprovalQueue({ now, timeoutMs: 100 });
         const v = q.gate(atlas, 'write', 'late');
         clock += 1_000;
         expect(q.sweep()).toBe(1);
-        expect(await v).toBe('denied');
-        expect(q.deckItems()).toEqual([]);
+        expect(await v).toBe('expired');
+        expect(q.deckItems().map((i) => i.id.startsWith('apprx_'))).toEqual([true]);
     });
 });
 
@@ -173,9 +174,9 @@ describe('cancel(id, reason) (Tynn #858)', () => {
         const q = new ApprovalQueue({ now });
         let changes = 0;
         q.onChange(() => { changes += 1; });
-        const a = q.gate(atlas, 'pod.sign', 'Tynn task 7');
-        const b = q.gate(atlas, 'pod.sign', 'Tynn task 7');
-        const keep = q.gate(atlas, 'pod.sign', 'Tynn task 8');
+        const a = q.gate(atlas, 'services.remove', 'redis 7');
+        const b = q.gate(atlas, 'services.remove', 'redis 7');
+        const keep = q.gate(atlas, 'services.remove', 'mysql 8');
         const [first, second] = q.deckItems();
         expect(q.deckItems()).toHaveLength(2);
         const before = changes;
@@ -184,7 +185,7 @@ describe('cancel(id, reason) (Tynn #858)', () => {
         expect(await Promise.all([a, b])).toEqual(['denied', 'denied']);
         // CONTROL: the other request is still on the Deck, still waiting for the person.
         expect(q.deckItems().map((i) => i.id)).toEqual([second!.id]);
-        expect(q.lastCancelled()).toEqual([{ action: 'pod.sign', detail: 'Tynn task 7', reason: 'withdrawn' }]);
+        expect(q.lastCancelled()).toEqual([{ action: 'services.remove', detail: 'redis 7', reason: 'withdrawn' }]);
         q.resolve(second!.id, 'allow');
         expect(await keep).toBe('allowed');
     });

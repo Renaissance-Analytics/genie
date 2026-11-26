@@ -12,9 +12,9 @@ import type { Store } from './store.js';
  * THE STORES AGENTS WRITE TO, OWNED BY GENIE-HOST (the host split, P3.1: plan §11d).
  *
  * The inbox, attention (questions, imDone, the lists), the approval queue and the knowledge graph each have ONE writer:
- * this host. Agents reach them through Genie's MCP server here, with or without a window. A window holds replicas
- * (agent-stores-replica.ts): it is sent the whole state when it connects (`dump`) and every change after (`onEvent`), and
- * writes through `call` — only the methods named below, so a window cannot reach what it has no business with.
+ * this host. Agents reach them through Genie's MCP server here, with or without a window. genie-host follows every
+ * change (`onEvent`) and writes through `call` — only the methods named below. A window holds no replica since Tynn #955
+ * (2g-4d E2a): it reaches them over the protocol.
  */
 
 export interface AgentStores {
@@ -34,15 +34,6 @@ export interface ApprovalsView {
     readonly deck: readonly DeckItem[];
     readonly auto: readonly AutoApproved[];
     readonly cancelled: ReadonlyArray<{ action: string; detail: string; reason: string }>;
-}
-
-export interface StoresDump {
-    readonly inbox: { readonly messages: readonly InboxMessage[]; readonly cursors: Readonly<Record<string, number>>; readonly filtered?: true };
-    readonly attention: AttentionData;
-    readonly approvals: ApprovalsView;
-    readonly settings: SettingsData | null;
-    /** What the host's store dropped reading the registry's files (a window shows its faults). */
-    readonly registryDropped: readonly string[];
 }
 
 export type StoresEvent =
@@ -75,8 +66,12 @@ export const WINDOW_CALLS: Readonly<Record<StoreName, readonly string[]>> = {
     approvals: ['resolve', 'gate'],
     settings: ['set', 'setFor', 'resetFor', 'reset'],
     drafts: ['all', 'save', 'putFile', 'readFile', 'release', 'prune'],
-    registry: ['readWorkspaces', 'readAgents', 'readRunningAtQuit', 'readInterruptedAtQuit', 'beginRestore', 'restoreStarted', 'writeWorkspaces', 'writeAgents', 'writeRunningAtQuit', 'writeInterruptedAtQuit'],
+    // The registry's lists change one record at a time (Tynn #1007): no caller writes a whole list.
+    registry: ['readWorkspaces', 'readAgents', 'readRunningAtQuit', 'readInterruptedAtQuit', 'beginRestore', 'restoreStarted', 'changeWorkspaces', 'changeAgents', 'writeRunningAtQuit', 'writeInterruptedAtQuit'],
 };
+
+/** A registry call that writes its files: its model follows, and every window re-reads. */
+const writes = (method: string): boolean => method.startsWith('write') || method.startsWith('change');
 
 export class AgentStoresService {
     /** The registry writes in flight, in the order they came. */
@@ -119,12 +114,6 @@ export class AgentStoresService {
 
     get stores(): AgentStores {
         return this.#stores;
-    }
-
-    /** Everything a window that just connected needs to read before anything else. */
-    dump(): StoresDump {
-        const mail = this.#stores.inbox.snapshot();
-        return { inbox: mail, attention: this.#stores.attention.snapshot(), approvals: this.#approvalsView(), settings: this.#stores.settings?.data() ?? null, registryDropped: [...(this.#stores.registry?.store.dropped ?? [])] };
     }
 
     onEvent(listener: (event: StoresEvent) => void): () => void {
@@ -182,7 +171,7 @@ export class AgentStoresService {
                 if (!reg) throw new Error('this host keeps no registry');
                 const run = async (): Promise<unknown> => {
                     const result = await (reg.store as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[method]!(...args);
-                    if (method.startsWith('write')) {
+                    if (writes(method)) {
                         // The host's own model follows the files (its tools and approvals read it with no window), then every
                         // window re-reads: two windows, one registry.
                         await reg.model.refresh();
@@ -191,7 +180,7 @@ export class AgentStoresService {
                     }
                     return result;
                 };
-                if (!method.startsWith('write')) return run();
+                if (!writes(method)) return run();
                 // Counted before the first await: a start right behind this on the same socket must find it.
                 const written = run();
                 this.#registryWrites = Promise.allSettled([this.#registryWrites, written]);

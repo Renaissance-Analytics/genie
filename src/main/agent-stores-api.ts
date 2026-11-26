@@ -7,8 +7,8 @@ import type { KnowledgeStore } from './knowledge-store.js';
 import type { SettingsStore } from './settings-store.js';
 
 /**
- * WHAT THE WINDOW USES OF THE STORES AGENTS WRITE TO (the host split, P3.1). In engine mode these are the replicas of
- * genie-host's stores (agent-stores-replica.ts); on the emergency path they are the stores themselves. Compose, the Deck,
+ * WHAT THE WINDOW USES OF THE STORES AGENTS WRITE TO (the host split, P3.1). They are the stores themselves:
+ * genie-host's, and the composition the tests build (compose.ts); a window reaches them only over the protocol. Compose, the Deck,
  * the snapshots and the person's actions are written against these, never against a store class, so either fits.
  */
 export type InboxApi = Pick<InboxStore, 'onSend' | 'onRead' | 'onMessagesChanged' | 'involving' | 'all' | 'hasWritten' | 'unread' | 'unreadCount' | 'receipts' | 'send' | 'receive' | 'markDelivered' | 'recordDeliveryRefusal' | 'deleteThread' | 'attachmentForPerson'>;
@@ -25,7 +25,7 @@ export interface ApprovalsApi {
     /** The person's verdict. The host's queue answers later (true = there was such an item). */
     resolve(id: string, choice: 'allow' | 'deny'): MaybePromise<boolean>;
     /** A gated action asks the ONE queue (the host's in engine mode): a window tool's approval among them. */
-    gate(caller: Caller, action: string, detail: string, call?: McpCall): Promise<'allowed' | 'denied'>;
+    gate(caller: Caller, action: string, detail: string, call?: McpCall): Promise<'allowed' | 'denied' | 'expired'>;
 }
 
 /** The knowledge graph: read and written where it lives (a call across the link in engine mode). */
@@ -37,14 +37,14 @@ export interface KnowledgeApi {
     summaries(...a: Parameters<KnowledgeStore['summaries']>): MaybePromise<ReturnType<KnowledgeStore['summaries']>>;
 }
 
-/** The stores themselves: what a window that opened them (the emergency path) holds, and what genie-host holds. */
+/** The stores themselves: what genie-host holds, and what a test that composes alone opens (compose.ts). */
 export type OwnAgentStores = AgentStores;
 
 /** The settings as a window uses them (P3.2): reads synchronous (a replica), writes the host's, change listeners kept. */
 export type SettingsApi = Pick<SettingsStore, 'get' | 'set' | 'setFor' | 'resetFor' | 'reset' | 'workspaceValues' | 'snapshotFor' | 'snapshot' | 'onChange'>;
 
 export interface WindowAgentStores {
-    /** Absent = this window opens the settings itself (the emergency path, and a window composed before P3.2). */
+    /** Absent = the holder opens the settings itself (a composition before P3.2). */
     readonly settings?: SettingsApi;
     readonly inbox: InboxApi;
     readonly attention: AttentionApi;

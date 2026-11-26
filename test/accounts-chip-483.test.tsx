@@ -15,6 +15,7 @@ import type { SwitchOffer } from '../src/core/switch-offer.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { Dashboard, RateLimitPills } from '../src/renderer/components/Dashboard.js';
+import { TitleBar } from '../src/renderer/components/TitleBar.js';
 import { control } from './helpers/control-markup.js';
 
 /**
@@ -88,14 +89,15 @@ describe('S10: the chip and its popover', () => {
         expect(chip()).not.toBeNull();
         expect(chip().textContent).toContain('Work Max');
     });
-    it('the popover renders one section per known account, each with its name, its plan or "unknown", and a bar per window', () => {
+    it('the popover renders one section per known account, each with its name, its plan when known, and a bar per window', () => {
         render(SNAPSHOT());
         click(chip());
         const sections = popover()!.querySelectorAll('[data-account]');
         expect([...sections].map((s) => s.getAttribute('data-account'))).toEqual([A, B]);
         expect(sections[0]!.textContent).toContain('Work Max');
         expect(sections[0]!.querySelector('[data-account-plan]')!.textContent).toBe('max');
-        expect(sections[1]!.querySelector('[data-account-plan]')!.textContent).toBe('unknown');
+        // Tynn #988: an unknown plan draws no chip (it used to read "unknown" on every Claude account).
+        expect(sections[1]!.querySelector('[data-account-plan]')).toBeNull();
         expect(sections[0]!.querySelectorAll('[data-account-window]')).toHaveLength(2);
         expect(sections[0]!.querySelector('[data-account-window="5h"] [role="progressbar"]')).not.toBeNull();
         expect(sections[1]!.querySelector('[data-account-window="5h"]')!.textContent).toContain('unknown');
@@ -140,13 +142,16 @@ describe('S10: the offer on the agent row, and every action a react-fancy Button
         collaborators: null, commsAgeSeconds: null, contextUsed: null, contextSize: null,
     };
     const html = () => renderToStaticMarkup(<Dashboard rows={[base, { ...base, id: 'c1', name: 'tern', provider: 'codex' }]} workspaces={[{ id: 'w', path: '/w/w' }]}
-        onOpenAgent={() => {}} onAddAgent={() => {}} accounts={SNAPSHOT([OFFER])} onSwitchAccount={() => {}} now={NOW} />);
+        onOpenAgent={() => {}} onAddAgent={() => {}} accounts={SNAPSHOT([OFFER])} onSwitchAccount={() => {}} />);
+    // The chip is in Genie's title bar (Tynn #949), not the Dashboard header.
+    const bar = () => renderToStaticMarkup(<TitleBar route="genie://dashboard" workstation={{ name: 'AlphaR', healthy: true }} onNavigate={() => {}} onOpenPalette={() => {}} platform="generic"
+        accountPills={{ limits: {}, accounts: SNAPSHOT([OFFER]), onSwitchAccount: () => {}, now: NOW }} />);
     it('the provider\'s agent rows carry the offer as one button; another provider\'s row does not', () => {
         expect(control(html(), `data-switch-offer-row="${OFFER.id}"`)).toMatchObject({ tag: 'button', fancy: true });
         expect(html().split(`data-switch-offer-row="${OFFER.id}"`)).toHaveLength(2);
     });
     it('the chip is a react-fancy Button, and AccountsChip draws no raw <button>', () => {
-        expect(control(html(), 'data-account-chip="claude"')).toMatchObject({ tag: 'button', fancy: true });
+        expect(control(bar(), 'data-account-chip="claude"')).toMatchObject({ tag: 'button', fancy: true });
         const chipSource = source('src/renderer/components/AccountsChip.tsx');
         expect(chipSource).not.toMatch(/<button\b/);
         for (const c of ['Popover', 'Progress', 'Avatar', 'Badge', 'Callout', 'Button']) expect(chipSource).toMatch(new RegExp(`import \\{[^}]*\\b${c}\\b[^}]*\\} from '@particle-academy/react-fancy'`));

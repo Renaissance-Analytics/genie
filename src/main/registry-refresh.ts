@@ -1,8 +1,6 @@
-import type { StoreReplicas } from './agent-stores-replica.js';
-
 /** Own the background read; a later change/reconnect notification retries it without replaying writes (#636). */
 export function watchRegistryRefresh(
-    source: Pick<StoreReplicas, 'onRegistryChanged'>,
+    source: { onRegistryChanged(listener: () => void): () => void },
     registry: { refresh(): Promise<void> },
     onError: (error: unknown) => void,
 ): () => void {

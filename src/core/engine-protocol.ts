@@ -81,7 +81,6 @@ export const ENGINE_METHODS = [
     'engine.watchLedger',
     'engine.unwatchLedger',
     // The records the host reads per call (a Claude agent's tool setting, genie#1188), pushed by the window.
-    'engine.records',
     // Liveness, and the graceful end (sessions stopped and verified, writes drained, then the process exits).
     'engine.ping',
     'engine.shutdown',
@@ -91,35 +90,12 @@ export const ENGINE_METHODS = [
     // The spawn host's frames, tunnelled (the host split, P2.1): `[profile, frame]` to genie-host's child of that profile.
     // Sent with call id 0, a notification: no result per keystroke. Its children's frames come back as `spawn.frame`.
     'engine.spawn',
-    // The file watcher's per-view subscriptions (the host split, P2.2): `[viewId, {id, path}, want]` / `[viewId]`, under the
-    // calling window's connection. Its batches and git come back as `files.event`, to the windows whose views watch.
-    'engine.filesWatch',
-    'engine.filesUnwatch',
-    // IssueWatch in genie-host (P5c): `[method, args]` — a LOCAL window's Refresh, repo load and repo switch. Its state is
-    // sent as `issueWatch.dump` before `engine.ready` and as `issueWatch.event` (a new state, or a sound to play now), to
-    // local windows only.
-    'engine.issueWatch',
-    // The live board's per-view subscriptions (P5c), LOCAL windows only: `[viewId, workspaceId]` / `[viewId]`, under the calling window's
-    // connection, like the file watcher's. Its rings and states come back as `tynnBoard.event` to the watching connections.
-    'engine.tynnBoardWatch',
-    'engine.tynnBoardUnwatch',
-    // Issues uses its own host-owned feed and connection-owned views, under the same local-only boundary.
-    'engine.tynnIssuesWatch',
-    'engine.tynnIssuesUnwatch',
-    // The Features page follows its own feed too (row F1), the same way: connection-owned views, local windows only.
-    'engine.tynnFeaturesWatch',
-    'engine.tynnFeaturesUnwatch',
     // Other Tynn pages are read on this host's pairing and workspace registry, for local windows only.
     'engine.tynnPage',
-    // The stores agents write to, owned by genie-host (the host split, P3.1): `[store, method, args]`, a window's write
-    // (or a knowledge read). The whole state is sent as `stores.dump` before `engine.ready`, every change as `stores.event`.
-    'engine.stores',
-    // The host's process supervisor (P3.3b): `[method, args]` — start, stop, restart, forget. Its state is sent as
-    // `supervisor.dump` before `engine.ready`, every change and every line of output as `supervisor.event`.
-    'engine.supervisor',
-    // The host's hosting (P5a: hosting-host.ts): `[method, args]` — a window's write. Its whole readable state is sent as
-    // `hosting.dump` before `engine.ready` (the front door's port and CA with it), and again as `hosting.event` on change.
-    'engine.hosting',
+    // The stores, the process supervisor and the flows went from the engine link in 2g-4d E2a (Tynn #955): a window reads and
+    // writes them over the protocol (features.act/snapshot, registry.write, chatDrafts.*); genie-host keeps them in-process.
+    // The host's hosting left the engine link in 2g-4d E2b (Tynn #955): a window reads its front door on frontdoor.watch and
+    // drives its sites and services over the protocol (features.snapshot/act); genie-host keeps it in-process.
     // The window's environment NOW (P5a.2): `[env]`, pushed after a Check and repair so what the host starts next (a site's
     // php-cgi, an agent) reads it with no restart. Also carried with every start, as before.
     'engine.windowEnv',
@@ -141,13 +117,11 @@ export const ENGINE_METHODS = [
     'engine.updater',
     // The host's process book and scheduler (P3.3c): `[method, args]`. Its list is sent as `processes.dump` before
     // `engine.ready`, and again as `processes.event` on every change.
-    'engine.featureQuestion',
     'client.featureEffect',
     'engine.processes',
     'engine.cloneOffers',
     // The host's plugins (ADF A3, Tynn #447: plugins-host.ts): `[method, args]` — a LOCAL window's setEnabled or refresh.
     // Their state is sent as `plugins.event` before `engine.ready` and again on every change.
-    'engine.plugins',
     // Anonymous Marketplace reads and reviewed installs: local window only, with connection-owned review tokens.
     'engine.marketplace',
     // The GApp book (GApps v2 V7, Tynn #572): `[operation, args]`, a local window's store actions (main/gapps-api.ts).
@@ -156,26 +130,16 @@ export const ENGINE_METHODS = [
     // the `catalog.snapshot` event before `engine.ready`; every change is pushed as `catalog.changed` (upserts and
     // removals from a base revision; a window that missed one asks for the snapshot again). `catalog.docs [kind, id]`
     // answers one element's definition, or null.
-    'catalog.snapshot',
-    'catalog.docs',
-    // The host's flows (P3.3d): `[method, args]`. Every flow is sent as `flows.event` before `engine.ready` and on change.
     'engine.browser',
-    'engine.flows',
     // The host's terminals (P3.3e): `[method, args]`. Their list and scrollback are sent as `terminals.dump` before
     // `engine.ready`; every change, every byte of output and every exit as `terminals.event`.
     'engine.terminals',
     // What Genie's MCP server in the host needs of the window until P3.2 (host-mcp.ts `WindowView`); the first one starts it.
-    'engine.windowView',
     // Genie 1's database, where only the window knows it is: the host takes its memories and AgentInbox history once.
-    'engine.v1Import',
     // The MCP server's endpoint, whether it verified, and its tools (the window's Deck and terminal env read them).
     'engine.mcpStatus',
-    // One of the host's own tools for a caller the window knows (a flow's step): `[ForwardedToolCall]`.
-    'engine.runTool',
     // This machine as a workstation: the host holds its key and signs: `[method, args]`.
     'engine.workstation',
-    // Another machine's socket, dialled by the host; the window holds a channel (P3.4 cut e): `[method, args]`.
-    'engine.deviceLink',
     // THE WINDOW'S PROTOCOL CONNECTIONS, TUNNELLED (Tynn #898 step 2d-4b: protocol-tunnels.ts, window-tunnel.ts): `[op,
     // tunnel, payload]` with call id 0, a notification, in order on this one socket. `open {window, label}`, `frame text`,
     // `close reason`, `browser state`. genie-host's RemoteHost answers them; its frames come back as `protocol.frame`.
@@ -184,24 +148,15 @@ export const ENGINE_METHODS = [
     // Remote access's host side (Tynn #409, P5d.1): its status, the PIN, devices, lock, pair answers, and the relay bridge.
     'engine.remoteAccess',
     // The Tynn relay host (Tynn #410, P5d.3): the registration, the role and the link, as a window reads them.
-    'engine.relayHost',
     // Take over (Tynn #553, P5d.5c): genie-host owns who has a TUI open; a window starts, ends and reads them here.
     'engine.takeOver',
-    // A workspace's agent config: the host writes it, under the lock its agent preparation holds.
-    'engine.configSync',
     // The keyring card, as the host found it: `[method, args]`.
-    'engine.keyring',
     // The host's GitHub account, and the authenticated git it runs (P3.4 cut c): `[method, args]`.
-    'engine.github',
     // What the OS said about proxies, handed over by a window: `[{ origin: answer }]`.
     'engine.proxyRemember',
     // The host's Tynn account, as a window asks it (P3.4 cut c): `[method, args]`.
-    'engine.tynn',
-    // The host's keychain, from the window (P3.4): an agent's key only, by name; compare answers same-or-not.
-    'engine.secretProbe',
-    'engine.secretRead',
-    'engine.secretStore',
-    'engine.secretCompare',
+    // The host's keychain, from the window (P3.4): an agent's key only, by name. What an older Genie sealed goes on the
+    // protocol's keychain.adoptLegacy instead (Tynn #959, 2g-3b).
     // Host → window.
     // A window tool's call, forwarded whole (mcp-host-tools.ts): the window runs today's handler and answers its result.
     'client.toolCall',

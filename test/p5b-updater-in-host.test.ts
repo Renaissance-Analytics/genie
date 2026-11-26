@@ -162,6 +162,18 @@ describe('the contract, over the protocol, with the helper doing the library cal
         expect(w.replica.state()).toEqual(r.service.dump());
     });
 
+    it('THE LOG NAMES THE LAUNCH THE HELPER GETS (Tynn #1031): a window started with a debugger port publishes it; the helper is started without it, and "updater: starting" says exactly that launch', async () => {
+        // Diagnosing a leftover helper, the lifecycle log read "updater: starting … --updater --remote-debugging-port=9334
+        // --inspect=9335" while the process itself had neither switch: the line printed the published launch, not the one used.
+        const r = rig();
+        const w = await r.window();
+        await w.replica.publishLaunch({ file: exe, args: ['/app', '--updater', '--no-sandbox', '--remote-debugging-port=9334', '--inspect=9335'] });
+        await w.replica.check();
+        await tick();
+        expect(r.launches).toEqual([{ file: exe, args: ['/app', '--updater', '--no-sandbox'] }]);
+        expect(r.logs.filter((l) => l.startsWith('updater: starting'))).toEqual([`updater: starting ${exe} /app --updater --no-sandbox`]);
+    });
+
     it('download: the progress and the end reach the window; still ONE helper, and the replica equals the host', async () => {
         const r = rig();
         const w = await r.window();
@@ -364,7 +376,8 @@ describe('the install order', () => {
         await tick();
         expect(told).toBe(1);
         const main = strip('src/main/main.ts');
-        expect(main).toMatch(/onInstalling\(\(\) => \{[\s\S]{0,400}quit\.markRecorded\(\)[\s\S]{0,200}quit\.choose\('shut-down'\)[\s\S]{0,300}app\.quit\(\)/);
+        // How it quits follows the install's scope (P6-1, Tynn #1036; test/p6-1-install-quit-keeps-host.test.ts): a full one shuts down.
+        expect(main).toMatch(/onInstalling\(\(scope\) => \{[\s\S]{0,100}const how = installQuit\(scope\);[\s\S]{0,400}quit\.markRecorded\(\)[\s\S]{0,200}quit\.choose\(how\)[\s\S]{0,300}app\.quit\(\)/);
     });
 });
 
@@ -494,11 +507,10 @@ function graph(entry: string, followDynamic: boolean): { files: Set<string>; pac
 }
 
 /*
- * electron-updater is imported by the helper mode. main's STATIC graph and genie-host's WHOLE graph never import it; the
- * window's emergency path (no host could start) loads it lazily with `import()` until P6 removes that path — the same
- * exception as compose's in-window hosting.
+ * electron-updater is imported by the helper mode. main's WHOLE graph and genie-host's WHOLE graph never import it: the
+ * window's lazy `import()` of it went with its no-host path (P6-4, Tynn #1036).
  */
-describe('electron-updater: the helper mode imports it; main statically and genie-host never; the window’s emergency path lazily until P6', () => {
+describe('electron-updater: the helper mode imports it; main and genie-host never, static or dynamic', () => {
     const port = resolve('src/main/electron-updater-port.ts');
 
     it('the helper mode’s import graph reaches it (the control)', () => {
@@ -513,8 +525,8 @@ describe('electron-updater: the helper mode imports it; main statically and geni
         expect(host.files.has(port)).toBe(false);
     });
 
-    it('main’s static graph never reaches it (its emergency path, no host, loads it lazily until P6)', () => {
-        const main = graph('src/main/main.ts', false);
+    it('main’s graph never reaches it, static or dynamic', () => {
+        const main = graph('src/main/main.ts', true);
         expect(main.packages.has('electron-updater')).toBe(false);
         expect(main.files.has(port)).toBe(false);
     });

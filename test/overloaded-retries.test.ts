@@ -60,17 +60,21 @@ describe('an overloaded turn', () => {
         expect(timers.map((t) => t.ms)).toEqual([OVERLOAD_RETRY_MS[0]]);
         expect((await notices())[0]!.message).toMatch(/overloaded \(serverOverloaded\).*retries in 30 s/);
         timers[0]!.fire();
-        expect(prompts).toEqual(['build it', OVERLOAD_RESUME_PROMPT]);
+        // prism-acp 0.48.0 (Tynn #1060): the failed prompt is sent again, not "continue"; no resumable claim = tried once.
+        expect(prompts).toEqual(['build it', 'build it']);
+        expect(prompts).not.toContain(OVERLOAD_RESUME_PROMPT);
     });
 
-    it('a message the person sends while it waits goes out on the retry, instead of "continue"', () => {
-        const { session, prompts, timers, overloaded } = open();
+    it('a message the person sends while it waits goes after the resent prompt, when that turn ends', () => {
+        const { session, prompts, timers, overloaded, endOk } = open();
         session.prompt('build it', 'you');
         overloaded();
         session.prompt('and run the tests', 'you');
         expect(prompts).toEqual(['build it']);
         timers[0]!.fire();
-        expect(prompts).toEqual(['build it', 'and run the tests']);
+        expect(prompts).toEqual(['build it', 'build it']);
+        endOk();
+        expect(prompts).toEqual(['build it', 'build it', 'and run the tests']);
     });
 
     it('backs off (30 s, 60 s, 120 s, 240 s), and the fifth overload in a row IS Broken, with the reason', () => {

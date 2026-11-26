@@ -4,14 +4,10 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { GithubNotInstalledError } from '../src/core/github.js';
-import { memoryPair } from '../src/core/line-transport.js';
 import { GithubAccount, githubSealedSources, type GithubAccountPorts } from '../src/main/github-account.js';
 import { GithubAccountService, type GithubGitPorts } from '../src/main/github-account-service.js';
-import { migrateSecrets, type HostVault, type MigrationBook, type MigrationState } from '../src/main/keychain-migration.js';
-import { SessionEngineClient } from '../src/main/session-engine-client.js';
-import { SessionEngineServer } from '../src/main/session-engine-server.js';
-import { SessionHost } from '../src/main/session-host.js';
+import type { HostVault, MigrationBook, MigrationState } from '../src/main/keychain-migration.js';
+import { moveAll } from './helpers/move-secrets.js';
 import { fakeKeychain } from './helpers/tynn-storage.js';
 
 /**
@@ -167,7 +163,8 @@ describe('a locked keychain is never read as signed out', () => {
     });
 });
 
-describe('git runs in the host: a window asks, and hears the outcome', () => {
+// Since Tynn #961 (2g-3c) no window reaches this service over the engine link: genie-host's own workspace lifecycle asks it.
+describe('git runs in the host: the service is asked, and says the outcome', () => {
     function gitFake() {
         const calls: Array<{ op: string; args: unknown[]; auth: unknown }> = [];
         let fail: string | null = null;
@@ -183,16 +180,13 @@ describe('git runs in the host: a window asks, and hears the outcome', () => {
         const account = await GithubAccount.open(portsWith(keychain({ 'github/access': TOKEN }), fakeGithub()));
         await account.refresh();
         const service = new GithubAccountService(account, { git: fake.git });
-        const server = new SessionEngineServer({ token: 'a'.repeat(64), build: 'test', github: service });
-        const host = new SessionHost({ userData: dir, driverFor: () => null, processTree: { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) }, ...server.hostOptions() });
-        server.attach(host);
-        const [hostSide, windowSide] = memoryPair();
-        server.accept(hostSide);
-        const seen: string[] = [];
-        windowSide.onMessage((line: string) => seen.push(line));
-        const client = new SessionEngineClient();
-        await client.connect(windowSide, 'a'.repeat(64));
-        return { account, service, client, replica: client.github(), seen, ...fake };
+        // What asks it: the service's own methods, by name, as genie-host's lifecycle does.
+        const replica = {
+            gitClone: async (url: string, into: string, branch: string | null) => { await service.call('gitClone', [url, into, branch]); },
+            gitAddSubmodule: (envelope: string, url: string, at: string, branch: string | null, local: boolean) => service.call('gitAddSubmodule', [envelope, url, at, branch, local]),
+            gitPushMain: async (path: string, url: string) => { await service.call('gitPushMain', [path, url]); },
+        };
+        return { account, service, replica, ...fake };
     }
 
     it('a clone of a repository the App can read: the host carries the credential', async () => {
@@ -224,20 +218,19 @@ describe('git runs in the host: a window asks, and hears the outcome', () => {
         await expect(replica.gitClone('https://github.com/ada/one.git', '/work/one', null)).rejects.toThrow('fatal: repository not found');
     });
 
-    it('NOTHING THE LINK CARRIES HOLDS A TOKEN: the dump, the view, each outcome; and CONTROL, the gauge reads the wire', async () => {
-        const { replica, client, seen, service } = await linked();
-        await replica.gitClone('https://github.com/ada/one.git', '/work/one', null);
-        await replica.gitPushMain('/work/one', 'https://github.com/ada/one.git');
-        await client.call('engine.github', ['refresh', []]);
-        expect(JSON.stringify(service.dump())).not.toContain(TOKEN);
-        const wire = seen.join('\n');
-        expect(wire).toContain('ada');
-        for (const secret of SECRETS) expect(wire).not.toContain(secret);
+    it('NOTHING IT SAYS HOLDS A TOKEN: the dump, the view, each outcome; and CONTROL, the gauge reads what it says', async () => {
+        const { replica, service } = await linked();
+        const said = [JSON.stringify(await replica.gitClone('https://github.com/ada/one.git', '/work/one', null) ?? null), JSON.stringify(await replica.gitPushMain('/work/one', 'https://github.com/ada/one.git') ?? null)];
+        await service.call('refresh', []);
+        said.push(JSON.stringify(service.dump()));
+        const text = said.join('\n');
+        expect(text).toContain('ada');
+        for (const secret of SECRETS) expect(text).not.toContain(secret);
     });
 
-    it.each(['cloneAuth', 'pushAuth', 'token', 'credential'])('no method a window can ask for returns a credential: %s', async (method) => {
-        const { client } = await linked();
-        const asked = await client.call('engine.github', [method, ['https://github.com/ada/one.git']]);
+    it.each(['cloneAuth', 'pushAuth', 'token', 'credential'])('no method it answers returns a credential: %s', async (method) => {
+        const { service } = await linked();
+        const asked = await service.call(method, ['https://github.com/ada/one.git']).then((value) => ({ ok: true, value }), (error: unknown) => ({ ok: false, reason: String(error) }));
         expect(asked.ok).toBe(false);
         expect(JSON.stringify(asked)).not.toContain(TOKEN);
     });
@@ -266,85 +259,9 @@ describe('git runs in the host: a window asks, and hears the outcome', () => {
         const strip = (text: string) => text.split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
         const main = strip(readFileSync('src/main/main.ts', 'utf8'));
         expect(main).not.toMatch(/\.cloneAuth\(|\.pushAuth\(/);
-        for (const file of ['src/main/github-account-replica.ts', 'src/main/session-engine-client.ts', 'src/main/session-engine-server.ts']) {
+        for (const file of ['src/main/session-engine-client.ts', 'src/main/session-engine-server.ts']) {
             expect(strip(readFileSync(file, 'utf8')), file).not.toMatch(/cloneAuth|pushAuth/);
         }
-    });
-});
-
-describe('a window reads a replica', () => {
-    async function linked(k = keychain({ 'github/access': TOKEN }), opened: string[] = []) {
-        writeFileSync(file, record());
-        const gh = fakeGithub();
-        const account = await GithubAccount.open(portsWith(k, gh));
-        const server = new SessionEngineServer({ token: 'a'.repeat(64), build: 'test', github: new GithubAccountService(account) });
-        const host = new SessionHost({ userData: dir, driverFor: () => null, processTree: { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) }, ...server.hostOptions() });
-        server.attach(host);
-        const [hostSide, windowSide] = memoryPair();
-        server.accept(hostSide);
-        const client = new SessionEngineClient();
-        await client.connect(windowSide, 'a'.repeat(64));
-        return { account, gh, client, replica: client.github({ openExternal: async (url) => { opened.push(url); } }), opened };
-    }
-
-    it('a window that connects to a signed-in host reads signed in at once, and hears a change', async () => {
-        const { replica, account } = await linked();
-        expect(replica.view()).toMatchObject({ status: 'signed-in', user: { login: 'ada' } });
-        let changes = 0;
-        replica.onChange(() => { changes += 1; });
-        await account.signOut();
-        for (let i = 0; i < 40 && replica.view().status === 'signed-in'; i += 1) await new Promise((r) => setTimeout(r, 5));
-        expect(replica.view().status).toBe('signed-out');
-        expect(changes).toBeGreaterThan(0);
-    });
-
-    it('a sign-in asked from the window opens the browser IN THE WINDOW: the host has none', async () => {
-        const opened: string[] = [];
-        writeFileSync(file, JSON.stringify({ version: 1, state: 'signed-out' }));
-        const gh = fakeGithub();
-        const account = await GithubAccount.open(portsWith(keychain(), gh));
-        const server = new SessionEngineServer({ token: 'a'.repeat(64), build: 'test', github: new GithubAccountService(account) });
-        const host = new SessionHost({ userData: dir, driverFor: () => null, processTree: { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) }, ...server.hostOptions() });
-        server.attach(host);
-        const [hostSide, windowSide] = memoryPair();
-        server.accept(hostSide);
-        const client = new SessionEngineClient();
-        await client.connect(windowSide, 'a'.repeat(64));
-        const replica = client.github({ openExternal: async (url) => { opened.push(url); } });
-        await replica.startSignIn();
-        for (let i = 0; i < 40 && opened.length === 0; i += 1) await new Promise((r) => setTimeout(r, 5));
-        expect(opened).toEqual(['https://github.com/login/device']);
-        replica.cancelSignIn();
-    });
-
-    it('a window opens only GitHub’s own pages, whatever the link says', async () => {
-        const { client, opened } = await linked();
-        client.github().openFromHost('https://elsewhere.example/phish');
-        client.github().openFromHost('https://github.com/settings/installations');
-        expect(opened).toEqual(['https://github.com/settings/installations']);
-    });
-
-    it('an error a window acts on by its type survives the link as that type: the install chooser still appears', async () => {
-        writeFileSync(file, record());
-        const account = await GithubAccount.open(portsWith(keychain({ 'github/access': TOKEN }), fakeGithub()));
-        account.createRepo = async () => { throw new GithubNotInstalledError('Example-Org', 'https://github.com/apps/x/installations/new', 403, 'nope'); };
-        const service = new GithubAccountService(account);
-        const server = new SessionEngineServer({ token: 'a'.repeat(64), build: 'test', github: service });
-        const host = new SessionHost({ userData: dir, driverFor: () => null, processTree: { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) }, ...server.hostOptions() });
-        server.attach(host);
-        const [hostSide, windowSide] = memoryPair();
-        server.accept(hostSide);
-        const client = new SessionEngineClient();
-        await client.connect(windowSide, 'a'.repeat(64));
-        const thrown = await client.github().createRepo({ owner: 'Example-Org', name: 'x', private: true }).catch((error: unknown) => error);
-        expect(thrown).toBeInstanceOf(GithubNotInstalledError);
-        expect(thrown).toMatchObject({ account: 'Example-Org', installUrl: 'https://github.com/apps/x/installations/new', status: 403 });
-    });
-
-    it('with no link it reads signed out, and git refuses', async () => {
-        const replica = new SessionEngineClient().github();
-        expect(replica.view().status).toBe('signed-out');
-        await expect(replica.gitPushMain('/w', 'https://github.com/a/b.git')).rejects.toThrow();
     });
 });
 
@@ -352,14 +269,14 @@ describe('what an older Genie sealed moves to the keychain', () => {
     const cipher = { decrypt: (bytes: Buffer) => { const text = bytes.toString(); if (!text.startsWith('sealed:')) throw new Error('another OS user'); return text.slice('sealed:'.length); } };
     const seal = (text: string) => Buffer.from(`sealed:${text}`).toString('base64');
     const memoryBook = (): MigrationBook => { const states: Record<string, MigrationState> = {}; return { read: async () => ({ ...states }), write: async (name, state) => { states[name] = state; } }; };
-    const vaultOver = (k: Lockable): HostVault => ({ store: (name, value) => k.set(name, value) as never, compare: async (name, value) => (k.held.get(name) === value ? 'same' : 'different') });
+    const vaultOver = (k: Lockable): HostVault => ({ store: (name, value) => k.set(name, value) as never, compare: async (name, value) => (!k.held.has(name) ? 'missing' : k.held.get(name) === value ? 'same' : 'different') });
 
     it('both tokens move; the file keeps who it is and the expiries; a reload signs in', async () => {
         writeFileSync(file, record({ tokenEnc: seal(TOKEN), refreshEnc: seal(REFRESH), accessExpiresAt: NOW + 1000 }));
         const k = keychain();
         const account = await GithubAccount.open(portsWith(k, fakeGithub()));
         expect(account.view().status).toBe('expired');
-        const moved = await migrateSecrets(await githubSealedSources({ file, cipher }), vaultOver(k), memoryBook());
+        const moved = await moveAll(await githubSealedSources({ file, cipher }), vaultOver(k), memoryBook());
         expect(moved).toEqual([{ name: 'github/access', status: 'moved' }, { name: 'github/refresh', status: 'moved' }]);
         expect(k.held.get('github/access')).toBe(TOKEN);
         expect(k.held.get('github/refresh')).toBe(REFRESH);
@@ -374,7 +291,7 @@ describe('what an older Genie sealed moves to the keychain', () => {
     it('a seal that will not open is not moved and not deleted', async () => {
         writeFileSync(file, record({ tokenEnc: Buffer.from('other:x').toString('base64') }));
         const k = keychain();
-        const moved = await migrateSecrets(await githubSealedSources({ file, cipher }), vaultOver(k), memoryBook());
+        const moved = await moveAll(await githubSealedSources({ file, cipher }), vaultOver(k), memoryBook());
         expect(moved[0]).toEqual({ name: 'github/access', status: 'old-copy-unreadable' });
         expect(JSON.parse(readFileSync(file, 'utf8')).tokenEnc).toBeDefined();
     });
@@ -382,7 +299,7 @@ describe('what an older Genie sealed moves to the keychain', () => {
     it('GENIE 1’S LOGIN carries over the same way, with no file yet: tokens moved, and the record says whose and from where', async () => {
         const v1Settings = () => ({ github_token_enc: seal(TOKEN), github_user: 'ada', github_refresh_enc: seal(REFRESH), github_token_exp_ms: String(NOW + 1000), github_refresh_exp_ms: String(NOW + 9000) });
         const k = keychain();
-        const moved = await migrateSecrets(await githubSealedSources({ file, cipher, v1Settings }), vaultOver(k), memoryBook());
+        const moved = await moveAll(await githubSealedSources({ file, cipher, v1Settings }), vaultOver(k), memoryBook());
         expect(moved.map((m) => m.status)).toEqual(['moved', 'moved']);
         expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ state: 'signed-in', login: 'ada', source: 'genie-1', accessExpiresAt: NOW + 1000, refreshExpiresAt: NOW + 9000 });
         const account = await GithubAccount.open(portsWith(k, fakeGithub()));

@@ -125,7 +125,7 @@ export class TerminalsService {
     }
 }
 
-/** The terminals as a window and its features use them: genie-host's through the replica, or a TerminalHost of its own on the emergency path. */
+/** The terminals as a window and its features use them: genie-host's, through the replica. */
 export type TerminalsApi = Pick<TerminalsReplica, 'open' | 'openReady' | 'write' | 'resize' | 'close' | 'list' | 'scrollback' | 'attach' | 'lastCwd' | 'refusal' | 'onData' | 'onExit' | 'count' | 'closeAll'> & Partial<Pick<TerminalsReplica, 'freshSnapshot' | 'streamSnapshot' | 'writeReady' | 'resizeReady' | 'closeReady'>> & { finished(id: string): { workspaceId: string; exitCode: number } | null };
 
 /** genie-host's terminals, as a window drives them (P3.3e). */

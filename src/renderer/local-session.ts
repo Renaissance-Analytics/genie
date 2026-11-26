@@ -5,7 +5,7 @@ import { localTransport } from './local-transport.js';
 import { connectRemote, type RemoteClient } from './remote-bridge.js';
 import type { LocalFilesBridge } from './local-files-client.js';
 
-export type WorkspaceProtocolKey = 'listRepos' | 'addRepo' | 'removeRepo' | 'removeRepoLock' | 'locateRepo' | 'commitsSince'
+export type WorkspaceProtocolKey = 'listRepos' | 'addRepo' | 'removeRepo' | 'removeRepoLock' | 'locateRepo' | 'relocate' | 'commitsSince'
     | 'settings' | 'setSetting' | 'resetSetting' | 'setGoverns' | 'setDefaultAgent' | 'setColor' | 'savePreview' | 'save' | 'cloneOffers' | 'applyOffer' | 'setMcpServer' | 'onSettingsChanged'
     | 'previewAdd' | 'confirmAdd' | 'create' | 'previewAddFromGit' | 'confirmAddFromGit' | 'readSource'
     | 'stageFromGit' | 'registerExisting' | 'buildEnvelope' | 'discardStaged' | 'githubRepos' | 'tynnProjects'
@@ -45,7 +45,7 @@ const LINK_DOWN = 'Genie isn’t answering this window yet. Try that again in a 
 const REPLACED = 'this window opened a replacement protocol connection';
 
 /** One session per pageBridge. Only moved calls wait for it; unmoved preload methods remain available. */
-export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; features: Pick<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>; reads: Pick<GenieBridge, 'snapshot' | 'subscribe' | 'agentDetail'>; agentWire: NonNullable<RemoteClient['agentWire']>; agentCommands: Pick<GenieBridge, 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'stopToolCall' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'takeOver' | 'providerLogin' | 'switchAccount' | 'designLogin' | 'designSignIn'>; host: NonNullable<GenieBridge['host']>; terminals: GenieBridge['terminals']; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']> } & HostFamily {
+export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; features: Pick<GenieBridge['features'], 'snapshot' | 'subscribe' | 'soundData' | 'act' | 'picked'>; reads: Pick<GenieBridge, 'snapshot' | 'subscribe' | 'agentDetail'>; agentWire: NonNullable<RemoteClient['agentWire']>; agentCommands: Pick<GenieBridge, 'openAgent' | 'stopAgent' | 'resumeLimit' | 'cancelTurn' | 'stopToolCall' | 'prompt' | 'resolvePrompt' | 'answerApproval' | 'addAgent' | 'takeOver' | 'providerLogin' | 'switchAccount' | 'designLogin' | 'designSignIn'>; host: NonNullable<GenieBridge['host']>; terminals: GenieBridge['terminals']; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge; files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']>; chatDrafts: NonNullable<GenieBridge['chatDrafts']>; artboard: NonNullable<GenieBridge['artboard']>; elevation: NonNullable<GenieBridge['elevation']> } & HostFamily {
     let state: LocalProtocolState = { phase: 'starting', reason: null, revision: 0 };
     let wasReady = false;
     const everReady = () => wasReady;
@@ -66,7 +66,37 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
         if (next.phase === 'ready') wasReady = true;
         for (const listener of listeners) listener();
     };
+    /*
+     * THIS WINDOW'S CHANNELS TO ANOTHER MACHINE (Tynn #941, 2f-2), across its session's reconnects: heard from whichever
+     * connection is live. genie-host closes a connection's channels when it goes, and nothing can say so on a connection
+     * that went: a dropped session says it here (`lost`), once for each channel still open.
+     */
+    const devices = (() => {
+        const messages = new Set<(channel: string, text: string) => void>();
+        const closes = new Set<(channel: string, reason: string | null) => void>();
+        const steps = new Set<(workstationId: string, step: 'relay') => void>();
+        const open = new Set<string>();
+        const closed = (channel: string, reason: string | null) => { if (!open.delete(channel)) return; for (const l of [...closes]) l(channel, reason); };
+        subscribe(() => {
+            const net = client!.localOwner!.tynnNetwork;
+            const offs = [
+                net.onMessage((channel, text) => { for (const l of [...messages]) l(channel, text); }),
+                net.onClosed((channel, reason) => closed(channel, reason)),
+                net.onOpenStep!((workstationId, step) => { for (const l of [...steps]) l(workstationId, step); }),
+            ];
+            return () => { for (const off of offs) off(); };
+        });
+        const listen = <L>(set: Set<L>) => (listener: L) => { set.add(listener); return () => { set.delete(listener); }; };
+        return {
+            onMessage: listen(messages), onClosed: listen(closes), onOpenStep: listen(steps),
+            opened: <T extends { ok: boolean; channel?: string }>(result: T): T => { if (result.ok && typeof result.channel === 'string') open.add(result.channel); return result; },
+            forget: (channel: string) => { open.delete(channel); },
+            lost: (reason: string) => { for (const channel of [...open]) closed(channel, reason); },
+        };
+    })();
+    const refusedOpen = (error: unknown) => ({ ok: false as const, reason: error instanceof Error ? error.message : String(error) });
     const release = () => {
+        devices.lost('Genie’s connection to its host closed');
         offSettings(); offSettings = () => {};
         offState(); offState = () => {};
         for (const entry of subscriptions) { entry.off(); entry.off = () => {}; }
@@ -82,7 +112,8 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
     /** One connection, up and subscribed. Otherwise released, and the reason. */
     const connect = async (revise: boolean): Promise<Connected> => {
         const transport = localTransport(port!);
-        const attempt = connectRemote(transport, { kind: 'local' }, 'this window');
+        // This window shows the host's password prompt for what it clicked (Tynn #973).
+        const attempt = connectRemote(transport, { kind: 'local' }, 'this window', { elevationPrompt: true });
         client = attempt;
         const result = await attempt.ready;
         if (!result.ok) { release(); return result; }
@@ -230,6 +261,11 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             home: () => read((b) => b.host!.home!()),
         },
         artboard: { read: id => read(b => b.artboard!.read(id)), review: (id, post, verdict, comment) => read(b => b.artboard!.review(id, post, verdict, comment)) },
+        // The host's password prompt (Tynn #973): heard on every connection this window makes, answered on the live one.
+        elevation: {
+            onPrompt: (listener) => subscribe((b) => b.elevation?.onPrompt(listener) ?? (() => {})),
+            answer: (id, password) => read((b) => (b.elevation ? b.elevation.answer(id, password) : Promise.resolve(false))),
+        },
         chatDrafts: {
             load: () => read(b => b.chatDrafts!.load()), save: (id, draft) => read(b => b.chatDrafts!.save(id, draft)),
             putFile: bytes => read(b => b.chatDrafts!.putFile(bytes)), readFile: ref => read(b => b.chatDrafts!.readFile(ref)),
@@ -255,11 +291,19 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
                 source: (id, op, kind, source) => ownerRead(b => b.appInbox.source(id, op, kind, source)),
             },
             deviceLink: {
+                open: (url) => ownerRead(b => b.deviceLink.open(url)).then(devices.opened, refusedOpen),
                 hosts: () => ownerRead(b => b.deviceLink.hosts()),
                 forget: (url) => ownerRead(b => b.deviceLink.forget(url)),
                 adopt: (url, token) => ownerRead(b => b.deviceLink.adopt(url, token)),
             },
             tynnNetwork: {
+                // A channel to another machine (Tynn #941, 2f-2), on this session; its frames, closes and steps are heard here.
+                open: (workstationId) => ownerRead(b => b.tynnNetwork.open(workstationId)).then(devices.opened, refusedOpen),
+                send: (channel, text) => { void ownerRead(async b => { b.tynnNetwork.send(channel, text); }).catch(() => {}); },
+                close: (channel) => { devices.forget(channel); void ownerRead(async b => { b.tynnNetwork.close(channel); }).catch(() => {}); },
+                onMessage: devices.onMessage, onClosed: devices.onClosed, onOpenStep: devices.onOpenStep,
+                openBrowser: (channel, address, hosts, view) => ownerRead(b => b.tynnNetwork.openBrowser!(channel, address, hosts, view))
+                    .catch((error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) })),
                 workstations: () => ownerRead(b => b.tynnNetwork.workstations()),
                 setRole: (id, role, code) => ownerRead(b => b.tynnNetwork.setRole!(id, role, code)),
                 shares: {
@@ -308,6 +352,7 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             delete: (id, outcome, also, handoff) => requestAgent((agents) => agents.delete(id, outcome, also, handoff)),
             switchDriver: (id, to) => requestAgent((agents) => agents.switchDriver(id, to)),
             setBudget: (id, usd) => requestAgent((agents) => agents.setBudget(id, usd)),
+            setAppWakeCap: (id, cap) => requestAgent((agents) => agents.setAppWakeCap(id, cap)),
             setMode: (id, mode) => requestAgent((agents) => agents.setMode(id, mode)),
             setAccessScope: (id, scope) => requestAgent((agents) => agents.setAccessScope(id, scope)),
             setAccessAgents: (id, ids) => requestAgent((agents) => agents.setAccessAgents(id, ids)),
@@ -355,6 +400,7 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             removeRepo: (id, slug) => request((ws) => ws.removeRepo(id, slug)),
             removeRepoLock: (id, slug) => request((ws) => ws.removeRepoLock(id, slug)),
             locateRepo: (id, slug, path) => request((ws) => ws.locateRepo(id, slug, path)),
+            relocate: (id, path) => request((ws) => ws.relocate!(id, path)),
             commitsSince: (id, since) => request((ws) => ws.commitsSince(id, since)),
             settings: (id) => request((ws) => ws.settings(id)),
             setSetting: (id, key, value) => request((ws) => ws.setSetting(id, key, value)),

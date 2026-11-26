@@ -14,6 +14,8 @@
 import { geniePageSource, isMainWindow } from './cdp-main-window.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { pageSpan } from './local-door-span.mjs';
+import { closeWhatsNew } from './cdp-whats-new.mjs';
+import { endOwnRun } from './end-own-tree.mjs';
 import { execFileSync, spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -29,6 +31,8 @@ const providerPids = new Set();
 let phase = 'safety gate';
 let app, inspector, main, remote, server, root, childEnv, mainId, hostPid;
 let cleaned = false;
+/** What this run's own cleanup could not end (Tynn #1031): the row fails on it by its own words. */
+let leftRunning = '';
 const PORT = Number(process.env.CDP_PORT ?? 9334);
 const INSPECT = Number(process.env.LOCAL_DOOR_CDP_INSPECT ?? 9335);
 const OUT = resolve('smoke-out');
@@ -260,7 +264,8 @@ async function nativeInterval(label, connectionId, startSummary, endSummary) {
     const sent = (summary) => summary.records.find((r) => r.connectionId === connectionId)?.frames;
     const nativeFrom = sent(startSummary), nativeTo = sent(endSummary);
     demand(Number.isSafeInteger(nativeFrom) && Number.isSafeInteger(nativeTo), `${label}: the socket counted connection ${connectionId} at both ends`);
-    const handle = await main.evaluate(`[...window.__doorCdp.connections].find(([, id]) => id === ${JSON.stringify(connectionId)})?.[0] ?? null`);
+    // The id is the app's (its welcome frame), so it goes in as an argument, not spliced into code (CodeQL #121).
+    const handle = await evaluateFn(main, (id) => [...window.__doorCdp.connections].find(([, c]) => c === id)?.[0] ?? null, connectionId);
     demand(handle, `${label}: the page knows the handle of connection ${connectionId}`);
     const span = await until(`${label}: the page received the socket's frame ${nativeTo}`,
         async () => pageSpan(await main.evaluate('window.__doorCdp.frames.map((f) => ({ seq: f.seq, handle: f.handle, n: f.n }))'), handle, nativeFrom, nativeTo), 8_000);
@@ -281,18 +286,21 @@ async function cleanup() {
     if (main) for (const id of agents) { try { await main.evaluate(`(window.genieTest ?? window.genie).stopAgent(${JSON.stringify(id)}); true`, 5_000); } catch { /* dead page */ } }
     try { await inspector?.evaluate('globalThis.__doorNative?.detach(); true', 3_000); } catch { /* gone */ }
     for (const c of sessions) c.close(); remote?.close();
-    if (app?.pid) {
-        try { if (WIN) execFileSync('taskkill', ['/T', '/F', '/PID', String(app.pid)], { timeout: 15_000, stdio: 'ignore' }); else process.kill(-app.pid, 'SIGKILL'); } catch { /* gone */ }
-    }
-    if (root) {
-        const record = readJson(join(root, '.genie', 'runtime', 'host.json'));
-        // A fresh private home had no record before launch; never enumerate or kill other Genies.
-        hostPid ??= record?.pid;
+    // A fresh private home had no record before launch; never enumerate or kill other Genies.
+    if (root) hostPid ??= readJson(join(root, '.genie', 'runtime', 'host.json'))?.pid;
+    if (WIN) {
+        // THE WHOLE RUN, ENDED AND WAITED FOR (Tynn #1031; end-own-tree.mjs). genie-host is not in the app's tree and its
+        // updater helper is detached from it: a tree kill of the app, then the host's pid, ended neither the helper nor
+        // waited for anything, and what taskkill answered was thrown away. Two gates failed the row guard on it.
+        const ended = await endOwnRun({ app, hostPid, others: [...providerPids], since: started, log });
+        if (!ended.ok) leftRunning = ended.words;
+    } else {
+        if (app?.pid) { try { process.kill(-app.pid, 'SIGKILL'); } catch { /* gone */ } }
         if (alive(hostPid)) { try { process.kill(hostPid, 'SIGTERM'); } catch { /* gone */ } }
         for (let i = 0; i < 20 && alive(hostPid); i++) await sleep(250);
         if (alive(hostPid)) { try { process.kill(hostPid, 'SIGKILL'); } catch { /* gone */ } }
+        for (const pid of providerPids) if (alive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
     }
-    for (const pid of providerPids) if (alive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
     try { if (readFileSync(TICKER, 'utf8').trim() === String(process.pid)) rmSync(TICKER); } catch { /* not ours */ }
     server?.close();
 }
@@ -301,6 +309,7 @@ let exiting = false;
 async function finish() {
     if (exiting) return; exiting = true;
     clearTimeout(watchdog); await cleanup();
+    if (leftRunning) result(0, 'FAIL', `LEFT RUNNING by this row's own cleanup: ${leftRunning}`);
     for (let n = 1; n <= 11; n++) if (!reports.some((r) => r.number === n)) result(n, 'UNMEASURED', `not reached after ${phase}`);
     const code = reports.some((r) => r.status === 'FAIL') ? 1 : reports.some((r) => r.status === 'UNMEASURED') ? 2 : 0;
     mkdirSync(OUT, { recursive: true });
@@ -373,6 +382,7 @@ try {
     inspector = await Cdp.connect((await until('main inspector', async () => (await targets(INSPECT))[0], 30_000)).webSocketDebuggerUrl);
     await until('preload/door registration', () => main.evaluate('typeof window.genieLocalProtocol === "object" && typeof window.genie === "object"'), 60_000);
     await until('real composed services', () => main.evaluate('(window.genieTest ?? window.genie).features.snapshot().then(d=>!!d.remote)'), 60_000);
+    await closeWhatsNew((expression) => main.evaluate(expression));
     const refs = await doorScopes(); await observeDoor(refs);
     mainId = await inspector.evaluate(`(() => { const { BrowserWindow } = process.getBuiltinModule('node:module').createRequire(process.execPath)('electron'); return BrowserWindow.getAllWindows().find((w) => new RegExp(${jsLiteral(geniePageSource('index'))}).test(w.webContents.getURL())).webContents.id; })()`);
     if (BREAK) await inspector.evaluate(`(() => { for (const wc of globalThis.__doorNative.admitted.keys()) if (wc.id === ${mainId}) globalThis.__doorNative.admitted.delete(wc); return true; })()`);

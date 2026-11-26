@@ -232,7 +232,7 @@ describe('the tab', () => {
         expect(optional).toMatch(/data-tynn-start-choice="s1"/);
         expect(optional).toMatch(/aria-haspopup="menu"/);
         const off = render(board([story('s1')], { mode: 'off', policy: 'any', can_assign: false }));
-        expect(off).toMatch(/data-tynn-step="story.start"[^>]*aria-label="Start"|aria-label="Start"[^>]*data-tynn-step="story.start"/);
+        expect(off).toMatch(/data-tynn-step="story.start"[^>]*aria-label="Run"|aria-label="Run"[^>]*data-tynn-step="story.start"/);
     });
 
     it('offers Assign only to a person who may manage the project', () => {

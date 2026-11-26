@@ -8,6 +8,8 @@
 export interface ProtocolTool {
     readonly name: string;
     readonly description: string;
+    /** Served only to some agents (a per-request gate): never named here, where every agent of the workspace reads it. */
+    readonly someAgents?: boolean;
 }
 
 const HEADER = '<!-- Written by Genie 2 and replaced on every sync. Put your own rules in RULES.md. -->';
@@ -28,10 +30,11 @@ function workSection(tracking: WorkTracking): string {
 
 Genie is signed in to Tynn (tynn.ai), so the work here is planned and tracked in Tynn, with the \`tynn\` MCP tools: \`next\` before choosing work, \`find\`, \`create\` and \`update\` to plan it, and \`workflow\` to move it. Tynn's own rules are in its \`tynn-guidelines\` resource; read them there. In short:
 
-- A release is a version: the active version is the release in flight.
-- A story is one PR, and its tasks are that PR's plan.
-- Items move through \`workflow\` as work happens: start when you pick it up, test when the PR is green, finish when it is merged or shipped.
-- A release go request lists what is NOT in the build, beside what is in it.
+- A release is a version: the active version is the release in flight. An urgent fix ships in a hotfix version.
+- A Slice is one PR (Tynn called it a story before), and its tasks are that PR's plan. A Spike is a time-boxed question that never merges.
+- Slices move through \`workflow\` as work happens: \`propose\` it, \`ready\` it when it can start, \`run\` it when you pick it up, \`submit\` it with the PR when the PR is green, and the reviewer will \`accept\` it (merged, gate passed, reviewed) or \`reject\` it. A Spike group is closed with \`decide\`.
+- Evidence (gate runs, reviews, merges, decisions) goes on the Slice with \`record\`; \`accept\` is refused until it is there, and the refusal names what is missing.
+- A release go request lists what is NOT in the build, beside what is in it; Tynn keeps it as a signed release decision.
 - Local plan files are only a fallback, for when Tynn cannot be reached; say so, and bring the plan back into Tynn when it can.
 `;
     }
@@ -81,8 +84,11 @@ The \`genie\` skill is Genie’s guide, with a \`genie-*\` skill per topic. Read
 export function sharedProtocol(tools: readonly ProtocolTool[], tracking: WorkTracking = 'files', firstRun = false): string {
     // NAMES ONLY (the owner, 2026-10-18: no duplicate info in the system prompt chain): each tool's description already
     // reaches the agent through the MCP tool list; this file is read into every agent's instructions on top of it.
-    const list = tools.length > 0
-        ? `${tools.map((t) => `\`${t.name}\``).join(', ')}. Each describes itself in your tool list; read it there.`
+    // ONLY THE TOOLS EVERY AGENT HAS (Tynn #1015): this one file is every agent's of the workspace, so a tool behind a
+    // per-request gate (workspaceTabs, pages) is left out; it describes itself in the tool list of an agent that has it.
+    const everyAgent = tools.filter((t) => t.someAgents !== true);
+    const list = everyAgent.length > 0
+        ? `${everyAgent.map((t) => `\`${t.name}\``).join(', ')}. Each describes itself in your tool list; read it there.`
         : '(Genie’s MCP server is not listening right now; no tools are listed.)';
     return `${HEADER}
 

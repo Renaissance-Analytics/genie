@@ -18,7 +18,7 @@ import type { KnowledgeStore } from './knowledge-store.js';
 import type { TerminalsPort } from './mcp-tools-more.js';
 import type { PluginToolsDeps } from './mcp-tools-plugins.js';
 import type { AllToolsDeps } from './mcp-registrations.js';
-import type { Caller, McpCall } from './mcp-tools.js';
+import type { Caller, GenieToolsDeps, McpCall } from './mcp-tools.js';
 import type { SettingsStore } from './settings-store.js';
 
 /**
@@ -34,7 +34,7 @@ export interface GenieToolParts {
     readonly knowledge: KnowledgeStore;
     readonly settings: Pick<SettingsStore, 'snapshot' | 'snapshotFor'>;
     /** The person's approval of a gated action (a terminal created or written, a gated plugin tool, a service added or removed, a site removed, a background process added or removed). */
-    readonly approve: (caller: Caller, action: 'create' | 'write' | 'plugin' | HostingApproval | ProcessApproval | typeof CREATE_AGENT_ACTION | typeof WORKSPACE_TABS_ACTION | PageAction | typeof PLAYWRIGHT_INSTALL_ACTION, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
+    readonly approve: (caller: Caller, action: 'create' | 'write' | 'plugin' | HostingApproval | ProcessApproval | typeof CREATE_AGENT_ACTION | typeof WORKSPACE_TABS_ACTION | PageAction | typeof PLAYWRIGHT_INSTALL_ACTION, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied' | 'expired'>;
     /** Every agent Genie knows, now. */
     readonly roster: () => readonly AgentRecord[];
     /** Each workspace's address slug (registry.workspaceSlugs): an agent is `name@slug`. */
@@ -42,6 +42,8 @@ export interface GenieToolParts {
     readonly refusalForRecipient?: (address: string) => string | null;
     /** Each agent's liveness for `agentinbox list` (core/liveness.ts). Absent = not reported. */
     readonly liveness?: (agentId: string) => Liveness;
+    /** Mail between the owner's workstations (P9, main/cross-station-host.ts). Absent = none (doctor mode, the window). */
+    readonly crossStation?: GenieToolsDeps['crossStation'];
     /** A Take Over terminal's id or a session's key → who is calling; anything else is nobody. */
     readonly resolveCaller: (id: string) => Caller | null;
     readonly userActive: () => boolean;
@@ -59,7 +61,7 @@ export interface GenieToolParts {
     /** The `plan` tool's read: the caller's kept plan (the record's `plan`); `null` = none. */
     readonly readPlan?: (agentId: string) => readonly { content: string; status: string }[] | null;
     readonly terminals: TerminalsPort;
-    /** The env a terminal in a workspace gets — the Terminals tab's own (hosting-actions.ts `terminalEnvFor`). Absent = none. */
+    /** The env a terminal in a workspace gets — the Terminals tab's own (genie-host.ts `shellEnv`). Absent = none. */
     readonly terminalEnv?: (workspaceId: string) => Readonly<Record<string, string>>;
     /** Puts a terminal that needs the person in front of them (Tynn #722); answers whether a window got it. Absent = nothing can be shown. */
     readonly surfaceTerminal?: (request: { workspaceId: string; terminalId: string; agentName: string; reason: string }) => boolean;
@@ -67,6 +69,8 @@ export interface GenieToolParts {
     readonly hosting?: HostingServices;
     /** A workspace's trust verdict as last read (Tynn #753): the agents' `sites` / `services` act only in a trusted one. Absent = none is (fail closed). */
     readonly workspaceTrusted?: (workspaceId: string) => boolean;
+    /** The verdict read now (Tynn #364), for what acts at once on it (the `playwright` install). Absent = `workspaceTrusted`. */
+    readonly workspaceTrustedNow?: (workspaceId: string) => Promise<boolean>;
     /** Genie's browser, for the agents' `sites open` — the pane the Hosting tab's Open uses. Absent = none (doctor mode), and the tool says so. */
     readonly openInBrowser?: OpenInBrowser;
     /** The background processes the agents' `processes` tool acts on — the Processes tab's book and the supervisor's logs. Absent = none (doctor mode), and the tool says so. */
@@ -79,7 +83,7 @@ export interface GenieToolParts {
     readonly serviceExec?: ServiceExec;
     readonly plugins: PluginToolsDeps['plugins'] & { readonly run: PluginToolsDeps['run'] };
     /** A workspace's default agent and registering a new agent (`createAgent`, the default agent's only). Absent = no such tool (doctor mode). */
-    readonly agents?: { defaultAgentOf(workspaceId: string): string | null; register: AgentToolsDeps['register'] };
+    readonly agents?: { defaultAgentOf(workspaceId: string): string | null; create: AgentToolsDeps['create'] };
     /** `workspaceTabs` (beta.35 item 36): writing a workspace's tabs, and the sites a site panel may show. Absent = no such tool (doctor mode). */
     readonly workspaceTabs?: { write(workspaceId: string, raw: string): void; sites(workspaceId: string): readonly string[] };
     /** `pages` (browser rebuild step 7): every page Genie has open, drivable (page-navigation-electron.ts). Absent = no such tool (doctor mode). */
@@ -108,6 +112,7 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
             ...(p.workspaceSlugs ? { workspaceSlugs: p.workspaceSlugs } : {}),
             ...(p.refusalForRecipient ? { refusalForRecipient: p.refusalForRecipient } : {}),
             ...(p.liveness ? { liveness: p.liveness } : {}),
+            ...(p.crossStation ? { crossStation: p.crossStation } : {}),
             resolveCaller: p.resolveCaller,
             userActive: p.userActive,
             glow: p.glow,
@@ -149,10 +154,9 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
         ...(p.agents ? {
             agents: {
                 resolveCaller: p.resolveCaller,
-                defaultAgentOf: (ws: string) => p.agents!.defaultAgentOf(ws),
                 roster: p.roster,
                 approve: (caller: Caller, action: typeof CREATE_AGENT_ACTION, detail: string, call: McpCall | undefined) => p.approve(caller, action, detail, call),
-                register: p.agents.register,
+                create: p.agents.create,
                 addressOf: (record: AgentRecord) => agentAddress(record, p.workspaceSlugs?.() ?? new Map()),
             },
         } : {}),
@@ -182,7 +186,7 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
             playwright: {
                 resolveCaller: p.resolveCaller,
                 port: p.playwright,
-                trusted: p.workspaceTrusted ?? (() => false),
+                trusted: p.workspaceTrustedNow ?? p.workspaceTrusted ?? (() => false),
                 approve: (caller: Caller, action: typeof PLAYWRIGHT_INSTALL_ACTION, detail: string, call: McpCall | undefined) => p.approve(caller, action, detail, call),
             },
         } : {}),

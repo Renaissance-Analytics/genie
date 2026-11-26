@@ -8,7 +8,8 @@ import { droneRefusal } from '../src/core/workstation-role.js';
 import type { AppInboxDump } from '../src/main/app-inbox-host.js';
 import { FilesWatchHub, type FilesHubEvent } from '../src/main/files-watch-hub.js';
 import { hostAloneApi, type HostAloneEngine, type HostAlonePorts } from '../src/main/host-alone-api.js';
-import { HOST_LOCAL_OWNER, hostFilesWatch, hostTynnWatch, ownerRoute } from '../src/main/host-local-watches.js';
+import * as hostLocalWatches from '../src/main/host-local-watches.js';
+import { HOST_LOCAL_OWNER, hostFilesWatch, hostTynnWatch } from '../src/main/host-local-watches.js';
 import { hostOwnerOps, restartAppSource, type HostOwnerSources } from '../src/main/host-owner-ops.js';
 import { LocalStagingArea } from '../src/main/local-staging-area.js';
 import { RemoteAccessHost, hostRemoteApi } from '../src/main/remote-access-host.js';
@@ -145,22 +146,18 @@ describe('the watch hubs have a host-local owner', () => {
         expect((heard[2] as { treeChanges?: unknown }).treeChanges).toBeUndefined();
     });
 
-    it('the owner route: genie-host\'s own owner is delivered here, an engine-link owner goes over the link', () => {
-        const local: unknown[] = [], remote: unknown[][] = [];
-        const send = ownerRoute<string>((e) => local.push(e), (o, e) => remote.push([o, e]));
-        send(HOST_LOCAL_OWNER, 'mine');
-        send('3f0c6a8e-uuid', 'theirs');
-        expect(local).toEqual(['mine']);
-        expect(remote).toEqual([['3f0c6a8e-uuid', 'theirs']]);
+    it('there is no owner route any more: no hub sends an owner\'s events over the engine link (the files hub since Tynn #1043, the Tynn hubs since #934 task #1474)', () => {
+        expect(Object.keys(hostLocalWatches).sort()).toEqual(['HOST_LOCAL_OWNER', 'hostFilesWatch', 'hostTynnWatch']);
     });
 
-    it('the real files hub sends genie-host\'s own view\'s batch here, and a window\'s over the link', async () => {
+    it('the real files hub sends genie-host\'s own view\'s batch here; a view under any other owner is told nowhere', async () => {
         let onPath: ((rel: string) => void) | null = null;
         const timers: Array<() => void> = [];
         const remote: unknown[][] = [];
         let hub: FilesWatchHub | null = null;
         const files = hostFilesWatch({ hub: () => hub, workspace: (id) => (id === 'tynn' ? { id, path: join(dir, 'tynn') } : null), recordDiskChanges: () => {} });
-        hub = new FilesWatchHub({ send: ownerRoute(files.deliver, (o, e) => remote.push([o, e])), source: (_root, cb) => { onPath = cb; return { close: () => {} }; }, schedule: (fn) => { timers.push(fn); return () => {}; }, now: () => 5 });
+        // As genie-host wires it: its own owner's events to its watch port; `remote` records what any other owner was sent.
+        hub = new FilesWatchHub({ send: (owner, event) => { if (owner === HOST_LOCAL_OWNER) files.deliver(event); else remote.push([owner, event]); }, source: (_root, cb) => { onPath = cb; return { close: () => {} }; }, schedule: (fn) => { timers.push(fn); return () => {}; }, now: () => 5 });
         const heard: FilesHubEvent[] = [];
         files.port.subscribe((e) => heard.push(e));
         expect(await files.port.watch('v1', 'tynn', {})).toBe(true);
@@ -252,15 +249,19 @@ describe('the owner operations are genie-host\'s', () => {
         expect(calls).toContainEqual(['tynn', 'GET', '/api/v1/workstations/connectable', undefined]);
     });
 
-    it('no account, or a drone, is said before Tynn is asked; Tynn\'s refusal reads the role again first', async () => {
+    it('no account is said before Tynn is asked; a drone is asked of Tynn like any machine, and Tynn\'s refusal stays Tynn\'s (Tynn #423)', async () => {
         const none = owner({ account: false });
         expect(await hostAloneApi(ports({ owner: hostOwnerOps(none.s) })).invoke('tynnNetwork.workstations', [])).toEqual({ ok: false, reason: 'this Genie has no Tynn account' });
-        const drone = owner({ role: 'drone' });
-        expect(await hostAloneApi(ports({ owner: hostOwnerOps(drone.s) })).invoke('tynnNetwork.workstations', [])).toEqual({ ok: false, reason: droneRefusal('drone') });
-        expect(drone.calls.filter((c) => c[0] === 'tynn')).toEqual([]);
-        const demoted = owner({ status: 404, roleAfterRead: 'drone' });
-        expect(await hostAloneApi(ports({ owner: hostOwnerOps(demoted.s) })).invoke('tynnNetwork.workstations', [])).toEqual({ ok: false, reason: droneRefusal('drone') });
-        expect(demoted.calls).toContainEqual(['readRole']);
+        const drone = owner({ role: 'drone', rows: [row('ws_beta')] });
+        const listed = await hostAloneApi(ports({ owner: hostOwnerOps(drone.s) })).invoke('tynnNetwork.workstations', []) as { ok: boolean; workstations?: Array<{ id: string }> };
+        expect(listed.ok).toBe(true);
+        expect(listed.workstations?.map((w) => w.id)).toEqual(['ws_beta']);
+        expect(drone.calls).toContainEqual(['tynn', 'GET', '/api/v1/workstations/connectable', undefined]);
+        const refused = owner({ status: 404, roleAfterRead: 'drone' });
+        const answer = await hostAloneApi(ports({ owner: hostOwnerOps(refused.s) })).invoke('tynnNetwork.workstations', []) as { ok: boolean; reason?: string };
+        expect(answer.ok).toBe(false);
+        expect(answer.reason).not.toBe(droneRefusal('drone'));
+        expect(refused.calls).not.toContainEqual(['readRole']);
     });
 
     it('a role change goes to Tynn with the code, and the role is read again once it is changed', async () => {
@@ -365,10 +366,11 @@ describe('local uploads on genie-host', () => {
 describe('the wiring', () => {
     const host = () => readFileSync('src/main/genie-host.ts', 'utf8');
 
-    it('genie-host\'s files hub and its three Tynn hubs send its own owner\'s events here, through one route', () => {
+    it('genie-host\'s files hub sends its own owner\'s events here and no other owner\'s anywhere (Tynn #1043); its three Tynn hubs send theirs here the same way (Tynn #934 task #1474)', () => {
         const src = host();
-        expect(src).toMatch(/files = new FilesWatchHub\(\{[^\n]*send: ownerRoute\(/);
-        for (const kind of ['board', 'issues', 'features']) expect(src).toContain(`send: ownerRoute((event) => hostTynnWatches.deliver('${kind}', event)`);
+        expect(src).toMatch(/files = new FilesWatchHub\(\{[^\n]*send: \(owner, event\) => \{ if \(owner === HOST_LOCAL_OWNER\) hostFilesWatches\.deliver\(event\); \},/);
+        for (const kind of ['board', 'issues', 'features']) expect(src).toContain(`send: (owner, event) => { if (owner === HOST_LOCAL_OWNER) hostTynnWatches.deliver('${kind}', event); },`);
+        expect(src).not.toContain('ownerRoute');
     });
 
     it('genie-host hands its answers the watch ports and its owner operations, and stages its window\'s uploads', () => {
@@ -387,11 +389,11 @@ describe('the wiring', () => {
         expect(src).toMatch(/deviceLink: deviceLinkService,/);
     });
 
-    it('main and genie-host restart an app source and read the card with the same code', () => {
-        for (const file of ['src/main/main.ts', 'src/main/host-owner-ops.ts']) {
-            const src = readFileSync(file, 'utf8');
-            expect(src, file).toMatch(/restartAppSource/);
-            expect(src, file).toMatch(/appInboxCardState\(/);
-        }
+    it('genie-host restarts an app source and reads the card; main keeps no copy of either (Tynn #952, 2g-1)', () => {
+        const ops = readFileSync('src/main/host-owner-ops.ts', 'utf8');
+        expect(ops).toMatch(/restartAppSource/);
+        expect(ops).toMatch(/appInboxCardState\(/);
+        const main = readFileSync('src/main/main.ts', 'utf8');
+        expect(main).not.toMatch(/restartAppSource|appInboxCardState/);
     });
 });

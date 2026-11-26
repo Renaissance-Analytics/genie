@@ -2,11 +2,10 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { composeServices } from './helpers/compose-alone.js';
-import { type ComposedServices } from '../src/main/compose.js';
+import { featureWorkspaceFiles } from '../src/main/feature-workspace-files.js';
+import { AgentFilesHealth } from '../src/core/agent-files-health.js';
 import { writeAgentProtocol, type SyncFs } from '../src/main/config-sync-targets.js';
 import { writeGenieInstructions } from '../src/main/genie-instructions.js';
-import type { PtyPort } from '../src/main/terminal-host.js';
 import type { TynnSessionPort } from '../src/main/tynn-agent-token.js';
 
 /**
@@ -37,7 +36,8 @@ const tools = [{ name: 'imDone', description: 'x' }];
 /** Tynn's work model, statement by statement, as the protocol must carry it when signed in. */
 const MODEL: ReadonlyArray<[string, RegExp]> = [
     ['a release is a version', /release is a version/i],
-    ['a story is one PR, its tasks are the plan', /story is one PR[^.\n]*tasks are that PR['’]s plan/i],
+    // PM G-0 (Tynn #933): a story is a Slice since Tynn PM-1.
+    ['a Slice is one PR, its tasks are the plan', /Slice is one PR[^.\n]*tasks are that PR['’]s plan/i],
     ['items move through the workflow as work happens', /through `workflow` as work happens/],
     ['a go request lists what is NOT in the build', /go request lists what is NOT in/],
     ['local plan files are only a fallback', /local plan files are only a fallback/i],
@@ -61,7 +61,7 @@ describe('the protocol Genie writes', () => {
         const md = store.get(SHARED)!;
         expect(md).toMatch(FALLBACK);
         expect(md).toContain('.ai/plans/');
-        expect(md).not.toMatch(/story is one PR/i);
+        expect(md).not.toMatch(/Slice is one PR/i);
         expect(md).not.toContain('`tynn-guidelines`');
         // Left unsaid, a sync writes the fallback: Genie never claims Tynn it was not told about.
         const unsaid = memFs();
@@ -97,26 +97,28 @@ describe('the protocol Genie writes', () => {
 });
 
 describe('the workspace sync takes the sign-in from Genie\'s Tynn account', () => {
-    const pty: PtyPort = {
-        open: (o) => ({ id: 'term_x', pid: 1, shell: o.command ?? 'sh', scrollback: '' }),
-        write: () => true, resize: () => true, kill: () => true, scrollback: () => '', onData: () => () => {}, onExit: () => () => {},
-    };
     const account = (signedIn: boolean): TynnSessionPort => ({ status: () => ({ signedIn }), request: async () => ({ ok: false, status: 404, json: async () => null }) });
-    const opened: Array<{ services: ComposedServices; dirs: string[] }> = [];
+    const opened: string[] = [];
     afterEach(async () => {
-        for (const o of opened.splice(0)) {
-            await o.services.shutdown();
-            for (const d of o.dirs) await rm(d, { recursive: true, force: true });
-        }
+        for (const d of opened.splice(0)) await rm(d, { recursive: true, force: true });
     });
+    /*
+     * The agents' docs are genie-host's to write, from ITS Tynn account (genie-host.ts featureWorkspaceFiles): since Tynn #961
+     * (2g-3c) the window's composition holds no account to say signed in. The same writer, with the host's own reading.
+     */
     const syncWith = async (tynn: (() => TynnSessionPort | null) | undefined) => {
-        const dir = await mkdtemp(join(tmpdir(), 'genie2-protocol-compose-'));
         const ws = await mkdtemp(join(tmpdir(), 'genie2-protocol-ws-'));
-        const services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, ...(tynn ? { tynn } : {}) });
-        opened.push({ services, dirs: [dir, ws] });
-        await services.syncAgentDocs(ws);
+        opened.push(ws);
+        const files = featureWorkspaceFiles({ mayWriteInto: async () => true, settings: { snapshot: () => ({}) } as never, health: new AgentFilesHealth(),
+            tools: () => [], tracking: () => (tynn?.()?.status().signedIn ? 'tynn' : 'files') });
+        await files.syncAgentDocs(ws);
         return readFile(join(ws, '.agents', '_genie', 'shared.md'), 'utf8');
     };
+
+    it('genie-host says which, from its own account', async () => {
+        const host = await readFile(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8');
+        expect(host).toMatch(/tracking: \(\) => tynnAccountNow\?\.status\(\)\.signedIn \? 'tynn' : 'files'/);
+    });
 
     it('signed in: the Tynn work model; signed out, or no account at all: the fallback', async () => {
         const signedIn = await syncWith(() => account(true));

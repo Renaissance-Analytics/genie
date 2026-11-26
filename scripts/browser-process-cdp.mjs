@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 /**
  * THE GENIE BROWSER AS ITS OWN PROCESS, IN THE BUILT APP (the host split, P2b; decision 5). A site opened from the window comes
- * up in a second Electron started by the host; killing the window leaves it up and saying so; the host ending ends it.
+ * up in a second Electron started by the host; killing the window leaves it up, its sites still behind genie-host's own front
+ * door (Tynn #1046 D2), so it says nothing is wrong; the host ending ends it.
  *
- * What it can't show: a page loading, because CI's unpackaged app has no Caddy. That is the VM's.
+ * A page loads its real content through genie-host's in-app front door, before the window dies and again after (Tynn #1046
+ * D2); Caddy (the external door) is not in CI's unpackaged app and is not what the browser uses.
  *
  * Linux only, on its own Xvfb: under xvfb-run the display ends with the window, and the browser with it, which would prove
  * nothing. It launches Electron, so it refuses to run anywhere but CI or a test machine. Exit 0 all passed; 1 a check
@@ -21,8 +23,8 @@ process.env.GENIE_PAGE_PROBE ??= '1';
 if (process.env.CI !== 'true' && process.env.GENIE_TEST_MACHINE !== '1' && process.env.BROWSER_PROCESS_CDP_ALLOW !== '1') { console.error('refused: this launches Electron, and runs only on CI or a test machine'); process.exit(2); }
 if (process.platform !== 'linux') { console.error('Linux only'); process.exit(2); }
 
-const PORT = 9334;
-const BROWSER_PORT = 9335;
+const PORT = 9403;
+const BROWSER_PORT = 9404;
 const DISPLAY = ':77';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const failures = [];
@@ -67,7 +69,9 @@ const data = mkdtempSync(join(tmpdir(), 'browser-process-data-'));
 const ws = mkdtempSync(join(tmpdir(), 'browser-process-ws-'));
 const WORKSPACE = 'browserprocws';
 const HOST = 'browserproc.gen';
-const siteServer = createServer((_req, res) => { res.setHeader('content-type', 'text/html'); res.end('<!doctype html><title>site</title>'); });
+// What the site says, changed once the window is gone: a page showing the new words was fetched after it died.
+let siteSays = `before-${process.pid}-${Date.now()}`;
+const siteServer = createServer((_req, res) => { res.setHeader('content-type', 'text/html'); res.setHeader('cache-control', 'no-store'); res.end(`<!doctype html><title>site</title><p id="probe">${siteSays}</p>`); });
 await new Promise((r) => siteServer.listen(0, '127.0.0.1', r));
 siteServer.unref();
 writeFileSync(join(ws, 'project.json'), `${JSON.stringify({ name: 'Browser process', sites: { browserprocaaaaaaa: { repo: '', runMode: 'host', kind: 'http', enabled: true, name: 'browserproc', genName: HOST, hostPort: siteServer.address().port } } }, null, 2)}\n`);
@@ -122,6 +126,13 @@ try {
         const tab = await until('the tab', 20_000, () => window.evaluate(`document.querySelectorAll('[data-browser-tab]').length`));
         check(tab === 1, 'the site came up in a tab there', String(tab));
     }
+    // The site's own page in the browser process: its view's target, and what it shows.
+    const sitePage = async () => { const t = (await targets(BROWSER_PORT)).find((x) => x.type === 'page' && x.url.includes(HOST)); return t ? Cdp.connect(t.webSocketDebuggerUrl) : null; };
+    const shows = (cdp) => cdp.evaluate(`document.getElementById('probe')?.textContent ?? ''`);
+    const before = siteSays;
+    const siteCdp = await until('the site page', 30_000, sitePage);
+    // CONTROL (the gauge can see a page load): with the window here, the site's real content came through the front door.
+    check(siteCdp !== null && (await until('its content', 30_000, async () => ((await shows(siteCdp)) === before ? true : null))) === true, 'CONTROL the site page shows its content through the front door', before);
     const pageTabs = (await targets(PORT)).filter((t) => /browser\.html/.test(t.url));
     check(pageTabs.length === 0, 'the window process holds no Genie browser for this machine', JSON.stringify(pageTabs.map((t) => t.url)));
 
@@ -135,9 +146,24 @@ try {
     check(mains('--genie-browser').some((p) => p.pid === up.pid), 'the window killed: the browser process stays');
     if (window) {
         check(await window.evaluate(`typeof window.genieBrowser === 'object'`) === true, 'and still answers');
-        const notice = await until('the notice', 20_000, () => window.evaluate(`document.querySelector('[data-browser-notice]')?.textContent ?? ''`));
-        check(/can.t load/.test(notice ?? ''), 'and says in words that Genie sites can\'t load', String(notice));
+        // The front door is genie-host's (Tynn #1046 D2): the window going takes nothing of it down, so no "can't load" notice
+        // comes, however long it is given, and the site's tab is still there.
+        await sleep(6000);
+        const read = (selector) => window.evaluate(`document.querySelector(${JSON.stringify(selector)})?.textContent ?? ''`);
+        // CONTROL: the same reader reads the text of an element that is there (the site's tab), so an empty notice is no blind read.
+        check(((await read('[data-browser-tab]')) ?? '').trim() !== '', 'CONTROL the reader reads a tab\'s text');
+        const notice = (await read('[data-browser-notice]')) ?? '';
+        check(!/can.t load/.test(notice), 'and says nothing is wrong: genie-host\'s door stayed up', JSON.stringify(notice));
+        check(await window.evaluate(`document.querySelectorAll('[data-browser-tab]').length`) === 1, 'and the site\'s tab is still there');
     }
+    // THE NEW CONTRACT, POSITIVELY: with the window dead, a fresh load of the site gets its NEW content, through genie-host's
+    // own front door (the window held the door before D2, and this load failed).
+    siteSays = `after-${process.pid}-${Date.now()}`;
+    if (siteCdp) {
+        await siteCdp.send('Page.reload', { ignoreCache: true });
+        const fresh = await until('the reloaded content', 30_000, async () => ((await shows(siteCdp)) === siteSays ? true : null));
+        check(fresh === true, 'with no window, a reload loads the site\'s new content through genie-host\'s front door', siteSays);
+    } else check(false, 'with no window, a reload loads the site\'s new content through genie-host\'s front door', 'no site page');
 
     process.kill(hostPid, 'SIGTERM');
     const gone = await until('the browser to end', 30_000, () => !mains('--genie-browser').some((p) => p.pid === up.pid));

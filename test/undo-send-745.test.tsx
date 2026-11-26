@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
  *
  * A Claude run takes a message mid-turn at once, so the host has nothing left to take back: the chat window holds a
  * message typed to a BUSY agent for UNDO_SEND_MS, with Undo (its words back in the composer) and Send now. An idle
- * agent's message, and one with files, go at once (the CONTROLs).
+ * agent's message goes at once (the CONTROL); since Tynn #1029 one with files is held too.
  *
  * No DOM (docs/decisions.md D3): the composer's props are captured and called, as in chat-acknowledged-send.test.tsx.
  */
@@ -89,9 +89,10 @@ describe('the grace window (core/send-grace.ts)', () => {
         expect(holdsSend({ busy: true, files: 0 })).toBe(true);
     });
 
-    it('CONTROL: an idle agent, or a message with files, is never held', () => {
+    it('CONTROL: an idle agent is never held; a busy agent’s message with files is held too (Tynn #1029: Esc unsends it, files and all)', () => {
         expect(holdsSend({ busy: false, files: 0 })).toBe(false);
-        expect(holdsSend({ busy: true, files: 1 })).toBe(false);
+        expect(holdsSend({ busy: false, files: 1 })).toBe(false);
+        expect(holdsSend({ busy: true, files: 1 })).toBe(true);
     });
 
     it('Undo puts the words back AHEAD of anything typed since, keeping its pills', () => {
@@ -155,10 +156,14 @@ describe('the chat composer (ChatFlyout)', () => {
         expect(onSend.mock.calls[0]).toEqual(['fix the header', [], 'a_lark']);
     });
 
-    it('CONTROL: to a busy agent WITH a file, it goes at once', async () => {
+    it('to a busy agent WITH a file: held as well (Tynn #1029), sent once the window ends', async () => {
+        vi.useFakeTimers();
         const onSend = vi.fn(async () => ({ kind: 'sent' as const }));
         const submit = composer(true, onSend);
         await submit('see this', [{ id: 'f1', name: 'a.txt', bytes: 1, type: 'text/plain', file: new Blob(['a']) }]);
+        await vi.advanceTimersByTimeAsync(UNDO_SEND_MS - 1);
+        expect(onSend).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
         await vi.waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
     });
 

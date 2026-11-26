@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { FilesPanel, type FilesPanelProps } from '../src/renderer/components/FilesPanel.js';
+import { FilesPanel, filesViewMenu, type FilesPanelProps } from '../src/renderer/components/FilesPanel.js';
 import { FilesWindow } from '../src/renderer/components/FilesWindow.js';
 import { NO_FILES } from '../src/renderer/bridge.js';
 
@@ -23,21 +23,20 @@ const base: FilesPanelProps = {
 const render = (p: Partial<FilesPanelProps>) => renderToStaticMarkup(<FilesPanel {...base} {...p} />);
 
 describe('pop-out in the header', () => {
-    it('docked or inline: pin, pop-out and close; popped: Dock it back and nothing else', () => {
+    // Pin, Pop out and Close are ONE view menu since Tynn #945 (the owner: no "Pop out" / "Close" words in the header); its
+    // items are opened and pressed in workspace-header-icons-945.test.tsx, and listed here by filesViewMenu.
+    it('docked or inline: the view menu (pin, pop-out and close); popped: Dock it back and nothing else', () => {
         const inline = render({ onPopOut: () => {} });
-        expect(inline).toContain('data-action="pin-files"');
-        expect(inline).toContain('data-action="pop-out-files"');
-        expect(inline).toContain('data-action="close-files"');
+        expect(inline).toContain('data-action="files-view-menu"');
+        expect(filesViewMenu({ onPin: () => {}, onPopOut: () => {} }).map((i) => i.action)).toEqual(['pin-files', 'pop-out-files', 'close-files']);
         expect(inline).not.toContain('data-action="bring-back-files"');
         const popped = render({ popped: true });
         expect(popped).toContain('data-action="bring-back-files"');
-        expect(popped).not.toContain('data-action="pin-files"');
-        expect(popped).not.toContain('data-action="pop-out-files"');
-        expect(popped).not.toContain('data-action="close-files"');
+        expect(popped).not.toContain('data-action="files-view-menu"');
     });
 
-    it('without an onPopOut there is no pop-out button — a remote window cannot pop a window on the host', () => {
-        expect(render({})).not.toContain('data-action="pop-out-files"');
+    it('without an onPopOut there is no pop-out item — a remote window cannot pop a window on the host', () => {
+        expect(filesViewMenu({ onPin: () => {} }).map((i) => i.action)).not.toContain('pop-out-files');
     });
 });
 

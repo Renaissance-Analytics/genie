@@ -65,7 +65,7 @@ async function drone(keepWelcomeToken: (token: string) => Promise<void> = async 
     return { host, baton, devices, link, listeners };
 }
 
-/** The window's transport on a device-link channel, as App.tsx's `ipcRelayTransport` is. */
+/** The window's transport on a device-link channel, as App.tsx's `channelTransport` is (over its own session, Tynn #941). */
 function channelTransport(d: Awaited<ReturnType<typeof drone>>, channel: string): ClientTransport {
     const messages = new Set<(text: string) => void>(), closes = new Set<() => void>();
     d.listeners.add((e) => {

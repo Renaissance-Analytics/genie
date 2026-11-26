@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseHostRecord } from '../core/engine-protocol.js';
-import type { AgentId, AgentRecord } from '../core/identity.js';
+import type { AgentId } from '../core/identity.js';
 import { linkToHost, pidAlive, type EngineLaunchPorts, type EngineLink } from './engine-launch.js';
 import { SessionEngineClient, type EngineClientOptions } from './session-engine-client.js';
 import type { SessionHost } from './session-host.js';
@@ -19,7 +19,6 @@ export const RECONNECT_BACKOFF_MS: readonly number[] = [1_000, 2_000, 4_000, 8_0
 export interface AgentEngineLinkOptions {
     readonly callbacks: EngineClientOptions;
     readonly launch: Omit<EngineLaunchPorts, 'askShutdown' | 'kill'>;
-    readonly records: () => readonly AgentRecord[];
     /** A stop the host could not verify, or the host itself lost: main says it on the Deck. */
     readonly onError: (kind: 'stop-unverified' | 'agent-host', error: Error) => void;
     readonly agentName: (id: AgentId) => string;
@@ -46,9 +45,9 @@ const killPid = (pid: number): void => {
 };
 
 /**
- * Find (adopt, replace or start) the host and connect to it. `null` when it cannot be had at all: the caller falls back
- * to the EMERGENCY in-process engine and says so on the Deck — never a quiet downgrade, and never a mode anyone chooses
- * (the owner, 2026-11-01: "we split host from UI for good"; plan §4.1).
+ * Find (adopt, replace or start) the host and connect to it. `null` when it cannot be had at all: the caller says what is
+ * wrong and how to fix it, and stops (main.ts `stopForNoHost`, Tynn #415). There is no in-process engine to fall back to
+ * (the owner, 2026-11-01: "we split host from UI for good"; removed in P6-4, Tynn #1036).
  */
 export async function connectAgentEngine(options: AgentEngineLinkOptions & { readonly onLinked?: (client: SessionEngineClient) => void }): Promise<AgentEngineLink | null> {
     const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
@@ -58,7 +57,6 @@ export async function connectAgentEngine(options: AgentEngineLinkOptions & { rea
     let reconnect = (): void => {};
     const client = new SessionEngineClient({
         ...options.callbacks,
-        records: options.records,
         onStopUnverified: (id, reason) => options.onError('stop-unverified', new Error(`${options.agentName(id)}: ${reason}`)),
         onDisconnected: (reason) => { if (!stopping) { options.log(`agent host link lost: ${reason}`); reconnect(); } },
         log: options.log,

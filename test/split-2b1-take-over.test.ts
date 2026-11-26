@@ -76,7 +76,7 @@ describe('genie-host opens the asking window\'s terminal window and ends the TUI
 
 describe('the window process opens a Take Over window when genie-host asks', () => {
     const handler = (log: string[], answer: 'closed' | 'raised' = 'closed') => windowOpsHandler({
-        trash: async () => {}, workspaces: () => [], openApp: async () => {},
+        trash: async () => {}, workspaces: () => [], openApp: async () => {}, openPath: async () => '', reveal: () => {},
         openTerminalWindow: async (route) => { log.push(route); return answer; },
     });
 
@@ -171,8 +171,8 @@ describe('Take over leaves the window\'s IPC (source guards)', () => {
         expect(code(src('src/main/remote-host.ts'))).not.toContain('this window does it itself');
     });
 
-    it('takeOvers stays only for main\'s deck liveness, under 2f (the coordinator, 2026-11-19)', () => {
-        expect(WINDOW_ENGINE_INVENTORY).toContainEqual(['takeOvers', 'move:2f']);
-        expect(code(src('src/main/main.ts'))).toMatch(/takeOvers: \(\) => takeOvers/);
+    it('takeOvers is gone from main: its question window and tray read genie-host\'s Deck (Tynn #941, 2f-2)', () => {
+        expect(WINDOW_ENGINE_INVENTORY.map(([u]) => u)).not.toContain('takeOvers');
+        expect(code(src('src/main/main.ts'))).not.toMatch(/takeOvers/);
     });
 });

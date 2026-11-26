@@ -29,6 +29,8 @@ export interface TunnelDoorOptions {
     /** A window's "the page came back" notice, by the RemoteHost connection its welcome said; null = none (or not this window). */
     readonly notice?: (connectionId: string) => RendererNotice | null;
     readonly newId?: () => string;
+    /** This door is main's own protocol client (own-protocol-client.ts), never a page's: its tunnels open as `own`. */
+    readonly own?: boolean;
 }
 
 const STARTING = 'Genie is still starting; this window connects again in a moment';
@@ -38,9 +40,15 @@ interface Carried {
     connectionId: string | null;
 }
 
+/**
+ * Tunnel ids, counted once for this process across every door (Tynn #941, 2f-2). genie-host keys a window process's tunnels
+ * by id, and an id seen again replaces the connection that held it; main tunnels two doors over its one link (its window's
+ * and its own client's), so a count per door gave both a `w1`, and the Deck connection main holds open closed the page's.
+ */
+let nextTunnel = 0;
+
 export function tunnelDoor(door: ServerTransport, link: TunnelLink, options: TunnelDoorOptions = {}): { refreshWindow(): void; dispose(): void } {
-    let next = 0;
-    const newId = options.newId ?? (() => `w${(++next).toString(36)}`);
+    const newId = options.newId ?? (() => `w${(++nextTunnel).toString(36)}`);
     const carried = new Map<string, Carried>();
     const sayBrowser = (tunnel: string, c: Carried) => {
         if (options.browser && c.connectionId !== null) link.send('browser', tunnel, options.browser(c.connectionId));
@@ -77,7 +85,8 @@ export function tunnelDoor(door: ServerTransport, link: TunnelLink, options: Tun
         const c: Carried = { connection, connectionId: null };
         carried.set(tunnel, c);
         const pre = connection.preAuth;
-        if (!link.send('open', tunnel, { window: pre?.kind === 'local' && pre.window === 'remote' ? 'remote' : 'main', label: pre?.label ?? 'this Genie window' })) {
+        // `own` is this DOOR's, set where main tunnels its own client, never read from the connection (a page's door may say anything).
+        if (!link.send('open', tunnel, { window: pre?.kind === 'local' && pre.window === 'remote' ? 'remote' : 'main', label: pre?.label ?? 'this Genie window', ...(options.own === true ? { kind: 'own' } : {}) })) {
             carried.delete(tunnel);
             connection.send(JSON.stringify({ kind: 'refused', reason: STARTING }));
             connection.close();
@@ -118,6 +127,13 @@ export function tunnelLinkOf(client: {
 /** What only a window can do for genie-host: move a file to the OS trash, open an app's window, a terminal's window. */
 export interface WindowOpsDeps {
     readonly trash: (absolutePath: string) => Promise<void>;
+    /**
+     * Open a file with this machine's own app for it, for a client on ANOTHER machine (Tynn #912, 2f-1; host-shell.ts):
+     * Electron's shell.openPath, whose answer is '' when it opened and the OS's own words when it did not.
+     */
+    readonly openPath: (absolutePath: string) => Promise<string>;
+    /** Show it in this machine's file manager, for a client on another machine (Tynn #912, 2f-1). */
+    readonly reveal: (absolutePath: string) => void;
     readonly workspaces: () => readonly { readonly path: string }[];
     readonly openApp: (packageId: string, preview: boolean) => Promise<void>;
     /**
@@ -138,17 +154,32 @@ function terminalWindowRoute(route: unknown): string | null {
  * checks again, so nothing outside this machine's registered workspaces is ever moved, whoever asks.
  */
 export function windowOpsHandler(deps: WindowOpsDeps): (op: string, args: unknown[]) => Promise<unknown> {
+    /** The full path, when it lies inside one of this machine's registered workspaces (`root`: the workspace itself counts). */
+    const confined = (path: unknown, root: boolean): string | null => {
+        if (typeof path !== 'string' || !isAbsolute(path)) return null;
+        const full = resolve(path);
+        const inside = deps.workspaces().some((w) => {
+            const rel = relative(resolve(w.path), full);
+            return (root || rel !== '') && !rel.startsWith('..') && !isAbsolute(rel);
+        });
+        return inside ? full : null;
+    };
     return async (op, args) => {
         if (op === 'trash') {
             const path = args[0];
             if (typeof path !== 'string' || !isAbsolute(path)) throw new Error('the trash takes a file’s full path');
-            const full = resolve(path);
-            const inside = deps.workspaces().some((w) => {
-                const rel = relative(resolve(w.path), full);
-                return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
-            });
-            if (!inside) throw new Error('Genie moves to the trash only a file inside one of this machine’s workspaces');
+            const full = confined(path, false);
+            if (full === null) throw new Error('Genie moves to the trash only a file inside one of this machine’s workspaces');
             await deps.trash(full);
+            return true;
+        }
+        // Open with / Show in file manager on THIS machine's screen, asked by genie-host for a client on another machine
+        // (Tynn #912, 2f-1). genie-host confined the path to the workspace; it is checked here again, whoever asked.
+        if (op === 'shell.open' || op === 'shell.reveal') {
+            const full = confined(args[0], true);
+            if (full === null) throw new Error('Genie opens only a file inside one of this machine’s workspaces');
+            if (op === 'shell.open') return deps.openPath(full);
+            deps.reveal(full);
             return true;
         }
         if (op === 'gapps.open' || op === 'gapps.preview') {

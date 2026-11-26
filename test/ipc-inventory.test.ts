@@ -97,15 +97,14 @@ describe('P4 IPC inventory', () => {
      * it, and a row on it cannot be re-labelled a window capability while its handler is still registered.
      */
     const STILL_TO_MOVE: Readonly<Record<string, string>> = {
-        // 2f (#912): the question window's answers and reads, the device/relay frame path, the relay browser open, host-wait's act.
-        'question:answer': '2f', 'question:dismiss': '2f', 'question:files': '2f', 'question:file': '2f', 'question:visuals': '2f',
-        'genie:device-open': '2f', 'genie:relay-open': '2f', 'genie:relay-send': '2f', 'genie:relay-close': '2f',
-        'genie:browser-window-open': '2f', 'host-wait:act': '2f',
+        // 2f is done: 2f-1 (#912) moved the question window's answers and reads, and host-wait:act was re-labelled
+        // window:host-wait (the coordinator, 2026-11-19); 2f-2 (#941) moved the device/relay frame path, and the browser
+        // opener kept only this machine's own browser (window:feature-effect).
     };
     const moveRows = (rows: readonly (readonly [string, string])[]) => rows.filter(([, d]) => d.startsWith('move:')).map(([c, d]) => [c, d.slice('move:'.length)] as const);
-    const ratchet = (rows: readonly (readonly [string, string])[], registeredNow: readonly string[]) => ({
-        joined: moveRows(rows).filter(([c, step]) => STILL_TO_MOVE[c] !== step).map(([c]) => c).sort(),
-        relabelled: Object.keys(STILL_TO_MOVE).filter((c) => registeredNow.includes(c) && !moveRows(rows).some(([m]) => m === c)).sort(),
+    const ratchet = (rows: readonly (readonly [string, string])[], registeredNow: readonly string[], frozen: Readonly<Record<string, string>> = STILL_TO_MOVE) => ({
+        joined: moveRows(rows).filter(([c, step]) => frozen[c] !== step).map(([c]) => c).sort(),
+        relabelled: Object.keys(frozen).filter((c) => registeredNow.includes(c) && !moveRows(rows).some(([m]) => m === c)).sort(),
     });
 
     it('THE RATCHET: every still-to-move row is on the frozen list under its step, and every frozen channel still registered is still to move', () => {
@@ -114,8 +113,9 @@ describe('P4 IPC inventory', () => {
 
     it('CONTROL: the ratchet notices a new still-to-move row and a frozen one re-labelled a window capability', () => {
         expect(ratchet([['genie:new-host-thing', 'move:2b']], []).joined).toEqual(['genie:new-host-thing']);
-        expect(ratchet([['question:answer', 'move:2c']], []).joined).toEqual(['question:answer']);
-        expect(ratchet([['question:answer', 'window:pop-out']], ['question:answer']).relabelled).toEqual(['question:answer']);
+        expect(ratchet([['genie:relay-open', 'move:2c']], []).joined).toEqual(['genie:relay-open']);
+        // The frozen list is empty now that 2f is done: the re-label check is shown on one like it was.
+        expect(ratchet([['genie:frozen-example', 'window:pop-out']], ['genie:frozen-example'], { 'genie:frozen-example': '2g' }).relabelled).toEqual(['genie:frozen-example']);
         // A frozen channel whose handler is gone needs no row (the stale check removes it): the list shrinks.
         expect(ratchet([], [])).toEqual({ joined: [], relabelled: [] });
     });
@@ -149,11 +149,11 @@ describe('P4 IPC inventory', () => {
             expect(rowsFor('doctor-process').sort()).toEqual([...doctorFile].sort());
         });
 
-        it('the site panels are the window\'s site-panel capability; the window\'s opener moves in 2f (its relay mode)', () => {
+        it('the site panels are the window\'s site-panel capability; the window\'s opener is its own browser only since 2f-2', () => {
             const panels = channels(readFileSync(src('site-panels-electron.ts'), 'utf8'), 'site-panels-electron.ts');
             expect(panels.length).toBeGreaterThan(0);
             expect(panels.filter((channel) => !rowsFor('window:site-panel').includes(channel))).toEqual([]);
-            expect(rowsFor('move:2f')).toContain('genie:browser-window-open');
+            expect(rowsFor('window:feature-effect')).toContain('genie:browser-window-open');
         });
     });
 

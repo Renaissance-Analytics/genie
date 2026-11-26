@@ -91,6 +91,8 @@ export interface IdentityStore {
     /** `null` means this machine has no identity with that Tynn, which enrolls a new one. A key that cannot be read REJECTS: it is not that. */
     read(host: string): Promise<StoredIdentity | null>;
     write(host: string, identity: StoredIdentity): Promise<void>;
+    /** The workstation id on record for that Tynn, whether or not its key can be read; null = none (P7.3). */
+    recorded?(host: string): Promise<string | null>;
     /** The Genie 1 record already settled with this Tynn (genie#1278 adopt), or null. */
     legacyDone?(host: string): Promise<string | null>;
     markLegacyDone?(host: string, workstationId: string): Promise<void>;
@@ -246,6 +248,10 @@ export function workstationKeyStore(file: string, secrets: WorkstationSecrets): 
             all[host] = { ...kept, workstationId: identity.workstationId };
             await saveIdentities(file, all);
         },
+        async recorded(host) {
+            const id = (await load())[host]?.workstationId;
+            return typeof id === 'string' && id !== '' ? id : null;
+        },
         async legacyDone(host) {
             const done = (await load())[host]?.legacyDone;
             return typeof done === 'string' && done !== '' ? done : null;
@@ -345,6 +351,44 @@ export async function ensureWorkstation(ports: EnsureWorkstationPorts): Promise<
     const result = await enrollAndStore(ports, host, (await registered.json()) as { enrollment?: { workstation_id?: unknown; secret?: unknown } | null } | null);
     if (result.ok && legacy) await markLegacy(ports, host, legacy);
     return result;
+}
+
+export type RegisterAgainResult =
+    | { readonly ok: true; readonly outcome: 'same' | 'new'; readonly workstationId: string }
+    | { readonly ok: false; readonly reason: string };
+
+/**
+ * REGISTER THIS MACHINE AGAIN, ITS KEY GONE (P7.3; ruled 2026-11-23). The keychain of a rebuilt machine is empty: a
+ * workstation is on record and nothing can prove it. Tynn has no call that puts a new key on a workstation by naming it;
+ * its one door is self-register then enroll, and Tynn alone picks the record. So: self-register with the machine key and
+ * NO PROOF — a proof this machine cannot sign is refused outright (422 proof_rejected), and the old id is never sent —
+ * then a new key is enrolled and kept. `same`: Tynn found this machine by its machine id and re-keyed its record (its
+ * permission to drive other machines is removed until the owner approves it again). `new`: a new workstation.
+ *
+ * Refused, touching nothing, unless a workstation is on record AND its key is missing: a key that is there, or that a
+ * keychain which did not answer could not show, is never replaced. The record changes only after the enroll succeeded
+ * (`store.write`, last); any failure before leaves the old id on record and the item standing.
+ */
+export async function registerWorkstationAgain(ports: Pick<EnsureWorkstationPorts, 'host' | 'hostname' | 'request' | 'store' | 'generate' | 'machineKey'>): Promise<RegisterAgainResult> {
+    const host = ports.host();
+    const recorded = await (ports.store.recorded?.(host) ?? Promise.resolve(null));
+    if (recorded === null) return { ok: false, reason: 'No workstation is on record for this machine: it registers by itself when you sign in to Tynn.' };
+    if (!(await ports.store.canWrite())) return { ok: false, reason: 'No keyring is answering, so a new key could not be kept. Nothing was sent to Tynn.' };
+    const still = await ports.store.read(host).then(() => 'held' as const, (error: unknown) => (error instanceof Error ? error.message : String(error)));
+    if (still === 'held') return { ok: false, reason: `This machine still holds the key of workstation ${recorded}. Nothing was changed.` };
+    if (!/is not in the keychain/.test(still)) return { ok: false, reason: `${still} Nothing was sent to Tynn.` };
+    const machineKey = await (ports.machineKey?.() ?? Promise.resolve(null)).catch(() => null);
+    let registered: Awaited<ReturnType<TynnRequest>>;
+    try {
+        registered = await ports.request('/api/v1/workstations/self-register', { method: 'POST', body: { name: ports.hostname(), ...(machineKey ? { machine_key: machineKey } : {}) } });
+    } catch (error) {
+        return { ok: false, reason: `Tynn was not reached, so this machine was not registered again: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    if (registered.status === 401 || registered.status === 404 || registered.status === 419) return { ok: false, reason: 'sign in to Tynn to register this machine' };
+    if (!registered.ok) return { ok: false, reason: await refusal('register this machine again', registered) };
+    const enrolled = await enrollAndStore({ ...ports, host: () => host }, host, (await registered.json().catch(() => null)) as { enrollment?: { workstation_id?: unknown; secret?: unknown } | null } | null);
+    if (!enrolled.ok) return enrolled;
+    return { ok: true, outcome: enrolled.workstationId === recorded ? 'same' : 'new', workstationId: enrolled.workstationId };
 }
 
 /** Genie 1's record still to settle with this Tynn: there is one, it is not this identity, and it is not settled yet. */

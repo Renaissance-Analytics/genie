@@ -3,23 +3,11 @@ import type { ToolOutputReply } from '../core/tool-row-bound.js';
 import type { AttachmentReply } from '../core/thread-store.js';
 import type { readTynnPage } from './tynn-page-client.js';
 import { WorkstationReplica } from './workstation-replica.js';
-import { DeviceLinkReplica } from './device-link-replica.js';
 import { hostname } from 'node:os';
 import { RemoteAccessReplica } from './remote-access-replica.js';
-import { RelayHostReplica } from './relay-host-replica.js';
 import { TakeOverReplica } from './take-over-replica.js';
 import type { TakeOverView } from './take-over-service.js';
-import type { RelayHostView } from './relay-host-service.js';
 import type { RemoteAccessEvent } from './remote-access-host.js';
-import type { SyncResult } from '../core/integrations.js';
-import type { WorkspaceConfigRequest } from './workspace-config-sync.js';
-import type { DeviceLinkEvent } from './device-link-service.js';
-import { KeyringReplica } from './keyring-replica.js';
-import type { KeyringDump } from './keyring-service.js';
-import { GithubAccountReplica } from './github-account-replica.js';
-import type { GithubAccountDump } from './github-account-service.js';
-import { TynnAccountReplica } from './tynn-account-replica.js';
-import type { TynnAccountDump } from './tynn-account-service.js';
 import type { McpServer, SessionModelState } from '@particle-academy/prism-acp';
 import type { RowsPatch } from '../core/agent-push-wire.js';
 import type { AgentActionKind } from '../core/agent-actions.js';
@@ -50,24 +38,13 @@ import type { AccountsSnapshot } from '../core/accounts-view.js';
 import type { AccountsAction, AccountsActResult } from '../core/account-settings.js';
 import { commsFields, type EngineLiveness } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
-import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
-import type { StoreName, StoresDump, StoresEvent } from './agent-stores-host.js';
-import { storeReplicas, type StoreReplicas } from './agent-stores-replica.js';
-import { SupervisorReplica, type SupervisorDump, type SupervisorEvent } from './supervisor-host.js';
-import { HostingReplica, type HostingDump, type HostingEvent } from './hosting-host.js';
 import { AppInboxReplica, type AppInboxDump, type AppInboxEvent } from './app-inbox-host.js';
 import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
-import type { PhpCgiResolution } from './site-manager.js';
 import type { CloneApplyReply, CloneOffersReply } from './clone-offers-service.js';
 import { ProcessBookReplica, type ProcessesDump } from './processes-host.js';
-import type { PluginsDump } from './plugins-host.js';
-import { PluginsReplica } from './plugins-replica.js';
 import type { MarketplaceApi } from '../core/marketplace.js';
 import type { GAppBookApi, GAppSessionsApi } from '../core/gapps.js';
-import { CatalogReplica, type CatalogChange, type CatalogSnapshot } from '../core/catalog-sync.js';
-import type { CatalogKind, ElementDefinition } from '../core/catalog.js';
 import type { BrowserEvent } from './browser-service.js';
-import { FlowsReplica, type FlowsEvent } from './flows-host.js';
 import { TerminalsReplica, type TerminalsDump, type TerminalsEvent } from './terminals-host.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
 import type { HostMcp, WindowView } from './host-mcp.js';
@@ -75,8 +52,6 @@ import type { McpToolResult } from '@particle-academy/prism-mcp';
 import { UpdatesReplica } from './updates-replica.js';
 import type { UpdateState } from './updater.js';
 import type { UpdateFailedRecord } from './updates-host.js';
-import { IssueWatchReplica } from './issue-watch-replica.js';
-import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './issue-watch-host.js';
 import type { SafeModeView } from '../core/safe-mode.js';
 import type { CrashStateView, WindowBeatPayload } from '../core/crash-record.js';
 import { toWireAttachment } from './engine-wire.js';
@@ -114,7 +89,6 @@ export interface EngineClientOptions {
     readonly onHeadroom?: (provider: string, headroom: Headroom, stamp?: ReadingStamp) => void;
     readonly onMcpServers?: (agentId: AgentId, reports: readonly McpServerReport[]) => void;
     readonly mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
-    readonly prepareMcpServers?: (record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>;
     /** What this link says it is in its hello: a window (the default), or the Genie browser's process (BROWSER_LINK_LABEL). */
     readonly label?: string;
     /** A window tool's call, forwarded by the host's MCP server (P3.1): run it, answer its result. */
@@ -125,9 +99,6 @@ export interface EngineClientOptions {
     readonly onToolSignal?: (signal: unknown) => void;
     /** An elevation genie-host's hosting needs (P5a): run it here, as the window always has, and answer the outcome. Absent = refused. */
     readonly elevate?: (steps: readonly PrivilegedStep[]) => Promise<ElevationOutcome>;
-    /** Which php-cgi a site's pin runs, for the hosting replica's synchronous check (P5a). */
-    readonly phpCgiFor?: (pin: string | undefined) => PhpCgiResolution;
-    readonly serviceEnvFor?: (workspaceId: string) => Readonly<Record<string, string>>;
     /**
      * The window's environment NOW, sent with every start (default: `process.env`). Check and repair changes PATH and the
      * toolchain variables in the window's process at run time; the host takes them before it starts a provider, so a
@@ -137,8 +108,6 @@ export interface EngineClientOptions {
     readonly comms?: (agentId: AgentId, since: number) => Comms | null;
     /** A stop the host could not verify (the lifecycle's `refused`): main records it on the Deck. */
     readonly onStopUnverified?: (agentId: AgentId, reason: string) => void;
-    /** Every agent record, pushed to the host on connect and on `recordsChanged()` (genie#1188 reads them per call). */
-    readonly records?: () => readonly AgentRecord[];
     /** The link closed (the host exited or was lost): main reconnects. */
     readonly onDisconnected?: (reason: string) => void;
     /** How long an agent's ledger stays watched after the window last read it. Default 60 s. */
@@ -183,36 +152,15 @@ export class SessionEngineClient {
     /** genie-host's frames for this window's tunnelled protocol connections (Tynn #898 step 2d-4b). */
     readonly #protocolListeners = new Set<(event: import('./protocol-tunnels.js').TunnelEvent) => void>();
     readonly #linkListeners = new Set<{ up: () => void; down: (reason: string) => void }>();
-    /** The file-watch views this window holds (P2.2), sent again after a reconnect: the host dropped them with the link. */
-    readonly #filesViews = new Map<string, { workspace: { id: string; path: string }; want: FilesWant }>();
-    readonly #filesListeners = new Set<(event: FilesHubEvent) => void>();
-    /** The board views this window follows in the host (P5c), sent again after a reconnect: the host dropped them with the link. */
-    readonly #boardViews = new Map<string, string>();
-    readonly #boardListeners = new Set<(event: TynnBoardHubEvent) => void>();
-    readonly #issuesViews = new Map<string, string>();
-    readonly #issuesListeners = new Set<(event: TynnBoardHubEvent) => void>();
-    readonly #featuresViews = new Map<string, string>();
-    readonly #featuresListeners = new Set<(event: TynnBoardHubEvent) => void>();
-    #replicas: StoreReplicas | null = null;
-    #supervisor: SupervisorReplica | null = null;
-    #hosting: HostingReplica | null = null;
     #appInbox: AppInboxReplica | null = null;
     #processBook: ProcessBookReplica | null = null;
     #cloneOffers: { list(workspaceId: string): Promise<CloneOffersReply>; apply(workspaceId: string, offerId: string): Promise<CloneApplyReply> } | null = null;
-    #plugins: PluginsReplica | null = null;
     #marketplace: MarketplaceApi | null = null;
     #gapps: GAppBookApi | null = null;
     readonly #gappsChanged = new Set<() => void>();
-    #catalog: CatalogReplica | null = null;
-    #flows: FlowsReplica | null = null;
     readonly #browserListeners = new Set<(event: BrowserEvent) => void>();
-    #tynn: TynnAccountReplica | null = null;
-    #github: GithubAccountReplica | null = null;
-    #keyring: KeyringReplica | null = null;
     #workstation: WorkstationReplica | null = null;
-    #deviceLink: DeviceLinkReplica | null = null;
     #remoteAccess: RemoteAccessReplica | null = null;
-    #relayHost: RelayHostReplica | null = null;
     #takeOvers: TakeOverReplica | null = null;
     #terminals: TerminalsReplica | null = null;
     /** Agents updated since the last `welcome`: what a reconnect's dump did NOT mention has stopped meanwhile. */
@@ -301,10 +249,7 @@ export class SessionEngineClient {
                 this.#welcome = null;
                 for (const p of this.#pending.values()) p({ ok: false, reason: NOT_CONNECTED });
                 this.#pending.clear();
-                // Trust first (genie#1519): from here the window believes no verdict until the next dump.
-                this.#hosting?.linkDown();
                 for (const l of [...this.#linkListeners]) l.down('the host closed the connection');
-                this.#deviceLink?.lost('the host closed the connection');
                 this.#options.onDisconnected?.('the host closed the connection');
             }));
             transport.send(JSON.stringify({ kind: 'hello', auth: { kind: 'token', token }, label: this.#options.label ?? WINDOW_LINK_LABEL }));
@@ -363,12 +308,7 @@ export class SessionEngineClient {
             this.refusals.delete(id as AgentId);
             this.#emit(id as AgentId);
         }
-        void this.call('engine.records', [this.#options.records?.() ?? []]);
         for (const id of this.#watched) void this.call('engine.watchLedger', [id]);
-        for (const [viewId, v] of this.#filesViews) void this.call('engine.filesWatch', [viewId, v.workspace, v.want]);
-        for (const [viewId, workspaceId] of this.#boardViews) void this.call('engine.tynnBoardWatch', [viewId, workspaceId]);
-        for (const [viewId, workspaceId] of this.#issuesViews) void this.call('engine.tynnIssuesWatch', [viewId, workspaceId]);
-        for (const [viewId, workspaceId] of this.#featuresViews) void this.call('engine.tynnFeaturesWatch', [viewId, workspaceId]);
     }
 
     #onEvent(channel: string, payload: unknown): void {
@@ -405,32 +345,17 @@ export class SessionEngineClient {
             case 'browser.event':
                 for (const listener of [...this.#browserListeners]) listener(payload as BrowserEvent);
                 return;
-            case 'flows.event':
-                this.flows().apply(payload as FlowsEvent);
-                return;
             case 'processes.event':
                 this.processBook().rebase(payload as ProcessesDump);
                 return;
-            case 'catalog.snapshot':
-                this.catalog().rebase(payload as CatalogSnapshot);
-                return;
-            case 'catalog.changed':
-                void this.catalog().apply(payload as CatalogChange).catch(() => {});
-                return;
             case 'gapps.changed':
                 for (const listener of [...this.#gappsChanged]) listener();
-                return;
-            case 'plugins.event':
-                this.plugins().rebase(payload as PluginsDump);
                 return;
             case 'appInbox.dump':
                 this.appInbox().rebase(payload as AppInboxDump);
                 return;
             case 'appInbox.event':
                 this.appInbox().apply(payload as AppInboxEvent);
-                return;
-            case 'hosting.dump':
-                this.hosting().rebase(payload as HostingDump);
                 return;
             // genie-host's updater (P5b): its whole state, on this window's local link only.
             case 'safeMode.event':
@@ -447,62 +372,11 @@ export class SessionEngineClient {
             case 'updates.failed':
                 this.updates().failedInstall(payload as UpdateFailedRecord);
                 return;
-            case 'hosting.event':
-                this.hosting().apply(payload as HostingEvent);
-                return;
-            case 'supervisor.dump':
-                this.supervisor().rebase(payload as SupervisorDump);
-                return;
-            case 'supervisor.event':
-                this.supervisor().apply(payload as SupervisorEvent);
-                return;
-            case 'stores.dump':
-                this.stores().rebase(payload as StoresDump);
-                return;
-            case 'stores.event':
-                this.stores().apply(payload as StoresEvent);
-                return;
-            case 'keyring.event':
-                this.keyring().rebase(payload as KeyringDump);
-                return;
-            case 'github.event':
-                this.github().rebase(payload as GithubAccountDump);
-                return;
-            case 'github.open':
-                this.github().openFromHost(String((payload as { url?: unknown } | null)?.url ?? ''));
-                return;
-            case 'tynn.event':
-                this.tynn().rebase(payload as TynnAccountDump);
-                return;
             case 'takeOver.event':
                 this.takeOvers().deliver(payload as TakeOverView);
                 return;
-            case 'relayHost.event':
-                this.relayHost().deliver(payload as RelayHostView);
-                return;
             case 'remoteAccess.event':
                 this.remoteAccess().deliver(payload as RemoteAccessEvent);
-                return;
-            case 'device.event':
-                this.deviceLink().deliver(payload as DeviceLinkEvent);
-                return;
-            case 'files.event':
-                for (const l of [...this.#filesListeners]) l(payload as FilesHubEvent);
-                return;
-            case 'issueWatch.dump':
-                this.issueWatch().apply({ kind: 'dump', dump: payload as IssueWatchDump });
-                return;
-            case 'issueWatch.event':
-                this.issueWatch().apply(payload as IssueWatchHostEvent);
-                return;
-            case 'tynnBoard.event':
-                for (const l of [...this.#boardListeners]) l(payload as TynnBoardHubEvent);
-                return;
-            case 'tynnIssues.event':
-                for (const l of [...this.#issuesListeners]) l(payload as TynnBoardHubEvent);
-                return;
-            case 'tynnFeatures.event':
-                for (const l of [...this.#featuresListeners]) l(payload as TynnBoardHubEvent);
                 return;
             case 'engine.stopAllLeft':
                 if (typeof payload === 'number') this.#stopAllLeft?.(payload);
@@ -618,49 +492,6 @@ export class SessionEngineClient {
         };
     }
 
-    /**
-     * A view wants a workspace's disk changes (the host split, P2.2): genie-host's watcher runs while any view holds one.
-     * Kept here too, so a reconnect subscribes it again.
-     */
-    filesWatch(viewId: string, workspace: { id: string; path: string }, want: FilesWant): Promise<boolean> {
-        this.#filesViews.set(viewId, { workspace: { id: workspace.id, path: workspace.path }, want });
-        return this.#value('engine.filesWatch', [viewId, workspace, want], false).then((v) => v === true);
-    }
-
-    filesUnwatch(viewId: string): Promise<boolean> {
-        this.#filesViews.delete(viewId);
-        return this.#value('engine.filesUnwatch', [viewId], false).then((v) => v === true);
-    }
-
-    /**
-     * The window's replicas of genie-host's stores (the host split, P3.1): the inbox, attention, approvals (read here,
-     * synchronously, re-based at every connect) and the knowledge graph (read by call). Writes answer in the host's words.
-     */
-    stores(): StoreReplicas {
-        this.#replicas ??= storeReplicas(async (store: StoreName, method: string, args: readonly unknown[]) => {
-            const reply = await this.call('engine.stores', [store, method, [...args]]);
-            if (!reply.ok) throw new Error(reply.reason);
-            return reply.value;
-        });
-        return this.#replicas;
-    }
-
-    /** What Genie's MCP server in the host needs of this window until P3.2 (host-mcp.ts `WindowView`); the first starts it. */
-    pushWindowView(view: WindowView): Promise<boolean> {
-        return this.#value('engine.windowView', [view], false).then((v) => v === true);
-    }
-
-    /** One of the host's own tools, for a caller this window resolved (a flow's step). Refused in words with no host. */
-    async runHostTool(call: ForwardedToolCall): Promise<McpToolResult> {
-        const reply = await this.call('engine.runTool', [call]);
-        return reply.ok ? (reply.value as McpToolResult) : { text: `${call.name}: genie-host did not answer (${reply.reason}); nothing was done`, isError: true };
-    }
-
-    /** Genie 1's database: the host takes its memories and AgentInbox history once. */
-    v1Import(databasePath: string): Promise<boolean> {
-        return this.#value('engine.v1Import', [databasePath], false).then((v) => v === true);
-    }
-
     /** The host MCP server's endpoint, verification and tools; null when it has not started. */
     mcpStatus(): Promise<ReturnType<HostMcp['status']> | null> {
         return this.#value<ReturnType<HostMcp['status']> | null>('engine.mcpStatus', [], null);
@@ -717,29 +548,6 @@ export class SessionEngineClient {
         return this.#updates;
     }
 
-    /** genie-host's app door and its keys (P5a.2), as this window reads and changes them. */
-    hosting(): HostingReplica {
-        this.#hosting ??= new HostingReplica(async (method, args) => {
-            const reply = await this.call('engine.hosting', [method, [...args]]);
-            if (!reply.ok) throw new Error(reply.reason);
-            return reply.value;
-        }, this.#options.phpCgiFor ? { phpCgiFor: this.#options.phpCgiFor } : {});
-        return this.#hosting;
-    }
-
-    /**
-     * genie-host's process supervisor, as this window drives it (P3.3b): sites, the front door and the Processes view run
-     * their processes there, so they live — and restart — with the UI closed.
-     */
-    supervisor(): SupervisorReplica {
-        this.#supervisor ??= new SupervisorReplica(async (method, args) => {
-            const reply = await this.call('engine.supervisor', [method, [...args]]);
-            if (!reply.ok) throw new Error(reply.reason);
-            return reply.value;
-        });
-        return this.#supervisor;
-    }
-
     /** genie-host's terminals, as this window opens, types into and shows them (P3.3e). */
     terminals(): TerminalsReplica {
         this.#terminals ??= new TerminalsReplica(async (method, args) => {
@@ -748,13 +556,6 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#terminals;
-    }
-
-    /** A workspace's agent config: the host writes it. Anything but its answer rejects, so nothing reads as synced. */
-    async configSync(request: WorkspaceConfigRequest): Promise<SyncResult[]> {
-        const reply = await this.call('engine.configSync', [request]);
-        if (!reply.ok) throw new Error(reply.reason);
-        return reply.value as SyncResult[];
     }
 
     /** Remote access (Tynn #409, P5d.1): genie-host listens, pairs and holds the baton; this window reads and drives it. */
@@ -778,25 +579,6 @@ export class SessionEngineClient {
         return this.#takeOvers;
     }
 
-    relayHost(): RelayHostReplica {
-        this.#relayHost ??= new RelayHostReplica(async (method, args) => {
-            const reply = await this.call('engine.relayHost', [method, [...args]]);
-            if (!reply.ok) throw new Error(reply.reason);
-            return reply.value;
-        });
-        return this.#relayHost;
-    }
-
-    /** Other machines: genie-host dials them and holds their device tokens (P3.4 cut e). */
-    deviceLink(): DeviceLinkReplica {
-        this.#deviceLink ??= new DeviceLinkReplica(async (method, args) => {
-            const reply = await this.call('engine.deviceLink', [method, [...args]]);
-            if (!reply.ok) throw new Error(reply.reason);
-            return reply.value;
-        });
-        return this.#deviceLink;
-    }
-
     /** This machine as a workstation: genie-host holds the key and signs (P3.4). */
     workstation(): WorkstationReplica {
         this.#workstation ??= new WorkstationReplica(async (method, args) => {
@@ -805,38 +587,6 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#workstation;
-    }
-
-    /** The keyring card, as genie-host found it (P3.4 cut c). */
-    keyring(): KeyringReplica {
-        this.#keyring ??= new KeyringReplica(async (method, args) => {
-            const reply = await this.call('engine.keyring', [method, [...args]]);
-            if (!reply.ok) throw new Error(reply.reason);
-            return reply.value;
-        });
-        return this.#keyring;
-    }
-
-    /** genie-host's GitHub account (P3.4 cut c). */
-    github(options?: { openExternal?: (url: string) => Promise<void> }): GithubAccountReplica {
-        this.#github ??= new GithubAccountReplica(async (method, args) => {
-            const reply = await this.call('engine.github', [method, [...args]]);
-            if (!reply.ok) throw new Error(reply.reason);
-            return reply.value;
-        });
-        if (options?.openExternal) this.#github.useBrowser(options.openExternal);
-        return this.#github;
-    }
-
-    /** genie-host's Tynn account, as this window reads and asks it (P3.4 cut c). */
-    tynn(options?: { openExternal?: (url: string) => Promise<void> }): TynnAccountReplica {
-        this.#tynn ??= new TynnAccountReplica(async (method, args) => {
-            const reply = await this.call('engine.tynn', [method, [...args]]);
-            if (!reply.ok) throw new Error(reply.reason);
-            return reply.value;
-        });
-        if (options?.openExternal) this.#tynn.useBrowser(options.openExternal);
-        return this.#tynn;
     }
 
     /** genie-host's flows, as this window reads, edits, arms and runs them (P3.3d). */
@@ -850,32 +600,6 @@ export class SessionEngineClient {
     onBrowserEvent(listener: (event: BrowserEvent) => void): () => void {
         this.#browserListeners.add(listener);
         return () => { this.#browserListeners.delete(listener); };
-    }
-
-    flows(): FlowsReplica {
-        this.#flows ??= new FlowsReplica(async (method, args) => {
-            const reply = await this.call('engine.flows', [method, [...args]]);
-            if (!reply.ok) throw new Error(reply.reason);
-            return reply.value;
-        });
-        return this.#flows;
-    }
-
-    /** genie-host's catalog, as this window follows it (ADF A4, Tynn #448): a missed change asks for the snapshot again. */
-    catalog(): CatalogReplica {
-        this.#catalog ??= new CatalogReplica(async () => {
-            const reply = await this.call('catalog.snapshot', []);
-            if (!reply.ok) throw new Error(reply.reason);
-            return reply.value as CatalogSnapshot;
-        });
-        return this.#catalog;
-    }
-
-    /** One element's definition from the host's catalog, by kind and id; `null` when it has none. */
-    async catalogDocs(kind: CatalogKind, id: string): Promise<ElementDefinition | null> {
-        const reply = await this.call('catalog.docs', [kind, id]);
-        if (!reply.ok) throw new Error(reply.reason);
-        return reply.value as ElementDefinition | null;
     }
 
     /** The local window's Marketplace actions. Only the host downloads, verifies and activates packages. */
@@ -927,16 +651,6 @@ export class SessionEngineClient {
         return answer.value as T;
     }
 
-    /** genie-host's plugins, as this window lists and changes them (ADF A3, Tynn #447). */
-    plugins(): PluginsReplica {
-        this.#plugins ??= new PluginsReplica(async (method, args) => {
-            const reply = await this.call('engine.plugins', [method, [...args]]);
-            if (!reply.ok) throw new Error(reply.reason);
-            return reply.value;
-        });
-        return this.#plugins;
-    }
-
     /** genie-host's process book and scheduler, as this window lists and manages them (P3.3c). */
     processBook(): ProcessBookReplica {
         this.#processBook ??= new ProcessBookReplica(async (method, args) => {
@@ -957,89 +671,10 @@ export class SessionEngineClient {
         return this.#cloneOffers;
     }
 
-    #issueWatch: IssueWatchReplica | null = null;
-
-    /** genie-host's IssueWatch (P5c), as this window reads it (local links only) and asks it. */
-    issueWatch(): IssueWatchReplica {
-        this.#issueWatch ??= new IssueWatchReplica(async (method, args) => {
-            const reply = await this.call('engine.issueWatch', [method, [...args]]);
-            if (!reply.ok) throw new Error(reply.reason);
-            return reply.value;
-        });
-        return this.#issueWatch;
-    }
-
-    /**
-     * A view follows a workspace's live board in the host (P5c); false = not linked to a Tynn project. Kept here too, so a
-     * reconnect follows it again.
-     */
-    tynnBoardWatch(viewId: string, workspaceId: string): Promise<boolean> {
-        this.#boardViews.set(viewId, workspaceId);
-        return this.#value('engine.tynnBoardWatch', [viewId, workspaceId], false).then((v) => {
-            if (v !== true) this.#boardViews.delete(viewId);
-            return v === true;
-        });
-    }
-
-    tynnBoardUnwatch(viewId: string): Promise<boolean> {
-        this.#boardViews.delete(viewId);
-        return this.#value('engine.tynnBoardUnwatch', [viewId], false).then((v) => v === true);
-    }
-
-    /** The host owns Issues subscriptions; remember the intended views across a reconnect. */
-    tynnIssuesWatch(viewId: string, workspaceId: string): Promise<boolean> {
-        this.#issuesViews.set(viewId, workspaceId);
-        return this.#value('engine.tynnIssuesWatch', [viewId, workspaceId], false).then((v) => {
-            if (v !== true) this.#issuesViews.delete(viewId);
-            return v === true;
-        });
-    }
-
-    tynnIssuesUnwatch(viewId: string): Promise<boolean> {
-        this.#issuesViews.delete(viewId);
-        return this.#value('engine.tynnIssuesUnwatch', [viewId], false).then((v) => v === true);
-    }
-
-    onTynnIssuesEvent(listener: (event: TynnBoardHubEvent) => void): () => void {
-        this.#issuesListeners.add(listener);
-        return () => { this.#issuesListeners.delete(listener); };
-    }
-
-    /** The host owns Features subscriptions (row F1); remember the intended views across a reconnect. */
-    tynnFeaturesWatch(viewId: string, workspaceId: string): Promise<boolean> {
-        this.#featuresViews.set(viewId, workspaceId);
-        return this.#value('engine.tynnFeaturesWatch', [viewId, workspaceId], false).then((v) => {
-            if (v !== true) this.#featuresViews.delete(viewId);
-            return v === true;
-        });
-    }
-
-    tynnFeaturesUnwatch(viewId: string): Promise<boolean> {
-        this.#featuresViews.delete(viewId);
-        return this.#value('engine.tynnFeaturesUnwatch', [viewId], false).then((v) => v === true);
-    }
-
-    onTynnFeaturesEvent(listener: (event: TynnBoardHubEvent) => void): () => void {
-        this.#featuresListeners.add(listener);
-        return () => { this.#featuresListeners.delete(listener); };
-    }
-
     /** The host reads the workspace's Tynn page; a disconnected or refusing host is a visible error. */
     async tynnPage(workspaceId: string, page: unknown, query: unknown): ReturnType<typeof readTynnPage> {
         const reply = await this.call('engine.tynnPage', [workspaceId, page, query]);
         return reply.ok ? reply.value as Awaited<ReturnType<typeof readTynnPage>> : { ok: false, state: 'error', reason: reply.reason };
-    }
-
-    /** The rings and states for this window's board views. */
-    onTynnBoardEvent(listener: (event: TynnBoardHubEvent) => void): () => void {
-        this.#boardListeners.add(listener);
-        return () => { this.#boardListeners.delete(listener); };
-    }
-
-    /** The batches and git results for this window's views. */
-    onFilesEvent(listener: (event: FilesHubEvent) => void): () => void {
-        this.#filesListeners.add(listener);
-        return () => { this.#filesListeners.delete(listener); };
     }
 
     /** One op on a tunnel of this window's protocol connections to genie-host's RemoteHost; false while not linked. */
@@ -1077,10 +712,6 @@ export class SessionEngineClient {
     }
 
     /** Push every record again (main calls it when one changed). */
-    recordsChanged(): void {
-        void this.call('engine.records', [this.#options.records?.() ?? []]);
-    }
-
     /** The agents whose ledger the window has not read for `ledgerIdleMs`: unwatched, their replica dropped. */
     sweepLedgers(): void {
         const now = (this.#options.now ?? Date.now)();
@@ -1233,7 +864,8 @@ export class SessionEngineClient {
 
     start(record: AgentRecord, cwd: string): Promise<{ ok: true } | { ok: false; reason: string }> {
         const env = Object.fromEntries(Object.entries((this.#options.env ?? (() => process.env))()).filter((e): e is [string, string] => typeof e[1] === 'string'));
-        return this.#value('engine.start', [record, cwd, this.#options.serviceEnvFor?.(record.workspaceId) ?? {}, env], { ok: false, reason: NOT_CONNECTED });
+        // The third place was the window's service env: genie-host computes its own since Tynn #1044, so an empty one goes.
+        return this.#value('engine.start', [record, cwd, {}, env], { ok: false, reason: NOT_CONNECTED });
     }
 
     stop(agentId: AgentId, options: { graceful?: boolean } = {}): Promise<boolean> {

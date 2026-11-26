@@ -79,14 +79,6 @@ probe "hub-git-once" src/main/files-watch-hub.ts \
     "        if (w.gitRunning) { w.gitDirty = true; return; }" "" \
     test/files-watch-hub.test.ts "does not start a second run"
 
-probe "engine-drops-closed-window-views" src/main/session-engine-server.ts \
-    "            if (was) this.#options.files?.dropOwner(conn.id);" "" \
-    test/engine-files-tunnel.test.ts "drops every view it had"
-
-probe "client-resubscribes" src/main/session-engine-client.ts \
-    "        for (const [viewId, v] of this.#filesViews) void this.call('engine.filesWatch', [viewId, v.workspace, v.want]);" "" \
-    test/engine-files-tunnel.test.ts "subscribes its views again"
-
 # main x host split: Cooling (#1433) reaches the window through the host replica
 probe "cooling-end-pushed" src/core/session.ts \
     "            this.#coolingCancel = null;
@@ -100,22 +92,18 @@ probe "host-tool-refuses-without-window" src/main/mcp-host-tools.ts \
     "            if (!options.window.connected()) {" "            if (false) {" \
     test/mcp-host-tools.test.ts "with NO window: refused AT ONCE"
 
-probe "replica-follows-mail" src/main/agent-stores-host.ts \
+# The window's replicas of the stores, the supervisor and the flows left the engine link in 2g-4d E2a (Tynn #955): what a
+# window reads of them is the protocol's (features.snapshot, deck.watch, settings.watch). genie-host still follows the
+# stores' inbox changes: a hide or restore of a hibernated workspace's mail is one.
+probe "host-follows-mail" src/main/agent-stores-host.ts \
     "        this.#emit({ store: 'inbox', kind: 'delta', appended, updated, removed, cursors: { ...mail.cursors }, ...(mail.filtered ? { filtered: true } : {}) });" "" \
-    test/agent-stores-contract.test.ts "after an agent sends"
+    test/ghost-replica-394.test.ts "story394"
 
-probe "dump-before-ready" src/main/session-engine-server.ts \
-    "        if (this.#options.stores) this.#event(conn, 'stores.dump', this.#options.stores.dump());" "" \
-    test/agent-stores-contract.test.ts "connects later starts from the whole mail"
-
-# P3.2: the settings are the host's; every window a replica, hot-swap kept
-probe "settings-data-before-listeners" src/main/agent-stores-replica.ts \
-    "        this.#data = event.data;" "" \
-    test/settings-drafts-contract.test.ts "ALREADY readable"
-
-probe "settings-change-reaches-windows" src/main/agent-stores-host.ts \
+# P3.2: the settings are the host's. Each change is said by AgentStoresService (genie-host's feature machine and its
+# phones' push follow it); the engine link's settings replica left in 2g-4d E2a (Tynn #955).
+probe "settings-change-is-said" src/main/agent-stores-host.ts \
     "        stores.settings?.onChange((key, value, workspaceId) => this.#emit({ store: 'settings', kind: 'changed', key, value, workspaceId: workspaceId ?? null, data: stores.settings!.data() }));" "" \
-    test/settings-drafts-contract.test.ts "a change made ELSEWHERE"
+    test/split-2g4d-e2a-settings-push.test.ts "a workstation write"
 
 probe "registry-write-reaches-windows" src/main/agent-stores-host.ts \
     "                    this.#emit({ store: 'registry', kind: 'written' });" "" \
@@ -126,27 +114,14 @@ probe "host-mail-wake-starts" src/main/host-mail-wake.ts \
     test/host-mail-wake.test.ts "a STOPPED agent is started for its mail"
 
 # P3.3b: the process supervisor is the host's
-probe "window-stop-reaches-host" src/main/supervisor-host.ts \
-    "        void this.#call('stop', [id]).catch(() => {});" "" \
-    test/supervisor-host-contract.test.ts "Stop from a window ends it FOR GOOD"
-
 probe "start-of-running-is-noop" src/main/process-supervisor.ts \
     "        if (existing && existing.state === 'running') return this.#status(existing);" "" \
-    test/supervisor-host-contract.test.ts "starts nothing twice"
-
-probe "supervisor-dump-before-ready" src/main/session-engine-server.ts \
-    "        if (this.#options.supervisor) this.#event(conn, 'supervisor.dump', this.#options.supervisor.dump());" "" \
-    test/supervisor-host-contract.test.ts "the next window shows it"
+    test/process-supervisor.test.ts "starting an already-running process is a no-op"
 
 # P3.3c: the process book and the scheduler are the host's
 probe "book-dump-before-ready" src/main/session-engine-server.ts \
     "        if (this.#options.processes) this.#event(conn, 'processes.event', this.#options.processes.dump());" "" \
     test/process-book-host-contract.test.ts "the next window lists its run"
-
-# P3.3d: flows are the host's
-probe "flows-dump-before-ready" src/main/session-engine-server.ts \
-    "        if (this.#options.flows) this.#event(conn, 'flows.event', { kind: 'dump', dump: this.#options.flows.dump() });" "" \
-    test/flows-host-contract.test.ts "the next window sees its run"
 
 # P3.3e: the terminals are the host's
 probe "terminals-dump-before-ready" src/main/session-engine-server.ts \
@@ -320,7 +295,7 @@ probe "migration-read-back-gates-the-delete" src/main/keychain-migration.ts \
     test/keychain-migration.test.ts "kept, not confirmed, and said"
 
 probe "migration-book-before-the-delete" src/main/keychain-migration.ts \
-    "    if (!(await book.write(name, 'verified').then(() => true, () => false))) return 'book-failed';" "" \
+    "    return (await booked(book, name, 'verified')) ? 'verified' : 'book-failed';" "    return 'verified';" \
     test/keychain-migration.test.ts "each crash really stopped the run where it says"
 
 probe "migration-never-runs-twice" src/main/keychain-migration.ts \
@@ -344,14 +319,6 @@ probe "migration-host-compares-for-real" src/main/keychain-migration.ts \
     test/keychain-migration.test.ts "compare answers same, different"
 
 
-# P3.4 cut d: an agent's key is the host's (genie#1457).
-probe "a-window-asks-only-for-agent-keys" src/main/session-engine-server.ts \
-    "                return this.#keychain().get(agentKeyName(str(0)));" "                return this.#keychain().get(str(0) as never);" \
-    test/host-agent-keys.test.ts "nothing but an agent"
-
-probe "a-dead-link-is-not-a-missing-key" src/main/agent-secrets.ts \
-    "            return reply.ok ? (reply.value as KeychainRead) : { kind: 'unavailable', reason: reply.reason };" "            return reply.ok ? (reply.value as KeychainRead) : { kind: 'missing' };" \
-    test/host-agent-keys.test.ts "a dead link is not a signed-out agent"
 
 probe "a-sealed-key-must-match-its-record" src/main/tynn-agent-identities.ts \
     "? { kind: 'value', value: token } : { kind: 'unreadable' };" "? { kind: 'value', value: token } : { kind: 'value', value: token };" \
@@ -375,9 +342,6 @@ probe "only-a-real-pairing-token-moves" src/main/tynn-account.ts \
     "                    if (tokenValid(token)) return { kind: 'value', value: token };" "                    if (token) return { kind: 'value', value: token };" \
     test/tynn-account-host.test.ts "is not a pairing token"
 
-probe "a-window-reads-signed-in-at-once" src/main/session-engine-server.ts \
-    "        if (this.#options.tynn) this.#event(conn, 'tynn.event', this.#options.tynn.dump());" "" \
-    test/tynn-account-host.test.ts "reads signed in at once"
 
 probe "the-cookie-is-sent-on-the-exchange" src/main/host-tynn-account.ts \
     "const cookies = init.credentials === 'include' ? jar.get(new URL(url).origin) : undefined;" "const cookies = undefined as Map<string, string> | undefined;" \
@@ -490,15 +454,9 @@ probe "git-carries-the-credential-in-the-host" src/main/github-account-service.t
 probe "no-method-hands-out-a-credential" src/main/github-account-service.ts \
     "            case 'startSignIn': return account.startSignIn();" "            case 'startSignIn': return account.startSignIn();
             case 'cloneAuth': return account.cloneAuth(String(args[0] ?? ''));" \
-    test/github-account-host.test.ts "no method a window can ask for returns a credential"
+    test/github-account-host.test.ts "no method it answers returns a credential"
 
-probe "a-window-opens-only-githubs-pages" src/main/github-account-replica.ts \
-    "        if (!/^https:\\/\\/github\\.com\\//.test(url)) return;" "" \
-    test/github-account-host.test.ts "opens only GitHub"
 
-probe "typed-errors-survive-the-link" src/main/github-account-replica.ts \
-    "        if (carried.error) throw rebuilt(carried.error);" "        if (carried.error) throw new Error(carried.error.message);" \
-    test/github-account-host.test.ts "survives the link as that type"
 
 probe "the-seal-is-left-until-it-opens" src/main/github-account.ts \
     "        } catch { return { kind: 'unreadable' }; }" "        } catch { return { kind: 'none' }; }" \
@@ -514,9 +472,6 @@ probe "a-redirect-loop-stops" src/main/host-https-fetch.ts \
     "        if (hops >= REDIRECT_LIMIT) throw" "        if (hops >= 1000) throw" \
     test/host-https-fetch.test.ts "a loop stops at the limit"
 
-probe "the-card-is-there-as-a-window-connects" src/main/session-engine-server.ts \
-    "        if (this.#options.keyring) this.#event(conn, 'keyring.event', this.#options.keyring.dump());" "" \
-    test/keyring-host.test.ts "the card is there as the window connects"
 
 probe "the-keychain-coming-back-wakes-the-readers" src/main/keyring-service.ts \
     "                if (now && !ready) options.onReady?.();" "" \
@@ -573,10 +528,6 @@ probe "device-socket-survives-its-own-close" src/main/device-socket.ts \
     test/device-socket.test.ts "cannot take the host down"
 
 # One writer of a workspace's agent config
-probe "a-window-with-a-host-writes-nothing" src/main/compose.ts \
-    "            const host = input.hostConfigSync?.() ?? null;" "            const host = null as ReturnType<NonNullable<typeof input.hostConfigSync>>;" \
-    test/tynn-activation.test.ts "with a host, the window writes nothing"
-
 probe "the-host-prep-holds-the-lock" src/main/host-agent-keys.ts \
     "        ...(options.withConfig ? { withConfig: options.withConfig } : {})," "" \
     test/workspace-config-writer.test.ts "wired: the host"
@@ -659,9 +610,9 @@ probe "no-method-returns-a-device-token" src/main/device-link-service.ts \
     "            default: throw new Error(\`The device link has no \${method}.\`);" "            default: return this.#options.tokens.tokenFor(String(args[0] ?? ''));" \
     test/device-link.test.ts "no method returns a token"
 
-probe "a-dropped-window-lets-its-sockets-go" src/main/session-engine-server.ts \
-    "            if (was) this.#options.deviceLink?.dropOwner(conn.id);" "" \
-    test/device-link.test.ts "a window dropping off the link closes its sockets"
+probe "a-dropped-window-lets-its-sockets-go" src/main/host-api.ts \
+    "        releaseCaller: context => { deps.features.releaseCaller?.(context); deps.deviceLinkProtocol?.dropOwner(context.connectionId); }," "        releaseCaller: context => { deps.features.releaseCaller?.(context); }," \
+    test/device-link.test.ts "connection going closes its sockets at the host"
 
 probe "a-device-token-must-read-back" src/main/device-tokens.ts \
     "            if (back.kind !== 'value' || back.value !== token) return { ok: false, reason: back.kind === 'unavailable' ? back.reason : 'the keychain did not read back what was written' };" "" \
@@ -671,9 +622,9 @@ probe "localStorage-only-after-the-read-back" src/renderer/remote-session.ts \
     "        if (moved) tokens.forget(url);" "        if (moved || !moved) tokens.forget(url);" \
     test/device-link-window.test.ts "a token the host did not read back stays"
 
-probe "a-drone-stops-before-the-host" src/main/device-link-gate.ts \
-    "    if (outboundDialRefusal(ports.role(), url)) return { ok: false, reason: connectOutRefusal({ role: ports.role(), said: ports.said(), why: ports.why?.() ?? null })! };" "" \
-    test/device-link-window.test.ts "a drone is refused and the host is asked nothing"
+probe "any-machine-dials-through-its-host" src/main/device-link-protocol.ts \
+    "                    return ports.link.open(owner, url);" "                    return { ok: false, reason: 'refused before the host' };" \
+    test/device-link-window.test.ts "a socket to another machine is opened by the host"
 
 probe "the-desktop-hook-holds-no-token" src/renderer/App.tsx \
     "                const auth = deviceAuth(pin, label, pairedNow.current, url.url);" "                const auth = deviceAuth(pin, label, pairedNow.current, url.url); rememberedTokens(window.localStorage).tokenFor(url.url);" \
@@ -709,7 +660,7 @@ probe "one-source-failing-stops-only-itself" src/main/keychain-migration.ts \
 
 # A book that does not parse
 probe "a-rebuilt-book-does-not-overwrite" src/main/keychain-migration.ts \
-    "        if (now === 'different') return 'keychain-differs';" "" \
+    "    if (now === 'different') return 'keychain-differs';" "" \
     test/keychain-migration-finishes.test.ts "the keychain wins, the seal stays"
 
 probe "the-bad-book-is-kept" src/main/keychain-migration.ts \
@@ -723,7 +674,7 @@ probe "a-book-that-cannot-be-read-stops" src/main/keychain-migration.ts \
 
 # S4's holds: only in a test build
 probe "the-holds-need-the-flag" src/main/migration-holds.ts \
-    "    if (typeof __GENIE_TEST_HOLDS__ === 'undefined' || !__GENIE_TEST_HOLDS__) return ports;" "" \
+    "    if (typeof __GENIE_TEST_HOLDS__ === 'undefined' || !__GENIE_TEST_HOLDS__) return null;" "" \
     test/migration-holds.test.ts "the ports as they were, whatever the environment says"
 
 
@@ -747,7 +698,7 @@ probe "a-hostile-provider-is-refused" src/main/login-host.ts \
     test/shell-line-callers.test.ts "refused, and no terminal opens"
 
 echo "=== restored: every probed test file (green expected)"
-if npx vitest run test/acl-guard.test.ts test/acl-guard-stalled-worker.test.ts test/acl-guard-left-fake-timers.test.ts test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts test/tynn-account-host.test.ts test/host-https-fetch.test.ts test/host-proxy.test.ts test/host-prepares-agents.test.ts test/host-tynn-recovery.test.ts test/github-account-host.test.ts test/keyring-host.test.ts test/workstation-host.test.ts > "/tmp/probe-$$.log" 2>&1; then
+if npx vitest run test/acl-guard.test.ts test/acl-guard-stalled-worker.test.ts test/acl-guard-left-fake-timers.test.ts test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/split-2g4d-e2a-settings-push.test.ts test/ghost-replica-394.test.ts test/process-supervisor.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts test/tynn-account-host.test.ts test/host-https-fetch.test.ts test/host-proxy.test.ts test/host-prepares-agents.test.ts test/host-tynn-recovery.test.ts test/github-account-host.test.ts test/keyring-host.test.ts test/workstation-host.test.ts > "/tmp/probe-$$.log" 2>&1; then
     grep -E "Test Files|Tests " "/tmp/probe-$$.log"
 else
     echo "RESTORE FAILED"; grep -E "×|FAIL|Tests " "/tmp/probe-$$.log" | head -10; fail=1

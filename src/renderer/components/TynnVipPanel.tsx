@@ -2,6 +2,8 @@ import { Button, Icon, Input, Textarea } from '@particle-academy/react-fancy';
 import { useState, type FormEvent } from 'react';
 import type { BoardActionInput, LiveState } from '../../core/tynn-board.js';
 import { vipColumnLabel, VIP_MOVE_ORDER, type TynnPageActionInput, type TynnPageState, type VipStory, type VipView } from '../../core/tynn-pages.js';
+import { LEGACY_STATUS_STATE, sliceStateLabel } from '../../core/slice-state.js';
+import { ReleaseKindMark } from './ReleaseKindMark.js';
 import { LiveMark, OpLine } from './TynnBoardPanel.js';
 
 /**
@@ -70,6 +72,10 @@ function Card({ story, onAction }: { story: VipStory; onAction: TynnVipPanelProp
             {story.description ? <p className="line-clamp-3 text-[11px] whitespace-pre-wrap text-[var(--fg-3)]">{story.description}</p> : null}
             <div className="flex items-center gap-1.5 text-[10px] text-[var(--fg-3)]">
                 <span className="rounded bg-[var(--bg-2)] px-1.5 font-mono">{story.number}</span>
+                {/* A Slice whose state is not its column's (workspace-ux 0.13.0 `state`) says which, as on the board. */}
+                {story.state !== null && story.state !== LEGACY_STATUS_STATE[story.status]
+                    ? <span data-vip-story-state={story.state} className="rounded-full bg-[var(--bg-2)] px-1.5 font-medium text-[var(--fg-2)]">{sliceStateLabel(story.state)}</span>
+                    : null}
                 {story.progress ? <span className="inline-flex items-center gap-0.5"><Icon name="list-checks" size="xs" />{story.progress}</span> : null}
                 <span className="flex-1" />
                 {story.status === 'done' ? <Icon name="circle-check" size="xs" /> : null}
@@ -123,6 +129,7 @@ export function TynnVipPanel({ state, onAction, onStart, onRetry, live }: TynnVi
                 <span className="font-mono text-[var(--fg-2)]">{version.number}</span>
                 <span className="rounded-full bg-[var(--rose-500)]/20 px-2 py-0.5 text-[10px] font-medium text-[var(--rose-500)]">{`VIP ${version.number ?? ''}`}</span>
                 <span className="min-w-0 truncate font-medium text-[var(--fg-1)]">{version.title}</span>
+                <ReleaseKindMark release={version.release} />
                 <span className="text-[var(--fg-3)]">Progress</span>
                 <span className="inline-block h-1.5 w-32 overflow-hidden rounded bg-[var(--bg-2)]"><i className="block h-full bg-[var(--rose-500)]" style={{ width: `${view.progress.percent}%` }} /></span>
                 <span className="text-[var(--fg-3)]">{`${view.progress.done}/${view.progress.total}`}</span>

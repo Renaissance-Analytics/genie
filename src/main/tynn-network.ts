@@ -128,7 +128,12 @@ export async function setWorkstationRole(
     return { ok: true, role: now };
 }
 
-export async function mintConnectGrant(request: SessionRequest, workstationId: string, popJwk: PopJwk): Promise<{ ok: true; token: string; relayEndpoint: string } | { ok: false; reason: string; refusedByTynn?: true }> {
+/**
+ * `hostPublicKey` (audit M-a, P9.2): the key the workstation enrolled, as Tynn names it with this grant (SPKI DER,
+ * base64). The member checks the host against it and nothing else (relay-e2e.ts); `null` = Tynn named none, and the
+ * member then refuses, in words, before it dials.
+ */
+export async function mintConnectGrant(request: SessionRequest, workstationId: string, popJwk: PopJwk): Promise<{ ok: true; token: string; relayEndpoint: string; hostPublicKey: string | null } | { ok: false; reason: string; refusedByTynn?: true }> {
     let res: Awaited<ReturnType<SessionRequest>>;
     try {
         res = await request(`/api/v1/workstations/${encodeURIComponent(workstationId)}/connect-grant`, { method: 'POST', body: { pop_jwk: popJwk } });
@@ -138,9 +143,9 @@ export async function mintConnectGrant(request: SessionRequest, workstationId: s
     // Since tynn.ai#303 an unauthenticated OR unentitled request is one 404: Tynn no longer says which.
     if (signedOut(res.status)) return { ok: false, reason: 'Tynn did not give this machine a way in: sign in to Tynn, and check the workstation is shared with you', refusedByTynn: true };
     if (!res.ok) return { ok: false, reason: await tynnSays(res, 'Tynn refused a connection') };
-    const body = (await res.json().catch(() => null)) as { token?: unknown; relay_endpoint?: unknown } | null;
+    const body = (await res.json().catch(() => null)) as { token?: unknown; relay_endpoint?: unknown; host_public_key?: unknown } | null;
     if (typeof body?.token !== 'string' || typeof body.relay_endpoint !== 'string' || body.relay_endpoint === '') return { ok: false, reason: 'Tynn answered without a grant and a relay' };
-    return { ok: true, token: body.token, relayEndpoint: body.relay_endpoint };
+    return { ok: true, token: body.token, relayEndpoint: body.relay_endpoint, hostPublicKey: typeof body.host_public_key === 'string' && body.host_public_key !== '' ? body.host_public_key : null };
 }
 
 export interface RelayHostPorts {
@@ -202,6 +207,8 @@ export type RelayHostStatus =
     | { readonly state: 'off' }
     | { readonly state: 'connecting' }
     | { readonly state: 'reachable'; readonly relay: string }
+    /** The link was up and was lost at `since` (epoch ms), for `reason`; it is being redialled (Tynn #940). */
+    | { readonly state: 'reconnecting'; readonly since: number; readonly reason: string }
     | { readonly state: 'unavailable'; readonly reason: string };
 
 export interface RelayHostHandle {
@@ -266,6 +273,9 @@ export function startRelayHost(input: {
             socket: input.socket,
             relayUrl: relay,
             workstationId: input.workstationId,
+            // The enrolled key: what the end-to-end handshake proves this host by (relay-e2e.ts).
+            fingerprint: input.fingerprint,
+            sign: input.sign,
             // The first dial uses the ticket already fetched; every redial asks Tynn again.
             hello: async () => {
                 const t = pending ?? (await input.ports.ticket());
@@ -279,8 +289,12 @@ export function startRelayHost(input: {
             onState: (state, detail) => {
                 if (stopped) return;
                 if (state === 'open') set({ state: 'reachable', relay });
+                // A link that was up and is lost is RECONNECTING since it was lost (Tynn #940), through every redial and
+                // refusal until it is up again; one that never came up is unavailable, in the words it was refused in.
+                else if (state === 'closed' && detail && status.state === 'reachable') set({ state: 'reconnecting', since: Date.now(), reason: detail });
+                else if (state === 'closed' && detail && status.state === 'reconnecting') { if (status.reason !== detail) set({ ...status, reason: detail }); }
                 else if (state === 'closed' && detail) set({ state: 'unavailable', reason: detail });
-                else if (state === 'connecting' && status.state !== 'unavailable') set({ state: 'connecting' });
+                else if (state === 'connecting' && status.state !== 'unavailable' && status.state !== 'reconnecting') set({ state: 'connecting' });
             },
             ...(input.log ? { log: input.log } : {}),
         });

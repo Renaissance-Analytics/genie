@@ -131,6 +131,7 @@ describe('main raises the desktop notice on each arrival', () => {
     it('main watches remote access with ConnectWatch and shows a Notification from connectNotice', () => {
         const main = readFileSync('src/main/main.ts', 'utf8');
         expect(main).toMatch(/new ConnectWatch\(\)/);
-        expect(main).toMatch(/composed\.remote\.onChange\([\s\S]{0,600}\.next\(composed\.remote\.connections\(\)\)[\s\S]{0,600}connectNotice\([\s\S]{0,300}new Notification\(/);
+        // Since Tynn #997 (2g-4a): from genie-host's remote.watch, on main's own client.
+        expect(main).toMatch(/ownProtocol\.watchRemote\([\s\S]{0,1600}\.next\(view\.connections\)[\s\S]{0,600}connectNotice\(label, view\.hostName\)[\s\S]{0,300}new Notification\(/);
     });
 });

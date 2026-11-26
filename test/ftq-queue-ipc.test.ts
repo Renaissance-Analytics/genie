@@ -23,7 +23,12 @@ vi.mock('electron', () => ({
 }));
 
 describe('the queue’s calls, page → preload → main → controller', () => {
-    it('answer and Dismiss name their question; select and draft reach the controller; every channel is handled (counted)', async () => {
+    /*
+     * Since 2f-1 (Tynn #912) this machine's answer and Dismiss go to genie-host over the window's own frame port
+     * (renderer/question-bridge.ts; split-2f-question-window.test.ts). What still crosses to main is the window's own: the
+     * pick, the draft, Later — and another machine's question, answered through the window driving it (question:remote).
+     */
+    it('another machine’s answer and Dismiss name their question; select and draft reach the controller; every channel is handled (counted)', async () => {
         const { electronQuestionWindow } = await import('../src/main/question-window-electron.js');
         await import('../src/main/question-preload.js');
         const calls: unknown[][] = [];
@@ -33,16 +38,16 @@ describe('the queue’s calls, page → preload → main → controller', () => 
             select: (...args: unknown[]) => { calls.push(['select', ...args]); },
             draft: (...args: unknown[]) => { calls.push(['draft', ...args]); },
         } as unknown as QuestionWindow;
-        electronQuestionWindow({ here: '/genie/main', preload: '/genie/main/question-preload.cjs', controller: () => ctl });
+        electronQuestionWindow({ here: '/genie/main', preload: '/genie/main/question-preload.cjs', controller: () => ctl, owns: (id) => id.startsWith('remote:') });
         const api = ipc.exposed.get('genieQuestion')!;
 
-        await api.answer?.([['A']], ['ship it'], 'q_wren');
-        await api.dismiss?.(['not now'], 'q_kai');
+        await api.remote?.({ kind: 'answer', id: 'remote:7:q_wren', selections: [['A']], notes: ['ship it'] });
+        await api.remote?.({ kind: 'dismiss', id: 'remote:7:q_kai', notes: ['not now'] });
         await api.select?.('q_wren');
         await api.draft?.('q_kai', { selections: [['B']], notes: ['use the staging one'], revision: 0 });
         expect(ipc.invoked).toEqual([
-            ['question:answer', [['A']], ['ship it'], 'q_wren'],
-            ['question:dismiss', ['not now'], 'q_kai'],
+            ['question:remote', { kind: 'answer', id: 'remote:7:q_wren', selections: [['A']], notes: ['ship it'] }],
+            ['question:remote', { kind: 'dismiss', id: 'remote:7:q_kai', notes: ['not now'] }],
             ['question:select', 'q_wren'],
             ['question:draft', 'q_kai', { selections: [['B']], notes: ['use the staging one'], revision: 0 }],
         ]);
@@ -51,17 +56,16 @@ describe('the queue’s calls, page → preload → main → controller', () => 
         // Main's handlers, given what the preload sent: the id reaches the controller with the answer, exactly once each.
         for (const [channel, ...args] of ipc.invoked) await ipc.handlers.get(channel as string)!({}, ...args);
         expect(calls).toEqual([
-            ['answer', [['A']], ['ship it'], 'q_wren'],
-            ['dismiss', ['not now'], 'q_kai'],
+            ['answer', [['A']], ['ship it'], 'remote:7:q_wren'],
+            ['dismiss', ['not now'], 'remote:7:q_kai'],
             ['select', 'q_wren'],
             ['draft', 'q_kai', { selections: [['B']], notes: ['use the staging one'], revision: 0 }],
         ]);
 
-        // Control: a call that names no question goes out exactly as before — no id argument at all.
-        ipc.invoked.length = 0;
-        await api.answer?.([['A']], ['']);
-        expect(ipc.invoked).toEqual([['question:answer', [['A']], ['']]]);
-        expect(ipc.invoked[0]).toHaveLength(3);
+        // Control: this machine's question is never answered through main.
+        calls.length = 0;
+        expect(await ipc.handlers.get('question:remote')!({}, { kind: 'answer', id: 'q_wren', selections: [['A']], notes: [''] })).toMatchObject({ ok: false });
+        expect(calls).toEqual([]);
     });
 });
 

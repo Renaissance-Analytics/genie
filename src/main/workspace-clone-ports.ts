@@ -15,7 +15,7 @@ export interface CloneRestoreDeps {
     readonly files: { read(path: string): Promise<string | null>; list(dir: string): Promise<string[]> };
     readonly registry: {
         agentsOf(workspaceId: string): readonly { id: string; name: string }[];
-        defaultAgentOf(workspaceId: string): string | null;
+        chosenDefaultAgentOf(workspaceId: string): string | null;
         setDefaultAgent(workspaceId: string, agentId: string): Promise<unknown>;
         listWorkspaces(): readonly { id: string; envFile?: string }[];
         setWorkspaceEnvFile(workspaceId: string, file: string | null): Promise<unknown>;
@@ -39,7 +39,7 @@ export interface CloneRestoreDeps {
         kept(): readonly { name: string; workspaceId: string; command: string; cwd: string; restart: ProcessSource['restart']; schedule?: ProcessSource['schedule'] }[];
         keep(input: KeepInput): Promise<unknown>;
     } | null>;
-    trusted(workspaceId: string): boolean;
+    trusted(workspaceId: string): boolean | Promise<boolean>;
     siteHosts(workspaceId: string): readonly string[];
 }
 
@@ -60,7 +60,7 @@ export function cloneRestorePorts(d: CloneRestoreDeps): CloneRestorePorts {
             agentsOf: (id) => d.registry.agentsOf(id),
             overridden: (id) => d.settings.workspaceValues(id),
             setSetting: (id, key, value) => d.settings.setFor(id, key, value),
-            defaultAgentOf: (id) => d.registry.defaultAgentOf(id),
+            chosenDefaultAgentOf: (id) => d.registry.chosenDefaultAgentOf(id),
             setDefaultAgent: (id, agentId) => d.registry.setDefaultAgent(id, agentId),
             envFileOf: (id) => d.registry.listWorkspaces().find((w) => w.id === id)?.envFile ?? null,
             defaultEnvFile: () => text(d.settings.get('default_env_file')).trim() || '.env',

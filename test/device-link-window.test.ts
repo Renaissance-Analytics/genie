@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { AuthRequest } from '../src/core/remote-protocol.js';
-import { deviceLinkGate } from '../src/main/device-link-gate.js';
+import { deviceLinkProtocol, type DeviceLinkProtocolPorts } from '../src/main/device-link-protocol.js';
 import { deviceAuth, knownHosts, moveRememberedTokens, rememberedTokens, type DeviceLinkBridge, type TokenStorage } from '../src/renderer/remote-session.js';
 
 /**
@@ -115,34 +115,23 @@ describe('what a desktop window says when it connects', () => {
     });
 });
 
-describe('the drone stops in main, before any socket', () => {
-    const open = () => { const calls: string[] = []; return { calls, link: { open: async (url: string) => { calls.push(url); return { ok: true as const, channel: 'c' }; } } }; };
+describe('genie-host dials another machine for any role (Tynn #423), and only a machine', () => {
+    const open = () => {
+        const calls: string[] = [];
+        const link = { open: async (_owner: string, url: string) => { calls.push(url); return { ok: true as const, channel: 'c' }; }, openRelay: async () => ({ ok: false as const, reason: 'none' }), send: () => {}, close: () => {}, dropOwner: () => {}, browserVia: async () => ({ ok: false as const, reason: 'none' }) };
+        return { calls, protocol: deviceLinkProtocol({ link, openBrowser: async () => null, remoteVia: () => {} } as DeviceLinkProtocolPorts) };
+    };
 
-    it('a drone is refused and the host is asked nothing', async () => {
+    it('a socket to another machine is opened by the host; nothing about this machine is asked first', async () => {
         const o = open();
-        const result = await deviceLinkGate(URL_A, { role: () => 'drone', said: () => 'drone', reread: async () => {}, link: () => o.link });
-        expect(result.ok).toBe(false);
-        expect(o.calls).toEqual([]);
+        expect(await o.protocol.call('window-1', 'open', [URL_A])).toEqual({ ok: true, channel: 'c' });
+        expect(o.calls).toEqual([URL_A]);
     });
 
-    it('a pilot, and a machine not on the Tynn network, dial', async () => {
-        for (const role of ['pilot', null] as const) {
-            const o = open();
-            expect((await deviceLinkGate(URL_A, { role: () => role, said: () => role, reread: async () => {}, link: () => o.link })).ok).toBe(true);
-            expect(o.calls).toEqual([URL_A]);
-        }
-    });
-
-    it('a Tynn workstation or a web address is not a device link, whatever the role', async () => {
+    it('a Tynn workstation or a web address is not a device link', async () => {
         const o = open();
-        for (const url of ['relay:abc', 'https://evil.example/', 7]) expect((await deviceLinkGate(url, { role: () => 'pilot', said: () => 'pilot', reread: async () => {}, link: () => o.link })).ok).toBe(false);
+        for (const url of ['relay:abc', 'https://evil.example/', 7]) expect(((await o.protocol.call('window-1', 'open', [url])) as { ok: boolean }).ok).toBe(false);
         expect(o.calls).toEqual([]);
-    });
-
-    it('with no host it says so', async () => {
-        const result = await deviceLinkGate(URL_A, { role: () => 'pilot', said: () => 'pilot', reread: async () => {}, link: () => null });
-        expect(result.ok).toBe(false);
-        expect(result.ok ? '' : result.reason).toMatch(/host/i);
     });
 });
 

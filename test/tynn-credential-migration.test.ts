@@ -36,7 +36,9 @@ it('production pairing storage is inside its own directory and declares the old 
     const host = await readFile(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8');
     expect(host).toMatch(/file:\s*join\(home,\s*'credentials',\s*'tynn\.json'\)/);
     const main = await readFile(new URL('../src/main/main.ts', import.meta.url), 'utf8');
-    expect(main).toMatch(/file:\s*join\(genieRoot\(\),\s*'credentials',\s*'tynn\.json'\),\s*legacyFile:\s*join\(genieRoot\(\),\s*'tynn\.json'\)/);
+    // main's one-shot unsealer (Tynn #959, 2g-3b) names both files once and hands them to the pairing's source.
+    expect(main).toMatch(/const tynnFile = join\(genieRoot\(\),\s*'credentials',\s*'tynn\.json'\);\s*const tynnLegacyFile = join\(genieRoot\(\),\s*'tynn\.json'\);/);
+    expect(main).toMatch(/tynnPairingSource\(\{ file: tynnFile, legacyFile: tynnLegacyFile,/);
 });
 
 describe.skipIf(process.platform === 'win32')('Tynn account credential migration', () => {

@@ -16,16 +16,25 @@ export function identityFieldWords(value: string | null): string {
 const unknownIdentity = (): AccountIdentity => ({ name: null, email: null, plan: null });
 const text = (value: unknown): string | null => typeof value === 'string' && value.trim() !== '' && value.length <= 512 && !/[\x00-\x1f\x7f]/.test(value) ? value.trim() : null;
 
+/** `planTier` names Max's tier (`max_5x`, `max_20x`); its other values (`pro`, `max_other`, `other`) add nothing to `subscriptionType`. */
+const MAX_TIERS: Readonly<Record<string, string>> = { max_5x: 'max 5x', max_20x: 'max 20x' };
+
 /**
  * `claude auth status` prints JSON. `authMethod` and `configDirectory` are always there and say nothing about who the
- * person is; `email`, `name` and `plan` are read ONLY when present (a key of another name is never read in their place).
+ * person is; `email` and `name` are read ONLY when present (a key of another name is never read in their place). The plan
+ * is the CLI's own `subscriptionType` (`pro`, `max`, `team`, ...; null for an API key), refined by `planTier` for Max: the
+ * CLI prints no `plan` key, which is why every Claude account read "unknown" (Tynn #988). A `plan` key, should one appear,
+ * is still taken first.
  */
 export function parseClaudeAuthStatus(stdout: string): AccountIdentity {
     let parsed: unknown;
     try { parsed = JSON.parse(stdout); } catch { return unknownIdentity(); }
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return unknownIdentity();
     const status = parsed as Record<string, unknown>;
-    return { name: text(status.name), email: text(status.email), plan: text(status.plan) };
+    const subscription = text(status.subscriptionType);
+    const tier = text(status.planTier);
+    const plan = text(status.plan) ?? (subscription === 'max' && tier !== null && MAX_TIERS[tier] ? MAX_TIERS[tier]! : subscription);
+    return { name: text(status.name), email: text(status.email), plan };
 }
 
 /** The ONLY Codex App Server read for identity: `refreshToken:false` never makes the server refresh a token. */

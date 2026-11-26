@@ -14,7 +14,8 @@ import { deckActionForWire } from '../core/deck-answer-wire.js';
 import { bytesToBase64 } from '../core/mobile.js';
 import { BATON_REFUSAL } from '../core/remote.js';
 import { refusalSkew, shownBuild, welcomeSkew, type DroneSkew } from '../core/drone-version.js';
-import { hostUpdate, negotiate, offerOf, remoteOffer, type HostUpdateAnswer, type HostUpdateView, type Negotiated, type ProtocolOffer } from '../core/protocol-version.js';
+import { capability, hostUpdate, negotiate, offerOf, remoteOffer, type HostUpdateAnswer, type HostUpdateView, type Negotiated, type ProtocolOffer } from '../core/protocol-version.js';
+import { CAP_ELEVATION_PROMPT, ELEVATION_ANSWER_METHOD, ELEVATION_EVENT, elevationPromptEvent } from '../core/elevation.js';
 import { UPLOAD_CHUNK_BYTES, WindowReceiver, type WindowCursor, type WindowRows } from '../core/mobile-wire.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import type { BlobClient, BlobInfo, BlobChunk } from '../core/local-blobs.js';
@@ -27,6 +28,9 @@ import { filesContentReader, localFilesClient } from './local-files-client.js';
 import { localFilesWatchClient } from './local-files-watch-client.js';
 import { localDraftsClient } from './local-drafts-client.js';
 import { localArtboardClient } from './local-artboard-client.js';
+import { deviceChannels } from './device-channels.js';
+import type { DisplayPost } from '../core/artboard.js';
+import type { QuestionMedia } from '../core/question-media.js';
 import type { SavePreview, SaveResult } from '../core/workspace-save.js';
 import { readTypingEvent } from '../core/typing-mirror.js';
 import type { AccountsSnapshot } from '../core/accounts-view.js';
@@ -145,6 +149,12 @@ export interface RemoteOptions {
     readonly minBuild?: string;
     /** This client's offer (Tynn #894); absent = this build's (`remoteOffer('client')`). Tests set it to move the window. */
     readonly protocol?: ProtocolOffer;
+    /**
+     * THIS CLIENT SHOWS GENIE'S PASSWORD PROMPT (Tynn #973): it says so in its hello (CAP_ELEVATION_PROMPT), and the host
+     * asks it, and only it, for the administrator password of an elevated step it clicked. The main window and a window
+     * driving another machine; never a phone or the question window.
+     */
+    readonly elevationPrompt?: true;
 }
 
 /**
@@ -192,7 +202,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
     /** Which method each pending call asked: an older host's bare refusal names the method, never the id (Tynn #894). */
     const pendingMethods = new Map<number, string>();
     let nextId = 0;
-    const offer = options.protocol ?? remoteOffer('client');
+    const offer = options.protocol ?? remoteOffer('client', null, options.elevationPrompt ? [capability(CAP_ELEVATION_PROMPT, 1)] : []);
     let closed = false;
     const events = new Map<string, Set<(payload: unknown) => void>>();
     const on = (channel: string, listener: (payload: unknown) => void): (() => void) => {
@@ -410,7 +420,11 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
     // Native type guards can see bigint or cyclic objects. Keep their refusal order on the host,
     // and send only string slots (or null), without serializing an invalid object's contents.
     const ownerText = (value: unknown): string | null => typeof value === 'string' ? value : null;
-    const localOwner: import('./bridge.js').LocalOwnerBridge | undefined = local ? {
+    // A channel to another machine (Tynn #941, 2f-2): genie-host's device link, owned by this connection, heard on its events.
+    const devices = local ? deviceChannels({ call: (method, ...args) => read(method as RemoteMethod, ...args), on: (listener) => on(LOCAL_EVENTS.device, listener) }) : null;
+    // genie-host closes a connection's channels when it goes, and cannot say so over it: said here, for each one open.
+    if (devices) transport.onClose(() => devices.lost('Genie’s connection to its host closed'));
+    const localOwner: import('./bridge.js').LocalOwnerBridge | undefined = local && devices ? {
         appInbox: {
             state: (id) => read('appInbox.state', ownerText(id)),
             createKey: (id, name) => read('appInbox.createKey', ownerText(id), ownerText(name)),
@@ -418,11 +432,19 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             source: (id, op, kind, source) => read('appInbox.source', ownerText(id), ownerText(op), ownerText(kind), ownerText(source)),
         },
         deviceLink: {
+            open: (url) => devices.open(url),
             hosts: () => read('deviceLink.hosts'),
             forget: (url) => read('deviceLink.forget', ownerText(url)),
             adopt: (url, token) => read('deviceLink.adopt', ownerText(url), ownerText(token)),
         },
         tynnNetwork: {
+            open: (workstationId) => devices.openRelay(workstationId),
+            onOpenStep: (listener) => devices.onOpenStep(listener),
+            send: (channel, text) => devices.send(channel, text),
+            close: (channel) => devices.close(channel),
+            onMessage: (listener) => devices.onMessage(listener),
+            onClosed: (listener) => devices.onClosed(listener),
+            openBrowser: (channel, address, hosts, view) => devices.openBrowser(channel, address, hosts, view),
             workstations: () => read('tynnNetwork.workstations'),
             setRole: (id, role, code) => read('tynnNetwork.setRole', ownerText(id), ownerText(role), ownerText(code)),
             shares: {
@@ -512,6 +534,12 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         chooseProviderProgram: (provider, path) => answer<{ ok: true } | { ok: false; reason: string }>('providers.chooseProgram', provider, path),
         // The throwaway shell (Tynn #897, 2c-4): the host's; this window opens its companion window with the ticket.
         scratchTerminal: (workspaceId) => answer<{ ok: true; terminalId: string; route?: string; ticket?: string } | { ok: false; reason: string }>('terminals.scratch', workspaceId),
+        // A question's named files and its visuals (Tynn #912, 2f-1): the host's own question, read from its workspace.
+        questions: {
+            files: async (id, paths) => { const r = await call('questions.files', id, paths); return r.ok && Array.isArray(r.value) ? r.value.filter((p): p is string => typeof p === 'string') : null; },
+            file: (id, path) => answer<{ ok: true; path: string; text: string } | { ok: true; path: string; media: QuestionMedia } | { ok: false; reason: string }>('questions.file', id, path),
+            visuals: (id) => answer<{ ok: true; posts: DisplayPost[] } | { ok: false; reason: string }>('questions.visuals', id),
+        },
         // The answer comes back to the caller (an undelivered draft is kept, §4.4) AND a host refusal (the lock, a
         // scope) still lands in `lastRefusal` as it did when this was fire-and-forget.
         // Files do not cross to a remote workstation yet: said, never dropped.
@@ -561,6 +589,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             removeRepo: (workspaceId, slug) => answer('workspaces.removeRepo', workspaceId, slug),
             removeRepoLock: (workspaceId, slug) => answer('workspaces.removeRepoLock', workspaceId, slug),
             locateRepo: (workspaceId, slug, path) => answer('workspaces.locateRepo', workspaceId, slug, path),
+            relocate: (workspaceId, path) => answer('workspaces.relocate', workspaceId, path),
             commitsSince: (workspaceId, since) => answer('workspaces.commitsSince', workspaceId, since),
             settings: (workspaceId) => answer('workspaces.settings', workspaceId),
             setSetting: (workspaceId, key, value) => answer('workspaces.setSetting', workspaceId, key, value),
@@ -586,6 +615,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
                 if (usd === undefined || (typeof usd === 'number' && !Number.isFinite(usd))) return Promise.resolve({ ok: false, reason: 'a budget is a finite non-negative number of dollars, or null to clear it' });
                 return answer('agents.setBudget', agentId, usd);
             },
+            setAppWakeCap: (agentId, cap) => answer('agents.setAppWakeCap', agentId, cap),
             setMode: (agentId, mode) => answer('agents.setMode', agentId, mode),
             setAccessScope: (agentId, scope) => answer('agents.setAccessScope', agentId, scope),
             setAccessAgents: (agentId, ids) => answer('agents.setAccessAgents', agentId, ids),
@@ -613,6 +643,9 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             children: (workspaceId, dir) => read('files.children', workspaceId, dir),
             open: (workspaceId, path) => answer('files.open', workspaceId, path).then((r) => ('reason' in r && !('path' in r) ? { ok: false as const, path, error: (r as { reason: string }).reason } : r)) as never,
             readMedia: (workspaceId, path) => answer('files.readMedia', workspaceId, path).then((r) => ('reason' in r && !('path' in r) ? { ok: false as const, path, error: (r as { reason: string }).reason } : r)) as never,
+            // Open with / Show in file manager: on the HOST's own screen, done there by its Genie window (Tynn #912, 2f-1).
+            openExternal: (workspaceId, path) => answer<{ ok: true } | { ok: false; reason: string }>('files.openExternal', workspaceId, path),
+            reveal: (workspaceId, path) => answer<{ ok: true } | { ok: false; reason: string }>('files.reveal', workspaceId, path),
             upload: (workspaceId, dir, name, bytes, onProgress) => oneAtATime(async () => {
                 const staged = await stage(name, bytes, onProgress);
                 if (!staged.ok) return staged;
@@ -934,6 +967,17 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             tynnIssuesWatch: tynnFollow('issues'),
             tynnFeaturesWatch: tynnFollow('features'),
         });
+    }
+    // The host's password prompt for an elevated step this client clicked (Tynn #973). The event carries no secret; the
+    // password goes back once, as the answer's argument, and nowhere else: never kept, logged or sent on any other channel.
+    if (options.elevationPrompt) {
+        bridge.elevation = {
+            onPrompt: (listener) => on(ELEVATION_EVENT, (payload) => { const event = elevationPromptEvent(payload); if (event) listener(event); }),
+            answer: async (id, password) => {
+                const r = await call(ELEVATION_ANSWER_METHOD, id, password);
+                return r.ok && r.value === true;
+            },
+        };
     }
 
     return {

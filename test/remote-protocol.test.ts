@@ -122,7 +122,25 @@ describe('the capability table', () => {
         // 175 with `providers.chooseProgram` (a write, the owner's): a provider's .exe, picked on the host's disk (Tynn #897, 2c-3).
         // 176 with `terminals.scratch` (a write, workspace-scoped; the home one the owner's): the throwaway shell (Tynn #897, 2c-4).
         // 177 with `stopToolCall` (a write, agent-scoped): Stop this call, one hung tool call ends (Tynn #855).
-        expect(REMOTE_METHODS.length).toBe(177);
+        // 182 with `questions.files` / `questions.file` / `questions.visuals` (reads: a question's named files and ArtBoard
+        // visuals, from the host's own Deck) and `files.openExternal` / `files.reveal` (writes, workspace-scoped, the owner's:
+        // opened on the host's own screen for a client on another machine) (Tynn #912, 2f-1).
+        // 187 with `deviceLink.open` / `openRelay` / `send` / `close` / `openBrowser` (local): a window's transport to another
+        // machine, owned by its own connection (Tynn #941, 2f-2).
+        // 189 with `keychain.adoptLegacy` (local, main's own client only: what an older Genie sealed, into genie-host's keychain)
+        // and `tynn.recheck` (local: genie-host asks Tynn again) (Tynn #959, 2g-3b).
+        // 190 with `approvals.gate` (local, main's own client only: a window-run tool's approval, from genie-host's queue) (Tynn #1006, 2g-4b2).
+        // 191 with `window.view` (local, main's own client only: whether the person is active; genie-host names its workspaces itself) (Tynn #1044, 2g-4d B).
+        // 192 with `registry.write` (local, main's own client only: a write to genie-host's registry) (Tynn #1007, 2g-4e).
+        // 193 with `workspaces.relocate` ("Locate folder" on a workspace whose folder is not there: a write, workspace-scoped,
+        // the host owner's only) (host split P7).
+        // 194 with `agents.setAppWakeCap` (a write, agent-scoped, the owner's): an agent's app wake cap (Tynn #1053).
+        // 195 with `elevation.answer` (a write: the client's answer to the host's password prompt, from the asked connection only) (Tynn #973).
+        expect(REMOTE_METHODS.length).toBe(195);
+        expect(capabilityOf('elevation.answer')).toBe('write');
+        expect(capabilityOf('agents.setAppWakeCap')).toBe('write');
+        expect(AGENT_SCOPED_METHODS).toContain('agents.setAppWakeCap');
+        expect(capabilityOf('registry.write')).toBe('local');
         expect(capabilityOf('accounts.list')).toBe('read');
         expect(capabilityOf('accounts.act')).toBe('write');
         expect(capabilityOf('agents.typing')).toBe('write');
@@ -166,6 +184,8 @@ describe('the capability table', () => {
         expect(capabilityOf('workspaces.commitsSince')).toBe('read');
         expect(capabilityOf('workspaces.locateRepo')).toBe('write');
         expect(WORKSPACE_SCOPED_METHODS).toContain('workspaces.locateRepo');
+        expect(capabilityOf('workspaces.relocate')).toBe('write');
+        expect(WORKSPACE_SCOPED_METHODS).toContain('workspaces.relocate');
         expect(capabilityOf('workspaces.previewAddFromGit')).toBe('read');
         expect(capabilityOf('workspaces.removeRepoLock')).toBe('write');
         expect(capabilityOf('workspaces.previewAddFromTynn')).toBe('read');

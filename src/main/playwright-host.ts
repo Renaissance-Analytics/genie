@@ -30,6 +30,11 @@ export interface PlaywrightHostDeps {
     readonly installer?: { ensure(version: string): unknown; installing(): readonly string[] } | undefined;
     /** Whether the workspace is trusted (Tynn #846 review): one not yet trusted triggers no install. Absent = trusted. */
     readonly trusted?: ((workspaceId: string) => boolean) | undefined;
+    /**
+     * THE VERDICT READ NOW (Tynn #364): what `trusted` says was read up to a slow pass ago, so the install waits for this
+     * before it starts, and starts only on a yes. Absent = `trusted` decides alone.
+     */
+    readonly trustedNow?: ((workspaceId: string) => Promise<boolean>) | undefined;
 }
 
 export class PlaywrightHost {
@@ -56,7 +61,14 @@ export class PlaywrightHost {
             // The version this project pins: Genie installs it NOW, by itself (Tynn #846). Nobody is asked to do anything.
             // Not until the person trusts the workspace (Tynn #846 review): opening a folder installs nothing on its say-so.
             if (this.#deps.trusted?.(workspaceId) === false) return { ...base, [PLAYWRIGHT_NOTE_ENV]: `This project uses Playwright ${client}. Genie installs its browsers once you trust this workspace; until then, nothing is installed for it.` };
-            if (this.#deps.installer?.ensure(client)) return { ...base, [PLAYWRIGHT_NOTE_ENV]: `This project uses Playwright ${client}. Genie is installing Playwright ${client}'s browsers now, by itself; they are there in a few minutes (the playwright tool's status says when). Do not run playwright install.` };
+            // Read now before it installs (Tynn #364): the verdict above can be a slow pass old.
+            const now = this.#deps.trustedNow;
+            const installer = this.#deps.installer;
+            if (now && installer) {
+                void now(workspaceId).catch(() => false).then((yes) => { if (yes) installer.ensure(client); });
+                return { ...base, [PLAYWRIGHT_NOTE_ENV]: `This project uses Playwright ${client}. Genie installs Playwright ${client}'s browsers by itself once it has read that this workspace is trusted; they are there in a few minutes (the playwright tool's status says when). Do not run playwright install.` };
+            }
+            if (installer?.ensure(client)) return { ...base, [PLAYWRIGHT_NOTE_ENV]: `This project uses Playwright ${client}. Genie is installing Playwright ${client}'s browsers now, by itself; they are there in a few minutes (the playwright tool's status says when). Do not run playwright install.` };
             return { ...base, [PLAYWRIGHT_NOTE_ENV]: set.note };
         }
         base[PLAYWRIGHT_VERSION_ENV] = client;

@@ -3,13 +3,10 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { memoryPair } from '../src/core/line-transport.js';
 import { KeyringService } from '../src/main/keyring-service.js';
 import { LinuxKeyring, type KeyringPorts } from '../src/main/linux-keyring.js';
-import { SessionEngineClient } from '../src/main/session-engine-client.js';
-import { SessionEngineServer } from '../src/main/session-engine-server.js';
-import { SessionHost } from '../src/main/session-host.js';
 import { until } from './helpers/until.js';
+import type { ElevatedBatch, Elevate } from '../src/core/elevation.js';
 
 /**
  * THE KEYRING CARD READS THE HOST (P3.4 cut c). The secrets are in the host's keychain, so whether they can be kept is the host's to say. The window's Chromium store
@@ -17,7 +14,6 @@ import { until } from './helpers/until.js';
  * client sees a daemon as soon as it runs, so once it answers, the accounts read again by themselves.
  */
 
-const TOKEN = 'a'.repeat(64);
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'keyring-host-')); });
 afterEach(async () => { await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); });
@@ -30,25 +26,29 @@ async function hostKeyring(start: Facts) {
     const ports: KeyringPorts = {
         platform: 'linux',
         facts: async () => state.facts,
-        plan: async () => ({ pm: 'pacman', packages: ['gnome-keyring', 'libsecret'], run: ['pkexec', 'pacman', '-S', 'gnome-keyring'], manual: 'sudo pacman -S gnome-keyring' }) as never,
+        plan: async () => ({ pm: 'pacman', packages: ['gnome-keyring', 'libsecret'], run: ['pacman', '-S', 'gnome-keyring'], manual: 'sudo pacman -S gnome-keyring' }) as never,
         exec: async (argv: readonly string[]) => { state.execs.push([...argv]); state.facts = HEALTHY; return { code: 0, stdout: '', stderr: '' }; },
         relaunch: () => { state.relaunches += 1; },
     } as never;
     return { state, keyring: await LinuxKeyring.open(ports) };
 }
 
+/**
+ * The card as genie-host's service says it. Since Tynn #961 (2g-3c) no window keeps a replica of it: Settings draws the card
+ * from genie-host's features, and a window hears the keychain is back from the host summary (keychainReady).
+ */
 async function linked(service: KeyringService) {
-    const server = new SessionEngineServer({ token: TOKEN, build: 'test', keyring: service });
-    const host = new SessionHost({ userData: dir, driverFor: () => null, processTree: { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) }, ...server.hostOptions() });
-    server.attach(host);
-    const [hostSide, windowSide] = memoryPair();
-    server.accept(hostSide);
-    const client = new SessionEngineClient();
-    await client.connect(windowSide, TOKEN);
-    return { client, replica: client.keyring() };
+    const replica = {
+        view: () => service.dump().view,
+        canKeepSecrets: () => service.dump().canKeepSecrets,
+        // The host's elevation for the window that pressed it (Tynn #973) rides on the call.
+        fix: async (elevate?: Elevate) => { await service.call('fix', [elevate]); },
+        onChange: (listener: () => void) => service.onEvent(() => listener()),
+    };
+    return { service, replica };
 }
 
-describe('a window shows what the host found', () => {
+describe('the host says what it found, and its button runs there', () => {
     it('no daemon running: the card is there as the window connects, in the host’s words', async () => {
         const { keyring } = await hostKeyring({ ...HEALTHY, owned: false, available: false, backend: 'basic_text' });
         const { replica } = await linked(new KeyringService(keyring));
@@ -87,8 +87,11 @@ describe('a window shows what the host found', () => {
         const { keyring, state } = await hostKeyring({ installed: false, owned: false, activatable: false, backend: 'basic_text', available: false });
         const { replica } = await linked(new KeyringService(keyring));
         expect(replica.view()).toMatchObject({ state: 'not-installed' });
-        await replica.fix();
-        expect(state.execs[0]?.[0]).toBe('pkexec');
+        // Tynn #973: the install is ONE elevated batch through the pressing window's elevation, never pkexec.
+        const batches: ElevatedBatch[] = [];
+        await replica.fix(async (batch) => { batches.push(batch); state.facts = HEALTHY; return { kind: 'ran', exitCode: 0, output: '', failedStep: null }; });
+        expect(batches).toEqual([{ title: 'Install the keyring', items: ['gnome-keyring', 'libsecret'], steps: [{ command: 'pacman', args: ['-S', 'gnome-keyring'] }] }]);
+        expect(state.execs.some((argv) => argv[0] === 'pkexec' || argv[0] === 'sudo')).toBe(false);
     });
 
     it('still opening: no card yet, and nothing claims secrets cannot be kept', async () => {
@@ -101,16 +104,10 @@ describe('a window shows what the host found', () => {
         expect(replica.view()).toMatchObject({ state: 'not-running' });
     });
 
-    it('a window with no link has no card, and a click says why it did nothing', async () => {
-        const replica = new SessionEngineClient().keyring();
-        expect(replica.view()).toBeNull();
-        await expect(replica.fix()).rejects.toThrow();
-    });
-
     it('only what the card needs can be asked for', async () => {
         const { keyring } = await hostKeyring(HEALTHY);
-        const { client } = await linked(new KeyringService(keyring));
-        expect((await client.call('engine.keyring', ['relaunch', []])).ok).toBe(false);
+        const { service } = await linked(new KeyringService(keyring));
+        await expect(service.call('relaunch', [])).rejects.toThrow('The keyring has no relaunch.');
     });
 });
 
@@ -149,15 +146,18 @@ describe('when the keychain comes to answer', () => {
 
 describe('where it is wired', () => {
     const strip = (text: string) => text.split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
-    it('with a host, main shows the host’s card; only its own engine reads Chromium’s store for it', () => {
+    // The card is genie-host's, and every window shows it from the host's features (Tynn #959, 2g-3b): main holds no replica of it.
+    it('the card is the host’s alone: main holds no keyring replica; genie-host reads its accounts again when the keychain answers', () => {
         const main = strip(readFileSync('src/main/main.ts', 'utf8'));
-        expect(main).toMatch(/keyring = agentEngineLink\.client\.keyring\(\)/);
+        expect(main).not.toMatch(/client\.keyring\(\)/);
         const host = strip(readFileSync('src/main/genie-host.ts', 'utf8'));
         expect(host).toMatch(/new KeyringService\(/);
         expect(host).toMatch(/onReady:/);
     });
 
-    it('a window hears the keychain is back, and tries its one-time move again', () => {
-        expect(strip(readFileSync('src/main/main.ts', 'utf8'))).toMatch(/moveSecretsAgain\(\)/);
+    it('a window hears the keychain is back from the host’s summary, and hands an older Genie’s secrets over again', () => {
+        const host = strip(readFileSync('src/main/genie-host.ts', 'utf8'));
+        expect(host).toMatch(/opened\.keychain\.onAnswerChange\(pokeSummary\); opened\.keyring\?\.onChange\(pokeSummary\);/);
+        expect(strip(readFileSync('src/main/main.ts', 'utf8'))).toMatch(/unsealer\.summary\(before, summary\);/);
     });
 });

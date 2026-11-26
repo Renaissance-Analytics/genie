@@ -151,9 +151,12 @@ describe('the Pilot’s window reports what the connected machine asks', () => {
     it('wired: main reads both into the question window and routes the answer; preload and App carry it', () => {
         const main = readFileSync('src/main/main.ts', 'utf8');
         expect(main).toMatch(/new RemoteQuestions\(/);
-        expect(main).toMatch(/items: \(\) => \[\.\.\.composed\.deckItems\(\), \.\.\.remoteQuestions\.items\(\)\]/);
-        expect(main).toMatch(/remoteQuestions\.owns\(item\.id\)[\s\S]{0,120}remoteQuestions\.act\(item, \{ kind: 'deck\.answerForm'/);
-        expect(main).toMatch(/remoteQuestions\.owns\(item\.id\)[\s\S]{0,120}remoteQuestions\.act\(item, \{ kind: 'deck\.dismiss'/);
+        // genie-host's Deck (deck.watch, Tynn #941 2f-2) and the connected machine's questions.
+        expect(main).toMatch(/items: \(\) => \[\.\.\.hostDeckNow, \.\.\.remoteQuestions\.items\(\)\]/);
+        // Only another machine's question reaches main (question:remote, Tynn #912 2f-1): main answers it on that machine.
+        expect(main).toMatch(/owns: \(id\) => remoteQuestions\.owns\(id\)/);
+        expect(main).toMatch(/answer: \(item, selections, notes\) => remoteQuestions\.act\(item, \{ kind: 'deck\.answerForm'/);
+        expect(main).toMatch(/dismiss: \(item, notes\) => remoteQuestions\.act\(item, \{ kind: 'deck\.dismiss'/);
         expect(main).toMatch(/ipcMain\.on\('genie:remote-questions'[\s\S]{0,300}remoteQuestions\.report\(/);
         expect(main).toMatch(/ipcMain\.on\('genie:remote-question-acted'[\s\S]{0,200}remoteQuestions\.settle\(/);
         const preload = readFileSync('src/main/preload.ts', 'utf8');

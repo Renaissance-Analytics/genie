@@ -4,6 +4,7 @@ import { FEATURE_ICONS } from '../core/rail-view.js';
 import { NAV_GROUPS } from '../core/settings-nav.js';
 import { KIND_COPY } from './components/AddWorkspaceWizard.js';
 import { ORDER_ICON } from '../core/inbox-view.js';
+import { BUILT_IN_TAB } from './components/WorkspaceTabs.js';
 
 /**
  * ICON REGISTRATION — and the reason it has its own file and its own test.
@@ -51,6 +52,8 @@ export const ICON_NAMES: readonly string[] = [
     'flame', 'chevrons-right',
     // Its claims (row B3): Claim + Start and Assign to.
     'hand', 'user-plus',
+    // A Claude account's Sign in, and Sign out and remove (Tynn #1011).
+    'log-in', 'log-out',
     'settings', 'folder', 'x', 'square-terminal', 'pin',
     // The rail's Hosting / AgentInbox rows (Toolchain uses 'wrench'), and a hibernated workspace's row.
     'server', 'mail', 'moon',
@@ -78,6 +81,8 @@ export const ICON_NAMES: readonly string[] = [
     'git-branch', 'circle-alert',
     // the Agent view header's Stop
     'square',
+    // A call that has gone silent, at its own stream entry (Tynn #950).
+    'hourglass',
     // the four feature icons
     ...FEATURE_ICONS.map((f) => f.icon),
     // the Settings sidebar (Genie 1's, core/settings-nav.ts) — named in data, so registered from it
@@ -111,6 +116,8 @@ export const ICON_NAMES: readonly string[] = [
     'eye-off', 'pause', 'play',
     // The header's update chip: download, then restart to install.
     'download', 'rotate-cw',
+    // The sound levels' Button in Settings → Notifications (components/SoundVolume.tsx, Tynn #1022): named by prop.
+    'sliders-horizontal',
     // The ArtBoard's "Open full size" Button. Its name reached Button as a prop, so the <Icon name> scan never saw it and
     // it rendered blank until the icon-prop scan (test/icons.test.ts, 2026-11-01) read Button props too.
     'maximize-2',
@@ -169,6 +176,11 @@ export const ICON_NAMES: readonly string[] = [
     ...Object.values(ORDER_ICON),
     'chevrons-down', 'chevrons-up', 'arrow-up-to-line', 'arrow-down-to-line',
     'circle', 'sticky-note', 'circle-slash', 'archive-x', 'search-x',
+    // A workspace's built-in tabs are icons (Tynn #945), named in data (`BUILT_IN_TAB`); Tynn's is its logo. Hibernate / Wake
+    // on its Settings use 'moon' and 'play' (above); the Files view menu is 'ellipsis' (above).
+    ...Object.values(BUILT_IN_TAB).flatMap((t) => (t.icon ? [t.icon] : [])),
+    // The Toolchain's Check and repair (Tynn #962).
+    'stethoscope',
 ];
 
 /** Lucide exports components in PascalCase; `registerIcons` kebab-cases the keys itself. */

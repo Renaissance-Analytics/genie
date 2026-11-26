@@ -334,13 +334,36 @@ export function targetOf(row: AgentRow): TargetCell {
  */
 export interface WorkspaceFault {
     readonly text: string;
+    /** The missing repo's slug; empty for the folder kind. */
     readonly repo: string;
+    /** `folder`: the workspace's own folder is not there (host split P7), fixed by "Locate folder". Absent or `repo`: a registered repo's. */
+    readonly kind?: 'repo' | 'folder' | undefined;
 }
 
-export function workspaceFault(repos: readonly { slug: string; missing?: boolean | undefined }[] | null, workspaceName: string): WorkspaceFault | null {
+/**
+ * The workspace's fault. Its own folder not being there WINS over a missing repo: the repos of a folder that is gone
+ * cannot be read, so nothing about them is a fact. The workspace is still listed; the fault rides its row.
+ */
+export function workspaceFault(
+    repos: readonly { slug: string; missing?: boolean | undefined }[] | null,
+    workspaceName: string,
+    folder?: { readonly path: string; readonly missing?: boolean | undefined } | undefined,
+): WorkspaceFault | null {
+    if (folder?.missing === true) return { kind: 'folder', text: `folder not found: ${folder.path}`, repo: '' };
     const gone = repos?.find((r) => r.missing === true);
     if (!gone) return null;
     return { text: `repo ${gone.slug} not found in ${workspaceName}.agi`, repo: gone.slug };
+}
+
+/**
+ * A fault's text in two parts, for a line that has no room for all of it: everything before the path's LAST folder, which
+ * may be cut short, and that last folder, which is always shown (a path is told apart by its end). The two are the text;
+ * a text with no path in it is all head.
+ */
+export function faultTextParts(text: string): { head: string; tail: string } {
+    const end = text.replace(/[\\/]+$/, '').length;
+    const cut = Math.max(text.lastIndexOf('/', end - 1), text.lastIndexOf('\\', end - 1));
+    return cut < 0 ? { head: text, tail: '' } : { head: text.slice(0, cut), tail: text.slice(cut) };
 }
 
 export interface WorkspaceGroup {
@@ -352,7 +375,7 @@ export interface WorkspaceGroup {
     empty: boolean;
     /** Present only when an ops project governs this workspace (§6.1). */
     governedBy?: string;
-    /** Present only when the workspace has a fault of its own (a missing repo). */
+    /** Present only when the workspace has a fault of its own (its folder not there, or a missing repo). */
     fault?: WorkspaceFault;
 }
 

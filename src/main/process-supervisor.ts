@@ -46,9 +46,9 @@ import type { ListedPty } from './spawn-host-protocol.js';
 export type RestartPolicy = 'never' | 'on-failure' | 'always';
 
 /**
- * The supervisor as its users drive it (the host split, P3.3b): the supervisor itself (genie-host, and the emergency
- * path), or a window's replica of the host's (supervisor-host.ts SupervisorReplica). Sites, the front door, the process
- * book and the Processes view are written against this, never the class.
+ * The supervisor as its users drive it (the host split, P3.3b): genie-host's own, and the composition the tests build
+ * (compose.ts). A window reaches it only over the protocol (features.act's hosting.*Process, read back from the features
+ * snapshot's hosting.processes). Sites, the front door and the process book are written against this, never the class.
  */
 export type SupervisorApi = Pick<ProcessSupervisor, 'start' | 'stop' | 'restart' | 'forget' | 'status' | 'list' | 'command' | 'log' | 'readLog' | 'recheck' | 'watchLiveness' | 'onChange' | 'onOutput'> & Partial<Pick<ProcessSupervisor, 'onForget'>>;
 
@@ -375,6 +375,11 @@ export class ProcessSupervisor {
     /** The command a process runs, as started — what the toolchain's update guard reads to see who runs on Node. */
     command(id: string): string | undefined {
         return this.#entries.get(id)?.spec.command;
+    }
+
+    /** The folder a process runs in (Tynn #946: a worktree a process works in is never offered for .trash). */
+    cwd(id: string): string | undefined {
+        return this.#entries.get(id)?.spec.cwd;
     }
 
     /**

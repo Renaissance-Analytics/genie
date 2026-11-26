@@ -1,6 +1,6 @@
 /**
  * THE INBOX'S READS, over its state (the host split, P3.1). One implementation for the store that owns the mail
- * (main/inbox-store.ts, in genie-host) and the window's replica of it (main/agent-stores-replica.ts), so the two can never
+ * (main/inbox-store.ts, in genie-host) and every reader of its state (the comms rows, the inbox flyout), so they can never
  * answer differently: what the Deck counts as unread, a conversation's messages, a sender's receipts.
  */
 

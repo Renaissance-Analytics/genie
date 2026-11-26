@@ -28,6 +28,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
+import { closeWhatsNew } from './cdp-whats-new.mjs';
 import { initFixtureRepo } from './fixture-git-repo.mjs';
 import { builtFramePath } from './built-frame-path.mjs';
 import { installUiLagHostLaunch } from './perf-lag/ui-lag-host-launch.mjs';
@@ -250,7 +251,7 @@ try {
     for (const port of [PORT, INSPECT, HOST_INSPECT]) { let occupied = false; try { await targets(port); occupied = true; } catch (e) { if (e.name === 'TimeoutError') occupied = true; } demand(!occupied, `debugger port ${port} occupied; no app touched`); }
     root = mkdtempSync(join(tmpdir(), 'genie-ui-lag-')); const workspace = join(root, 'workspace'), runtime = join(root, '.genie', 'runtime');
     mkdirSync(workspace); mkdirSync(OUT, { recursive: true });
-    const env = { ...process.env, HOME: root, USERPROFILE: root, GENIE_HOME: join(root, '.genie'), GENIE_PAGE_PROBE: '1', GENIE_UI_LAG_MEASURE: '1' };
+    const env = { ...process.env, HOME: root, USERPROFILE: root, GENIE_HOME: join(root, '.genie'), GENIE_PAGE_PROBE: '1', GENIE_UI_LAG_MEASURE: '1', GENIE_SEED_WHATS_NEW: 'unseen' };
     execFileSync(process.execPath, [resolve('scripts/smoke-seed.mjs')], { cwd: workspace, env, stdio: 'pipe', timeout: 15000, windowsHide: true });
     // THE WORKSPACE: a git repository of 1,500 tracked sources, its build output ignored, and the build script.
     for (let d = 0; d < 30; d += 1) { mkdirSync(join(workspace, 'src', `m${d}`), { recursive: true }); for (let f = 0; f < 50; f += 1) writeFileSync(join(workspace, 'src', `m${d}`, `s${f}.js`), `export const s${d}_${f} = ${f};\n`); }
@@ -295,8 +296,7 @@ try {
      * That was the terminal's "cost" on Linux. Nothing is measured with a dialog over the window: see `noDialog`.
      */
     await until('What’s new on a first run', () => page.evaluate(`Boolean(document.querySelector('[data-whats-new]'))`), 30000);
-    await page.evaluate(`document.querySelector('[data-action="whats-new-close"]').click(); true`);
-    await until('What’s new to close', () => page.evaluate(`!document.querySelector('[data-whats-new]')`), 15000);
+    if (!(await closeWhatsNew((expression) => page.evaluate(expression), { timeoutMs: 15000 })).closed) throw new Error('What’s new was not there to close');
     const noDialog = async (when) => {
         const open = await page.evaluate(`[...document.querySelectorAll('[aria-modal="true"], [role="dialog"], dialog[open]')].filter((d) => { const r = d.getBoundingClientRect(); return r.width > 0 && r.height > 0; }).map((d) => (d.textContent ?? '').trim().slice(0, 80))`);
         demand(open.length === 0, `no dialog over the window ${when}: ${JSON.stringify(open)}`);
@@ -318,10 +318,11 @@ try {
     await hostCdp.evaluate(`(${installHostGauge.toString()})((${createGapGauge.toString()}))`);
     const pageGauge = await page.evaluate(`(${installPageGauge.toString()})((${createGapGauge.toString()}))`);
     const focusField = () => page.evaluate(`document.querySelector('[data-ui-lag-typing]').focus(); true`);
-    const filesOpen = () => page.evaluate(`document.querySelector('[data-action="toggle-files"]')?.getAttribute('data-panel-open') === 'true'`);
-    const toggleFiles = async (want) => {
+    const filesOpen = () => page.evaluate(`document.querySelector('[data-workspace-tab="files"]')?.getAttribute('aria-selected') === 'true'`);
+    // Files is a tab since Tynn #945 (no bar button): open it by its tab; close it by going back to the tab it was opened from.
+    const toggleFiles = async (want, back = 'home') => {
         if ((await filesOpen()) === want) return;
-        await page.evaluate(`document.querySelector('[data-action="toggle-files"]').click(); true`);
+        await page.evaluate(`document.querySelector('[data-workspace-tab="${want ? 'files' : back}"]').click(); true`);
         await until(`the Files panel ${want ? 'open' : 'closed'}`, async () => (await filesOpen()) === want, 15000);
     };
 
@@ -411,7 +412,7 @@ try {
         phases.push({ ...p, end: await mark('build-files-end'), input });
         const build = json(done);
         demand(build?.run === run && build.writes > 0, `the ${label} build ran to its end (${JSON.stringify(build)})`);
-        await toggleFiles(false);
+        await toggleFiles(false, termTab);
         await until('the terminal again', () => page.evaluate(`Boolean(document.querySelector('[data-panel="terminal"] [data-terminal-pane] .xterm-rows'))`), 30000);
         /*
          * PAST THE OUTPUT CAP (Tynn #542): the terminal stays on screen while more than the view keeps per terminal streams

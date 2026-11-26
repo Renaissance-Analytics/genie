@@ -1,3 +1,4 @@
+import { CROSS_STATION_METHODS } from './cross-station.js';
 import { BLOB_METHODS } from './local-blobs.js';
 import { LOCAL_TERMINAL_METHODS, type LocalTerminalMethod } from './local-terminals.js';
 import { LOCAL_CONTENT_METHODS } from './local-content.js';
@@ -65,6 +66,7 @@ export const REMOTE_METHODS = [
     'agents.delete',
     'agents.switchDriver',
     'agents.setBudget',
+    'agents.setAppWakeCap',
     'agents.setMode',
     'agents.setAccessScope',
     'agents.setAccessAgents',
@@ -120,6 +122,8 @@ export const REMOTE_METHODS = [
     'workspaces.removeRepo',
     'workspaces.removeRepoLock',
     'workspaces.locateRepo',
+    // "Locate folder" on a workspace whose recorded folder is not there (host split P7): the registry is told where it is.
+    'workspaces.relocate',
     'workspaces.commitsSince',
     'workspaces.settings',
     'workspaces.setSetting',
@@ -147,6 +151,8 @@ export const REMOTE_METHODS = [
     // Tynn #560: the host's own file picker says what it picked; only this machine's window counts (CallContext).
     'features.picked',
     'features.act',
+    // Tynn #973: the client's answer to the host's password prompt (core/elevation.ts), from the asked connection only.
+    'elevation.answer',
     'features.setBrowserBounds',
     'updates.state',
     'host.listDir',
@@ -186,6 +192,33 @@ export const REMOTE_METHODS = [
     'files.open',
     'files.readMedia',
     'files.upload',
+    // Open with the host's app / Show in its file manager, on the HOST's own screen, for a client on another machine (Tynn #912, 2f-1).
+    'files.openExternal',
+    'files.reveal',
+    // A question's named files and its ArtBoard visuals (the question window's drawer and gallery), read by the host from
+    // its own Deck and the question's workspace (Tynn #912, 2f-1).
+    'questions.files',
+    'questions.file',
+    'questions.visuals',
+    // A remote window's transport to ANOTHER machine (Tynn #941, 2f-2): genie-host's device link, owned by the calling
+    // connection; its frames, closes and steps come back as LOCAL_EVENTS.device to that connection alone, a frame in
+    // pieces (core/device-frames.ts). openBrowser: this machine's browser on the caller's relay channel's workstation.
+    'deviceLink.open',
+    'deviceLink.openRelay',
+    'deviceLink.send',
+    'deviceLink.close',
+    'deviceLink.openBrowser',
+    // WHAT AN OLDER GENIE SEALED (Tynn #959, 2g-3b): main's one-time unsealer hands each old copy to genie-host, which keeps
+    // it in its own keychain (`phase: 'adopt'`), and is told which old copies main then deleted (`phase: 'removed'`).
+    'keychain.adoptLegacy',
+    // A window-run tool's approval, asked of genie-host's one queue (Tynn #1006, 2g-4b2): main's own client only.
+    'approvals.gate',
+    // Whether the person is at this machine, said by main's own client (Tynn #1044, 2g-4d B): all genie-host cannot find itself.
+    'window.view',
+    // A write to genie-host's registry, by main's window registry (Tynn #1007, 2g-4e): main's own client only.
+    'registry.write',
+    // genie-host asks Tynn again whether it is signed in: the machine woke, or an agent found IssueWatch signed out (Tynn #959).
+    'tynn.recheck',
     ...LOCAL_FILES_METHODS,
     ...LOCAL_DRAFT_METHODS,
     ...LOCAL_ARTBOARD_METHODS,
@@ -204,10 +237,15 @@ export type RemoteMethod = (typeof REMOTE_METHODS)[number];
  * `blob.*`, `localUpload.*`, `page.*`: connection-owned local content resources, gated before any source is opened.
  */
 /**
+ * `xstation.roster`, `xstation.deliver`, `xstation.read` (P9, core/cross-station.ts): mail between the owner's own
+ * workstations, said by one host to another. Taken only from the owner's own workstation (the grant's `src_ws`), never
+ * on the baton.
+ */
+/**
  * `host.version` and `host.update` (Tynn #894): the host's version and window, read at any time, and the client's request
  * that the host update. The two calls a connection outside the support window may still make; neither takes the baton.
  */
-export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'host.lock', 'host.unlock', 'host.version', 'host.update', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS, ...TYNN_WATCH_METHODS] as const;
+export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'baton.watch', 'deck.watch', 'summary.watch', 'remote.watch', 'settings.watch', 'registry.watch', 'registry.read', 'frontdoor.watch', 'host.lock', 'host.unlock', 'host.version', 'host.update', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS, ...TYNN_WATCH_METHODS, ...CROSS_STATION_METHODS] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
 /** Moved native pushes have separate local channels; existing remote subscriptions keep their channels. */
@@ -223,7 +261,25 @@ export interface CompanionEvent { readonly revoked: string }
 /** `viewOnly` (Tynn #732): the person at the host set this window's person to watch only; absent = full control. */
 export interface BatonEvent { readonly driver: string | null; readonly mine: boolean; readonly locked: boolean; readonly by: string | null; readonly viewOnly?: true }
 
-export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files', tynn: 'local-tynn', features: 'local-features', gapps: 'local-gapps', agent: 'local-agent', snapshot: 'local-snapshot', typing: 'local-typing' } as const;
+export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files', tynn: 'local-tynn', features: 'local-features', gapps: 'local-gapps', agent: 'local-agent', snapshot: 'local-snapshot', typing: 'local-typing',
+    // A window's channels to another machine (Tynn #941, 2f-2): sent to the owning connection alone (RemoteHost eventTo).
+    device: 'local-device',
+    // The host's Deck, to a connection that said deck.watch (main's question window and tray, Tynn #941), when it changes.
+    deck: 'local-deck',
+    // What genie-host runs (core/host-summary.ts), to a connection that said summary.watch (main's tray and quit, Tynn #953).
+    summary: 'local-summary',
+    // Who is at this machine (core/remote-watch.ts), to a connection that said remote.watch: main's own client, for its
+    // desktop notifications (Tynn #997, 2g-4a).
+    remote: 'local-remote',
+    // genie-host's settings (main/settings-watch.ts), to a connection that said settings.watch: main's own client, for the
+    // settings it reads (Tynn #998, 2g-4b1).
+    settings: 'local-settings',
+    // That genie-host's registry was written (main/registry-protocol.ts), to a connection that said registry.watch: main's
+    // own client, whose window registry reads it again (Tynn #1007, 2g-4e).
+    registry: 'local-registry',
+    // genie-host's front door (core/front-door-watch.ts), to a connection that said frontdoor.watch: main's own client, for
+    // its browser sessions, site panels, cookie bridge and GApp windows (Tynn #1046, 2g-4d-D1).
+    frontdoor: 'local-frontdoor' } as const;
 
 /** What another window on an agent is typing (Tynn #730), to a remote connection; this machine's windows hear LOCAL_EVENTS.typing. */
 export const TYPING_EVENT = 'agent-typing';
@@ -256,6 +312,8 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'agents.delete': 'write',
     'agents.switchDriver': 'write',
     'agents.setBudget': 'write',
+    // An agent's app wake cap (Tynn #1053): a write, agent-scoped, and the host owner's (remote-host.ts OWNER_ONLY).
+    'agents.setAppWakeCap': 'write',
     'agents.setMode': 'write',
     'agents.setAccessScope': 'write',
     'agents.setAccessAgents': 'write',
@@ -331,6 +389,8 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'workspaces.removeRepoLock': 'write',
     // The folder picker is the host's; a remote window is told to do it there.
     'workspaces.locateRepo': 'write',
+    // Where a workspace's folder IS (host split P7): a write to the host's registry, its owner's only (remote-host.ts OWNER_ONLY).
+    'workspaces.relocate': 'write',
     'workspaces.commitsSince': 'read',
     'workspaces.settings': 'read',
     'workspaces.setSetting': 'write',
@@ -352,6 +412,8 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'terminals.resize': 'write',
     'terminals.close': 'write',
     'features.act': 'write',
+    // Tynn #973: a write; the broker also takes it only from the connection it asked, for that prompt, once.
+    'elevation.answer': 'write',
     // The whole upgrade is the OWNER acting on the host (Tynn #845): no baton, never a guest.
     'updates.check': 'upgrade',
     'updates.download': 'upgrade',
@@ -382,6 +444,21 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'files.open': 'read',
     'files.readMedia': 'read',
     'files.upload': 'write',
+    'files.openExternal': 'write',
+    'files.reveal': 'write',
+    'questions.files': 'read',
+    'questions.file': 'read',
+    'questions.visuals': 'read',
+    'deviceLink.open': 'local',
+    'deviceLink.openRelay': 'local',
+    'deviceLink.send': 'local',
+    'deviceLink.close': 'local',
+    'deviceLink.openBrowser': 'local',
+    'keychain.adoptLegacy': 'local',
+    'approvals.gate': 'local',
+    'window.view': 'local',
+    'registry.write': 'local',
+    'tynn.recheck': 'local',
     ...Object.fromEntries(LOCAL_FILES_METHODS.map(method => [method, 'local'])) as Record<LocalFilesMethod, 'local'>,
     ...Object.fromEntries(LOCAL_DRAFT_METHODS.map(method => [method, 'local'])) as Record<LocalDraftMethod, 'local'>,
     ...Object.fromEntries(LOCAL_ARTBOARD_METHODS.map(method => [method, 'local'])) as Record<LocalArtboardMethod, 'local'>,
@@ -418,9 +495,9 @@ export function capabilityOf(method: RemoteMethod): RemoteCapability {
 }
 
 /** Methods whose FIRST argument is an agent id — what a guest's workspace scope is checked against. */
-export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'cancelTurn', 'stopToolCall', 'resumeLimit', 'providerLogin', 'prompt', 'resolvePrompt', 'answerApproval', 'takeOver', 'agents.toolOutput', 'agents.attachment', 'agents.typing', 'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope', 'agents.setAccessAgents', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setMcpServer', 'agents.setIssueWatch', 'agents.setPermissions', 'agents.setModel', 'agents.models', 'agents.diagnose'];
+export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'cancelTurn', 'stopToolCall', 'resumeLimit', 'providerLogin', 'prompt', 'resolvePrompt', 'answerApproval', 'takeOver', 'agents.toolOutput', 'agents.attachment', 'agents.typing', 'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setAppWakeCap', 'agents.setMode', 'agents.setAccessScope', 'agents.setAccessAgents', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setMcpServer', 'agents.setIssueWatch', 'agents.setPermissions', 'agents.setModel', 'agents.models', 'agents.diagnose'];
 /** Methods whose FIRST argument is a workspace id. */
-export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['workspaces.savePreview', 'workspaces.save', 'workspaces.cloneOffers', 'workspaces.applyOffer', 'workspaces.setMcpServer', 'addAgent', 'activity', 'terminals.open', 'terminals.scratch', 'terminals.attach', 'terminals.list', 'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.listRepos', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.setColor', 'workspaces.commitsSince', 'workspaces.locateRepo', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'workspaces.tynnPageAction', 'files.children', 'files.open', 'files.readMedia', 'files.upload'];
+export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['workspaces.savePreview', 'workspaces.save', 'workspaces.cloneOffers', 'workspaces.applyOffer', 'workspaces.setMcpServer', 'addAgent', 'activity', 'terminals.open', 'terminals.scratch', 'terminals.attach', 'terminals.list', 'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.listRepos', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.setColor', 'workspaces.commitsSince', 'workspaces.locateRepo', 'workspaces.relocate', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'workspaces.tynnIssues', 'workspaces.tynnIssueAction', 'workspaces.tynnPage', 'workspaces.tynnPageAction', 'files.children', 'files.open', 'files.readMedia', 'files.upload', 'files.openExternal', 'files.reveal'];
 
 export type AuthRequest =
     | { kind: 'pin'; code: string; label?: string }
@@ -438,11 +515,22 @@ export interface PreAuth {
     /** Omitted by existing relay transports. Only the local window door issues `local`. */
     readonly kind?: 'relay' | 'local';
     readonly label: string;
+    /**
+     * MAIN'S OWN PROTOCOL CLIENT, never a page (Tynn #959, the security review of #2120). Set only by genie-host's tunnel for a
+     * door main opened as its own (window-tunnel.ts `own`), or by that client itself in-process. A label is display words any
+     * door can say; this is not one.
+     */
+    readonly own?: true;
     readonly isOwner: boolean;
     /** The one workspace a guest may reach; `null` = the whole host. */
     readonly workspaceId: string | null;
     /** Reads only: every change is refused. */
     readonly readonly: boolean;
+    /**
+     * WHICH OF THE OWNER'S WORKSTATIONS this is (P9): the grant's `src_ws`, Tynn's word from its device binding, set only on
+     * the owner's own grant. What a host takes agent mail by (core/cross-station.ts `deliveryAdmission`). Absent otherwise.
+     */
+    readonly station?: string;
     /** Only with `kind: 'local'`: which window the door admitted. Absent = not known to be this machine's own (Tynn #578). */
     readonly window?: 'main' | 'remote';
 }
@@ -461,6 +549,8 @@ export interface CallContext {
     readonly workspaceId: string | null;
     readonly readonly: boolean;
     readonly label: string;
+    /** This machine's own Genie client itself (PreAuth `own`), never a page in its window; absent for everyone else. */
+    readonly own?: true;
 }
 
 /** A call nobody vouched for: no owner, reads only, and a workspace id no workspace has (`null` would be the whole host). */
@@ -515,12 +605,15 @@ export type WireMessage =
     /**
      * `code` (Tynn #894): `unsupported`, the other side does not know the method (the call settles, nothing hangs);
      * `version`, the connection is outside the support window and may only read the version and ask for the update.
+     * `no-address`, `scope` (P9, core/cross-station.ts `DefiniteRefusal`): another workstation's mail was refused for good,
+     * for nobody at that address or for the recipient's scope. A refusal with no code is not definite.
      */
     | { kind: 'result'; id: number; ok: false; reason: string; code?: ResultCode }
     | { kind: 'event'; channel: string; payload: unknown };
 
 export type RefusalCode = 'version';
-export type ResultCode = 'unsupported' | 'version';
+export type ResultCode = 'unsupported' | 'version' | 'no-address' | 'scope';
+const RESULT_CODES: readonly ResultCode[] = ['unsupported', 'version', 'no-address', 'scope'];
 
 /** Why a frame was not parsed. A CALL to a method this side does not know keeps its `id`, so the answer can carry it. */
 export type FrameRefusal = { ok: false; reason: string; id?: number; method?: string; code?: 'unsupported' };
@@ -577,7 +670,7 @@ export function parseFrame<M extends string>(text: string, isMethodOf: (m: unkno
         case 'result': {
             if (typeof raw.id !== 'number' || typeof raw.ok !== 'boolean') return { ok: false, reason: 'a result needs a numeric id and ok' };
             if (raw.ok) return { ok: true, message: { kind: 'result', id: raw.id, ok: true, value: raw.value } };
-            return { ok: true, message: { kind: 'result', id: raw.id, ok: false, reason: typeof raw.reason === 'string' ? raw.reason : 'refused', ...(raw.code === 'unsupported' || raw.code === 'version' ? { code: raw.code } : {}) } };
+            return { ok: true, message: { kind: 'result', id: raw.id, ok: false, reason: typeof raw.reason === 'string' ? raw.reason : 'refused', ...((RESULT_CODES as readonly unknown[]).includes(raw.code) ? { code: raw.code as ResultCode } : {}) } };
         }
         case 'event':
             if (typeof raw.channel !== 'string') return { ok: false, reason: 'an event needs a channel' };

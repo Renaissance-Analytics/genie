@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { droneRefusal, effectiveRoleOf, mayBrowse, parseMeRole } from '../src/core/workstation-role.js';
+import { droneRefusal, effectiveRoleOf, parseMeRole } from '../src/core/workstation-role.js';
 import { readWorkstationRole } from '../src/main/workstation-role-reader.js';
 import { workstationKeyStore } from '../src/main/workstation-identity.js';
 
@@ -33,11 +33,9 @@ describe('what Tynn says this workstation is', () => {
         expect(effectiveRoleOf({ signedIn: false })).toBeNull();
     });
 
-    it('a drone may not browse; a pilot may; a Genie not on the Tynn network has no Tynn role to restrict', () => {
-        expect(mayBrowse('drone')).toBe(false);
-        expect(mayBrowse('pilot')).toBe(true);
-        expect(mayBrowse(null)).toBe(true);
-        expect(droneRefusal('drone')).toMatch(/drone/);
+    it('a drone is refused only a role change, in words; a pilot and a Genie not on the Tynn network are not (Tynn #423)', () => {
+        expect(droneRefusal('drone')).toMatch(/drone: only a pilot changes workstation roles/);
+        expect(droneRefusal('drone')).not.toMatch(/browse|open other workstations/);
         expect(droneRefusal('pilot')).toBeNull();
         expect(droneRefusal(null)).toBeNull();
     });
@@ -71,10 +69,9 @@ describe('readWorkstationRole — GET /api/v1/workstations/me, nothing else', ()
 
         const role = await readWorkstationRole(async () => respond(200, { role: 'drone' }));
         expect(effectiveRoleOf({ signedIn: true, role })).toBe('drone');
-        expect(mayBrowse(effectiveRoleOf({ signedIn: true, role }))).toBe(false);
         // And with Tynn unreachable, the local values still grant nothing.
         const offline = await readWorkstationRole(async () => { throw new Error('offline'); });
-        expect(mayBrowse(effectiveRoleOf({ signedIn: true, role: offline }))).toBe(false);
+        expect(effectiveRoleOf({ signedIn: true, role: offline })).toBe('drone');
         expect(settings.role).toBe('pilot'); // (the local values were there all along)
     });
 });

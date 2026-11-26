@@ -1,4 +1,5 @@
 import type { KeyringView, LinuxKeyring } from './linux-keyring.js';
+import type { Elevate } from '../core/elevation.js';
 
 /**
  * THE KEYRING CARD, AS THE HOST FOUND IT (P3.4 cut c). The secrets are in the host's keychain, so whether they can be kept is the host's to say: a window's Chromium store says
@@ -99,7 +100,8 @@ export class KeyringService {
     async call(method: string, _args: readonly unknown[]): Promise<unknown> {
         const keyring = await this.#opening;
         // The button answers once its step is done or the keyring's own unlock dialog is up (Tynn story #388); Cancel ends that ask.
-        if (method === 'fix') { await keyring?.press(); return null; }
+        // `_args[0]`: the host's elevation for the window that pressed it (Tynn #973), so an install asks THAT window.
+        if (method === 'fix') { await keyring?.press(typeof _args[0] === 'function' ? _args[0] as Elevate : undefined); return null; }
         if (method === 'cancel') { keyring?.cancel(); return null; }
         throw new Error(`The keyring has no ${method}.`);
     }

@@ -1,6 +1,5 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { DeviceLinkReplica } from '../src/main/device-link-replica.js';
 import { DeviceLinkService, type DeviceLinkEvent, type RelayMemberPorts } from '../src/main/device-link-service.js';
 import { genieCatalog, RELAY_MEMBER_ELEMENT } from '../src/main/genie-catalog.js';
 import type { RelayMemberTransport } from '../src/main/relay-member.js';
@@ -35,12 +34,12 @@ function fakeTransport() {
 function rig(over: Partial<RelayMemberPorts> = {}) {
     const events: Array<{ owner: string; event: DeviceLinkEvent }> = [];
     const minted: Array<{ workstationId: string; jwk: unknown }> = [];
-    const opened: Array<{ relayUrl: string; workstationId: string; grant: string; renew?: () => Promise<unknown> }> = [];
+    const opened: Array<{ relayUrl: string; workstationId: string; grant: string; hostPublicKey?: string | null; name?: string | null; renew?: () => Promise<unknown> }> = [];
     const t = fakeTransport();
     const relay: RelayMemberPorts = {
         signedIn: () => true,
         keypair: () => PopKeypair.generate(),
-        mint: async (workstationId, jwk) => { minted.push({ workstationId, jwk }); return { ok: true, token: GRANT, relayEndpoint: 'wss://relay.tynn.test' }; },
+        mint: async (workstationId, jwk) => { minted.push({ workstationId, jwk }); return { ok: true, token: GRANT, relayEndpoint: 'wss://relay.tynn.test', hostPublicKey: 'HOST-KEY-FROM-TYNN' }; },
         open: async (input) => { opened.push(input); return { ok: true, transport: t.transport }; },
         ...over,
     };
@@ -50,6 +49,42 @@ function rig(over: Partial<RelayMemberPorts> = {}) {
 }
 
 describe('the relay member, in genie-host', () => {
+    // Audit M-a (P9.2): the member checks the host against the key TYNN named with this grant, so it must be given it.
+    it('hands the member the host key Tynn named with the grant', async () => {
+        const r = rig();
+        await r.service.call('window-1', 'openRelay', ['ws_alpha']);
+        expect(r.opened).toHaveLength(1);
+        expect(r.opened[0]!.hostPublicKey).toBe('HOST-KEY-FROM-TYNN');
+    });
+
+    it('Tynn naming no host key is handed on as none (the member refuses before it dials); the machine’s name goes with it, for the words', async () => {
+        const r = rig({
+            mint: async () => ({ ok: true, token: GRANT, relayEndpoint: 'wss://relay.tynn.test', hostPublicKey: null }),
+            name: async (workstationId) => (workstationId === 'ws_alpha' ? 'alphar' : null),
+        });
+        await r.service.call('window-1', 'openRelay', ['ws_alpha']);
+        expect(r.opened).toHaveLength(1);
+        expect(r.opened[0]!.hostPublicKey).toBeNull();
+        expect(r.opened[0]!.name).toBe('alphar');
+    });
+
+    it('a name that cannot be read does not stop the connection: it opens with no name', async () => {
+        const r = rig({ name: async () => { throw new Error('Tynn could not be reached'); } });
+        expect(await r.service.call('window-1', 'openRelay', ['ws_alpha'])).toMatchObject({ ok: true });
+        expect(r.opened[0]!.name ?? null).toBeNull();
+        expect(r.opened[0]!.hostPublicKey).toBe('HOST-KEY-FROM-TYNN');
+    });
+
+    it('a renewal’s answer never changes the host key the session was opened with', async () => {
+        let n = 0;
+        const r = rig({ mint: async () => ({ ok: true, token: GRANT, relayEndpoint: 'wss://relay.tynn.test', hostPublicKey: `KEY-${++n}` }) });
+        await r.service.call('window-1', 'openRelay', ['ws_alpha']);
+        const renewed = await r.opened[0]!.renew!();
+        expect(renewed).toMatchObject({ ok: true });
+        expect(r.opened).toHaveLength(1);
+        expect(r.opened[0]!.hostPublicKey).toBe('KEY-1');
+    });
+
     it('mints the grant for its own key, opens the member, says the step, and hands the window a channel', async () => {
         const r = rig();
         const result = await r.service.call('window-1', 'openRelay', ['ws_alpha']) as { ok: boolean; channel?: string };
@@ -101,17 +136,16 @@ describe('the relay member, in genie-host', () => {
         expect(await rig().service.call('w', 'openRelay', [''])).toMatchObject({ ok: false });
     });
 
-    it('a drone never connects out, refused here from the role genie-host read from Tynn (Tynn #410): no grant minted (control: a pilot opens)', async () => {
-        const drone = rig({ refusal: () => 'this workstation is a drone: it does not connect out' });
-        expect(await drone.service.call('w', 'openRelay', ['ws_alpha'])).toEqual({ ok: false, reason: 'this workstation is a drone: it does not connect out' });
-        expect(drone.minted).toEqual([]);
-        expect(await rig({ refusal: () => null }).service.call('w', 'openRelay', ['ws_alpha'])).toMatchObject({ ok: true });
+    it('no local role gate on a relay dial: Tynn decides the grant (Tynn #963; a share link is how a drone opens a host)', async () => {
+        const asDrone = rig({ refusal: () => 'this workstation is a drone: it does not connect out' } as unknown as Partial<RelayMemberPorts>);
+        expect(await asDrone.service.call('w', 'openRelay', ['ws_alpha'])).toMatchObject({ ok: true });
+        expect(asDrone.minted.map((m) => m.workstationId)).toEqual(['ws_alpha']);
     });
 
     it('the browser\'s door to that workstation\'s sites is genie-host\'s: its port, and its CA once a site answered, said to the window', async () => {
         const r = rig();
         const { channel } = await r.service.call('window-1', 'openRelay', ['ws_alpha']) as { channel: string };
-        expect(await r.service.call('window-1', 'browserVia', [channel])).toEqual({ ok: true, port: 47001, ca: null });
+        expect(await r.service.call('window-1', 'browserVia', [channel])).toEqual({ ok: true, workstationId: 'ws_alpha', port: 47001, ca: null });
         expect(await r.service.call('window-2', 'browserVia', [channel])).toMatchObject({ ok: false });
     });
 
@@ -126,34 +160,10 @@ describe('the relay member, in genie-host', () => {
     });
 });
 
-describe('the window\'s replica', () => {
-    it('opens a relay channel through the host, hears its step, keeps the door\'s port and CA as the host says, and ends it on a lost link', async () => {
-        const calls: Array<[string, readonly unknown[]]> = [];
-        const replica = new DeviceLinkReplica(async (method, args) => {
-            calls.push([method, args]);
-            if (method === 'openRelay') { replica.deliver({ type: 'step', workstationId: 'ws_alpha', step: 'relay' }); return { ok: true, channel: 'relay_1' }; }
-            if (method === 'browserVia') return { ok: true, port: 47001, ca: null };
-            return true;
-        });
-        const steps: string[] = [];
-        replica.onStep((workstationId, step) => steps.push(`${workstationId} ${step}`));
-        expect(await replica.openRelay('ws_alpha')).toEqual({ ok: true, channel: 'relay_1' });
-        expect(steps).toEqual(['ws_alpha relay']);
-        const via = await replica.browserVia('relay_1');
-        expect(via && [via.port(), via.ca()]).toEqual([47001, null]);
-        replica.deliver({ type: 'via', channel: 'relay_1', port: 47002, ca: 'PEM' });
-        expect(via && [via.port(), via.ca()]).toEqual([47002, 'PEM']);
-        const closed: string[] = [];
-        replica.onClosed((channel) => closed.push(channel));
-        replica.lost('the host went');
-        expect(closed).toEqual(['relay_1']);
-    });
-});
-
 describe('genie.relay-member in the catalog', () => {
-    it('is a host-service on both sides, linked by the engine link\'s device-link call and event', () => {
+    it('is a host-service on both sides, linked by the protocol\'s device-link methods and event (Tynn #941, 2f-2)', () => {
         expect(genieCatalog().list('host-service').find((d) => d.id === 'genie.relay-member')).toMatchObject({
-            reach: { side: 'both', requiresWindow: false, remote: 'local', link: { calls: ['engine.deviceLink'], events: ['device.event'] } },
+            reach: { side: 'both', requiresWindow: false, remote: 'local', link: { calls: ['deviceLink.open', 'deviceLink.openRelay', 'deviceLink.send', 'deviceLink.close', 'deviceLink.openBrowser'], events: ['local-device'] } },
             payload: { start: 'deviceLink.openRelay', stop: 'deviceLink.close', health: 'deviceLink.relayHealth', settingsSection: 'workstation' },
         });
         expect(RELAY_MEMBER_ELEMENT.id).toBe('genie.relay-member');
@@ -169,8 +179,9 @@ describe('genie.relay-member in the catalog', () => {
 
 describe('with genie-host linked, the window mints no grant and opens no relay member (source guard)', () => {
     const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
-    it('genie:relay-open asks genie-host when linked, and the browser asks genie-host for the door', () => {
-        expect(main).toMatch(/const opened = await link\.openRelay\(workstationId\)/);
-        expect(main).toMatch(/await link\.browserVia\(/);
+    it('the window asks genie-host over its own connection; main opens no relay and asks for no door (Tynn #941, 2f-2)', () => {
+        expect(main).not.toMatch(/openRelay\(|browserVia\(/);
+        const host = readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8');
+        expect(host).toMatch(/const deviceProtocol = deviceLinkProtocol\(\{\s*link: deviceLinkService,/);
     });
 });

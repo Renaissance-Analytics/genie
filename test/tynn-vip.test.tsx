@@ -32,7 +32,7 @@ const noop = () => {};
 describe('reading the VIP lane', () => {
     it('reads the VIP in flight: banner, task progress, columns and each story\'s next column', () => {
         const vip = parseVip(IN_FLIGHT)!;
-        expect(vip.version).toEqual({ id: 'v9', number: '1.0.1', title: 'Login <is> down' });
+        expect(vip.version).toEqual({ id: 'v9', number: '1.0.1', title: 'Login <is> down', release: null });
         expect(vip.progress).toEqual({ done: 2, total: 4, percent: 50 });
         expect(vip.columns.map((c) => [c.status, c.label, c.stories.map((s) => s.id)])).toEqual([
             ['backlog', 'Backlog', []], ['blocked', 'Blocked', []], ['in_progress', 'In Progress', ['s1']], ['qa', 'QA', []], ['done', 'Done', ['s2']],
@@ -61,7 +61,7 @@ describe('reading the VIP lane', () => {
         expect(tynnPagePath('p1', 'vip', { view: 'x', project_id: 'other' })).toBe('/api/v1/projects/p1/vip');
         const ids = TYNN_SECTIONS.map((s) => s.id);
         expect(ids.indexOf('vip')).toBe(ids.indexOf('board') + 1);
-        expect(TYNN_SECTIONS.find((s) => s.id === 'vip')).toMatchObject({ icon: 'flame', label: 'VIP' });
+        expect(TYNN_SECTIONS.find((s) => s.id === 'vip')).toMatchObject({ icon: 'flame', label: 'Hotfix' });
     });
 });
 

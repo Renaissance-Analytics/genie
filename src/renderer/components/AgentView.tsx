@@ -15,6 +15,7 @@ import { agentIndex, type IndexLive } from '../../core/agent-index.js';
 import { readIndexCollapsed, turnNumbers, writeIndexCollapsed } from '../../core/index-column.js';
 import type { McpRow } from '../../core/agent-mcp.js';
 import { McpServerSwitches, SkillsAndCommands } from './AgentSkills.js';
+import { AppWakeCapControl } from './AppWakeCapControl.js';
 import { FidelityDot } from './Dashboard.js';
 import { Flash } from './Flash.js';
 import { BAR_ACTION, TopBar } from './TopBar.js';
@@ -36,7 +37,7 @@ import { agentOpsMenu } from '../../core/agent-ops-menu.js';
 import { controlOutcome, issueWatchGroups, removeControls, runControls, settingsSectionShown, settingsSections, type SettingsControl, type SettingsSection } from '../../core/agent-settings-view.js';
 import { isOsAgent, OS_AGENT_POLICY_NOTE } from '../../core/os-agent.js';
 import { TurnStop } from './TurnStop.js';
-import { RunningCall } from './RunningCall.js';
+import { useSilentCall } from './SilentCall.js';
 import type { DeletePlan, ProviderSwitchState } from '../../core/agent-ops.js';
 import type { Diagnosis, Repair } from '../../core/workspace-model.js';
 import { approvalPlacement, approvalPolicySentence, budgetFor, parkedDivider, planFor, statePill, tabsFor } from '../../core/agent-view.js';
@@ -166,6 +167,9 @@ export interface AgentOpsProps {
     /** The agent's own half of who may message it (§6.4). */
     readonly accessScope: 'none' | 'self' | 'specific' | 'all';
     readonly onSetMode: (mode: 'automated' | 'manual') => void;
+    /** Its app wake cap (Tynn #1053): turns an hour an app's mail may give it, or no limit. Absent setter = no row. */
+    readonly appWakeCap?: number | 'unlimited';
+    readonly onSetAppWakeCap?: (cap: number | 'unlimited') => void;
     readonly onSetAccessScope: (scope: 'none' | 'self' | 'all') => void;
     /** Chosen agents who may message it (Tynn #526); absent = the choice is off. */
     readonly accessAgents?: readonly string[] | undefined;
@@ -471,6 +475,10 @@ function AgentViewBody({
     }, [files, workspace, agent.name]);
     const pill = statePill(session, now ?? (() => Date.now()), { turns, takeOver: agent.fidelity === 'observed' ? takeOver : null });
     const actions = headerActions(session, agent.fidelity, providerSignedOut === true);
+    // A CALL THAT HAS GONE SILENT (Tynn #950): in the stream, at the call's own entry — never in the bar, which carries the
+    // agent's state only (the owner on beta.65). Stop this call is #855's, unchanged; a read-only share sees no button.
+    const silent = useSilentCall(agent.fidelity === 'declared' ? session?.call : null, session?.lastEventAt, clock);
+    const silentEntry = silent ? { call: silent, onStop: onStopToolCall ? () => onStopToolCall(agent.id, silent.toolCallId) : undefined } : null;
     // "Stop agent" is offered while the session is up and there is something to end it with.
     const menu = ops ? agentOpsMenu(agent, undefined, { running: session?.running === true && onStop !== undefined }) : [];
     const act = (id: string) => {
@@ -754,10 +762,6 @@ function AgentViewBody({
                             {/* STOP THIS TURN: the TURN ends, the agent keeps running ("Stop agent" is in More). Its slot is kept while
                                 nothing runs, so the icons beside it do not move as turns start and end. */}
                             {onCancelTurn ? (actions.stop ? <TurnStop iconOnly onStop={() => onCancelTurn(agent.id)} agentName={agent.name} /> : <span aria-hidden="true" data-stop-slot="" className="size-6 shrink-0" />) : null}
-                    {/* THE CALL THE TURN IS IN (Tynn #855): its command and age, and Stop this call — only that call ends. */}
-                    {agent.fidelity === 'declared' && session?.call ? (
-                        <RunningCall call={session.call} now={clock()} onStop={onStopToolCall ? () => onStopToolCall(agent.id, session.call!.toolCallId) : undefined} />
-                    ) : null}
                     {/* SIGNED OUT (the owner, 2026-10-18): the provider's own login, in a window of its own, with what to do. */}
                     {actions.login && onProviderLogin ? (
                         <Button size="xs" labelClassName="contents"
@@ -1022,6 +1026,7 @@ function AgentViewBody({
                                     persona={persona}
                                     markup={streamMarkup}
                                     loadToolOutput={agentToolOutput}
+                                    silentCall={silentEntry}
                                     onChat={() => onNavigate(chatRoute)}
                                     onEditPersona={workspaceFiles ? () => onNavigate(workspaceFiles) : undefined}
                                 />
@@ -1107,6 +1112,7 @@ function AgentViewBody({
                             issueWatch: ops?.onSetIssueWatch !== undefined && ops.issueWatch !== undefined,
                             persona: persona !== null, skills: session?.extensions != null || ops?.mcp !== undefined,
                             tui: onTakeOver !== undefined,
+                            appWakeCap: ops?.onSetAppWakeCap !== undefined,
                         });
                         const shown = settingsSectionShown(sections, settingsSectionProp ?? ownSettingsSection);
                         const has = new Set(sections.find((s) => s.id === shown)?.controls ?? []);
@@ -1305,6 +1311,9 @@ function AgentViewBody({
                                                     {help('Mode is wording for the agent, not a permission boundary.')}
                                                     {outcomeFor('mode')}
                                                 </div>
+                                            ) : null}
+                                            {ops?.onSetAppWakeCap && has.has('app-wake-cap') ? (
+                                                <AppWakeCapControl agentName={agent.name} cap={ops.appWakeCap ?? 6} onSet={(cap) => { touch('app-wake-cap'); ops.onSetAppWakeCap?.(cap); }} outcome={outcomeFor('app-wake-cap')} />
                                             ) : null}
                                             {ops && has.has('run') ? (
                                                 <div data-settings-row="run" className={rowClass}>

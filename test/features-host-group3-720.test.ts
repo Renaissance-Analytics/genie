@@ -146,7 +146,7 @@ describe('host feature group three with no window (Tynn #720)', () => {
     it('a consented tool install uses the real installer plan and re-probes its result', async () => {
         f.missing.add('git'); await act({ kind: 'toolchain.check', force: true });
         const data = await act({ kind: 'toolchain.install', tool: 'git', consent: true });
-        expect(f.commands.filter(call => call.binary === 'pkexec')).toHaveLength(1);
+        expect(f.batches).toEqual([{ title: 'Install git', items: ['git'], steps: [{ command: 'apt-get', args: ['update'] }, { command: 'apt-get', args: ['install', '-y', 'git'] }] }]);
         expect(data.toolchain?.tools).toEqual(expect.arrayContaining([expect.objectContaining({ tool: 'git', installed: '2.51.0' })]));
         expect(data.toolchain?.result).toBe('git 2.51.0 is installed.');
     });
@@ -154,12 +154,12 @@ describe('host feature group three with no window (Tynn #720)', () => {
         await act({ kind: 'toolchain.check', force: true });
         const data = await act({ kind: 'toolchain.install', tool: 'git', consent: false });
         expect(data.toolchain?.refusals).toEqual([{ tool: 'git', reason: 'Genie installs nothing without your go-ahead; git was not installed' }]);
-        expect(f.commands.filter(call => call.binary === 'pkexec')).toEqual([]);
+        expect(f.batches).toEqual([]);
     });
     it('toolchain Update uses the real update planner and re-probes the new version', async () => {
         await act({ kind: 'toolchain.check', force: true });
         const data = await act({ kind: 'toolchain.update', tool: 'git', version: '2.51.0' });
-        expect(f.commands.filter(call => call.binary === 'pkexec')).toEqual([{ binary: 'pkexec', args: ['apt-get', 'install', '--only-upgrade', '-y', 'git'] }]);
+        expect(f.batches).toEqual([{ title: 'Update git', items: ['git'], steps: [{ command: 'apt-get', args: ['install', '--only-upgrade', '-y', 'git'] }] }]);
         expect(data.toolchain?.tools).toEqual(expect.arrayContaining([expect.objectContaining({ tool: 'git', installed: '2.51.0' })]));
         expect(data.toolchain?.updated).toEqual({ tool: 'git', version: '2.51.0' });
     });
@@ -167,7 +167,7 @@ describe('host feature group three with no window (Tynn #720)', () => {
         await act({ kind: 'toolchain.check', force: true }); f.activity({ sessions: [{ provider: 'claude', label: 'fixture Claude' }], processes: [], engines: [] });
         const data = await act({ kind: 'toolchain.update', tool: 'claude-code' });
         expect(data.toolchain?.refusals).toEqual([expect.objectContaining({ tool: 'claude-code', reason: expect.stringContaining('fixture Claude') })]);
-        expect(f.commands.filter(call => call.binary === 'pkexec')).toEqual([]);
+        expect(f.batches).toEqual([]);
     });
     it('Check and repair uses the real repair planner and records its measured report', async () => {
         await act({ kind: 'toolchain.check', force: true });
@@ -201,7 +201,7 @@ describe('host feature group three with no window (Tynn #720)', () => {
     });
     it('CONTROL: the real OS planners run through the inert boundaries without the feature service', async () => {
         f.missing.add('git'); expect((await f.legacyAct({ kind: 'toolchain.install', tool: 'git', consent: true })).toolchain?.result).toBe('git 2.51.0 is installed.');
-        expect(f.commands.some(call => call.binary === 'pkexec')).toBe(true);
+        expect(f.batches.map((b) => b.title)).toEqual(['Install git']);
         expect((await f.legacyAct({ kind: 'remote.allowFirewall' })).remote?.firewallRule).toMatchObject({ state: 'present', covers: true });
         expect((await f.legacyAct({ kind: 'tailscale.up' })).remote?.tailscaleOutcome).toBe('Connected to your tailnet.'); expect(f.tailCalls).toHaveLength(2);
     });

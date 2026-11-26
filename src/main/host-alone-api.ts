@@ -53,7 +53,7 @@ export const PHONE_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([
  * after the remote host's own owner, read-only and workspace checks. Later families of P5d.5 join {@link HOST_ALONE_METHODS}.
  */
 export const PILOT_AGENT_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod>([
-    'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope',
+    'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setAppWakeCap', 'agents.setMode', 'agents.setAccessScope',
     'agents.setAccessAgents', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setMcpServer', 'agents.setIssueWatch', 'agents.setPermissions',
     'agents.setModel', 'agents.models', 'agents.diagnose', 'agents.toolOutput', 'agents.attachment',
     // What someone is typing (Tynn #730): with no window open, a Pilot and a guest still see each other's.
@@ -77,7 +77,7 @@ export const HOST_WORKSPACE_LIFECYCLE_METHODS: ReadonlySet<RemoteMethod> = new S
     'workspaces.previewAdd', 'workspaces.confirmAdd', 'workspaces.create', 'workspaces.previewAddFromGit', 'workspaces.confirmAddFromGit', 'workspaces.readSource',
     'workspaces.stageFromGit', 'workspaces.registerExisting', 'workspaces.buildEnvelope', 'workspaces.discardStaged', 'workspaces.githubRepos', 'workspaces.tynnProjects',
     'workspaces.tynnOwnerOptions', 'workspaces.createTynnProject', 'workspaces.importedAgents', 'workspaces.adoptAgent', 'workspaces.previewAddFromTynn', 'workspaces.confirmAddFromTynn',
-    'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.locateRepo',
+    'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.locateRepo', 'workspaces.relocate',
     'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.setColor', 'workspaces.setMcpServer',
     'workspaces.savePreview', 'workspaces.save', 'workspaces.cloneOffers', 'workspaces.applyOffer',
 ]);
@@ -95,10 +95,20 @@ export const HOST_LAST_METHODS: ReadonlySet<RemoteMethod> = new Set<RemoteMethod
     'tynnNetwork.shares.list', 'tynnNetwork.shares.mint', 'tynnNetwork.shares.revoke',
     // The crash report (Tynn #897, 2c-2): built from genie-host's own safe mode, crash state, registry and identity.
     'crashReport.draft', 'crashReport.send',
+    // The answer to genie-host's password prompt (Tynn #973): to its own broker, which asked.
+    'elevation.answer',
     // A provider's program (Tynn #897, 2c-3): written to genie-host's own choice file.
     'providers.chooseProgram',
     // The throwaway shell (Tynn #897, 2c-4): opened on genie-host's terminal host, in the caller's window.
     'terminals.scratch',
+    // A question's files and visuals, from genie-host's own Deck; a file opened on its own screen (Tynn #912, 2f-1).
+    'questions.files', 'questions.file', 'questions.visuals', 'files.openExternal', 'files.reveal',
+    // A remote window's transport to another machine, owned by the calling connection (Tynn #941, 2f-2).
+    'deviceLink.open', 'deviceLink.openRelay', 'deviceLink.send', 'deviceLink.close', 'deviceLink.openBrowser',
+    // What an older Genie sealed, into genie-host's own keychain; Tynn asked again (Tynn #959, 2g-3b).
+    'keychain.adoptLegacy', 'tynn.recheck', 'approvals.gate', 'window.view',
+    // A write to genie-host's registry, by main's window registry (Tynn #1007, 2g-4e).
+    'registry.write',
 ]);
 
 /** Every method genie-host answers itself, for every remote client: since step 2d-2b no remote method needs a window. */
@@ -125,6 +135,8 @@ export interface HostAlonePorts {
     readonly providerInstalled: AgentOpsWiring['providerInstalled'];
     /** What the provider's status call last said (Tynn #698). Absent = not measured here, so nothing is claimed. */
     readonly signedIn?: AgentOpsWiring['signedIn'];
+    /** The host's lifecycle log, for the agents' operations: a changed setting is one line (Tynn #1053). */
+    readonly lifecycleLog?: ((line: string) => void) | undefined;
     /** The sign-ins (Tynn #896, host-sign-ins.ts): the provider's own login for whoever asked. Absent = this host cannot. */
     readonly signIns?: HostApiDeps['signIns'];
     /** The banner's crash report (Tynn #897, 2c-2). Absent = this host cannot send one. */
@@ -133,6 +145,24 @@ export interface HostAlonePorts {
     readonly providerPrograms?: HostApiDeps['providerPrograms'];
     /** The throwaway shell (Tynn #897, 2c-4). Absent = this host cannot open one. */
     readonly scratchTerminals?: HostApiDeps['scratchTerminals'];
+    /** A question's files and visuals (Tynn #912, 2f-1). Absent = this host cannot read them. */
+    readonly questions?: HostApiDeps['questions'];
+    /** A file opened on this host's own screen (Tynn #912, 2f-1). Absent = it cannot. */
+    readonly hostShell?: HostApiDeps['hostShell'];
+    /** A window's transport to another machine (Tynn #941, 2f-2). Absent = this Genie connects to none. */
+    readonly deviceLinkProtocol?: HostApiDeps['deviceLinkProtocol'];
+    /** What this host runs, for this machine's tray and quit (Tynn #953, 2g-2). Absent = nothing said. */
+    readonly hostSummary?: HostApiDeps['hostSummary'];
+    readonly remoteWatch?: HostApiDeps['remoteWatch'];
+    readonly settingsWatch?: HostApiDeps['settingsWatch'];
+    /** What an older Genie sealed, adopted into this host's keychain (Tynn #959, 2g-3b). Absent = refused. */
+    readonly legacySecrets?: HostApiDeps['legacySecrets'];
+    readonly approvalsGate?: HostApiDeps['approvalsGate'];
+    readonly windowView?: HostApiDeps['windowView'];
+    /** genie-host's registry and its writes, for main's window registry (Tynn #1007, 2g-4e). Absent = refused. */
+    readonly registryFiles?: HostApiDeps['registryFiles'];
+    /** Ask Tynn again whether this host is signed in (Tynn #959, 2g-3b). Absent = refused. */
+    readonly tynnRecheck?: HostApiDeps['tynnRecheck'];
     readonly attention: DeckAnswerPorts['attention'] & { finished(): readonly Finished[] };
     readonly approvals: DeckAnswerPorts['approvals'];
     /** The host's own Deck: an answer is resolved against it, never against the copy a client sent (Tynn #861). */
@@ -230,6 +260,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         providerInstalled: ports.providerInstalled,
         signedIn: ports.signedIn ?? (() => true),
         applyOnStart: (id) => settingApplier.requested(id),
+        ...(ports.lifecycleLog ? { log: ports.lifecycleLog } : {}),
     });
     // A model change waiting for its agent to be free applies the moment it is, with or without a window.
     const settingApplier = new SettingApplier(agentOps, (id) => agentShells(ports.engine()?.rowsFor(id) ?? []).count);
@@ -278,6 +309,17 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         ...(ports.crashReports ? { crashReports: ports.crashReports } : {}),
         ...(ports.providerPrograms ? { providerPrograms: ports.providerPrograms } : {}),
         ...(ports.scratchTerminals ? { scratchTerminals: ports.scratchTerminals } : {}),
+        ...(ports.questions ? { questions: ports.questions } : {}),
+        ...(ports.hostShell ? { hostShell: ports.hostShell } : {}),
+        ...(ports.deviceLinkProtocol ? { deviceLinkProtocol: ports.deviceLinkProtocol } : {}),
+        ...(ports.hostSummary ? { hostSummary: ports.hostSummary } : {}),
+        ...(ports.remoteWatch ? { remoteWatch: ports.remoteWatch } : {}),
+        ...(ports.settingsWatch ? { settingsWatch: ports.settingsWatch } : {}),
+        ...(ports.legacySecrets ? { legacySecrets: ports.legacySecrets } : {}),
+        ...(ports.approvalsGate ? { approvalsGate: ports.approvalsGate } : {}),
+        ...(ports.windowView ? { windowView: ports.windowView } : {}),
+        ...(ports.registryFiles ? { registryFiles: ports.registryFiles } : {}),
+        ...(ports.tynnRecheck ? { tynnRecheck: ports.tynnRecheck } : {}),
         startForYourMessage: (record) => startForYourMessage({
             startForWork: startOnDemand,
             needsNewDriver: (id) => ports.engine()?.needsNewDriver(id) ?? false,

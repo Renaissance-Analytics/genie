@@ -51,9 +51,9 @@ describe('the Tynn row', () => {
 });
 
 /**
- * A DRONE CANNOT BROWSE (genie#1278 W5). What this machine is comes from Tynn (`role`, set by main from
- * `GET /api/v1/workstations/me`). On a drone the tailnet's device count is not drawn, and the title bar's host picker is
- * not given to it (Shell: `!mayBrowse(role)`). Since Tynn #640 that picker is the one way to another machine: Settings →
+ * A DRONE'S DISCOVERY (genie#1278 W5). What this machine is comes from Tynn (`role`, set by main from
+ * `GET /api/v1/workstations/me`). On a drone the tailnet's device count is not drawn; the title bar's host picker is
+ * given to every machine since Tynn #423 (every client a pilot; host-picker-role.test.tsx). Since Tynn #640 that picker is the one way to another machine: Settings →
  * Remote access draws "Drive another machine" for nobody (test/remote-settings-own-only.test.tsx). Hiding is not the boundary — Tynn refuses a drone's list and grants, and the relay refuses a member without a grant —
  * but a drone offers nothing it would only be refused.
  */

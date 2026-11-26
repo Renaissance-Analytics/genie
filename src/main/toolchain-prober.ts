@@ -1,6 +1,8 @@
-import { HOST_TOOLS, parseVersionOutput, planUpdate, platformArgv, repairOutcome, toolStatus, type PackageManager, type Platform, type RepairOutcome, type ToolStatus } from '../core/toolchain.js';
+import { pacmanPreflight, type PacmanSync } from './pacman.js';
+import { HOST_TOOLS, pacmanInstalls, parseVersionOutput, planUpdate, platformArgv, repairOutcome, toolStatus, type PackageManager, type Platform, type RepairOutcome, type ToolStatus } from '../core/toolchain.js';
 import { LANGUAGE_LABEL, genieUpdates, installableVersions, updateChoices, type LanguageTool } from '../core/toolchain-update.js';
 import { latestFromBrewOutdated, latestFromNodeIndex, latestFromNpmOutdated, latestFromWingetUpgrade, phpLatestFromReleases } from '../core/toolchain-indexes.js';
+import type { Elevate } from '../core/elevation.js';
 
 /**
  * THE MANAGED TOOLCHAIN (§6.6) — the main-side half, with the process runner INJECTED.
@@ -131,16 +133,31 @@ export interface LanguageUpdatePorts {
  */
 export async function runUpdate(
     tool: string,
-    where: { platform: Platform; packageManager: PackageManager | null },
+    where: { platform: Platform; packageManager: PackageManager | null; pacman?: PacmanSync | undefined },
     run: CommandRunner,
     wanted: string | null,
     languages?: LanguageUpdatePorts,
+    /** Tynn #973: the host's elevation, bound to the client that clicked; absent = an elevated plan is refused with why. */
+    elevate?: Elevate,
 ): Promise<RepairOutcome | { kind: 'refused'; reason: string }> {
     if (languages && genieUpdates(tool, where.platform)) return updateLanguage(tool, where.platform, run, wanted, languages);
-    const plan = planUpdate({ tool, ...where });
+    const plan = planUpdate({ tool, platform: where.platform, packageManager: where.packageManager });
     if ('refused' in plan) return { kind: 'refused', reason: plan.refused };
+    if ('elevated' in plan && !elevate) return { kind: 'refused', reason: `updating ${tool} needs the administrator password, and no Genie window is connected to ask for it; nothing was updated` };
     const def = HOST_TOOLS.find((t) => t.name === tool)!;
+    // pacman (Tynn #968): the sync rule's check, against Genie's fresh copy of the repositories, before anyone is asked.
+    if ('elevated' in plan && plan.manager === 'pacman') {
+        if (!where.pacman) return { kind: 'refused', reason: `Genie has no copy of Arch's package databases to check updating ${tool} against; nothing was updated` };
+        const refused = await pacmanPreflight(where.pacman, tool, pacmanInstalls(plan.steps), 'update');
+        if (refused !== null) return { kind: 'refused', reason: refused };
+    }
     const before = await probeInstalled(def, run, where.platform);
+    if ('elevated' in plan) {
+        const r = await elevate!({ title: `Update ${tool}`, items: plan.items, steps: plan.steps });
+        if (r.kind === 'refused') return { kind: 'refused', reason: r.reason };
+        const after = await probeInstalled(def, run, where.platform);
+        return repairOutcome({ tool, wanted, before, after, exitCode: r.exitCode });
+    }
     // A vendor installer is one argv of constants (its pipe is its shell's); every other plan is a plain command line.
     const [binary, args] = plan.argv ? [plan.argv[0]!, [...plan.argv.slice(1)]] : argv(plan.command, where.platform);
     let exitCode: number;

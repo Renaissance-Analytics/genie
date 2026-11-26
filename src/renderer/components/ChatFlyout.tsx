@@ -21,14 +21,14 @@ import { ApprovalCard, ApprovalMarker } from './ApprovalCard.js';
 import type { Fidelity } from '../../core/dashboard-view.js';
 import { CHAT_LIVE_LINES, chatWindowStart } from '../../core/chat-window.js';
 import { personLine } from '../../core/person-text.js';
-import { chatFollowKey, mailSubject, waitingStepLabel, type ChatContext, type ChatMessage, type ChatWaitingOn } from '../../core/chat-view.js';
+import { chatFollowKey, mailSubject, overloadRetryWords, waitingStepLabel, type ChatContext, type ChatMessage, type ChatWaitingOn } from '../../core/chat-view.js';
 import { toolIcon } from '../../core/stream-view.js';
 import { ago } from '../../core/inbox-threads.js';
 import { useNow } from '../use-now.js';
 import type { Attachment } from '../../core/prompt-content.js';
 import type { ChatScope } from '../../core/chat-scope.js';
 import { errorWords, submitFromComposer, type ChatSendOutcome } from '../../core/chat-send.js';
-import { SendGrace, holdsSend, putBackUndone, type HeldSend } from '../../core/send-grace.js';
+import { SendGrace, holdsSend, putBackUndone, unsendOnEscape, type HeldFile, type HeldSend } from '../../core/send-grace.js';
 import { takeBackQueued, type QueuedAction, type QueuedResolve } from '../../core/queued-withdraw.js';
 import { ChatHeldSends } from './ChatHeldSend.js';
 import { draftFileCount, namePastedImages, PASTE_PILL_CHARS, type ComposerMeter } from '../../core/composer.js';
@@ -409,6 +409,14 @@ export function ComposerSendError({ chat, error, onChooseProviderProgram }: { ch
 /** The stored files a sent message carried (genie#1261): released once the message holds their bytes. */
 const sentRefs = (picked: readonly { ref?: string }[]): string[] => picked.flatMap((a) => (typeof a.ref === 'string' ? [a.ref] : []));
 
+/** An unsent message's file, back for the composer that asks (Tynn #1029): taken once, as the File react-fancy keeps. */
+function restoreHeld(held: Map<string, File>, entry: ChatDraftFile): File | undefined {
+    const file = held.get(entry.id);
+    if (!file) return undefined;
+    held.delete(entry.id);
+    return file;
+}
+
 /** Drawn only when something it shows changed (renderer/stable-view.tsx, genie#1340): never for another agent's push. */
 export const ChatFlyout = stableView(ChatFlyoutBody, 'ChatFlyout');
 
@@ -483,23 +491,38 @@ function ChatFlyoutBody({
      */
     const onSendRef = useRef(onSend);
     onSendRef.current = onSend;
-    // The words back in their chat's composer (core/send-grace.ts `putBackUndone`); only Undo, the person's click, focuses it.
-    const putBack = (chat: string, text: string, focus: boolean): void => {
-        putBackUndone(composerRefs.current, chat, text, focus,
+    const keeperRef = useRef(keeper);
+    keeperRef.current = keeper;
+    /*
+     * A HELD MESSAGE'S FILES (Tynn #1029): the Files picked with it, by attachment id, while it waits. An unsend puts its
+     * draft back, and react-fancy asks `restoreAttachment` for each file the draft names: these answer first, so a file
+     * comes back even where no draft store keeps it. Forgotten once the message has really gone.
+     */
+    const heldFiles = useRef(new Map<string, File>());
+    // The message back in its chat's composer (core/send-grace.ts `putBackUndone`): its whole draft when the composer gave
+    // one, else its words. Only the person's own Undo or Esc focuses it.
+    const putBackInto = (chat: string, undone: string | ChatDraft, focus: boolean): void => {
+        putBackUndone(composerRefs.current, chat, undone, focus,
             keeper && chat !== '' ? { initial: (c) => keeper.initial(c) ?? null, change: (c, d) => keeper.change(c, d) } : null);
     };
+    const putBack = (h: HeldSend, focus: boolean): void => putBackInto(h.chat, h.draft ?? h.text, focus);
     const putBackRef = useRef(putBack);
     putBackRef.current = putBack;
-    const [grace] = useState(() => new SendGrace((h: HeldSend) => Promise.resolve(onSendRef.current(h.text, [], h.chat)).then((out) => {
-        // Refused after the window: the words go back to the composer, with why — never lost.
-        if (out && out.kind === 'failed') {
-            putBackRef.current(h.chat, h.text, false);
-            setSendErrors((e) => withSendError(e, h.chat, out.reason));
-        }
-    }, (error: unknown) => {
-        putBackRef.current(h.chat, h.text, false);
-        setSendErrors((e) => withSendError(e, h.chat, errorWords(error)));
-    })));
+    const [grace] = useState(() => new SendGrace((h: HeldSend) => {
+        const picked = h.attachments ?? [];
+        const kept = keeperRef.current;
+        return submitFromComposer({
+            read: () => readAttachments(namePastedImages(h.text, picked), kept ? (ref) => kept.readRef(ref) : undefined),
+            send: (files) => onSendRef.current(h.text, files, h.chat),
+            release: () => kept?.sent(h.chat, sentRefs(picked)),
+        }).then((ack) => {
+            // Refused after the window: the message goes back to the composer, with why — never lost.
+            if (ack) {
+                putBackRef.current(h, false);
+                setSendErrors((e) => withSendError(e, h.chat, ack.error));
+            } else for (const a of picked) heldFiles.current.delete(a.id);
+        });
+    }));
     const [, setHeldSeq] = useState(0);
     useEffect(() => {
         const off = grace.subscribe(() => setHeldSeq((n) => n + 1));
@@ -507,7 +530,7 @@ function ChatFlyoutBody({
     }, [grace]);
     const undoSend = (id: string): void => {
         const h = grace.undo(id);
-        if (h) putBack(h.chat, h.text, true);
+        if (h) putBack(h, true);
     };
     // What the end of the thread IS: its agent, how many messages, and how long the last one is — a reply is one row that
     // GROWS as the agent writes (beta.33 item 6), and keyed on the count alone its words were written below a chat that
@@ -582,6 +605,7 @@ function ChatFlyoutBody({
      * prism went to moic). `Message lark — in beta.example` can not be read as the project you are looking at.
      */
     const elsewhere = scope?.kind === 'elsewhere' ? scope.workspace : null;
+    const elsewhereId = scope?.kind === 'elsewhere' ? scope.workspaceId : null;
     const blocked = scope?.kind === 'blocked' ? scope.reason : null;
     const sendKey = useSendKey();
     // Resolved after mount, as the title bar's hint is: reading `navigator` while rendering is a hydration mismatch.
@@ -622,7 +646,7 @@ function ChatFlyoutBody({
             pressed, promptId: m.promptId, text: m.text,
             composer: () => composerRefs.current.get(chat)?.getDraft() ?? (keeper && chat !== '' ? keeper.initial(chat) ?? null : null),
             resolve: onResolveQueued,
-            putBack: (text, focus) => putBack(chat, text, focus),
+            putBack: (text, focus) => putBackInto(chat, text, focus),
         }).then((r) => {
             setQueuedBusy((b) => { const next = new Set(b); next.delete(messageId); return next; });
             if (!r.ok) setQueuedProblems((p) => ({ ...p, [messageId]: r.reason }));
@@ -646,6 +670,12 @@ function ChatFlyoutBody({
             data-chat-loaded={thread?.loaded ? 'true' : 'false'}
             // Whose chat this is — the smoke reads it after a Dashboard row click (genie#1209).
             data-chat-subject={thread?.agentId ?? ''}
+            // Whether its agent is mid-turn, so a message sent now waits out the undo window (the Esc-unsend proof reads it).
+            data-chat-busy={busy ? 'true' : 'false'}
+            // ESC UNSENDS (Tynn #1029, core/send-grace.ts): the newest message of this chat still in its window comes back
+            // into the composer and never goes. Bubbled, so a menu inside that took Esc keeps it; with nothing waiting it
+            // is left alone, and Esc keeps its meaning (the Agent view's blur / Inspector / Dashboard).
+            onKeyDown={(e) => { unsendOnEscape(e, grace, activeChat, (h) => putBack(h, true)); }}
             style={{ width }}
             className="relative flex min-h-0 min-w-0 shrink-0 flex-col border-l border-[var(--border-1)] bg-[var(--surface)]"
         >
@@ -667,10 +697,16 @@ function ChatFlyoutBody({
                     {thread ? thread.name : 'genie'}
                 </span>
 
+                {/*
+                  * THE AGENT IS FROM ANOTHER WORKSPACE (Tynn #1002): said in its own words, never in a hover. It read "in Tynn"
+                  * with its meaning only in a tooltip, and "in Tynn" reads as the Tynn product. A click opens that workspace.
+                  */}
                 {elsewhere ? (
-                    <span data-chat-scope="elsewhere" title={`${thread?.name ?? 'This agent'} is in ${elsewhere}, not the workspace on screen`} className="shrink-0 rounded-sm bg-[var(--warning)]/15 px-1.5 py-px font-mono text-[10px] text-[var(--warning)]">
-                        in {elsewhere}
-                    </span>
+                    onOpenWorkspace && elsewhereId ? (
+                        <Button size="xs" labelClassName="contents" type="button" data-chat-scope="elsewhere" data-chat-scope-workspace={elsewhereId} onClick={() => onOpenWorkspace(elsewhereId)} className="shrink-0 rounded-sm bg-[var(--warning)]/15 px-1.5 py-px text-[11px] text-[var(--warning)] hover:bg-[var(--warning)]/25">Agent from {elsewhere}</Button>
+                    ) : (
+                        <span data-chat-scope="elsewhere" className="shrink-0 rounded-sm bg-[var(--warning)]/15 px-1.5 py-px text-[11px] text-[var(--warning)]">Agent from {elsewhere}</span>
+                    )
                 ) : null}
 
                 {mailOnly ? (
@@ -703,7 +739,7 @@ function ChatFlyoutBody({
                 While a turn runs that can be stopped, `Stop this turn` sits at its end: with the turn, not under Send. */}
             {thread?.context || onStopTurn || onResumeLimit || onProviderLogin || onAccountRetry || onDesignLogin ? (
                 <div data-chat-context={thread?.context?.tone ?? 'ok'} {...(thread?.context?.title ? { title: thread.context.title } : {})} className={`flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-1.5 text-[12px] ${CONTEXT_TONE[thread?.context?.tone ?? 'ok']}`}>
-                    <ChatPlanLine text={thread?.context?.text ?? 'Working'} plan={thread?.context?.planView} />
+                    {thread?.context?.retryAt !== undefined ? <RetryCountdown at={thread.context.retryAt} /> : <ChatPlanLine text={thread?.context?.text ?? 'Working'} plan={thread?.context?.planView} />}
                     {onStopTurn ? <TurnStop onStop={onStopTurn} agentName={thread?.name} className="ml-auto" /> : null}
                     {onProviderLogin ? (
                         <Button size="xs" labelClassName="contents"
@@ -1006,8 +1042,9 @@ function ChatFlyoutBody({
                         {...(keeper && chat !== '' ? {
                             ...(keeper.initial(chat) ? { defaultDraft: keeper.initial(chat)! } : {}),
                             persistAttachment: (file: File) => keeper.persistFile(file),
-                            restoreAttachment: (entry: ChatDraftFile) => keeper.restoreFile(entry),
                         } : {})}
+                        /* A file of an unsent message first (Tynn #1029), then the draft store’s. */
+                        restoreAttachment={(entry: ChatDraftFile) => restoreHeld(heldFiles.current, entry) ?? (keeper && chat !== '' ? keeper.restoreFile(entry) : undefined)}
                         /* Each change: to the kept draft, and to the other people on this agent (Tynn #730). A window that keeps no
                            drafts (a window driving another machine) still reports what is typed. Only the chat on screen is
                            typed in: a hidden composer, holding its kept draft, never reports it as typing. */
@@ -1020,9 +1057,12 @@ function ChatFlyoutBody({
                          */
                         onSubmit={(text, picked) => {
                             setSendErrors((e) => withSendError(e, chat, null));
-                            // To a busy agent, text only: held for the undo window; the composer empties now (Tynn #745).
-                            if (holdsSend({ busy, files: picked.length }) && text.trim() !== '') {
-                                grace.hold(chat, text);
+                            // To a busy agent: held for the undo window, files and all; the composer empties now (Tynn #745,
+                            // #1029). Its draft as sent is what an unsend puts back; its Files wait here for that.
+                            if (holdsSend({ busy, files: picked.length }) && (text.trim() !== '' || picked.length > 0)) {
+                                const held: readonly HeldFile[] = picked;
+                                for (const a of held) if (a.file) heldFiles.current.set(a.id, a.file);
+                                grace.hold(chat, text, { draft: composerRefs.current.get(chat)?.getDraft() ?? null, attachments: held });
                                 // It is drawn at the end of the thread: a reader following there sees it, as a sent one.
                                 if (followRef.current) setTimeout(() => { const el = scrollRef.current; if (el) el.scrollTop = el.scrollHeight; }, 0);
                                 return Promise.resolve(undefined);
@@ -1227,4 +1267,14 @@ export function ChatCarriedRow({ m }: { m: ChatThreadMessage }) {
             <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap border-l-2 border-[var(--border-1)] pl-2.5 font-mono text-[11px] [overflow-wrap:anywhere]">{m.carried}</pre>
         </details>
     );
+}
+
+/** `Provider busy, retrying in N s` (Tynn #1060), counted down each second until the retry goes. */
+function RetryCountdown({ at }: { at: number }) {
+    const [now, setNow] = useState(() => Date.now());
+    useEffect(() => {
+        const timer = setInterval(() => setNow(Date.now()), 1000);
+        return () => clearInterval(timer);
+    }, [at]);
+    return <span data-chat-retry={at} className="truncate">{overloadRetryWords(at, now)}</span>;
 }

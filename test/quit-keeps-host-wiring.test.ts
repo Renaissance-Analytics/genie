@@ -40,8 +40,10 @@ describe('main.ts', () => {
         expect(quit).not.toMatch(/host\?\.stopAll\(\)/);
         const ports = block(main(), 'const quitPorts: QuitPorts = {', '\n};');
         expect(ports).toMatch(/stopAgents: \(\) => \{ host\?\.stopAll\(\); \}/);
-        expect(ports).toMatch(/closeTerminals: \(\) => \{ terminals\?\.closeAll\(\); \}/);
-        expect(ports).toMatch(/void services\?\.shutdown\(\);/);
+        // genie-host ends its own terminals when it shuts down (Tynn #953, 2g-2): the quit has no terminal step.
+        expect(ports).not.toMatch(/closeTerminals/);
+        // The window composes nothing (Tynn #955): no composition to shut down; genie-host ends its own on shutDownHost.
+        expect(ports).not.toMatch(/services\?\.shutdown/);
         expect(ports).toMatch(/shutDownHost: \(\) => agentEngineLink\?\.shutdown\(QUIT_WRITES_MS\)/);
     });
 
@@ -100,12 +102,13 @@ describe('main.ts', () => {
         expect(watch).toMatch(/if \(step\.exit\) \{[\s\S]*?requestQuit\('shut-down'\);/);
     });
 
-    it('the tray and the quit count what waits on the host\u2019s clock, from the host\u2019s own replicas', () => {
+    it('the tray and the quit count what waits on the host\u2019s clock, from genie-host\u2019s summary (Tynn #953, 2g-2)', () => {
         const src = main();
         const now = block(src, 'function onTheClockNow(', '\n}\n');
-        expect(now).toMatch(/onTheClock\(agentEngineLink\.client\.flows\(\)\.list\(\), agentEngineLink\.client\.processBook\(\)\.kept\(\)\)/);
+        expect(now).toMatch(/armedFlows: hostSummaryNow\.armedFlows\.length, scheduledTasks: hostSummaryNow\.scheduledTasks\.length/);
         expect(block(src, 'function hostActivityNow(', '\n}\n')).toMatch(/\.\.\.onTheClockNow\(\)/);
-        expect(block(src, "app.on('before-quit'")).toMatch(/\{ keptProcesses: kept, \.\.\.onTheClockNow\(\) \}/);
+        // The kept processes too, since Tynn #1045 (2g-4d-C): the summary's, never the window's supervisor replica.
+        expect(block(src, "app.on('before-quit'")).toMatch(/\{ keptProcesses: hostSummaryNow\.processes\.length, \.\.\.onTheClockNow\(\) \}/);
     });
 
     it('the left-running mark: on when the UI closes, off when Genie is opened, the tray shuts down, or nothing is left; the OS ending the session leaves it alone', () => {
@@ -116,7 +119,7 @@ describe('main.ts', () => {
         expect(src).toMatch(/onShutDown: \(\) => \{ void confirmTray\('shut-down'\)\.then\(\(ok\) => \{ if \(ok\) \{ leftRunning\.set\(false\); requestQuit\('shut-down'\); \} \}\); \}/);
         expect(block(src, "powerMonitor.on('shutdown'")).not.toMatch(/leftRunning/);
         expect(src).not.toMatch(/session-end', \(\) => \{[^}]*leftRunning/);
-        expect(src).toMatch(/void wireLoginItem\(composed\.settings, loginItemPort, \{[\s\S]*?\}, leftRunning\);/);
+        expect(src).toMatch(/void wireLoginItem\(settingsNow, loginItemPort, \{[\s\S]*?\}, leftRunning\);/);
     });
 
     it('a quit with an answer chosen up front (the tray, Restart, the tray-only exit) chooses it, then quits', () => {

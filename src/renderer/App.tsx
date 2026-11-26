@@ -2,6 +2,7 @@ import { AgentDetailCache, chatSubscriptionId } from './agent-detail.js';
 import { CommandWindow } from './components/CommandWindow.js';
 import { FlowEditorWindow } from './components/FlowEditorWindow.js';
 import { WhatsNewWindow } from './components/WhatsNewWindow.js';
+import { ElevationPrompt } from './components/ElevationPrompt.js';
 import { ConnectDialog } from './components/ConnectMenu.js';
 import { OPEN_SHARE_LINK_ACTION, connectPaletteActions, mergeWorkstationRead, type ConnectProgress } from '../core/connect-machine.js';
 import { WHATS_NEW_ROUTE } from '../core/whats-new.js';
@@ -32,7 +33,7 @@ import { takeOverTerminalOf } from '../core/take-over-route.js';
 import { chatPickAfter, chatSubjectFor, resolveChatAgent } from '../core/chat-scope.js';
 import { parseTabs } from '../core/workspace-tabs.js';
 import { addressOf, rehomeAddress, type AddressContext } from '../core/address.js';
-import { rewrittenAddress, routeFor, windowBridge, windowChromeOf } from './window-address.js';
+import { routeFor, useAddressQualifier, windowBridge, windowChromeOf } from './window-address.js';
 import { answerOutcome, remoteQuestionFeed, visualsOutcome } from './remote-questions-feed.js';
 import { Button, browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
 import { themePreferenceFrom } from '../core/theme.js';
@@ -61,6 +62,8 @@ import { ALERT_KINDS, alertDelivery, alertSound, toastFor, type AlertKind } from
 import { toolchainSecurityAlerts } from '../core/toolchain-alerts.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
+import { alertVolume } from '../core/sound-volume.js';
+import { clientSoundValues } from './client-sound-settings.js';
 import { limitAlertSound } from '../core/limit-alerts.js';
 import { accountSwitchOutcomeOf, accountSwitchToast } from '../core/account-switch.js';
 import type { AccountsSnapshot } from '../core/accounts-view.js';
@@ -78,7 +81,7 @@ import { fromBase64 } from '../core/mobile-wire.js';
 import { deviceAuth, knownHosts, moveRememberedTokens, openRemoteHost, relayWorkstationOf, remoteFromSearch, remoteNameFromSearch, remoteUrl, rememberedTokens, type KnownHost } from './remote-session.js';
 import { RelayConnecting } from './components/RelayConnecting.js';
 import { withAsking, type RelayConnect } from '../core/relay-connect.js';
-import { ipcRelayTransport, watchTynnSignIn, type RoleChange, type TynnWorkstationList, type TynnWorkstationRow } from './relay-transport.js';
+import { channelTransport, watchTynnSignIn, type RoleChange, type TynnWorkstationList, type TynnWorkstationRow } from './relay-transport.js';
 import { ShareWorkspaceModal } from './components/ShareWorkspaceModal.js';
 import { shareDoor } from './share-door.js';
 import { HostPathPicker, HostPathPickerContext, type PickHostPath } from './components/HostPathPicker.js';
@@ -342,6 +345,15 @@ function visibleAgentSubject(snapshot: GenieSnapshot, subject: string | null): s
     return resolveChatAgent(subject, snapshot.agents) ? subject : null;
 }
 
+/**
+ * Where THIS machine's Genie browser opens for a relay window's workstation, and what it is called: over this window, on its
+ * display (Tynn #739). genie-host opens it (deviceLink.openBrowser, Tynn #941); this is only where, never which.
+ */
+function browserView(): import('./device-channels.js').BrowserView {
+    if (typeof window === 'undefined') return {};
+    return { title: document.title, anchor: { x: window.screenX, y: window.screenY, width: window.outerWidth, height: window.outerHeight } };
+}
+
 /** The own window's cached bridge, including local protocol families and retained native window/channel ports. */
 function ownWindowBridge(): GenieBridge | undefined {
     return typeof window === 'undefined' || window.genie === undefined ? undefined : pageBridge(window.genie);
@@ -459,11 +471,9 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
                         return false;
                     }
                     setRelayConnect({ kind: 'working', step: 'host' });
-                    const transport = ipcRelayTransport(net, opened.channel);
-                    // This machine's Genie browser, which main points at THIS workstation's sites over this window's channel.
-                    const localBrowser = window.genie?.browserWindow;
+                    const transport = channelTransport(net, opened.channel);
                     // A drone older than this Pilot needs is said as such, never as its protocol words (Tynn #651).
-                    const next = connectRemote(transport, { kind: 'relay', label: label || 'another screen' }, label || 'another screen', { ...(companionTicket.current ? { companion: companionTicket.current } : { drive: true }), ...(localBrowser ? { browse: (address: string | undefined, hosts: readonly string[]) => localBrowser.open(address, hosts) } : {}), minBuild: DRONE_MIN_BUILD });
+                    const next = connectRemote(transport, { kind: 'relay', label: label || 'another screen' }, label || 'another screen', { ...(companionTicket.current ? { companion: companionTicket.current } : { drive: true }), ...(net.openBrowser ? { browse: (address: string | undefined, hosts: readonly string[]) => net.openBrowser!(opened.channel, address ?? null, hosts, browserView()) } : {}), minBuild: DRONE_MIN_BUILD, elevationPrompt: true });
                     setClient(next);
                     setState(next.state());
                     return next.ready.then((r) => {
@@ -495,9 +505,9 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
                 last.current = { url: url.url, label };
                 const opened = await link.open(url.url);
                 if (!opened.ok) { setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: opened.reason })); return false; }
-                const transport = ipcRelayTransport(net, opened.channel);
+                const transport = channelTransport(net, opened.channel);
                 const ticket = companionTicket.current;
-                const next = connectRemote(transport, auth, label || 'another screen', ticket ? { companion: ticket } : { drive: true });
+                const next = connectRemote(transport, auth, label || 'another screen', { ...(ticket ? { companion: ticket } : { drive: true }), elevationPrompt: true });
                 // Dropped after it was up: the host's words, when it has some.
                 transport.onClose(() => { const why = transport.closedBecause(); if (why) setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: why })); });
                 setClient(next);
@@ -658,7 +668,7 @@ function useAlerts(snapshot: GenieSnapshot, settings: Readonly<Record<string, bo
         const deck = snapshot.deckItems !== null ? alertsBetween(prev.current, next) : [];
         for (const alert of [...deck, ...finishes.alerts]) {
             // The chosen sound — a wav or the Default chime — through the one player Preview uses too.
-            playAlertSound(alertSound(alert.kind, settings ?? {}));
+            playAlertSound(alertSound(alert.kind, settings ?? {}), alertVolume(alert.kind, clientSoundValues()));
             // The agent's workspace colour beside its address (genie#1300).
             const color = snapshot.workspaces?.find((w) => w.id === alert.workspace)?.color;
             show({ ...toastFor(alert, slugsFor(snapshot.workspaces ?? [])), ...(color ? { color } : {}) });
@@ -677,7 +687,7 @@ function useToolchainSecurityAlerts(tools: readonly ToolStatus[] | null, setting
     useEffect(() => {
         if (tools === null) return;
         for (const alert of toolchainSecurityAlerts(prev.current, tools)) {
-            playAlertSound(alertSound(alert.kind, settings ?? {}));
+            playAlertSound(alertSound(alert.kind, settings ?? {}), alertVolume(alert.kind, clientSoundValues()));
             show(toastFor(alert));
         }
         prev.current = tools;
@@ -1063,7 +1073,10 @@ function DesktopApp({ bridge }: AppProps) {
     // main asks it to connect again — with a grant minted now, under the account signed in now — instead of only focusing.
     const reconnectNow = useRef(remote.reconnect);
     reconnectNow.current = remote.reconnect;
-    useEffect(() => (typeof window === 'undefined' ? undefined : window.genie?.remoteWindows?.onReconnectAsked?.(() => reconnectNow.current())), []);
+    // Main brings this window up and asks it to reconnect; whether its link is up is this window's own to know (Tynn #941).
+    const remoteConnectedNow = useRef(false);
+    remoteConnectedNow.current = remote.state?.connected === true;
+    useEffect(() => (typeof window === 'undefined' ? undefined : window.genie?.remoteWindows?.onReconnectAsked?.(() => { if (remoteConnectedNow.current) return; reconnectNow.current(); })), []);
     // The window's own bridge goes through `pageBridge`: an agent's detail crosses the preload as a patch and is rebuilt here.
     // A window BOUND to another host reads that host's Genie, and nothing of this machine's while it connects (window-address.ts).
     // This window's own bridge (its preload): what is the WINDOW's, whichever machine it reads — its buttons (Tynn #726).
@@ -1150,13 +1163,7 @@ function DesktopApp({ bridge }: AppProps) {
     const navigate = (next: string): void => { if (next === route) { arriveAt(next); return; } writeAddress(addressContext ? addressOf(next, addressContext) : next); };
     // An OLD address (genie://workspace/<id>?chat=…, a link, a host navigation) is rewritten in place to the new form.
     const shownAddress = addressContext ? addressOf(route, addressContext) : address;
-    // The workstation this window read until now: connecting in place, its page goes with it to the host (beta.61, step four).
-    const readBefore = useRef<string | null>(null);
-    useEffect(() => {
-        const next = rewrittenAddress(address, addressContext, readBefore.current);
-        if (addressContext) readBefore.current = addressContext.workstation;
-        if (next !== null) window.location.replace(`#${next}`);
-    }, [address, shownAddress, addressContext !== null, addressContext?.workstation]);
+    useAddressQualifier(address, shownAddress, addressContext);
     // LEAVING A REMOTE HOST (the two-VM proof, 2026-10-20): the address named that machine; once this window's own snapshot
     // names this one, the same page comes back here — Disconnect on the host's Remote access lands on this machine's Remote
     // access (the host it left is listed there), not the Dashboard. Not in a window BOUND to a host: it waits for its host.
@@ -1214,7 +1221,7 @@ function DesktopApp({ bridge }: AppProps) {
     const [accountsSnapshot, setAccountsSnapshot] = useState<AccountsSnapshot | undefined>(undefined);
     const readAccounts = useCallback(() => { void resolvedBridge?.accounts?.().then((s) => { if (s) setAccountsSnapshot(s); }, () => {}); }, [resolvedBridge]);
     useEffect(() => { readAccounts(); }, [readAccounts, rateLimits]);
-    useEffect(() => resolvedBridge?.onAction?.((action) => { if (action.kind === 'account-switch' || action.kind === 'accounts-changed') readAccounts(); }), [resolvedBridge, readAccounts]);
+    useEffect(() => resolvedBridge?.onAction?.((action) => { if (action.kind === 'account-switch' || action.kind === 'accounts-changed' || action.kind === 'account-notice') readAccounts(); }), [resolvedBridge, readAccounts]);
     // DESIGN SIGN-IN for the machine (Tynn #480): one click from the Claude popover or Settings.
     /**
      * ANOTHER MACHINE'S TERMINAL, HERE (Tynn #529 part A; sign-ins, Tynn #896): its host started a Take Over TUI or a
@@ -1242,8 +1249,13 @@ function DesktopApp({ bridge }: AppProps) {
     useEffect(() => resolvedBridge?.onAction?.((action) => {
         // A RATE-LIMIT ALERT the person set (Tynn #748): its own sound, held by Do not disturb, and a notice naming the account.
         if (action.kind === 'limit-alert' && action.title && action.body) {
-            playAlertSound(limitAlertSound(action.sound ?? 'synth', soundSettings.current ?? {}));
+            playAlertSound(limitAlertSound(action.sound ?? 'synth', soundSettings.current ?? {}), alertVolume(null, clientSoundValues()));
             showAlert({ title: action.title, body: action.body });
+            return;
+        }
+        // HOW A CLAUDE SIGN-IN OR SIGN-OUT CAME OUT (Tynn #1011).
+        if (action.kind === 'account-notice') {
+            showAlert({ title: action.title ?? 'Accounts', body: action.body ?? '' });
             return;
         }
         // HOW AN ACCOUNT SWITCH CAME OUT (Tynn #482): the account now active, or nothing changed with Retry (one click, again).
@@ -1252,7 +1264,7 @@ function DesktopApp({ bridge }: AppProps) {
             if (outcome) showAlert(accountSwitchToast(outcome, (provider) => { void resolvedBridge?.switchAccount?.(provider).then((r) => { if (r.ok) openCompanion(r, 'Switch account'); }, () => {}); }));
             return;
         }
-        if (ALERT_KINDS.some((k) => k.kind === action.kind)) playAlertSound(alertSound(action.kind as AlertKind, soundSettings.current ?? {}));
+        if (ALERT_KINDS.some((k) => k.kind === action.kind)) playAlertSound(alertSound(action.kind as AlertKind, soundSettings.current ?? {}), alertVolume(action.kind as AlertKind, clientSoundValues()));
         const emoji = action.agentId ? ROW_EMOJI[action.kind as RowSignalKind] : undefined;
         if (emoji && action.agentId) {
             const id = action.agentId;
@@ -1392,14 +1404,17 @@ function DesktopApp({ bridge }: AppProps) {
     const [workspaceFaults, setWorkspaceFaults] = useState<Record<string, WorkspaceFault | null>>({});
     // Bumped after a repo is relocated, so the faults are read again without waiting for the workspace list to change.
     const [faultsTick, setFaultsTick] = useState(0);
-    const faultKey = (snapshot.workspaces ?? []).map((w) => `${w.id}\u0000${w.name ?? ''}`).join('\n');
+    // A workspace's own folder gone or back, or located elsewhere (host split P7), reads the faults again too.
+    const faultKey = (snapshot.workspaces ?? []).map((w) => `${w.id}\u0000${w.name ?? ''}\u0000${w.path}\u0000${w.missing === true ? 'missing' : ''}`).join('\n');
     useEffect(() => {
         if (!resolvedBridge || !snapshot.workspaces) return;
         let live = true;
         const list = snapshot.workspaces;
         void Promise.all(list.map(async (w) => {
-            const r = await resolvedBridge.workspaces.listRepos(w.id);
             const name = w.name ?? w.path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? w.id;
+            // Its folder is not there: its repos cannot be read, and the folder fault is the one to show.
+            if (w.missing === true) return [w.id, workspaceFault(null, name, w)] as const;
+            const r = await resolvedBridge.workspaces.listRepos(w.id);
             return [w.id, workspaceFault(r.ok ? r.repos : null, name)] as const;
         })).then((entries) => { if (live) setWorkspaceFaults(Object.fromEntries(entries)); });
         return () => { live = false; };
@@ -1409,6 +1424,19 @@ function DesktopApp({ bridge }: AppProps) {
         const envelope = snapshot.workspaces?.find((w) => w.id === workspaceId)?.path;
         void pickFolder(`Where is ${slug} now? Pick its folder inside the envelope`, envelope).then((path) => {
             if (path) void resolvedBridge?.workspaces.locateRepo(workspaceId, slug, path).then((r) => { if (r.ok) setFaultsTick((t) => t + 1); });
+        });
+    };
+    // "Locate folder" on a workspace whose own folder is not there (host split P7): the host's picker, then its registry is
+    // told where the folder is. A refusal is said in the host's words.
+    const locateFolder = (workspaceId: string) => {
+        const workspace = snapshot.workspaces?.find((w) => w.id === workspaceId);
+        const name = workspace?.name ?? workspaceId;
+        const failed = (reason: string) => showAlert({ title: 'Could not locate folder', body: reason });
+        void pickFolder(`Where is ${name} now? Pick its folder`).then((path) => {
+            if (!path || !resolvedBridge) return;
+            const asked = resolvedBridge.workspaces.relocate?.(workspaceId, path);
+            if (!asked) { failed('this host cannot locate a workspace’s folder'); return; }
+            void asked.then((r) => { if (r.ok) setFaultsTick((t) => t + 1); else failed(r.reason); }, (error: unknown) => failed(error instanceof Error ? error.message : String(error)));
         });
     };
     // The workspace-scoped settings (§6.1) of the workspace on screen: its effective values and which it overrides.
@@ -1635,9 +1663,9 @@ function DesktopApp({ bridge }: AppProps) {
                             now: Date.now(),
                             onCreateKey: (name: string) => appInboxAct({ action: 'create', target: 'create' }, () => appInboxBridge.createKey(workspaceId, name), `Made ${name}: copy it now`),
                             onRevokeKey: (id: string) => appInboxAct({ action: 'revoke-key', target: `key:${id}` }, () => appInboxBridge.revokeKey(workspaceId, id), 'Key revoked: it stopped working'),
-                            onRotate: (kind: AppSourceKind, id: string) => { if (kind !== 'script') appInboxAct({ action: 'rotate', target: `${kind}:${id}` }, () => appInboxBridge.source(workspaceId, 'rotate', kind, id), 'Rotated'); },
-                            onRevoke: (kind: AppSourceKind, id: string) => { if (kind !== 'script') appInboxAct({ action: 'revoke', target: `${kind}:${id}` }, () => appInboxBridge.source(workspaceId, 'revoke', kind, id), 'Revoked'); },
-                            onAllow: (kind: AppSourceKind, id: string) => { if (kind !== 'script') appInboxAct({ action: 'allow', target: `${kind}:${id}` }, () => appInboxBridge.source(workspaceId, 'allow', kind, id), 'Allowed'); },
+                            onRotate: (kind: AppSourceKind, id: string) => { if (kind === 'site' || kind === 'process') appInboxAct({ action: 'rotate', target: `${kind}:${id}` }, () => appInboxBridge.source(workspaceId, 'rotate', kind, id), 'Rotated'); },
+                            onRevoke: (kind: AppSourceKind, id: string) => { if (kind === 'site' || kind === 'process') appInboxAct({ action: 'revoke', target: `${kind}:${id}` }, () => appInboxBridge.source(workspaceId, 'revoke', kind, id), 'Revoked'); },
+                            onAllow: (kind: AppSourceKind, id: string) => { if (kind === 'site' || kind === 'process') appInboxAct({ action: 'allow', target: `${kind}:${id}` }, () => appInboxBridge.source(workspaceId, 'allow', kind, id), 'Allowed'); },
                             onDismissReveal: () => setAppInboxView((v) => (v ? { ...v, revealed: null } : v)),
                         },
                     }
@@ -1706,6 +1734,8 @@ function DesktopApp({ bridge }: AppProps) {
               diagnosis: opsView.diagnosis,
               lastOutcome: opsView.lastOutcome,
               budgetUsd: detail?.agent.dailyBudgetUsd ?? null,
+              appWakeCap: detail?.agent.appWakeCap ?? 6,
+              onSetAppWakeCap: (cap) => { void resolvedBridge.agents.setAppWakeCap(agentId, cap).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               mode: detail?.agent.mode ?? 'manual',
               accessScope: detail?.agent.accessScope ?? 'self',
               ...(detail?.agent.accessAgents ? { accessAgents: detail.agent.accessAgents } : {}),
@@ -2188,6 +2218,7 @@ function DesktopApp({ bridge }: AppProps) {
             peerTyping={typing.peer}
             workspaceFaults={workspaceFaults}
             onLocateRepo={locateRepo}
+            onLocateFolder={locateFolder}
             servable={SERVABLE}
             onShareWorkstation={shares ? () => { setShare({ workspaceId: null, name: remote.state?.host ?? snapshot.workstation?.name ?? 'this workstation', links: null, minted: null, problem: null, busy: false }); readShares(null); } : undefined}
             remote={remote.state?.connected && remote.state.host ? {
@@ -2417,6 +2448,8 @@ function DesktopApp({ bridge }: AppProps) {
                 else if (item.category === 'prompt') { const prompt = savedPrompts.find((p) => p.id === item.id); if (prompt) sendSavedPrompt(prompt); }
             }}
         />
+        {/* The host's password prompt for an elevated step clicked here (Tynn #973): over every page and modal. */}
+        <ElevationPrompt elevation={resolvedBridge?.elevation} />
         {/* What's New, once per version (Tynn #762): closing records the version as seen. */}
         {features.whatsNew && windowScope.kind === 'workstation' ? (
             <WhatsNewWindow

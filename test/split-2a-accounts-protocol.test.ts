@@ -117,7 +117,9 @@ describe('the accounts family is on the remote wire, for every client', () => {
             expect(await client.bridge.dismissSwitchOffer!('offer_gone')).toBe(false);
         }
         expect(accounts.list).toHaveBeenCalledTimes(2);
-        expect(accounts.act.mock.calls).toEqual([[RENAME], [RENAME]]);
+        // The action, and WHO asked (Tynn #1011: a browser sign-in opens on the screen of the window that asked).
+        expect(accounts.act.mock.calls.map((c: unknown[]) => c[0])).toEqual([RENAME, RENAME]);
+        for (const c of accounts.act.mock.calls as unknown[][]) expect(c[1]).toMatchObject({ connectionId: expect.any(String) });
         expect(accounts.dismissOffer.mock.calls).toEqual([['offer_1'], ['offer_gone'], ['offer_1'], ['offer_gone']]);
     });
 

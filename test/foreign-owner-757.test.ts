@@ -29,6 +29,7 @@ const VISITOR = 'user_visitor';
 const tynnKey = generateKeyPairSync('ed25519');
 const tynnJwk = { ...(tynnKey.publicKey.export({ format: 'jwk' }) as { kty: string; crv: string; x: string }), kid: 'tynn-1', alg: 'EdDSA' } as TynnJwk;
 const hostKey = generateKeyPairSync('ed25519');
+const HOST_PUBLIC_KEY = (hostKey.publicKey.export({ type: 'spki', format: 'der' }) as Buffer).toString('base64');
 const hostFingerprint = createHash('sha256').update(hostKey.publicKey.export({ type: 'spki', format: 'der' })).digest('hex');
 const thumbprint = (jwk: { crv: string; kty: string; x: string }) =>
     createHash('sha256').update(`{"crv":"${jwk.crv}","kty":"${jwk.kty}","x":"${jwk.x}"}`, 'utf8').digest('base64url');
@@ -100,6 +101,7 @@ async function hostSignedInAs(account: string | null, answer: PairAnswer) {
         relayUrl: 'wss://relay.example.com',
         workstationId: WS_ID,
         hello: async () => buildTicketHostHello({ ticket: 'ticket-1', workstationId: WS_ID, fingerprint: hostFingerprint, sign: (d) => sign(null, d, hostKey.privateKey) }),
+        fingerprint: hostFingerprint, sign: (d) => sign(null, d, hostKey.privateKey),
         validateGrant: async (token) => verifyMemberGrant(token, { keys: [tynnJwk], workstationId: WS_ID }),
         signedInHere: () => account,
         reconnect: { minMs: 0, maxMs: 0 },
@@ -112,7 +114,7 @@ async function hostSignedInAs(account: string | null, answer: PairAnswer) {
     cleanup.push(() => link.close(), () => rm(dir, { recursive: true, force: true }));
     const member = async (claims: Record<string, unknown>) => {
         const pop = PopKeypair.generate();
-        const opened = await openRelayMember({ socket: relay.socket, relayUrl: 'wss://relay.example.com', workstationId: WS_ID, grant: mintGrant({ cnf: { jkt: thumbprint(pop.publicJwk) }, ...claims }), pop });
+        const opened = await openRelayMember({ socket: relay.socket, relayUrl: 'wss://relay.example.com', workstationId: WS_ID, grant: mintGrant({ cnf: { jkt: thumbprint(pop.publicJwk) }, ...claims }), hostPublicKey: HOST_PUBLIC_KEY, pop });
         if (!opened.ok) throw new Error(opened.reason);
         return opened.transport as ClientTransport & { closedBecause(): string | null };
     };

@@ -1,27 +1,20 @@
 import { mkdtemp, rm } from 'node:fs/promises';
-import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { FLOW_SCHEMA_URL } from '../src/core/flow-form.js';
-import { memoryPair } from '../src/core/line-transport.js';
-import type { ProcessTree } from '../src/core/process-tree.js';
 import { FlowScheduler } from '../src/main/flow-scheduler.js';
 import { FlowStore, type Actor } from '../src/main/flow-store.js';
-import { FlowsService } from '../src/main/flows-host.js';
-import { SessionEngineClient } from '../src/main/session-engine-client.js';
-import { SessionEngineServer } from '../src/main/session-engine-server.js';
-import { SessionHost } from '../src/main/session-host.js';
+import { FlowsReplica, FlowsService } from '../src/main/flows-host.js';
 
 /**
  * FLOWS ARE GENIE-HOST'S (the host split, P3.3d: plan §11e). The flows file, the scheduler and the runner live in the host,
- * so an armed flow fires on the host's clock with no window. A window — the canvas editor, the Flows tab — reads them from
- * a replica (every flow, its runs, how many are running) and edits, arms and runs them through the host, in its words.
+ * so an armed flow fires on the host's clock with no window. genie-host reads them through its own replica over its
+ * FlowsService (genie-host.ts `hostFlows`: what its features snapshot and its agents' tools read); a window reaches them
+ * only over the protocol (features.act flows.*, read back from the snapshot). A reader that starts later starts whole.
  */
 
-const TOKEN = 'flows-token';
 const user: Actor = { kind: 'user' };
-const noProcessTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 const tick = async (n = 8) => { for (let i = 0; i < n; i += 1) await new Promise((r) => setTimeout(r, 0)); };
 const doc = (cron: string) => ({
     $schema: FLOW_SCHEMA_URL,
@@ -53,21 +46,19 @@ async function rig() {
     });
     scheduler.plan();
     const service = new FlowsService({ store, scheduler });
-    const server = new SessionEngineServer({ token: TOKEN, build: 't', flows: service });
-    server.attach(new SessionHost({ userData: mkdtempSync(join(tmpdir(), 'flows-host-')), driverFor: () => null, processTree: noProcessTree, ...server.hostOptions() }));
+    // A reader as genie-host wires hostFlows: the service's calls, its events, and the whole state when it starts.
     const window = async () => {
-        const [h, w] = memoryPair();
-        server.accept(h);
-        const client = new SessionEngineClient();
-        expect(await client.connect(w, TOKEN)).toMatchObject({ ok: true });
-        return { flows: client.flows(), close: () => w.close() };
+        const flows = new FlowsReplica((method, args) => service.call(method, args));
+        const off = service.onEvent((event) => flows.apply(event));
+        flows.apply({ kind: 'dump', dump: service.dump() });
+        return { flows, close: off };
     };
     const runUntil = (t: number) => { clock = t; for (let g = 0; g < 50; g += 1) { const due = timers.filter((x) => !x.cancelled && x.at <= clock)[0]; if (!due) return; due.cancelled = true; due.fn(); } };
     return { store, ran, window, runUntil };
 }
 
 describe('flows in genie-host', () => {
-    it('a flow saved and armed from a window is the host\'s: the window reads it back as the host has it', async () => {
+    it('a flow saved and armed through the host\'s replica is the host\'s: the replica reads it back as the host has it', async () => {
         const r = await rig();
         const w = await r.window();
         const created = await w.flows.create({ workspaceId: 'ws', name: 'nightly', document: doc('0 3 * * *'), by: user });
@@ -78,7 +69,7 @@ describe('flows in genie-host', () => {
         expect(w.flows.list('ws')).toEqual(r.store.list('ws'));
     });
 
-    it('an armed flow fires on the HOST\'s clock with no window; the next window sees its run', async () => {
+    it('an armed flow fires on the HOST\'s clock with no reader following; the next reader sees its run', async () => {
         const r = await rig();
         const first = await r.window();
         const created = await first.flows.create({ workspaceId: 'ws', name: 'nightly', document: doc('0 3 * * *'), by: user, armed: true });

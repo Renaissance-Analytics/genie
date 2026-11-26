@@ -2,7 +2,6 @@ import type { AppSourceKind } from '../core/app-inbox.js';
 import type { WorkstationRole } from '../core/workstation-role.js';
 import type { AppInboxCardState } from '../renderer/components/AppInboxCard.js';
 import type { AppInboxDump } from './app-inbox-host.js';
-import { wordTynnRefusal } from './drone-refusal.js';
 import type { LocalOwnerDeps } from './host-api.js';
 import { HOST_LOCAL_OWNER } from './host-local-watches.js';
 import { thisMachineWorkstationIds } from './this-machine.js';
@@ -93,7 +92,6 @@ export function hostOwnerOps(sources: HostOwnerSources): HostOwnerOps {
         if (!a) throw new Error('this Genie has no Tynn account');
         return a;
     };
-    const rereadRole = async (): Promise<WorkstationRole | null> => { await tynn.readRole(); return tynn.role(); };
     /** Every Tynn identity this machine holds (this-machine.ts): "Your workstations" lists none of them. */
     const thisMachine = async (host: string) => thisMachineWorkstationIds({ registered: tynn.registered(), stored: await tynn.stored(host).catch(() => null), v1Settings: tynn.v1Settings() });
     return {
@@ -120,7 +118,7 @@ export function hostOwnerOps(sources: HostOwnerSources): HostOwnerOps {
             host: () => tynn.account()?.host() ?? null,
             workstations: async () => {
                 const a = account();
-                return wordTynnRefusal(await connectableWorkstations((path, init) => a.request(path, init), await thisMachine(a.host())), rereadRole);
+                return connectableWorkstations((path, init) => a.request(path, init), await thisMachine(a.host()));
             },
             // Tynn decides a role change with a fresh authenticator code (genie#1278 W6).
             setRole: (workstationId, role, code) => { const a = account(); return setWorkstationRole((path, init) => a.request(path, init), workstationId, role, code); },

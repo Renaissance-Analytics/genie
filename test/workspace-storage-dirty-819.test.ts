@@ -172,7 +172,10 @@ describe('the one-click clean-up', () => {
         expect(ids).toContain('ci-artifacts:repos/app/ci-out');
         expect(ids.filter((id) => id.startsWith('dirty:'))).toEqual([]);
         const done = await storage.cleanUp(root, ['dirty:upload.png', 'ci-artifacts:repos/app/ci-out'], { chatFiles: [] });
-        expect(done).toEqual({ moved: ['ci-artifacts:repos/app/ci-out'], skipped: ['dirty:upload.png'], failed: [] });
+        // Tynn #947: the item left is named with the reason, and the bytes moved are counted.
+        expect(done).toEqual({ moved: ['ci-artifacts:repos/app/ci-out'], skipped: ['dirty:upload.png'], failed: [], bytes: expect.any(Number),
+            problems: [{ id: 'dirty:upload.png', label: 'upload.png', reason: 'The one-click clean-up moves only merged worktrees and old test results: move this one by itself.' }] });
+        expect(done.bytes).toBeGreaterThan(0);
         expect(existsSync(join(dirty(), 'upload.png'))).toBe(true);
     });
 });

@@ -24,7 +24,7 @@ export interface DeckAnswerPorts {
     deckItems(): readonly DeckItem[];
     readonly attention: Pick<AttentionStore, 'answer' | 'pending'> & { readonly lists: Pick<AttentionStore['lists'], 'done'> };
     /** As the window's approvals API types it (a replica may answer later); read exactly as the feature action always did. */
-    readonly approvals: { resolve(id: string, choice: 'allow' | 'deny'): boolean | Promise<boolean> };
+    readonly approvals: { resolve(id: string, choice: 'allow' | 'deny'): boolean | Promise<boolean>; dismissExpired?(id: string): boolean | Promise<boolean> };
     readonly inbox: Pick<InboxStore, 'unread' | 'receive'>;
     readonly deliverToAgent?: ((agentId: string, text: string) => boolean | Promise<boolean>) | undefined;
     readonly trustCertificate?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
@@ -39,6 +39,8 @@ export interface DeckAnswerPorts {
     readonly limitNotices?: { dismiss(id: string): boolean };
     /** A Playwright install Genie could not finish (Tynn #846): Retry installs it again, Dismiss puts it away. */
     readonly playwrightNotices?: { retry(id: string): Promise<boolean>; dismiss(id: string): boolean };
+    /** What this host could not restore (Tynn #419; attach-host.ts): the item's action or Dismiss; a refusal is thrown in words. */
+    readonly attach?: { answer(id: string, optionId: string): Promise<void> };
     /** A turn Genie ended as stalled (Tynn #855): Stop or Restart the agent, or Dismiss; `false` when there is no such item. */
     readonly stalledTurns?: { act(agentId: string, action: 'stop' | 'restart' | 'dismiss'): Promise<boolean> };
     /** `deckItems`: the window's own record of them, the items an answer to one is resolved against (Tynn #861). */
@@ -93,8 +95,18 @@ export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPort
                 ? approvalNoteText({ what: `“${item.title}”`, outcome: command.choice === 'allow' ? 'allowed' : 'denied', option: command.choice, note: command.note })
                 : null;
             if (text !== null && !ports.deliverToAgent) throw new Error('your note cannot reach the agent from here; answer without it, or from its own window');
+            // A GROUPED ASK answers the list the person read (Tynn #742): one that grew since is refused, so Sign all never
+            // signs a claim that joined after the person looked. Its revision is the one fact of the item an answer brings.
+            if (typeof item.revision === 'number' && item.revision !== (action.item.revision ?? 0)) {
+                throw new Error('This request changed since you opened it: more were added to its list. Nothing was answered: read it again and answer the current list.');
+            }
             if (!ports.approvals.resolve(command.approvalId, command.choice)) throw new Error(`no pending approval ${command.approvalId}`);
             if (text !== null && !(await ports.deliverToAgent!(item.agentId!, text))) throw new Error(`answered — but ${item.agentName ?? 'the agent'} is not running, so your note was not delivered`);
+            break;
+        }
+        // An approval nobody answered in time (Tynn #1006): its notice goes; there is no verdict to give any more.
+        case 'dismiss-expired-approval': {
+            if (!ports.approvals.dismissExpired || !(await ports.approvals.dismissExpired(command.approvalId))) throw new Error(DECK_ITEM_GONE);
             break;
         }
         case 'list-done':
@@ -154,6 +166,10 @@ export async function answerDeck(action: DeckAnswerAction, ports: DeckAnswerPort
             // A Playwright install Genie could not finish (Tynn #846). Retry runs it again: when it fails again the item stays, with why.
             if (!ports.playwrightNotices) throw new Error('Genie’s Playwright installer is not running here; nothing was done');
             if (command.retry ? !(await ports.playwrightNotices.retry(command.id)) : !ports.playwrightNotices.dismiss(command.id)) throw new Error(`no Playwright install item ${command.id}`);
+            break;
+        case 'attach':
+            if (!ports.attach) throw new Error('this Genie keeps no record of what it could not restore; nothing was done');
+            await ports.attach.answer(command.id, command.optionId);
             break;
         case 'stalled-turn':
             // A turn Genie ended as stalled (Tynn #855): the agent is stopped or restarted on its conversation here, on its host.

@@ -3,7 +3,7 @@ import { firstStartWords, readEnvelopeSites, siteRunFingerprint, type ServableSi
 import { listRepos } from '../core/repo-registry.js';
 import { flowTrustItems } from '../core/workspace-flows.js';
 import { processTrustItems } from '../core/workspace-processes.js';
-import { npmRunTarget, trustHash, trustVerdict, unsafeGitKeys, type GitConfigEntry, type TrustFlow, type TrustHook, type TrustList, type TrustProcess, type TrustServer } from '../core/workspace-trust.js';
+import { npmRunTarget, recordSaysYes, trustHash, trustVerdict, unsafeGitKeys, type GitConfigEntry, type TrustFlow, type TrustHook, type TrustList, type TrustProcess, type TrustServer } from '../core/workspace-trust.js';
 import { isExactlyGenieStopHook } from './config-sync-targets.js';
 
 /**
@@ -150,6 +150,22 @@ export async function readTrustList(path: string, ports: TrustListPorts): Promis
     return { sites, hooks, servers, gitKeys, approvals, ...(flows.length > 0 ? { flows } : {}), ...(processes.length > 0 ? { processes } : {}) };
 }
 
+/**
+ * EVERY FILE AND FOLDER THE LIST ABOVE LOOKS AT, asked of the list itself (Tynn #955): what the watch must look at too
+ * (trust-watch.ts), so a file added to the list is watched without anyone remembering to add it there. Runs no git: the
+ * folders whose git config counts are the watch's own to find (a `.git` file's target). Reads what the list reads.
+ */
+export async function trustListReads(path: string, ports: Pick<TrustListPorts, 'readText' | 'listDir'>): Promise<{ files: string[]; dirs: string[] }> {
+    const files = new Set<string>();
+    const dirs = new Set<string>();
+    await readTrustList(path, {
+        readText: (file) => { files.add(file); return ports.readText(file); },
+        gitConfig: async () => [],
+        listDir: (dir) => { dirs.add(dir); return ports.listDir ? ports.listDir(dir) : Promise.reject(new Error('this folder is not listed here')); },
+    });
+    return { files: [...files], dirs: [...dirs] };
+}
+
 /** The `.json` files of one folder of the workspace that would run something, in name order; a folder that is not there, or a file that is not JSON, has none. */
 async function rowsIn(root: string, dir: string, ports: TrustListPorts, rowsOf: (file: string, value: unknown) => readonly (TrustFlow | TrustProcess)[]): Promise<(TrustFlow | TrustProcess)[]> {
     if (!ports.listDir) return [];
@@ -171,9 +187,37 @@ const inside = (root: string, path: string): boolean => {
     return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 };
 
+/** The guard's: the workspace went, moved, slept or was redocked while it was being read. Whoever interrupted it owns the verdict now. */
+export class TrustReadInterrupted extends Error {
+    constructor() { super('workspace trust read interrupted; redock it first'); }
+}
+
+/** How many times one call reads a workspace's list when another verdict landed while it was reading. Then it stops, and nothing it read says "trusted". */
+const READS_WHEN_CROSSED = 3;
+
+/**
+ * A workspace's list, and whether it was read ALONE: no other verdict of that workspace was written while it was being read.
+ * `fresher`: the read gave up crossed, and a verdict from a reading made alone was kept after this read began (Tynn #364).
+ */
+interface ListRead { readonly list: TrustList; readonly alone: boolean; readonly fresher?: TrustView }
+
+/**
+ * A kept verdict. `seq`: the write count when it was kept (`#writes`), which orders it against every read by the count, never by
+ * a clock. `lone`: it came from a reading made alone, or from the person's yes: a complete verdict, not a crossed one.
+ */
+interface Kept { readonly path: string; readonly view: TrustView; readonly seq: number; readonly lone: boolean }
+
 export class WorkspaceTrust {
     readonly #ports: WorkspaceTrustPorts;
-    readonly #views = new Map<string, { path: string; view: TrustView }>();
+    readonly #views = new Map<string, Kept>();
+    /**
+     * EVERY WRITE OF A WORKSPACE'S VERDICT, COUNTED (Tynn #955). Several things read one workspace at once (the hosting's
+     * pass, the watcher, an agent's start, Genie's own writes, the person's Untrust), a read takes several steps, and
+     * whichever landed last used to be kept: a read that found "no file" before the file existed could land after the
+     * read that saw it, and "nothing would run" is a yes. A read knows by this count that another verdict landed while it
+     * was reading; then what it read may be the older of the two, and it is not kept (`#read`).
+     */
+    readonly #writes = new Map<string, number>();
     readonly #redockEpoch = new Map<string, symbol>();
     readonly #redocking = new Set<string>();
     readonly #trustedListeners = new Set<(workspaceId: string) => void>();
@@ -200,11 +244,14 @@ export class WorkspaceTrust {
         const ensure = this.#guard(workspaceId, workspace.path, epoch, purpose);
         const ports = this.#guardedPorts(ensure);
         try {
-            const list = await readTrustList(workspace.path, ports);
-            ensure();
-            const view = { ...trustVerdict(this.#ports.record(), workspaceId, trustHash(list)), list };
-            this.#keep(workspaceId, workspace.path, view);
+            const read = await this.#read(workspaceId, workspace.path, ports, ensure);
+            if (read.fresher) return read.fresher;
+            const view = this.#verdict(workspaceId, read);
+            this.#keep(workspaceId, workspace.path, view, read.alone);
             return view;
+        } catch (error) {
+            this.#notRead(workspaceId, error);
+            throw error;
         } finally {
             if (purpose === 'redock' && this.#redockEpoch.get(workspaceId) === epoch) this.#redocking.delete(workspaceId);
         }
@@ -216,14 +263,15 @@ export class WorkspaceTrust {
         if (!workspace || workspace.asleep) { this.#forget(workspaceId); return null; }
         if (this.#redocking.has(workspaceId)) return null;
         const ensure = this.#guard(workspaceId, workspace.path, this.#redockEpoch.get(workspaceId));
-        const list = await readTrustList(workspace.path, this.#guardedPorts(ensure));
+        // Read once: the yes is the record's, so a list crossed by another read only shows a moment older.
+        const list = await readTrustList(workspace.path, this.#guardedPorts(ensure)).catch((error: unknown) => { this.#notRead(workspaceId, error); throw error; });
         ensure();
         await this.#ports.recordWorkspace(workspaceId, trustHash(list));
         ensure();
         await this.#ports.approveSites(workspaceId);
         ensure();
         const view: TrustView = { trusted: true, changed: false, list };
-        this.#keep(workspaceId, workspace.path, view);
+        this.#keep(workspaceId, workspace.path, view, true);
         // Told after the yes is kept (Tynn #756, PR9b): what waited for it is restored. One listener failing costs nobody the yes or the next listener.
         for (const listener of [...this.#trustedListeners]) { try { listener(workspaceId); } catch { /* the yes stands */ } }
         return view;
@@ -243,20 +291,72 @@ export class WorkspaceTrust {
         const ensure = this.#guard(workspaceId, workspace.path, this.#redockEpoch.get(workspaceId));
         await this.#ports.forgetWorkspace(workspaceId);
         ensure();
-        const list = await readTrustList(workspace.path, this.#guardedPorts(ensure));
-        ensure();
-        const view: TrustView = { ...trustVerdict(this.#ports.record(), workspaceId, trustHash(list)), list };
-        this.#keep(workspaceId, workspace.path, view);
+        // The yes is gone from the record. If the list cannot be read now, the verdict kept from before must not go on saying it.
+        const read = await this.#read(workspaceId, workspace.path, this.#guardedPorts(ensure), ensure).catch((error: unknown) => { this.#notRead(workspaceId, error); throw error; });
+        if (read.fresher) return read.fresher;
+        const view = this.#verdict(workspaceId, read);
+        this.#keep(workspaceId, workspace.path, view, read.alone);
         return view;
     }
 
-    #keep(workspaceId: string, path: string, view: TrustView): void {
+    /**
+     * The workspace's list, read until one reading was made ALONE. A reading during which another verdict of this
+     * workspace was written may be older than that verdict's (it does not matter which of the two started first: each
+     * reads its files in its own time), so it is read again. Every verdict kept from a reading made alone comes from one
+     * that began after the verdict before it was written, so a later one is never replaced by an earlier one. Crossed
+     * `READS_WHEN_CROSSED` times, it stops and says so: `#verdict` then takes the record's yes and nothing else.
+     *
+     * UNLESS A FRESHER COMPLETE VERDICT IS ALREADY KEPT (Tynn #364). Each crossing is a verdict written while this read ran.
+     * When the one kept now came from a reading made alone (or the person's yes) and was kept AFTER this read began (by the
+     * write count), it is a complete read at least as fresh as anything this one read: it is the answer, and this read
+     * keeps nothing over it. A workspace just added, read at once by the hosting's pass, a file write and an agent's start,
+     * was left "not trusted" by the last of them, over three reads that each read alone that nothing would run.
+     * Otherwise (nothing kept since, a forget, or a kept verdict that was itself crossed) it is as before.
+     */
+    async #read(workspaceId: string, path: string, ports: TrustListPorts, ensure: () => void): Promise<ListRead> {
+        const began = this.#writes.get(workspaceId) ?? 0;
+        for (let reading = 1; ; reading++) {
+            const before = this.#writes.get(workspaceId) ?? 0;
+            const list = await readTrustList(path, ports);
+            ensure();
+            const alone = (this.#writes.get(workspaceId) ?? 0) === before;
+            if (alone) return { list, alone };
+            if (reading === READS_WHEN_CROSSED) {
+                const kept = this.#views.get(workspaceId);
+                const fresher = kept !== undefined && kept.lone && kept.path === path && kept.seq > began ? kept.view : undefined;
+                return { list, alone, ...(fresher ? { fresher } : {}) };
+            }
+        }
+    }
+
+    /** The record's yes stands whatever was read. "Nothing would run" is a yes only from a list read alone: a crossed reading may be from before a file arrived. */
+    #verdict(workspaceId: string, read: ListRead): TrustView {
+        const record = this.#ports.record();
+        const verdict = trustVerdict(record, workspaceId, trustHash(read.list));
+        return { ...verdict, trusted: verdict.trusted && (read.alone || recordSaysYes(record, workspaceId)), list: read.list };
+    }
+
+    /**
+     * A read failed (a file held while it is written: EBUSY or EPERM on Windows). What could not be read is not trusted
+     * until a read succeeds: a verdict kept as "trusted, nothing would run" does not stand over a workspace that cannot
+     * be read now. The person's yes is the record's and stays (Tynn #618); a verdict that already says no stays, with its
+     * list to show. An interrupted read is the interrupter's to answer (`#guard`).
+     */
+    #notRead(workspaceId: string, error: unknown): void {
+        if (error instanceof TrustReadInterrupted) return;
+        if (this.#views.get(workspaceId)?.view.trusted === true && !recordSaysYes(this.#ports.record(), workspaceId)) this.#forget(workspaceId);
+    }
+
+    #keep(workspaceId: string, path: string, view: TrustView, lone: boolean): void {
         const before = this.#views.get(workspaceId)?.view.trusted;
-        this.#views.set(workspaceId, { path, view });
+        const seq = (this.#writes.get(workspaceId) ?? 0) + 1;
+        this.#views.set(workspaceId, { path, view, seq, lone });
+        this.#writes.set(workspaceId, seq);
         if (before !== view.trusted) this.#ports.verdictMoved?.(workspaceId);
     }
 
     #forget(workspaceId: string): void {
+        this.#writes.set(workspaceId, (this.#writes.get(workspaceId) ?? 0) + 1);
         if (this.#views.delete(workspaceId)) this.#ports.verdictMoved?.(workspaceId);
     }
 
@@ -265,7 +365,7 @@ export class WorkspaceTrust {
             const current = this.#ports.workspaces().find((w) => w.id === workspaceId);
             if (!current || current.path !== path || this.#redockEpoch.get(workspaceId) !== epoch || (purpose !== 'redock' && (current.asleep || this.#redocking.has(workspaceId)))) {
                 if (this.#redockEpoch.get(workspaceId) === epoch) this.#forget(workspaceId);
-                throw new Error('workspace trust read interrupted; redock it first');
+                throw new TrustReadInterrupted();
             }
         };
     }
@@ -277,6 +377,24 @@ export class WorkspaceTrust {
             ...(this.#ports.listDir ? { listDir: (dir: string) => { ensure(); return this.#ports.listDir!(dir); } } : {}),
             ...(this.#ports.isTracked ? { isTracked: (root: string, path: string) => { ensure(); return this.#ports.isTracked!(root, path); } } : {}),
         };
+    }
+
+    /**
+     * THE PERSON'S OWN YES, AS IT IS NOW (Tynn #364): the record's, which nothing but their Untrust ends (Tynn #618), so it
+     * needs no reading of the workspace's files to be current. A workspace trusted only because nothing in it would run is
+     * not this: that verdict is only as fresh as its last read. Asleep, being redocked, or no workspace: no.
+     */
+    durable(workspaceId: string): boolean {
+        const workspace = this.#ports.workspaces().find((w) => w.id === workspaceId);
+        return workspace !== undefined && !workspace.asleep && !this.#redocking.has(workspaceId) && recordSaysYes(this.#ports.record(), workspaceId);
+    }
+
+    /** `durable`, for the workspace holding `path`: the first one, as `isTrustedPath` finds it. */
+    durablePath(path: string): boolean {
+        for (const workspace of this.#ports.workspaces()) {
+            if (inside(workspace.path, path)) return this.durable(workspace.id);
+        }
+        return false;
     }
 
     /** As last read. A workspace not read yet is not trusted; nor is a folder in none. */
