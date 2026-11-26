@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ENGINE_PROTOCOL } from '../src/core/engine-protocol.js';
 import type { LineTransport } from '../src/core/line-transport.js';
 
 /*
@@ -21,7 +22,7 @@ const { linkToHost } = await import('../src/main/engine-launch.js');
 const { connectAgentEngine } = await import('../src/main/agent-engine.js');
 
 const transport = (): LineTransport => ({ send: () => {}, onMessage: () => () => {}, onClose: () => () => {}, close: () => {}, trusted: () => {} });
-const record = (over: Record<string, unknown> = {}) => JSON.stringify({ pid: 777, endpoint: 'pipe-777', protocol: 1, build: '2.0.0-beta.61+aaaaaaaaaaaa', startedAt: 1, ...over });
+const record = (over: Record<string, unknown> = {}) => JSON.stringify({ pid: 777, endpoint: 'pipe-777', protocol: ENGINE_PROTOCOL, build: '2.0.0-beta.61+aaaaaaaaaaaa', startedAt: 1, ...over });
 
 beforeEach(() => { started.length = 0; });
 
@@ -73,7 +74,7 @@ describe('a host of another build', () => {
         const dialled: string[] = [];
         const link = await connectAgentEngine({
             callbacks: {},
-            launch: { runtimeDir: 'rt', readFile: (f: string) => (f.endsWith('host.json') ? record({ protocol: 999 }) : 'tok'), alive: () => true, connectTo: async (e: string) => { dialled.push(e); return transport(); } },
+            launch: { runtimeDir: 'rt', readFile: (f: string) => (f.endsWith('host.json') ? record({ protocol: ENGINE_PROTOCOL + 1 }) : 'tok'), alive: () => true, connectTo: async (e: string) => { dialled.push(e); return transport(); } },
             onError: () => {}, agentName: (id) => id, log: () => {},
             sleep: () => new Promise<void>(() => {}),
         });
@@ -84,13 +85,16 @@ describe('a host of another build', () => {
 
     it('a live host that does not answer yet is not ended: no link now, and it is tried again later', async () => {
         const kills: number[] = [];
+        const dialled: string[] = [];
         const link = await linkToHost({
             runtimeDir: 'rt', logsDir: 'logs', build: 'b', hostScript: 'host.js', execPath: 'genie', genieHome: 'home', env: {},
             readFile: (f: string) => (f.endsWith('host.json') ? record() : 'tok'), alive: () => true,
-            connectTo: async () => { throw new Error('ECONNREFUSED'); },
+            connectTo: async (e: string) => { dialled.push(e); throw new Error('ECONNREFUSED'); },
             kill: (pid: number) => { kills.push(pid); },
         } as never);
         expect(link).toBeNull();
+        // CONTROL: it was this host, of this protocol, that was dialled and left alone.
+        expect(dialled).toEqual(['pipe-777']);
         expect(kills).toEqual([]);
         expect(started).toEqual([]);
     });
