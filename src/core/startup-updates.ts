@@ -110,6 +110,8 @@ export function runStartupUpdates(ports: StartupUpdatePorts, limitMs: number = S
     const startedAt = ports.now();
     let closed = false;
     let current = 'Checking for tool updates';
+    // What the limit names: the task, never its sub-step (`Updating Claude Code …`, not the installer's line).
+    let task = current;
     const ran: { label: string; words: string }[] = [];
     const failed: { label: string; reason: string }[] = [];
     const say = (step: string): void => {
@@ -133,20 +135,21 @@ export function runStartupUpdates(ports: StartupUpdatePorts, limitMs: number = S
             resolve(report);
         };
         // An elapsed timer, as the host-update drain's bound: a wall-clock correction cannot lengthen the wait.
-        const timer = setTimeout(() => finish(current), limitMs);
+        const timer = setTimeout(() => finish(task), limitMs);
         void (async () => {
             say(current);
             let tasks: readonly StartupUpdateTask[] = [];
             try { tasks = await ports.tasks(); } catch (error) { log(`startup updates: what is due could not be read: ${why(error)}`); }
-            for (const task of tasks) {
-                say(task.label);
+            for (const t of tasks) {
+                task = t.label;
+                say(t.label);
                 try {
-                    const words = await task.run((step) => say(`${task.label}: ${step}`));
-                    ran.push({ label: task.label, words });
-                    log(closed ? `startup updates: after the limit: ${task.label}: ${words}` : `startup update: ${task.label}: ${words}`);
+                    const words = await t.run((step) => say(`${t.label}: ${step}`));
+                    ran.push({ label: t.label, words });
+                    log(closed ? `startup updates: after the limit: ${t.label}: ${words}` : `startup update: ${t.label}: ${words}`);
                 } catch (error) {
-                    failed.push({ label: task.label, reason: why(error) });
-                    log(closed ? `startup updates: after the limit: ${task.label} failed: ${why(error)}` : `startup update failed: ${task.label}: ${why(error)}`);
+                    failed.push({ label: t.label, reason: why(error) });
+                    log(closed ? `startup updates: after the limit: ${t.label} failed: ${why(error)}` : `startup update failed: ${t.label}: ${why(error)}`);
                 }
             }
             finish(null);
