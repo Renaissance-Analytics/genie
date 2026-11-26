@@ -7,6 +7,7 @@ import {
     parsePhpNetSupported,
     parseStoredCatalog,
     parseWindowsReleaseLines,
+    parseWindowsToolsets,
     phpNetLineJson,
     setPhpCatalog,
     type PhpCatalog,
@@ -81,7 +82,8 @@ export class PhpReleaseFeed {
         const candidates = [...new Set([...(supported ?? []), ...PHP_RECIPES.map((r) => r.version.split('.').slice(0, 2).join('.')), ...Object.keys(windows ?? {})])];
         const lineTexts = await Promise.all(candidates.map(async (line) => [line, await get(phpNetLineJson(line))] as const));
         const lines = Object.fromEntries(lineTexts.map(([line, text]) => [line, text === null ? null : parsePhpNetLine(text, line)]));
-        const built = buildPhpCatalog({ platform: this.#p.platform, at: this.#p.now(), windows, supported, lines });
+        const windowsToolsets = windowsText === null ? null : parseWindowsToolsets(windowsText);
+        const built = buildPhpCatalog({ platform: this.#p.platform, at: this.#p.now(), windows, windowsToolsets, supported, lines });
         if (built.source !== 'live') {
             if (!this.#offlineSaid) {
                 const using = currentPhpCatalog().source === 'live' ? 'the PHP release data it read last' : "this Genie release's baked PHP versions";

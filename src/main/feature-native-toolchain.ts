@@ -24,7 +24,7 @@ import { userHome } from './paths.js';
 import { join } from 'node:path';
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { PhpReleaseFeed } from './php-release-feed.js';
-import { ensureVcRuntimeAtLeast } from './vc-runtime.js';
+import { dllVersion, ensureVcRuntimeAtLeast } from './vc-runtime.js';
 import { applyDuePhpUpdates, PhpPatchNotices, type PhpPatchSite } from './php-patch-keeper.js';
 import type { FeaturePorts } from './feature-ipc.js';
 import type { ProviderHealthBook } from './provider-health.js';
@@ -109,6 +109,8 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
             }) : { ok: true };
         },
         progress: (step) => deps.busy(step),
+        // Tynn #1066: the card offers the newest PHP this machine's Visual C++ runtime can run.
+        ...(process.platform === 'win32' ? { vcRuntimeVersion: () => dllVersion((binary, args) => execFileRunner(binary, args, { timeoutMs: 30_000 }), process.env.SystemRoot ?? 'C:/Windows') } : {}),
     });
     const nodeVersionsPorts = (): NodeVersionsPorts => ({
         platform: process.platform as NodeVersionsPorts['platform'],

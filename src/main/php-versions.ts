@@ -7,6 +7,8 @@ import {
     PHP_VERSION,
     compareVersionsDesc,
     vcRuntimeFor,
+    VC_RUNTIME_FOR_TOOLSET,
+    vcRuntimeAtLeast,
     managedCgiCommand,
     managedVersions,
     missingPinReason,
@@ -100,6 +102,11 @@ export interface PhpVersionsPorts {
     readonly cpus?: number;
     /** The CA bundle the new version's php.ini names (genie#1334). Absent = none is named. */
     readonly ca?: PhpCaPort;
+    /**
+     * Windows (Tynn #1066): this machine's VCRUNTIME140 version, or `null` unread. A line whose build needs a newer one
+     * (8.6, vs18: 14.50) is offered after every line that runs here, so the card's Install is one that works.
+     */
+    readonly vcRuntimeVersion?: () => Promise<string | null>;
 }
 
 export interface PhpVersionsView {
@@ -264,10 +271,21 @@ export async function listPhpVersions(ports: PhpVersionsPorts, pins: readonly Si
         // no php-cgi on PATH: an unpinned php site cannot start either, and Toolchain's php row says how to install one
     }
     const have = new Set(managed.map((m) => m.version));
+    const catalog = currentPhpCatalog();
+    let offer = catalogVersions(catalog);
+    const runtime = ports.platform === 'win32' && ports.vcRuntimeVersion ? await ports.vcRuntimeVersion().catch(() => null) : null;
+    if (runtime !== null) {
+        const runs = (v: string) => {
+            const toolset = catalogLine(catalog, v.split('.').slice(0, 2).join('.'))?.toolset;
+            const need = toolset ? VC_RUNTIME_FOR_TOOLSET[toolset] : undefined;
+            return need === undefined || vcRuntimeAtLeast(runtime, need);
+        };
+        offer = [...offer.filter(runs), ...offer.filter((v) => !runs(v))];
+    }
     return {
         managed: managed.map((m) => ({ ...m, usedBy: sitesOn(m.version, pins, managed), ...withAdvisory(m.version) })),
         system,
-        available: ports.platform !== 'darwin' ? catalogVersions(currentPhpCatalog()).map((version) => ({ version, installed: have.has(version) })) : [],
+        available: ports.platform !== 'darwin' ? offer.map((version) => ({ version, installed: have.has(version) })) : [],
         ...(ports.platform !== 'darwin' ? {} : { installRefused: NOT_HERE }),
     };
 }

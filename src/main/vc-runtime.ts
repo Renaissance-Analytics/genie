@@ -36,7 +36,8 @@ export interface VcRuntimePorts {
 const psQuote = (s: string) => `'${s.replace(/'/g, "''")}'`;
 const ps = (run: CommandRunner, command: string) => run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command]);
 
-async function dllVersion(run: CommandRunner, systemRoot: string): Promise<string | null> {
+/** This machine's VCRUNTIME140 version (`14.44.35211.0`), read from the DLL php-cgi loads; `null` when unread. */
+export async function dllVersion(run: CommandRunner, systemRoot: string): Promise<string | null> {
     try {
         const r = await ps(run, `(Get-Item -LiteralPath ${psQuote(join(systemRoot, 'System32', 'vcruntime140.dll'))}).VersionInfo.FileVersion`);
         const v = r.stdout.trim().split(/\s+/)[0] ?? '';

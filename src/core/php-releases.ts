@@ -41,6 +41,8 @@ export interface PhpCatalogLine {
     readonly newest: string;
     /** php.net's newest SECURITY release of this line, from the live data; `null` when unknown (baked, or not read). */
     readonly securityFloor: string | null;
+    /** Windows: the Visual Studio toolset of windows.php.net's build (`vs18`) — what Visual C++ runtime it needs. */
+    readonly toolset?: string;
 }
 
 export interface PhpCatalog {
@@ -89,6 +91,19 @@ export function parseWindowsReleaseLines(text: string): Record<string, string> |
     return out;
 }
 
+/** windows.php.net's releases.json → line → the toolset of its NTS x64 build (`vs18`), or `null` when not that file. */
+export function parseWindowsToolsets(text: string): Record<string, string> | null {
+    const parsed = json(text);
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+    const out: Record<string, string> = {};
+    for (const [line, entry] of Object.entries(parsed as Record<string, unknown>)) {
+        if (!LINE.test(line) || typeof entry !== 'object' || entry === null) continue;
+        const key = Object.keys(entry as Record<string, unknown>).find((k) => NTS_X64.test(k));
+        if (key) out[line] = key.slice('nts-'.length, -'-x64'.length);
+    }
+    return out;
+}
+
 /** php.net's `?json&version=8` → its `supported_versions` (`["8.2", …]`), or `null`. */
 export function parsePhpNetSupported(text: string): string[] | null {
     const parsed = json(text) as { supported_versions?: unknown } | null;
@@ -124,6 +139,8 @@ export interface PhpCatalogInput {
     readonly at: number;
     /** windows.php.net's lines (parseWindowsReleaseLines); `null` = not read. Used on Windows. */
     readonly windows: Record<string, string> | null;
+    /** windows.php.net's toolsets per line (parseWindowsToolsets). Used on Windows. */
+    readonly windowsToolsets?: Record<string, string> | null;
     /** php.net's supported lines; `null` = not read. */
     readonly supported: readonly string[] | null;
     /** php.net's releases per line (parsePhpNetLine); a line absent or `null` = not read. */
@@ -156,7 +173,8 @@ export function buildPhpCatalog(input: PhpCatalogInput): PhpCatalog {
         if (newest === null) continue;
         const securityFloor = input.lines[line]?.newestSecurity ?? null;
         if (fromFeed !== null || securityFloor !== null) live = true;
-        out.push({ line, newest, securityFloor });
+        const toolset = input.platform === 'win32' && fromFeed !== null && newest === fromFeed ? input.windowsToolsets?.[line] : undefined;
+        out.push({ line, newest, securityFloor, ...(toolset ? { toolset } : {}) });
     }
     if (!live || out.length === 0) return bakedPhpCatalog();
     return { source: 'live', at: input.at, lines: out };
@@ -181,7 +199,7 @@ export function parseStoredCatalog(text: string | null): PhpCatalog | null {
     if (lines.length === 0) return null;
     // A stored catalog is still held to this release's minimum.
     const baked = new Map(PHP_RECIPES.map((r) => [lineOf(r.version), r.version]));
-    return { source: 'live', at: parsed.at, lines: lines.map((l) => ({ line: l.line, newest: baked.has(l.line) ? maxOf(l.newest, baked.get(l.line)!) : l.newest, securityFloor: l.securityFloor })).sort((a, b) => linesDesc(a.line, b.line)) };
+    return { source: 'live', at: parsed.at, lines: lines.map((l) => ({ line: l.line, newest: baked.has(l.line) ? maxOf(l.newest, baked.get(l.line)!) : l.newest, securityFloor: l.securityFloor, ...(typeof l.toolset === 'string' && /^vs[0-9]+$/.test(l.toolset) ? { toolset: l.toolset } : {}) })).sort((a, b) => linesDesc(a.line, b.line)) };
 }
 
 /**
