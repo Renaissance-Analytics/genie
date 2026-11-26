@@ -143,7 +143,11 @@ async function click(cdp, selector) {
         return { x, y, reaches: Boolean(hit && (hit === el || el.contains(hit))), under: hit ? hit.outerHTML.slice(0, 120) : null };
     })()`);
     if (!at) { note(`no ${selector} on the page`); return false; }
-    if (!at.reaches) { note(`the mouse at ${selector} would reach: ${at.under}`); return false; }
+    if (!at.reaches) {
+        // Off the visible part of a scrolled container (the cramped Toolchain on this base, Tynn #1062): a DOM click.
+        note(`the mouse at ${selector} would reach: ${at.under}; clicking it in the page instead`);
+        return cdp.evaluate(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; el.click(); return true; })()`);
+    }
     for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
         await cdp.send('Input.dispatchMouseEvent', { type, x: at.x, y: at.y, button: type === 'mouseMoved' ? 'none' : 'left', clickCount: type === 'mouseMoved' ? 0 : 1 });
     }
@@ -184,7 +188,7 @@ async function shootAt(cdp, label, sizes) {
     }
 }
 
-const SIZES = [[1280, 800], [1050, 720]];
+const SIZES = [[1600, 900], [1280, 800]];
 let app = launch();
 let cdp = null;
 let shots = 0;
@@ -195,7 +199,7 @@ try {
         for (const type of ['keyDown', 'keyUp']) await cdp.send('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
         await sleep(500);
     }
-    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 900, deviceScaleFactor: 1, mobile: false });
     await openPhpPanel(cdp);
     // BEFORE: php.net's live data reached the panel (a patch above 8.4.27 on its button), and nothing installed yet.
     const offered = await waitFor(cdp, `Boolean(document.querySelector('${PANEL} [data-patch-update="php:8.4.27"]'))`, 45_000, 1000);
