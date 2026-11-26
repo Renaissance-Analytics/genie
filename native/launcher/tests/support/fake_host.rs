@@ -1,8 +1,10 @@
 //! A STAND-IN FOR genie-host AND genie-client in the launcher's tests (built only with the `test-keys` feature). As a
 //! host it does what the launcher relies on: binds its endpoint, writes `host.token` and `host.json` (pid, endpoint,
 //! protocol 4, its GENIE_HOST_BUILD), answers `hello` with the token by a `welcome`, `engine.ping`, and `engine.shutdown`
-//! by exiting. As a client (any of `--host`, `--genie-browser`, `--open-window`) it writes its arguments to
-//! `<GENIE_HOME>/client-args.txt` and exits. FAKE_HOST_MODE=exit-at-boot makes the host exit at once.
+//! by exiting. As a client (any of `--host`, `--genie-browser`, `--open-window`, `--doctor`) it writes its arguments to
+//! `<GENIE_HOME>/client-args.txt`, and its own path with what the launcher handed it (GENIE_LAUNCHER_EXE,
+//! GENIE_LAUNCHER_HOST_BUILD) to `<GENIE_HOME>/client-env.txt`, and exits. As a host it prints the same, and its
+//! GENIE_RESOURCES. FAKE_HOST_MODE=exit-at-boot makes the host exit at once.
 
 use genie_launcher::local::LocalListener;
 use serde_json::{json, Value};
@@ -13,11 +15,16 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let home = PathBuf::from(std::env::var("GENIE_HOME").expect("GENIE_HOME"));
     println!("fake {} args {:?} cwd {}", std::process::id(), args, std::env::current_dir().unwrap().display());
-    if args.iter().any(|a| a == "--host" || a == "--genie-browser" || a == "--open-window") {
+    let env = |k: &str| std::env::var(k).unwrap_or_else(|_| "-".to_string());
+    let exe = std::env::current_exe().unwrap().display().to_string();
+    if args.iter().any(|a| a == "--host" || a == "--genie-browser" || a == "--open-window" || a == "--doctor") {
         let mut f = std::fs::OpenOptions::new().create(true).append(true).open(home.join("client-args.txt")).unwrap();
         writeln!(f, "{}", args.join(" ")).unwrap();
+        let mut e = std::fs::OpenOptions::new().create(true).append(true).open(home.join("client-env.txt")).unwrap();
+        writeln!(e, "{} | exe={exe} launcher={} hostBuild={}", args.join(" "), env("GENIE_LAUNCHER_EXE"), env("GENIE_LAUNCHER_HOST_BUILD")).unwrap();
         return;
     }
+    println!("fake host env exe={exe} launcher={} resources={}", env("GENIE_LAUNCHER_EXE"), env("GENIE_RESOURCES"));
     if std::env::var("FAKE_HOST_MODE").as_deref() == Ok("exit-at-boot") {
         std::process::exit(3);
     }

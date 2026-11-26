@@ -80,8 +80,8 @@ function materialise(c: ManifestCase): { bytes: Buffer; sig: string; trusted: st
 }
 
 describe('the shared verify-before-run table', () => {
-    it('is format 1, names every case once, and has every verdict', () => {
-        expect(table.format).toBe(1);
+    it('is format 2, names every case once, and has every verdict', () => {
+        expect(table.format).toBe(2);
         expect(new Set(table.manifestCases.map((c) => c.name)).size).toBe(table.manifestCases.length);
         expect(new Set(table.treeCases.map((c) => c.name)).size).toBe(table.treeCases.length);
         const codes = new Set(table.manifestCases.map((c) => (c.verdict.ok ? 'ok' : c.verdict.code)));
@@ -117,8 +117,8 @@ describe('the shared verify-before-run table', () => {
                 .sort((x, y) => Buffer.compare(Buffer.from(x[0]), Buffer.from(y[0])))
                 .map(([path, text]) => ({ path, size: Buffer.byteLength(text), sha256: createHash('sha256').update(text).digest('hex') }));
             const manifest: TrackManifest = {
-                format: 1, track: 'host', build: '2026.11.25-1', schema: '2026.11.25', channel: 'stable', platform: 'linux', arch: 'x64',
-                minLauncher: null, files, notes: '',
+                format: 2, track: 'host', build: '2026.11.25-1', schema: '2026.11.25', channel: 'stable', platform: 'linux', arch: 'x64',
+                withClient: '2026.11.25-1', minLauncher: null, files, notes: '',
             };
             const v = await verifyTree(manifest, dir);
             expect(v.ok ? { ok: true } : { ok: false, code: v.code, path: v.path }).toEqual(c.verdict);

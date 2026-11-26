@@ -89,11 +89,14 @@ pub struct Package<'a> {
     pub format: Format,
     pub min_launcher: Option<&'a str>,
     pub next_key: Option<String>,
+    /// A host package's client build (format 2's `withClient`): the build itself unless a test says otherwise.
+    pub with_client: Option<&'a str>,
 }
 
 impl<'a> Package<'a> {
     pub fn new(track: &'a str, build: &'a str, files: Vec<(String, Vec<u8>)>) -> Package<'a> {
-        Package { track, build, channel: "stable", files, format: native_format(), min_launcher: None, next_key: None }
+        let with_client = if track == "host" { Some(build) } else { None };
+        Package { track, build, channel: "stable", files, format: native_format(), min_launcher: None, next_key: None, with_client }
     }
     pub fn stem(&self) -> String {
         format!("{}-{}-{}-{}", self.track, self.build, this_platform(), this_arch())
@@ -105,7 +108,7 @@ pub fn manifest_bytes(p: &Package) -> Vec<u8> {
     let mut files = p.files.clone();
     files.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
     let mut m = json!({
-        "format": 1,
+        "format": 2,
         "track": p.track,
         "build": p.build,
         "schema": &p.build[..10],
@@ -116,6 +119,9 @@ pub fn manifest_bytes(p: &Package) -> Vec<u8> {
         "files": files.iter().map(|(path, bytes)| json!({"path": path, "size": bytes.len(), "sha256": sha256_hex(bytes)})).collect::<Vec<_>>(),
         "notes": "a test package",
     });
+    if let Some(c) = p.with_client {
+        m["withClient"] = Value::String(c.to_string());
+    }
     if let Some(k) = &p.next_key {
         m["nextKey"] = Value::String(k.clone());
     }
