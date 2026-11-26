@@ -195,6 +195,14 @@ describe('carried to every window', () => {
         expect(WORKSPACE_SCOPED_METHODS).toContain('workspaces.setMcpServer' as never);
     });
 
+    // Tynn #1062 (the owner could not find the Fancy Dev Kit switch): the MCP servers are the FIRST row of the workspace's
+    // settings, above the fold, not under its colour picker.
+    it('the workspace’s MCP servers are the first row of its settings', () => {
+        const ws = src('src/renderer/components/Workspace.tsx');
+        expect(ws.indexOf('data-ws-mcp=""')).toBeGreaterThan(0);
+        expect(ws.indexOf('data-ws-mcp=""')).toBeLessThan(ws.indexOf('data-ws-color=""'));
+    });
+
     it('the host answers it, both bridges ask it, and both pages are wired', () => {
         expect(src('src/main/host-api.ts')).toContain('return deps.workspaceOps.setMcpServer(str(args[0]), args[1], args[2]);');
         expect(src('src/main/workspace-lifecycle-api.ts')).toContain('setMcpServer: (id, name, on) => wiring.registry()!.setWorkspaceMcpServer(id, name, on).finally(touch),');

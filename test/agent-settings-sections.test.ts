@@ -54,6 +54,20 @@ describe('settingsSections — the sub-tabs and what each holds', () => {
         expect(ids({ ...ALL, ops: false })).toEqual(['persona', 'skills']);
     });
 
+    // Tynn #1062 (the owner could not find the Fancy Dev Kit switch): the agent's MCP switches were drawn under "Skills", and
+    // only when the provider had reported its skills. They are their own tab, named for what they are, right after General.
+    it('MCP servers is its OWN tab, right after General, whenever the window can set them; Skills keeps only skills', () => {
+        const f = { ...ALL, mcp: true };
+        expect(ids(f)).toEqual(['general', 'mcp', 'permissions', 'issuewatch', 'persona', 'skills']);
+        expect(settingsSections(f).find((s) => s.id === 'mcp')?.label).toBe('MCP servers');
+        expect(controlsOf(f, 'mcp')).toEqual(['mcp']);
+        expect(controlsOf(f, 'skills')).toEqual(['skills']);
+        // Not hidden by a provider that reported no skills.
+        expect(ids({ ...f, skills: false, issueWatch: false, persona: false })).toEqual(['general', 'mcp', 'permissions']);
+        // CONTROL: a window that cannot set them has no such tab.
+        expect(ids({ ...ALL, mcp: false })).not.toContain('mcp');
+    });
+
     it('an OBSERVED agent gets no operations and no settings at all', () => {
         expect(ids({ ...ALL, fidelity: 'observed' })).toEqual([]);
     });
