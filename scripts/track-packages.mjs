@@ -18,7 +18,7 @@
  */
 import { chmod, copyFile, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { leftovers } from './packed-tree-check.mjs';
+import { asarTopProblems, leftovers } from './packed-tree-check.mjs';
 
 /** The tracks packed from the app build, each its own package and manifest. GApps join as tracks of their own later. */
 export const COMPONENT_TRACKS = ['client', 'browser', 'host'];
@@ -225,8 +225,7 @@ export function trackTreeProblems({ track, platform, arch = 'x64', files: list, 
     if (track === 'client') {
         // What the client's app.asar may hold: the app (dist, package.json) and its production modules. Anything else at its
         // top is the repository packed by mistake (the Windows build, item 1126-183942-7000a7: a 956 MiB asar).
-        const tops = new Set(asarFiles.map((a) => a.replace(/\\/g, '/').replace(/^\//, '').split('/')[0]).filter(Boolean));
-        for (const t of tops) if (!['dist', 'package.json', 'node_modules'].includes(t)) problems.push({ file: `resources/app.asar:/${t}`, why: 'not the app or its modules: the repository was packed into the client' });
+        problems.push(...asarTopProblems(asarFiles));
         for (const f of asarFiles.map((a) => a.replace(/\\/g, '/'))) {
             if (f === '/dist/main/host.js' || f === 'dist/main/host.js') problems.push({ file: `resources/app.asar:${f}`, why: 'the host bundle: the client package holds none' });
         }

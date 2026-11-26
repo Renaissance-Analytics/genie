@@ -12,7 +12,8 @@
  * .py, .sh), node-pty's TypeScript sources and its tests. Antivirus reads every one of them in the install directory,
  * the scripts and other platforms' binaries are what it looks at hardest, and none of them is ever loaded.
  */
-import { readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join, relative } from 'node:path';
 
 const UNPACKED = 'resources/app.asar.unpacked/node_modules/';
@@ -41,6 +42,23 @@ export function leftovers(files, { platform = 'win32', arch = 'x64' } = {}) {
         if (why) out.push({ file, why });
     }
     return out;
+}
+
+/** What may be at the top of the app's archive: the app and its production modules. */
+export const ASAR_TOP = ['dist', 'package.json', 'node_modules'];
+
+/**
+ * Everything at the top of the app's archive that is not the app or its modules (`[{file, why}]`), from its listing
+ * (`/dist/main/main.js`, or with backslashes on Windows). v2.0.0-beta.66's held the repository: src/, test/, scripts/,
+ * docs/, contracts/, packages/, native/ and the build configs (Tynn #1058 L3).
+ */
+export function asarTopProblems(listing) {
+    const tops = [];
+    for (const entry of listing) {
+        const top = String(entry).replace(/\\/g, '/').replace(/^\//, '').split('/')[0];
+        if (top && !tops.includes(top)) tops.push(top);
+    }
+    return tops.filter((t) => !ASAR_TOP.includes(t)).map((t) => ({ file: `resources/app.asar:/${t}`, why: 'not the app or its modules: the repository was packed into the app' }));
 }
 
 /** What the installed app loads on `platform`-`arch` (Windows only): every one must be in `files`. */
@@ -85,6 +103,12 @@ if (isMain) {
     const extra = leftovers(files, { platform: 'win32', arch });
     const have = new Set(files);
     const missing = required({ platform: 'win32', arch }).filter((f) => !have.has(f));
+    // The archive itself: the app and its modules only (@electron/asar, electron-builder's own reader).
+    const asarPath = join(root, 'resources', 'app.asar');
+    if (existsSync(asarPath)) {
+        const asar = createRequire(import.meta.url)('@electron/asar');
+        extra.push(...asarTopProblems(asar.listPackage(asarPath, { isPack: false })));
+    }
     console.log(`### packed-tree-check: ${files.length} files; ${extra.length} the app never uses; ${missing.length} it needs and lacks`);
     for (const { file, why } of extra) console.log(`### NOT USED  ${file}  (${why})`);
     for (const file of missing) console.log(`### MISSING   ${file}`);
