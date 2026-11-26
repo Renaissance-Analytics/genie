@@ -536,3 +536,45 @@ describe('bringing the Visual C++ runtime up to a toolset (main/vc-runtime.ts)',
         expect(!r.ok && r.reason).toMatch(/14[.]44[.]35211[.]0/);
     });
 });
+
+describe('no winget (Windows Server, measured on the test VM: spawn winget ENOENT): Microsoft’s own redistributable, signature-checked', () => {
+    const serverMachine = (opts: { signature: string; versions: string[] }) => {
+        const ran: string[] = [];
+        const written: string[] = [];
+        let reads = 0;
+        const run = async (binary: string, args: readonly string[]) => {
+            const line = `${binary} ${args.join(' ')}`;
+            ran.push(line);
+            if (binary === 'winget') throw new Error('spawn winget ENOENT');
+            if (line.includes('VersionInfo')) return { stdout: `${opts.versions[Math.min(reads++, opts.versions.length - 1)]}\r\n`, exitCode: 0 };
+            if (line.includes('Get-AuthenticodeSignature')) return { stdout: `${opts.signature}\r\n`, exitCode: 0 };
+            if (line.includes('Start-Process')) return { stdout: '', exitCode: 0 };
+            throw new Error(`unexpected ${line}`);
+        };
+        const ports = {
+            run, systemRoot: 'C:/Windows', tempDir: 'C:/genie/tmp',
+            download: async (url: string) => { ran.push(`GET ${url}`); return { ok: true as const, body: new Uint8Array([1, 2, 3]) }; },
+            writeFile: (path: string) => { written.push(path); },
+        };
+        return { ports, ran, written };
+    };
+
+    it('downloads aka.ms/vc14/vc_redist.x64.exe, runs it only once its Authenticode signature is Microsoft’s and valid, and reads the DLL again', async () => {
+        const m = serverMachine({ signature: 'Valid|CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US', versions: ['14.44.35211.0', '14.51.36231.0'] });
+        expect(await ensureVcRuntimeAtLeast('14.50', m.ports)).toEqual({ ok: true });
+        expect(m.ran).toContain('GET https://aka.ms/vc14/vc_redist.x64.exe');
+        const sig = m.ran.findIndex((c) => c.includes('Get-AuthenticodeSignature'));
+        const start = m.ran.findIndex((c) => c.includes('Start-Process'));
+        expect(sig).toBeGreaterThan(-1);
+        expect(start).toBeGreaterThan(sig);
+        expect(m.ran[start]).toMatch(/\/install \/quiet \/norestart/);
+    });
+
+    it('a file whose signature is not Microsoft’s (or not valid) is never run', async () => {
+        const m = serverMachine({ signature: 'HashMismatch|CN=Someone Else', versions: ['14.44.35211.0'] });
+        const r = await ensureVcRuntimeAtLeast('14.50', m.ports);
+        expect(r.ok).toBe(false);
+        expect(!r.ok && r.reason).toMatch(/signature/);
+        expect(m.ran.some((c) => c.includes('Start-Process'))).toBe(false);
+    });
+});
