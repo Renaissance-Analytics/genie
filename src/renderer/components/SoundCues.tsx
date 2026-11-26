@@ -81,7 +81,9 @@ export function SoundActivity({ scope }: { scope: 'dashboard' | { workspaceId: s
     const label = scope === 'dashboard' ? `${unseen} unseen event${unseen === 1 ? '' : 's'}` : 'Recent events';
     return (
         <div data-sound-activity={scope === 'dashboard' ? 'dashboard' : scope.workspaceId} role="list" aria-label={label}
-            className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-[var(--border-1)] px-7 py-1.5">
+            // The Dashboard's is a band under its header, edge to edge like its signal strip; a workspace dashboard's is a card
+            // in its column, like the lanes under it.
+            className={`flex shrink-0 flex-wrap items-center gap-1.5 ${scope === 'dashboard' ? 'border-b border-[var(--border-1)] px-7 py-1.5' : 'rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] px-3 py-2'}`}>
             <span title={label} className="flex shrink-0 items-center gap-1 text-[var(--fg-3)]">
                 <Icon name="bell" size="xs" />
                 {unseen > 0 ? <span data-sound-unseen={unseen} className="font-mono text-[11px] tabular-nums">{unseen}</span> : null}

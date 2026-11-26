@@ -160,7 +160,8 @@ async function click(cdp, selector) {
     const at = await cdp.evaluate(`(() => {
         const el = document.querySelector(${JSON.stringify(selector)});
         if (!el) return null;
-        el.scrollIntoView({ block: 'center', inline: 'center' });
+        // Nearest, never centred: centring scrolled the narrow board sideways and cut its first column off the picture.
+        el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
         const r = el.getBoundingClientRect();
         const x = r.left + r.width / 2, y = r.top + r.height / 2;
         const hit = document.elementFromPoint(x, y);
@@ -177,6 +178,9 @@ async function click(cdp, selector) {
 async function shot(cdp, name, selector = null, scale = 1) {
     const file = `sound-cues-1057-${name}-${LABEL}-${PLATFORM}.png`;
     try {
+        // Every board back at its left edge, as a person who has not scrolled sees it.
+        await cdp.evaluate(`(() => { for (const el of document.querySelectorAll('*')) if (el.scrollLeft) el.scrollLeft = 0; return true; })()`);
+        await sleep(150);
         let clip;
         if (selector) {
             const r = await cdp.evaluate(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return null; const b = el.getBoundingClientRect(); return [b.left, b.top, b.width, b.height]; })()`);
@@ -212,7 +216,8 @@ try {
     check(await waitFor(cdp, `document.querySelectorAll('[data-rail="expanded"] [data-workspace]').length === 3`, 60_000), '1. the sidebar lists the three workspaces (the positive control for every row check below)', await cdp.evaluate(ROWS));
     // A fresh home's agents are stopped, and Stopped is hidden by default (on the Dashboard and the sidebar's Agents view alike).
     if (!(await cdp.evaluate(`document.querySelector('[data-dashboard-filter="stopped"]')?.getAttribute('aria-pressed') === 'true'`))) await click(cdp, '[data-dashboard-filter="stopped"]');
-    check(await waitFor(cdp, `document.querySelectorAll('[data-dashboard-list] [data-agent]').length === 4`, 30_000), '2. the Dashboard lists the four agents', await cdp.evaluate(`String(document.querySelectorAll('[data-dashboard-list] [data-agent]').length)`));
+    const LISTED = `JSON.stringify([...document.querySelectorAll('[data-dashboard-list] [data-agent]')].map((e) => e.getAttribute('data-agent')))`;
+    check(await waitFor(cdp, `(() => { const ids = JSON.parse(${LISTED}); return ${JSON.stringify(AGENTS.map((a) => a.id))}.every((id) => ids.includes(id)); })()`, 30_000), '2. the Dashboard lists the four agents (and Genie’s own)', await cdp.evaluate(LISTED));
     await sleep(1000);
     const before = JSON.parse(await cdp.evaluate(ROWS));
     console.log(`  before: ${JSON.stringify(before)}`);
