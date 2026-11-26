@@ -11,6 +11,7 @@ export function HostWaitScreen({ view, onAction }: { view: HostWaitView; onActio
         <main data-host-wait="" className="flex h-screen flex-col justify-center gap-2 bg-[var(--bg-0)] px-6 text-[13px] text-[var(--fg-1)]">
             <p role="status" className="font-semibold">{view.title}</p>
             <p data-host-wait-detail="" className="text-[var(--fg-3)]">{view.detail}</p>
+            {view.updates ? <div data-host-wait-updates="" role="progressbar" aria-label={view.updates.step} className="h-1 w-full overflow-hidden rounded bg-[var(--bg-2)]"><div className="h-full w-1/3 animate-pulse rounded bg-[var(--accent,#7c9cff)]" /></div> : null}
             {view.actions ? (
                 <div className="mt-1 flex gap-2">
                     <Button size="xs" type="button" data-action="open-log" loading={view.busy === 'open-log'} disabled={view.busy !== null} className={button} onClick={() => onAction('open-log')}>Open the log</Button>
