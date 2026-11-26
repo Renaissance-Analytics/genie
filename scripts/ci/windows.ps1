@@ -68,7 +68,8 @@ $Rows = @(
 # ROWS ONLY ASKED FOR BY NAME (-Only), never in a full run: they read the real internet and install from it, so a full
 # gate would be as green as php.net is reachable. php-live-shots (Tynn #1066): PHP 8.4.27 on disk, Genie's own pass
 # installs php.net's newest 8.4 security patch by itself, the Toolchain's PHP panel photographed before and after.
-$OptInRows = @('php-live-shots')
+# php-card-shots: a fresh machine installs PHP from the card, then every other supported line from the panel.
+$OptInRows = @('php-live-shots', 'php-card-shots')
 
 if ($List) { $Rows | ForEach-Object { Write-Output $_ }; exit 0 }
 
@@ -412,6 +413,7 @@ function Row-artboard { Need-Build; Need-TestMachine; Run 'artboard-cdp' { node 
 function Row-ui-lag { Need-Build; Need-TestMachine; Run 'ui-lag-cdp' { node scripts/ui-lag-cdp.mjs --budget } }
 function Row-plan-popover { Need-Build; Need-TestMachine; Run 'plan-popover-cdp' { node scripts/plan-popover-cdp.mjs } }
 function Row-php-live-shots { Need-Build; Need-TestMachine; Run 'php-live-shots-cdp' { node scripts/php-live-shots-cdp.mjs } }
+function Row-php-card-shots { Need-Build; Need-TestMachine; Run 'php-card-shots-cdp' { node scripts/php-live-shots-cdp.mjs --card } }
 function Row-trust-step { Need-Build; Need-TestMachine; Run 'trust-step-cdp' { node scripts/trust-step-cdp.mjs } }
 function Row-accounts-popover { Need-Build; Need-TestMachine; Run 'accounts-popover-cdp' { node scripts/accounts-popover-cdp.mjs } }
 function Row-claude-accounts { Need-Build; Need-TestMachine; Run 'claude-accounts-cdp' { node scripts/claude-accounts-cdp.mjs } }
@@ -571,6 +573,7 @@ function Ceiling([string]$name) {
         'accounts-popover' { return 300 }
         'plan-popover' { return 480 }
         'php-live-shots' { return 1200 }
+        'php-card-shots' { return 3000 }
         'claude-accounts' { return 300 }
         'sound-picker' { return 300 }
         'question-maximize' { return 300 }
