@@ -651,3 +651,11 @@ describe('after Genie made its PHP the default, nothing calls it the system’s 
         expect(unpinnedSitesLine(null, null)).toBe('Sites with no version chosen cannot start until PHP is installed: there is no system PHP.');
     });
 });
+
+describe('the line never says "until PHP is installed" while a version is listed', () => {
+    it('versions listed, no default, no system PHP: it says to choose one, not to install one', () => {
+        const line = unpinnedSitesLine(null, null, true);
+        expect(line).not.toMatch(/until PHP is installed/);
+        expect(line).toMatch(/default/);
+    });
+});

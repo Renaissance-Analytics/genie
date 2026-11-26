@@ -199,3 +199,19 @@ describe('a PHP whose build needs a newer Visual C++ runtime: a plain refusal, a
         expect(after.toolchain?.refusals ?? []).toEqual([]);
     });
 });
+
+describe('Genie-installed PHPs and no default (seeded, upgraded from an older Genie): the newest becomes the default (Tynn #1066)', () => {
+    // A test VM, 2026-11-26: 8.4.27 installed, its radio empty, and the line said sites "cannot start until PHP is installed".
+    it('no system PHP, no default, a Genie PHP on disk: a scan makes the newest the default', async () => {
+        f.faults.noSystemPhp = true;
+        f.seed('php');
+        const data = await scan();
+        expect(data.toolchain?.defaults?.php).toBe(f.versions.php);
+        expect(f.defaultTarget('php')).toBe(join(f.roots.php, f.versions.php));
+    });
+    it('control: with a system PHP, nothing is chosen for the person', async () => {
+        f.seed('php');
+        await scan();
+        expect(f.defaultTarget('php')).toBeUndefined();
+    });
+});
