@@ -128,6 +128,7 @@ export const DATA_ROOT_RULES: readonly DataRootRule[] = [
     machine('app-inbox-endpoint.json', 'the app inbox’s port'),
     machine('runtime/genie.pid', 'the window’s pid', { live: true }),
     machine('runtime/doctor-hold.json', 'that the doctor holds Genie stopped', { live: true }),
+    machine('runtime/startup-updates.json', 'what the host is updating before it starts, for a window waiting for it (Tynn #1067)', { live: true }),
     machine('runtime/host-proxy.json', 'the proxy routes the OS last gave'),
     machine('runtime/provider-programs.json', 'where each provider’s program is on this machine'),
     machine('runtime/mobile-tls/', 'this machine’s tailnet certificate', { names: ['cert.pem', 'key.pem'] }),

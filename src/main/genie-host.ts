@@ -504,19 +504,29 @@ async function main(): Promise<void> {
      * Update (the program the agents run) and PHP's patch source when this build has it, within a limit: past it the host
      * starts as usual and the log says so. A waiting window shows each step (startup-updates-file.ts).
      */
+    // Opened here, before the start's updates (Tynn #1067), so their downloads take the OS's proxy routes like every other.
+    const proxyMemory = ProxyMemory.open(join(runtime, 'host-proxy.json'), say);
     {
         const startupHealth = new ProviderHealthBook(async (provider) => {
             if (!isAcpProvider(provider)) throw new Error('Unknown provider account');
             return checkProviderHealth(provider, realProviderHealthPorts(execFileRunner), accounts.activeFor(provider));
         });
+        // The host's own HTTPS (host-https-fetch.ts: the OS's roots and proxy routes), never Node's plain fetch.
+        const startupMemory = await proxyMemory;
+        const startupRoutes = (url: string) => startupMemory?.routesFor(url) ?? [{ kind: 'direct' as const }];
         const startupToolchain = nativeFeatureToolchain({ home, providerHealth: startupHealth, busy: () => {},
-            download: (url) => fetch(url, { signal: AbortSignal.timeout(30_000) }),
+            download: featureDownload({ proxyRoutes: startupRoutes }),
             activity: async () => ({ sessions: [], processes: [], engines: [] }) });
+        const startupSend = hostHttpsFetch({ proxyRoutes: startupRoutes, log: say });
         await applyStartupUpdates({
             runtime,
             toolchain: startupToolchain,
             check: (provider) => startupHealth.refresh(provider),
-            fetchJson: async (url) => { const res = await fetch(url, { signal: AbortSignal.timeout(15_000), headers: { Accept: 'application/json' } }); if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); },
+            fetchJson: async (url) => {
+                const res = await startupSend(url, { method: 'GET', headers: { Accept: 'application/json', 'User-Agent': 'Genie' }, credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(15_000) });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                return JSON.parse(await res.text()) as unknown;
+            },
             log: (line) => { say(line); lifecycleLog(line); },
             env: process.env,
             safeMode: safeNow(),
@@ -828,7 +838,6 @@ async function main(): Promise<void> {
     /** What tells the host summary (below) to read again: the relay host's role, and the Tynn account (Tynn #954, 2g-3a). */
     const summaryPokes = new Set<() => void>();
     const pokeSummary = (): void => { for (const l of [...summaryPokes]) l(); };
-    const proxyMemory = ProxyMemory.open(join(runtime, 'host-proxy.json'), say);
     const tynnOpening = proxyMemory.then((memory) => TynnAccount.open(hostTynnPorts({
         file: join(home, 'credentials', 'tynn.json'),
         host: () => TYNN_HOST,

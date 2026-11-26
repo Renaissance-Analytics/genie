@@ -1,5 +1,6 @@
-import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { renameOverSync } from '../core/atomic-rename.js';
 import type { StartupProgress } from '../core/startup-updates.js';
 
 /**
@@ -18,7 +19,7 @@ export function writeStartupProgress(runtime: string, progress: StartupProgress 
     if (progress === null) { rmSync(file, { force: true }); return; }
     const part = `${file}.${process.pid}.part`;
     writeFileSync(part, JSON.stringify(progress));
-    renameSync(part, file);
+    renameOverSync(part, file);
 }
 
 export function readStartupProgress(runtime: string, now: number): StartupProgress | null {
