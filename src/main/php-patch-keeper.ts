@@ -226,7 +226,7 @@ export class PhpPatchNotices {
 function noticeDetail(n: PhpPatchNotice): string {
     if (n.failed !== undefined) return `${sentence(n.why)}. Installing PHP ${n.version} failed: ${sentence(n.failed)}. Genie tries again on its next check; Toolchain → PHP installs it by hand.`;
     return [
-        `${sentence(n.why)}. Genie installed PHP ${n.version} by itself; PHP ${n.replaced} is still installed until you remove it.`,
+        `${sentence(n.why.replace(/; update to [0-9.]+$/, ''))}. Genie installed PHP ${n.version} by itself; PHP ${n.replaced} is still installed until you remove it.`,
         n.restarted.length > 0 ? `Restarted onto it: ${n.restarted.join(', ')}.` : n.sitesOnLine.length > 0 ? `Sites on PHP ${n.line} (${n.sitesOnLine.join(', ')}) start on it next time.` : '',
         ...n.notRestarted.map((r) => `${r.host} could not be restarted: ${r.reason}. Restart it in Hosting.`),
     ].filter(Boolean).join(' ');
