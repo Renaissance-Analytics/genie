@@ -20,6 +20,7 @@ import { installableVersions, patchWithinLine } from '../src/core/toolchain-upda
 import { applyDuePhpUpdates, PhpPatchNotices, type PhpPatchPorts, type PhpPatchSite } from '../src/main/php-patch-keeper.js';
 import { withSharedToolchainPhp } from '../src/main/features-host.js';
 import { PhpReleaseFeed } from '../src/main/php-release-feed.js';
+import { ensureVcRuntimeAtLeast } from '../src/main/vc-runtime.js';
 import { installPhpVersion, listPhpVersions, resolvePhpCgi, type Fetched, type PhpVersionsFs, type PhpVersionsPorts } from '../src/main/php-versions.js';
 
 /**
@@ -499,5 +500,39 @@ describe('a build needs the Visual C++ runtime its toolset links (8.6 is vs18: V
         const r = await installPhpVersion('8.4.28', true, t.p);
         expect(t.asked).toContain('14.30');
         expect(r).toMatchObject({ kind: 'installed', version: '8.4.28' });
+    });
+});
+
+describe('bringing the Visual C++ runtime up to a toolset (main/vc-runtime.ts)', () => {
+    /** A machine whose vcruntime140.dll reports `versions` in turn, one per read; records every command. */
+    const machine = (versions: string[], wingetExit = 0) => {
+        const ran: string[] = [];
+        let reads = 0;
+        const run = async (binary: string, args: readonly string[]) => {
+            ran.push(`${binary} ${args.join(' ')}`);
+            if (binary === 'powershell.exe') return { stdout: `${versions[Math.min(reads++, versions.length - 1)]}\r\n`, exitCode: 0 };
+            if (binary === 'winget') return { stdout: '', exitCode: wingetExit };
+            throw new Error(`unexpected ${binary}`);
+        };
+        return { run, ran };
+    };
+
+    it('already new enough: nothing is installed', async () => {
+        const m = machine(['14.51.36231.0']);
+        expect(await ensureVcRuntimeAtLeast('14.50', { run: m.run, systemRoot: 'C:/Windows' })).toEqual({ ok: true });
+        expect(m.ran.filter((c) => c.startsWith('winget'))).toEqual([]);
+    });
+
+    it('14.44 for a vs18 build: winget brings Microsoft.VCRedist.2015+.x64 up, and the DLL is read again', async () => {
+        const m = machine(['14.44.35211.0', '14.51.36231.0']);
+        expect(await ensureVcRuntimeAtLeast('14.50', { run: m.run, systemRoot: 'C:/Windows' })).toEqual({ ok: true });
+        expect(m.ran.some((c) => c.startsWith('winget') && c.includes('Microsoft.VCRedist.2015+.x64'))).toBe(true);
+    });
+
+    it('still old after winget: refused, naming what the machine has and what is needed', async () => {
+        const m = machine(['14.44.35211.0'], 1);
+        const r = await ensureVcRuntimeAtLeast('14.50', { run: m.run, systemRoot: 'C:/Windows' });
+        expect(r.ok).toBe(false);
+        expect(!r.ok && r.reason).toMatch(/14[.]44[.]35211[.]0/);
     });
 });
