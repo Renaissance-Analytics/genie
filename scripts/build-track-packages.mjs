@@ -72,21 +72,25 @@ async function biggestOf(name, root) {
     for (const [f, s] of sizes.slice(0, 15)) console.log(`[tracks]   ${(s / 1048576).toFixed(1).padStart(7)} MiB  ${f}`);
     const asarPath = join(root, 'resources', 'app.asar');
     if (!(await exists(asarPath))) return;
+    // The asar's own header: every entry with its size, read once (no per-file stat, which threw on Windows).
     const asar = require('@electron/asar');
+    const { header } = asar.getRawHeader(asarPath);
     const by = new Map();
-    let skipped = 0;
-    for (const f of asar.listPackage(asarPath, { isPack: false })) {
-        const p = f.replace(/\\/g, '/');
-        let st = null;
-        try { st = asar.statFile(asarPath, p.replace(/^\//, ''), false); } catch { skipped++; continue; }
-        if (!st || typeof st.size !== 'number' || st.files) continue;
-        const parts = p.split('/').filter(Boolean);
-        const key = parts[0] === 'node_modules' ? `node_modules/${parts[1]?.startsWith('@') ? `${parts[1]}/${parts[2]}` : parts[1]}` : parts.slice(0, 2).join('/');
-        by.set(key, (by.get(key) ?? 0) + st.size + (st.unpacked ? 0 : 0));
-    }
-    const rows = [...by].sort((x, y) => y[1] - x[1]).slice(0, 15);
-    console.log(`[tracks] ${name}'s app.asar by folder (unpacked sizes${skipped ? `; ${skipped} entries not statted` : ''}):`);
-    for (const [k, s] of rows) console.log(`[tracks]   ${(s / 1048576).toFixed(1).padStart(7)} MiB  ${k}`);
+    const tops = new Map();
+    const walk = (node, parts) => {
+        for (const [n, child] of Object.entries(node.files ?? {})) {
+            const here = [...parts, n];
+            if (child.files) { walk(child, here); continue; }
+            const size = Number(child.size ?? 0);
+            const key = here[0] === 'node_modules' ? `node_modules/${here[1]?.startsWith('@') ? `${here[1]}/${here[2]}` : here[1]}` : here.slice(0, 2).join('/');
+            by.set(key, (by.get(key) ?? 0) + size);
+            tops.set(here[0], (tops.get(here[0]) ?? 0) + size);
+        }
+    };
+    walk(header, []);
+    console.log(`[tracks] ${name}'s app.asar at its top: ${[...tops].sort((x, y) => y[1] - x[1]).map(([k, s]) => `${k} ${(s / 1048576).toFixed(1)} MiB`).join(', ')}`);
+    console.log(`[tracks] ${name}'s app.asar by folder:`);
+    for (const [k, s] of [...by].sort((x, y) => y[1] - x[1]).slice(0, 20)) console.log(`[tracks]   ${(s / 1048576).toFixed(1).padStart(7)} MiB  ${k}`);
 }
 
 /**
@@ -149,6 +153,14 @@ async function packages(a) {
     const h = await layoutHost({ unpackedApp, asarDir, dist: join(ROOT, 'dist'), runtimeDir: join(unpackedApp, 'resources', 'runtime'), out: made.host, platform, arch });
     await biggest('host', made.host);
     console.log(`[tracks] host: ${h.files} files; ${h.leftOut.length} left out by Tynn #437's rule${h.leftOut.length ? ` (${h.leftOut.slice(0, 8).map((l) => l.file).join(', ')}${h.leftOut.length > 8 ? ', ...' : ''})` : ''}`);
+    // electron-builder's record of the file patterns it applied (builder-debug.yml beside its output), said before that
+    // output goes: what packed-tree-client reads when the client's asar holds more than the app and its modules.
+    const debugYml = join(ROOT, 'release', 'tracks', 'client-app', 'builder-debug.yml');
+    if (await exists(debugYml)) {
+        const text = await (await import('node:fs/promises')).readFile(debugYml, 'utf8');
+        const lines = text.split(/\r?\n/).slice(0, 80).map((l) => `[tracks]   ${l}`);
+        console.log(["[tracks] electron-builder's file patterns (builder-debug.yml):", ...lines].join('\n'));
+    } else console.log('[tracks] electron-builder wrote no builder-debug.yml');
     // What the trees were made from is not kept: a test VM's disk holds the trees and the packages, not three copies.
     await rm(asarDir, { recursive: true, force: true });
     await rm(join(ROOT, 'release', 'tracks', 'client-app'), { recursive: true, force: true });

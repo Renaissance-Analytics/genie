@@ -65,12 +65,13 @@ if (mode === 'fail') {
     if (!s?.error) fail(`no failure shown within 2 minutes for a tampered package (last: ${JSON.stringify(s)})`);
     await sleep(1200);
     await shot('launcher-setup-failed.png');
-    const seen = await js(`({ step: document.querySelector('#steps li.failed')?.textContent, words: document.getElementById('why').textContent,
+    const seen = await js(`({ step: document.querySelector('#steps li.failed')?.textContent, title: document.getElementById('install-title').textContent, words: document.getElementById('why').textContent,
         actions: [...document.querySelectorAll('#fail-actions .btn')].filter((b) => !b.hidden).map((b) => b.textContent),
         actionsShown: !document.getElementById('fail-actions').hidden, detail: document.getElementById('details').textContent })`);
     console.log(`the failure screen: ${JSON.stringify(seen)}`);
     if (!seen.step) fail('no step is marked failed');
-    if (!/damaged/.test(seen.words)) fail(`the plain words are not the damaged-package words: ${seen.words}`);
+    // The damaged-package failure (src/ui.rs failure_view): its title, and plain words that say what to do.
+    if (!/damaged/.test(seen.title) || !/Download the installer again/.test(seen.words)) fail(`not the damaged-package failure: ${seen.title} / ${seen.words}`);
     if (!seen.actionsShown || !seen.actions.includes('Try again') || !seen.actions.includes('Close')) fail(`no way forward: ${JSON.stringify(seen.actions)}`);
     if (!/do not match its signed manifest/.test(seen.detail)) fail('the launcher\'s own words are not under Show details');
     await js(`document.getElementById('fail-close').click()`);
