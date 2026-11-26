@@ -28,7 +28,8 @@ describe('the screen', () => {
         expect(html).toContain('data-host-state="stopped"');
         expect(html).toContain('data-action="start"');
         expect(html).not.toContain('No host on this computer.');
-        expect(draw(view, 'local')).toMatch(/data-action="start"[^>]*disabled/);
+        expect(draw(view, 'local').match(/<button[^>]*data-action="start"[^>]*>/)?.[0]).toMatch(/ disabled=""/);
+        expect(html.match(/<button[^>]*data-action="start"[^>]*>/)?.[0]).not.toMatch(/ disabled=""/);
     });
 
     it('paired hosts: one row each, by name and address, with why they cannot open yet', () => {
