@@ -100,7 +100,12 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
             const r = await installTool('vcredist', true, toolchainOps());
             if (r.kind !== 'installed' && r.kind !== 'already-installed') return { ok: false, reason: r.reason };
             // Tynn #1066: present is not enough — the build's toolset needs at least `min` (vs18: 14.50).
-            return min ? ensureVcRuntimeAtLeast(min, { run: longRunner, systemRoot: process.env.SystemRoot ?? 'C:\\Windows', progress: (step) => deps.busy(step) }) : { ok: true };
+            return min ? ensureVcRuntimeAtLeast(min, {
+                run: longRunner, systemRoot: process.env.SystemRoot ?? 'C:\\Windows', progress: (step) => deps.busy(step),
+                // No winget (Windows Server): Microsoft's redistributable, run only with a valid Microsoft signature.
+                tempDir: toolchainDataDir(), download: httpFetch.bytes,
+                writeFile: (path, bytes) => { mkdirSync(toolchainDataDir(), { recursive: true }); writeFileSync(path, bytes); },
+            }) : { ok: true };
         },
         progress: (step) => deps.busy(step),
     });
