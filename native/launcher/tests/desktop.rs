@@ -6,12 +6,12 @@
 mod common;
 
 use common::*;
-use genie_launcher::layout::{browser_executable_name, client_executable_name, host_executable_name, HOST_ENTRY};
+use genie_launcher::layout::{client_executable_name, host_executable_name, HOST_ENTRY};
 use std::path::Path;
 
 fn packages(dir: &Path, key: &ed25519_dalek::SigningKey, build: &str) {
     write_package(dir, key, &Package::new("client", build, vec![(client_executable_name().into(), b"#!/bin/sh\necho client\n".to_vec())]));
-    write_package(dir, key, &Package::new("browser", build, vec![(browser_executable_name().into(), b"#!/bin/sh\necho browser\n".to_vec())]));
+    write_package(dir, key, &Package::new("browser", build, vec![("browser.json".into(), br#"{"runs":"client","args":["--genie-browser"]}"#.to_vec())]));
     write_package(dir, key, &Package::new("host", build, vec![(host_executable_name().into(), b"#!/bin/sh\n".to_vec()), (HOST_ENTRY.into(), b"// host".to_vec())]));
     write_package(dir, key, &Package::new("launcher", build, vec![("genie".into(), std::fs::read(env!("CARGO_BIN_EXE_genie")).unwrap())]));
 }

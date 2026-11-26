@@ -4,7 +4,7 @@ mod common;
 use common::*;
 use genie_launcher::folder::{sweep, verify_build, HashScope, COMPLETE};
 use genie_launcher::install::{install_from, InstallOptions, Installed, Profile};
-use genie_launcher::layout::{browser_executable_name, client_executable_name, host_executable_name, Roots, Track, HOST_ENTRY};
+use genie_launcher::layout::{client_executable_name, host_executable_name, Roots, Track, HOST_ENTRY};
 use genie_launcher::{keys, secure, state};
 use std::path::Path;
 
@@ -19,13 +19,20 @@ fn client_files() -> Vec<(String, Vec<u8>)> {
     vec![(client_executable_name().to_string(), b"client program".to_vec()), ("resources/app.asar".to_string(), vec![1u8; 5000])]
 }
 
+/// The browser's package: no second copy of the app, only what is browser-only (the coordinator, 2026-11-26).
 fn browser_files() -> Vec<(String, Vec<u8>)> {
-    vec![(browser_executable_name().to_string(), b"browser program".to_vec()), ("resources/app.asar".to_string(), vec![2u8; 5000])]
+    vec![("browser.json".to_string(), br#"{"runs":"client","args":["--genie-browser"]}"#.to_vec())]
 }
 
-/// The browser beside a test's own client: every profile installs it (its own track, the owner 2026-11-26).
+/// The browser beside a test's own client: every profile installs it (its own track, the owner 2026-11-26). It runs on
+/// the client of the same build unless `with_browser_on` names another.
 fn with_browser(dir: &Path, key: &ed25519_dalek::SigningKey, build: &str) {
     write_package(dir, key, &Package::new("browser", build, browser_files()));
+}
+fn with_browser_on(dir: &Path, key: &ed25519_dalek::SigningKey, build: &str, client: &str) {
+    let mut p = Package::new("browser", build, browser_files());
+    p.with_client = Some(client);
+    write_package(dir, key, &p);
 }
 
 fn options(from: &Path, profile: Profile, channel: &str) -> InstallOptions {
@@ -136,13 +143,19 @@ fn a_host_installs_only_with_the_client_it_ships_with() {
     write_package(&from, &key, &host);
     let why = install_from(&r, &options(&from, Profile::Both, "stable"), &[verifying(&key)]).unwrap_err();
     assert!(why.contains("ships with client 2026.11.24-1") && why.contains("2026.11.25-1"), "{why}");
+    // The browser alike: it installs only beside the client it runs on.
+    let b = base.join("browser-other");
+    write_package(&b, &key, &Package::new("client", "2026.11.25-1", client_files()));
+    with_browser_on(&b, &key, "2026.11.25-1", "2026.11.23-1");
+    let why = install_from(&r, &options(&b, Profile::Client, "stable"), &[verifying(&key)]).unwrap_err();
+    assert!(why.contains("runs on client 2026.11.23-1"), "{why}");
     for t in [Track::Client, Track::Browser, Track::Host] {
         assert_nothing_landed(&r, t);
     }
     // Its own client beside it (another build than the host's): installs.
     let ok = base.join("ok");
     write_package(&ok, &key, &Package::new("client", "2026.11.24-1", client_files()));
-    with_browser(&ok, &key, "2026.11.25-1");
+    with_browser_on(&ok, &key, "2026.11.25-1", "2026.11.24-1");
     write_package(&ok, &key, &host);
     install_from(&r, &options(&ok, Profile::Both, "stable"), &[verifying(&key)]).expect("a host with its own client installs");
 }
@@ -159,7 +172,7 @@ fn a_client_or_browser_package_alone_never_touches_the_host() {
     install_from(&r, &options(&one, Profile::Both, "stable"), &[verifying(&key)]).unwrap();
     let two = base.join("two");
     write_package(&two, &key, &Package::new("client", "2026.11.26-1", client_files()));
-    with_browser(&two, &key, "2026.11.26-2");
+    with_browser_on(&two, &key, "2026.11.26-2", "2026.11.26-1");
     install_from(&r, &options(&two, Profile::Client, "stable"), &[verifying(&key)]).expect("the client and browser install alone");
     let s = state::read(&r.state_file()).unwrap();
     assert_eq!(s.track("host").unwrap().current.as_deref(), Some("2026.11.25-1"));

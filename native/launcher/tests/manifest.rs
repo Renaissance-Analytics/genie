@@ -144,6 +144,8 @@ fn the_shape_refuses_what_the_schema_refuses() {
         ("a schema that is not the build's", edit(&good, |v| v["schema"] = "2026.11.24".into())),
         ("a date that is not a date", edit(&good, |v| { v["build"] = "2026.02.30-1".into(); v["schema"] = "2026.02.30".into(); })),
         ("an unknown track (a GApp joins in a later format)", edit(&good, |v| v["track"] = "gapp".into())),
+        ("a browser that names no client", edit(&good, |v| { v["track"] = "browser".into(); v.as_object_mut().unwrap().remove("withClient"); })),
+        ("a client that names a client", edit(&good, |v| v["track"] = "client".into())),
         ("an unknown channel", edit(&good, |v| v["channel"] = "beta".into())),
         ("no files", edit(&good, |v| v["files"] = Value::Array(vec![]))),
         ("files out of order", edit(&good, |v| v["files"].as_array_mut().unwrap().reverse())),

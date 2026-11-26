@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-    COMPONENT_TRACKS, clientBuilderConfig, launcherInstallerConfig, layoutHost, layoutWindowApp, programName, trackTreeProblems,
+    COMPONENT_TRACKS, clientBuilderConfig, launcherInstallerConfig, layoutBrowser, layoutHost, layoutWindowApp, programName, trackTreeProblems,
 } from '../scripts/track-packages.mjs';
 import { packagePlan } from '../scripts/win-sign-plan.mjs';
 import { runtimeFiles } from '../src/main/host-runtime.js';
@@ -49,11 +49,9 @@ async function tree(root: string): Promise<string[]> {
 describe('the programs, one per track', () => {
     it('names each program as the launcher starts it: never Genie, which is the launcher (the installer ends it by name)', () => {
         expect(programName('client', 'win32')).toBe('genie-client.exe');
-        expect(programName('browser', 'win32')).toBe('genie-browser.exe');
         expect(programName('host', 'win32')).toBe('genie-host.exe');
         expect(programName('launcher', 'win32')).toBe('Genie.exe');
         expect(programName('client', 'linux')).toBe('genie-client');
-        expect(programName('browser', 'linux')).toBe('genie-browser');
         expect(programName('host', 'linux')).toBe('genie-host');
         expect(programName('launcher', 'linux')).toBe('genie');
     });
@@ -64,7 +62,7 @@ describe('the programs, one per track', () => {
 
     it('the launcher reads the same names (native/launcher/src/layout.rs)', () => {
         const layout = readFileSync('native/launcher/src/layout.rs', 'utf8');
-        for (const name of ['genie-client.exe', 'genie-browser.exe', 'genie-host.exe', '"genie-client"', '"genie-browser"', '"genie-host"']) {
+        for (const name of ['genie-client.exe', 'genie-host.exe', '"genie-client"', '"genie-host"']) {
             expect(layout).toContain(name.startsWith('"') ? name : `"${name}"`);
         }
     });
@@ -121,16 +119,18 @@ describe('the client and the browser packages', () => {
         expect(files.filter((f) => /genie-launch|caddy/.test(f))).toEqual([]);
     });
 
-    it.each(['win32', 'linux'] as const)('%s: the browser is the same app, its program named genie-browser, on its own track', async (platform) => {
-        const from = join(dir, 'unpacked');
-        await put(from, unpacked(platform));
+    it('the browser is its own track with NO second copy of the app: browser.json, and its manifest names the client it runs on', async () => {
+        // The coordinator, 2026-11-26: while the browser is the client app run with --genie-browser, its package carries
+        // only what is browser-only, and the launcher runs the installed client build its manifest names.
         const out = join(dir, 'browser');
-        await layoutWindowApp({ from, out, track: 'browser', platform });
-        const files = await tree(out);
-        expect(files).toContain(programName('browser', platform));
-        expect(files).not.toContain(programName('client', platform));
-        expect(await readFile(join(out, programName('browser', platform)), 'utf8')).toBe('electron');
+        await layoutBrowser({ out });
+        expect(await tree(out)).toEqual(['browser.json']);
+        expect(JSON.parse(await readFile(join(out, 'browser.json'), 'utf8'))).toEqual({ runs: 'client', args: ['--genie-browser'] });
+        expect(trackTreeProblems({ track: 'browser', platform: 'win32', arch: 'x64', files: ['browser.json'] })).toEqual([]);
+        expect(trackTreeProblems({ track: 'browser', platform: 'win32', arch: 'x64', files: ['browser.json', 'genie-client.exe', 'resources/app.asar'] }).map((p: { file: string }) => p.file).sort())
+            .toEqual(['genie-client.exe', 'resources/app.asar']);
     });
+});
 });
 
 describe('the host package: P6-1\'s copy, made at build time', () => {
@@ -220,12 +220,10 @@ describe('what each package must hold, and must not', () => {
         expect(problems.map((p: { file: string }) => p.file).sort()).toEqual([...extra].sort());
     });
 
-    it('a client or browser package holds no host bundle: host.js in its app.asar fails it', () => {
+    it('a client package holds no host bundle: host.js in its app.asar fails it', () => {
         const files = ['genie-client.exe', 'resources/app.asar'];
         expect(trackTreeProblems({ track: 'client', platform: 'win32', arch: 'x64', files, asarFiles: ['/dist/main/main.js'] })).toEqual([]);
         expect(trackTreeProblems({ track: 'client', platform: 'win32', arch: 'x64', files, asarFiles: ['/dist/main/main.js', '/dist/main/host.js'] }))
-            .toEqual([expect.objectContaining({ file: 'resources/app.asar:/dist/main/host.js' })]);
-        expect(trackTreeProblems({ track: 'browser', platform: 'linux', arch: 'x64', files: ['genie-browser', 'resources/app.asar'], asarFiles: ['/dist/main/host.js'] }))
             .toEqual([expect.objectContaining({ file: 'resources/app.asar:/dist/main/host.js' })]);
         expect(trackTreeProblems({ track: 'client', platform: 'win32', arch: 'x64', files: ['genie-client.exe', 'resources/app.asar', 'resources/bin/genie-launch.exe'], asarFiles: [] }))
             .toEqual([expect.objectContaining({ file: 'resources/bin/genie-launch.exe' })]);

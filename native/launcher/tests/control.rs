@@ -5,7 +5,7 @@ mod common;
 
 use common::*;
 use genie_launcher::install::{install_from, InstallOptions, Profile};
-use genie_launcher::layout::{browser_executable_name, client_executable_name, host_executable_name, Roots, Track, HOST_ENTRY};
+use genie_launcher::layout::{client_executable_name, host_executable_name, Roots, Track, HOST_ENTRY};
 use genie_launcher::local::LocalStream;
 use genie_launcher::spawn::pid_alive;
 use serde_json::{json, Value};
@@ -23,7 +23,8 @@ fn install_fakes(r: &Roots, key: &ed25519_dalek::SigningKey, base: &std::path::P
     let fake = fake_bytes();
     write_package(&from, key, &Package::new("host", "2026.11.25-1", vec![(host_executable_name().into(), fake.clone()), (HOST_ENTRY.into(), b"// host".to_vec())]));
     write_package(&from, key, &Package::new("client", "2026.11.25-1", vec![(client_executable_name().into(), fake.clone())]));
-    write_package(&from, key, &Package::new("browser", "2026.11.25-1", vec![(browser_executable_name().into(), fake)]));
+    let _ = fake;
+    write_package(&from, key, &Package::new("browser", "2026.11.25-1", vec![("browser.json".into(), br#"{"runs":"client","args":["--genie-browser"]}"#.to_vec())]));
     let options = InstallOptions { from, profile: Profile::Both, channel: "stable".into(), launcher_build: "2026.11.25-1".into() };
     install_from(r, &options, &[verifying(key)]).expect("the fakes install");
 }
@@ -360,13 +361,14 @@ fn the_client_and_the_browser_each_run_from_their_own_track_told_the_launcher_an
     let text = lines_of(&r.data.join("client-env.txt"), 2);
     let me = std::path::PathBuf::from(env!("CARGO_BIN_EXE_genie"));
     let client = r.build_dir(Track::Client, "2026.11.25-1").unwrap().join(client_executable_name());
-    let browser = r.build_dir(Track::Browser, "2026.11.25-1").unwrap().join(browser_executable_name());
+    // The browser is the client build its manifest names, run with --genie-browser: no second copy of the app.
+    let browser = client.clone();
     let open = text.lines().find(|l| l.starts_with("--open-window |")).unwrap_or_else(|| panic!("{text}"));
     assert!(open.contains(&format!("exe={}", client.display())), "the window is the client track's program: {open}");
     assert!(open.contains(&format!("launcher={}", me.display())), "{open}");
     assert!(open.contains("hostBuild=2026.11.25-1"), "the client is told the host it links to: {open}");
     let b = text.lines().find(|l| l.starts_with("--genie-browser |")).unwrap_or_else(|| panic!("{text}"));
-    assert!(b.contains(&format!("exe={}", browser.display())), "the browser is its own track's program: {b}");
+    assert!(b.contains(&format!("exe={}", browser.display())), "the browser runs the installed client build: {b}");
 }
 
 #[test]
@@ -386,12 +388,14 @@ fn the_registry_names_every_program_the_launcher_starts() {
     }
     assert_eq!(component("client").unwrap().track, Track::Client);
     assert_eq!(component("browser").unwrap().track, Track::Browser);
+    assert_eq!(component("browser").unwrap().runs, Some(Track::Client), "the browser runs on the client its manifest names");
+    assert_eq!(component("client").unwrap().runs, None);
     assert_eq!(component("browser").unwrap().args, &["--genie-browser"]);
     assert!(component("client").unwrap().args.is_empty());
     assert!(component("a-gapp").is_none(), "no GApp is registered yet; they join the registry later");
-    // Every component's program is made by the layout, in its own track's folder.
+    // Every component that runs a program of its own has it in its own track's folder.
     let r = Roots { code: std::path::PathBuf::from(if cfg!(windows) { r"C:\code" } else { "/code" }), data: std::path::PathBuf::from(if cfg!(windows) { r"C:\data" } else { "/data" }) };
-    for c in COMPONENTS {
+    for c in COMPONENTS.iter().filter(|c| c.runs.is_none()) {
         let p = r.program(c.track, "2026.11.25-1").expect("a program");
         assert!(p.path().starts_with(r.build_dir(c.track, "2026.11.25-1").unwrap()), "{}", c.id);
     }

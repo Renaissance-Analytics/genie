@@ -89,13 +89,13 @@ pub struct Package<'a> {
     pub format: Format,
     pub min_launcher: Option<&'a str>,
     pub next_key: Option<String>,
-    /// A host package's client build (format 2's `withClient`): the build itself unless a test says otherwise.
+    /// A host's or a browser's client build (format 2's `withClient`): the build itself unless a test says otherwise.
     pub with_client: Option<&'a str>,
 }
 
 impl<'a> Package<'a> {
     pub fn new(track: &'a str, build: &'a str, files: Vec<(String, Vec<u8>)>) -> Package<'a> {
-        let with_client = if track == "host" { Some(build) } else { None };
+        let with_client = if track == "host" || track == "browser" { Some(build) } else { None };
         Package { track, build, channel: "stable", files, format: native_format(), min_launcher: None, next_key: None, with_client }
     }
     pub fn stem(&self) -> String {

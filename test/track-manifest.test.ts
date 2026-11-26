@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildManifest, checkManifest, manifestBytes, packTrack, readArchive } from '../scripts/pack-track.mjs';
 import { publicKeyOf, signManifestBytes } from '../scripts/sign-manifest.mjs';
 import {
-    ARCHES, CHANNELS, PACKAGE_TRACKS, PLATFORMS, hostClient, parseManifest, parseTrackTag, restartsHost, semverOf, trackBuildFromEnv, trackTag,
+    ARCHES, CHANNELS, PACKAGE_TRACKS, PLATFORMS, clientOf, hostClient, parseManifest, parseTrackTag, restartsHost, semverOf, trackBuildFromEnv, trackTag,
     trustedKeysAfter, verifyManifest, verifyTree, type ManifestExpect, type TrackManifest,
 } from '../src/core/track-manifest.js';
 
@@ -116,7 +116,7 @@ describe('the manifest\'s shape is the contract\'s', () => {
             expect(() => checkManifest(without), field).toThrow();
         }
         expect(Object.keys(schema.properties).sort()).toEqual([...schema.required, 'nextKey', 'withClient'].sort());
-        expect(schema.if).toEqual({ properties: { track: { const: 'host' } } });
+        expect(schema.if).toEqual({ properties: { track: { enum: ['host', 'browser'] } } });
         expect(schema.then).toEqual({ required: ['withClient'] });
         expect(schema.else).toEqual({ not: { required: ['withClient'] } });
     });
@@ -128,7 +128,8 @@ describe('the manifest\'s shape is the contract\'s', () => {
         ['a host that names no client', (m) => { delete m.withClient; }],
         ['a host whose client is not a track build', (m) => { m.withClient = 'latest'; }],
         ['a client that names a client', (m) => { m.track = 'client'; }],
-        ['a browser that names a client', (m) => { m.track = 'browser'; }],
+        ['a browser that names no client (it runs on one)', (m) => { m.track = 'browser'; delete m.withClient; }],
+        ['a launcher that names a client', (m) => { m.track = 'launcher'; }],
         ['a schema that is not the build\'s', (m) => { m.schema = '2026.11.24'; }],
         ['a build with +metadata', (m) => { m.build = '2026.11.25-1+ci'; }],
         ['the bridge\'s version as a build', (m) => { m.build = '2.0.0'; m.schema = '2.0.0'; }],
@@ -329,7 +330,7 @@ describe('each part of Genie is its own track (the owner, 2026-11-26: each item 
         const key = keyPair();
         const from = await source();
         for (const track of ['client', 'browser', 'host', 'launcher'] as const) {
-            const meta = track === 'host' ? META : { ...META, track, withClient: undefined };
+            const meta = track === 'host' || track === 'browser' ? { ...META, track } : { ...META, track, withClient: undefined };
             const packed = await packTrack({ ...meta, from, out: join(dir, `out-${track}`) });
             expect(packed.base).toBe(`${track}-2026.11.25-1-linux-x64`);
             const bytes = await readFile(packed.manifest);
@@ -342,7 +343,7 @@ describe('each part of Genie is its own track (the owner, 2026-11-26: each item 
         expect([...PACKAGE_TRACKS].sort()).toEqual(['browser', 'client', 'host', 'launcher']);
     });
 
-    it('a host package names the client build it ships with; nothing else names one', async () => {
+    it('a host names the client build it ships with, a browser the one it runs on; nothing else names one', async () => {
         const from = await source();
         const host = await buildManifest(from, { ...META, withClient: '2026.11.24-2' });
         expect(host.withClient).toBe('2026.11.24-2');
@@ -350,6 +351,10 @@ describe('each part of Genie is its own track (the owner, 2026-11-26: each item 
         const client = await buildManifest(from, { ...META, track: 'client', withClient: undefined });
         expect('withClient' in client).toBe(false);
         expect(hostClient(parseManifestOk(client))).toBeNull();
+        const browser = await buildManifest(from, { ...META, track: 'browser', withClient: '2026.11.24-2' });
+        expect(clientOf(parseManifestOk(browser))).toBe('2026.11.24-2');
+        expect(hostClient(parseManifestOk(browser))).toBeNull();
+        expect(clientOf(parseManifestOk(client))).toBeNull();
     });
 
     it('only a host update restarts the host: a client, browser or launcher package never does', () => {
