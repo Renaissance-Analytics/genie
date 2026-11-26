@@ -102,7 +102,8 @@ describe('reading php.net’s live release data', () => {
         // Another line's release in the answer is never read as this line's.
         expect(parsePhpNetLine(phpNetLineJsonBody([{ version: '8.5.13', security: true }]), '8.4')).toBeNull();
         expect(parsePhpNetLine('not json', '8.4')).toBeNull();
-        expect(parsePhpNetSupported(NEW_DAY[PHP_NET_SUPPORTED_JSON]!)).toEqual(['8.2', '8.3', '8.4', '8.5']);
+        // Newest line first, as the catalog lists them.
+        expect(parsePhpNetSupported(NEW_DAY[PHP_NET_SUPPORTED_JSON]!)).toEqual(['8.5', '8.4', '8.3', '8.2']);
     });
 
     it('with no Genie update, a new 8.4.x is what Genie offers and installs (Windows: the build windows.php.net lists)', async () => {
