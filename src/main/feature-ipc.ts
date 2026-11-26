@@ -172,6 +172,12 @@ export interface FeaturePorts {
             list(pins: readonly SitePin[]): Promise<PhpVersionsView>;
             install(version: string, consent: boolean): Promise<PhpInstallOutcome>;
             remove(version: string, pins: readonly SitePin[]): PhpRemoveOutcome;
+            /**
+             * Tynn #1066: install the php.net SECURITY patches due in each installed line (never another line), move the
+             * default and restart the line's running sites onto them, and tell the person and the sites' agents. Never
+             * rejects; offline it does nothing. main/php-patch-keeper.ts.
+             */
+            applyDue?(progress: (step: string | null) => void): Promise<{ updated: string[]; failed: Array<{ version: string; reason: string }> }>;
         };
         /** Genie's own Node (main/node-versions.ts): nodejs.org zips, checksum-verified, under its toolchain directory. */
         node?: {

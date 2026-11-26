@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { phpAdvisoryText } from '../core/php-advisories.js';
+import { catalogVersions, currentPhpCatalog } from '../core/php-releases.js';
 import {
-    PHP_RECIPES,
     PHP_VERSION,
     managedCgiCommand,
     managedVersions,
@@ -107,7 +107,10 @@ export interface PhpVersionsView {
     readonly managed: ReadonlyArray<{ readonly version: string; readonly dir: string; readonly usedBy: readonly string[]; readonly advisory?: string }>;
     /** The php-cgi on PATH — what an unpinned site runs — or `null` when none answers. `advisory` as above. */
     readonly system: { readonly version: string; readonly advisory?: string } | null;
-    /** What this release can install, and whether each is here already. Empty where Genie installs none. */
+    /**
+     * What Genie can install, and whether each is here already: the newest patch of each supported line, from php.net's
+     * live data (Tynn #1066; the baked list offline). Empty where Genie installs none.
+     */
     readonly available: ReadonlyArray<{ readonly version: string; readonly installed: boolean }>;
     /** Why nothing can be installed here (macOS/Linux), when that is so. */
     readonly installRefused?: string;
@@ -261,7 +264,7 @@ export async function listPhpVersions(ports: PhpVersionsPorts, pins: readonly Si
     return {
         managed: managed.map((m) => ({ ...m, usedBy: sitesOn(m.version, pins, managed), ...withAdvisory(m.version) })),
         system,
-        available: ports.platform !== 'darwin' ? PHP_RECIPES.map((r) => ({ version: r.version, installed: have.has(r.version) })) : [],
+        available: ports.platform !== 'darwin' ? catalogVersions(currentPhpCatalog()).map((version) => ({ version, installed: have.has(version) })) : [],
         ...(ports.platform !== 'darwin' ? {} : { installRefused: NOT_HERE }),
     };
 }
@@ -283,7 +286,9 @@ export async function installPhpVersion(version: string, consent: boolean, ports
     // would be true and would hide the reason there is none.
     const unsafe = phpAdvisoryText(version);
     if (unsafe !== null) return { kind: 'refused', reason: `${unsafe}; Genie will not install it` };
-    if (!PHP_RECIPES.some((r) => r.version === version)) return { kind: 'refused', reason: `Genie has no installer for PHP ${version}; this release installs ${PHP_RECIPES.map((r) => r.version).join(', ')}` };
+    // What php.net lists now (Tynn #1066): the newest patch of each supported line, or the baked list offline.
+    const offered = catalogVersions(currentPhpCatalog());
+    if (!offered.includes(version)) return { kind: 'refused', reason: `Genie has no installer for PHP ${version}; it installs the newest patch of each line php.net supports: ${offered.join(', ')}` };
     const dir = join(ports.root, version);
     if (ports.fs.exists(join(dir, phpCgiName(ports.platform)))) return { kind: 'already-installed', version };
     if (ports.platform === 'linux') return buildPhpOnLinux(version, ports);
