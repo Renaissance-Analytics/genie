@@ -265,7 +265,16 @@ export function toolchainProblems(tc: ToolchainSection, servicesWaiting = 0): To
     }
     for (const c of cards.values()) {
         if (!c.tool) continue;
-        if (c.tool.tone === 'broken') out.push({ key: c.key, card: c.key, title: `${c.title} can't run`, why: c.tool.problem ?? null, label: 'Repair', action: { kind: 'toolchain.repairCli', tool: c.tool.tool } });
+        if (c.tool.tone !== 'broken') continue;
+        // NOT INSTALLED IS NOT BROKEN (Tynn #1066, the fresh-Windows shots): "Repair" on a CLI that is not there read as
+        // fixing something. It is offered "Install" — its install plan when there is one, else the vendor's installer
+        // (repairCli installs it); "Repair" stays for an install that is there and does not run.
+        // The health check's own words say which (main/provider-health: "… is not installed: there is no `claude` program"); a
+        // CLI that is there but cannot run ("installed but cannot run") reads no version either, and stays a Repair.
+        if (c.tool.installed === null && /\bis not installed\b|^there is no `/i.test(c.tool.problem ?? '')) {
+            const plan = tc.installs?.[c.tool.tool];
+            out.push({ key: c.key, card: c.key, title: `${c.title} isn't installed`, why: c.tool.problem ?? null, label: 'Install', action: plan && 'label' in plan ? { kind: 'toolchain.install', tool: c.tool.tool, consent: true } : { kind: 'toolchain.repairCli', tool: c.tool.tool } });
+        } else out.push({ key: c.key, card: c.key, title: `${c.title} can't run`, why: c.tool.problem ?? null, label: 'Repair', action: { kind: 'toolchain.repairCli', tool: c.tool.tool } });
     }
     for (const f of tc.findings ?? []) {
         if (f.result.kind !== 'needs-install') continue;
