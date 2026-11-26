@@ -1,14 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Renaissance-Analytics/genie/contracts/track-manifest.schema.json",
-  "title": "Genie track manifest, format 1 (Tynn #1058 L1)",
-  "description": "One package of one track (client, host or launcher) for one platform and architecture. SIGNATURE: Ed25519 over the EXACT bytes of manifest.json (UTF-8, no BOM; never re-serialised before verifying). manifest.json.sig is the 64-byte signature in standard padded base64: 88 ASCII characters on one line, written with no newline; a reader ignores trailing ASCII whitespace (CR, LF, space, tab) and refuses anything else. A public key is the raw 32-byte Ed25519 key in standard padded base64 (44 characters). KEY ROTATION: `nextKey` names the next public key; the manifest's own signature by a trusted key is what vouches for it, so there is no separate nextKeySig. A reader that verified the manifest with a trusted key adds nextKey to its trusted keys. CHECKS, IN ORDER: the signature; the shape below (any unknown field refuses: a new field is a new format); track, platform, arch and channel are the ones asked for (a stable install takes stable only; dev takes dev and stable); the build is newer than the installed current one (no downgrade; equal refuses); minLauncher is not newer than the running launcher; then every file's size and sha256, with no file missing and none unlisted. Builds and schemas follow test/fixtures/protocol-negotiation.json (trackBuilds, buildOrder). Mirrored in src/core/track-manifest.ts (parseManifest), which test/track-manifest.test.ts holds to this file.",
+  "title": "Genie track manifest, format 2 (Tynn #1058 L1; L3 added the browser track and withClient)",
+  "description": "One package of one track (client, host, browser or launcher) for one platform and architecture. Each track updates on its own: a client, browser or launcher package is applied with the host left running; a host package names the client build it ships with (withClient), and the two are applied together. GApps join later as tracks of their own, in a new format. Format 1 was never published. SIGNATURE: Ed25519 over the EXACT bytes of manifest.json (UTF-8, no BOM; never re-serialised before verifying). manifest.json.sig is the 64-byte signature in standard padded base64: 88 ASCII characters on one line, written with no newline; a reader ignores trailing ASCII whitespace (CR, LF, space, tab) and refuses anything else. A public key is the raw 32-byte Ed25519 key in standard padded base64 (44 characters). KEY ROTATION: `nextKey` names the next public key; the manifest's own signature by a trusted key is what vouches for it, so there is no separate nextKeySig. A reader that verified the manifest with a trusted key adds nextKey to its trusted keys. CHECKS, IN ORDER: the signature; the shape below (any unknown field refuses: a new field is a new format; withClient is required of a host and refused for any other track); track, platform, arch and channel are the ones asked for (a stable install takes stable only; dev takes dev and stable); the build is newer than the installed current one (no downgrade; equal refuses); minLauncher is not newer than the running launcher; then every file's size and sha256, with no file missing and none unlisted. Builds and schemas follow test/fixtures/protocol-negotiation.json (trackBuilds, buildOrder). Mirrored in src/core/track-manifest.ts (parseManifest), which test/track-manifest.test.ts holds to this file.",
   "type": "object",
   "additionalProperties": false,
   "required": ["format", "track", "build", "schema", "channel", "platform", "arch", "minLauncher", "files", "notes"],
   "properties": {
-    "format": { "const": 1 },
-    "track": { "enum": ["client", "host", "launcher"] },
+    "format": { "const": 2 },
+    "track": { "enum": ["client", "host", "browser", "launcher"] },
     "build": {
       "description": "The track build: <schema>-<release>[.<hotfix>], a real calendar date, release 1 or more. No +metadata in a manifest.",
       "type": "string",
@@ -22,6 +22,11 @@
     "channel": { "enum": ["stable", "dev"] },
     "platform": { "enum": ["win32", "linux"] },
     "arch": { "enum": ["x64", "arm64"] },
+    "withClient": {
+      "description": "A host package's client build: the client it ships with, applied with it. Required of a host (if/then below), refused for every other track (else).",
+      "type": "string",
+      "pattern": "^\\d{4}\\.\\d{2}\\.\\d{2}-[1-9]\\d{0,5}(\\.\\d{1,6})?$"
+    },
     "minLauncher": {
       "description": "The oldest launcher build that may install this package; null for none.",
       "oneOf": [
@@ -55,5 +60,8 @@
       "type": "string",
       "pattern": "^[A-Za-z0-9+/]{43}=$"
     }
-  }
+  },
+  "if": { "properties": { "track": { "const": "host" } } },
+  "then": { "required": ["withClient"] },
+  "else": { "not": { "required": ["withClient"] } }
 }

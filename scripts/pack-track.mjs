@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * ONE TRACK'S PACKAGE AND ITS MANIFEST (Tynn #1058 L1), for the release job. Packs a folder (the client's unpacked app,
- * the host's runtime and bundle, or the launcher) into the release assets the launcher downloads:
+ * ONE TRACK'S PACKAGE AND ITS MANIFEST (Tynn #1058 L1; format 2 since L3), for the release job. Packs a folder (the
+ * client's unpacked app, the browser's, the host's runtime and bundle, or the launcher) into the release assets the
+ * launcher downloads (scripts/build-track-packages.mjs lays each folder out):
  *
  *   <out>/<track>-<build>-<platform>-<arch>.zip            Windows (deflate; a standard zip)
  *   <out>/<track>-<build>-<platform>-<arch>.tar.zst        Linux (ustar + pax paths, zstd)
@@ -13,7 +14,10 @@
  * test/track-manifest.test.ts holds the two to the same refusals.
  *
  *   node scripts/pack-track.mjs --track host --build 2026.11.25-1 --channel dev --platform linux --arch x64 \
- *        --from <folder> --out <folder> [--min-launcher <build>] [--notes <text> | --notes-file <file>] [--next-key <base64>]
+ *        --from <folder> --out <folder> [--with-client <build>] [--min-launcher <build>] [--notes <text> | --notes-file <file>]
+ *        [--next-key <base64>]
+ *
+ * --with-client is required of a host (the client build it ships with) and refused for any other track.
  */
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
@@ -21,11 +25,12 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
 
-export const PACKAGE_TRACKS = ['client', 'host', 'launcher'];
+export const PACKAGE_TRACKS = ['client', 'host', 'browser', 'launcher'];
+export const MANIFEST_FORMAT = 2;
 export const CHANNELS = ['stable', 'dev'];
 export const PLATFORMS = ['win32', 'linux'];
 export const ARCHES = ['x64', 'arm64'];
-const FIELDS = new Set(['format', 'track', 'build', 'schema', 'channel', 'platform', 'arch', 'minLauncher', 'files', 'notes', 'nextKey']);
+const FIELDS = new Set(['format', 'track', 'build', 'schema', 'channel', 'platform', 'arch', 'withClient', 'minLauncher', 'files', 'notes', 'nextKey']);
 const FILE_FIELDS = new Set(['path', 'size', 'sha256']);
 const BUILD = /^(\d{4})\.(\d{2})\.(\d{2})-([1-9]\d{0,5})(?:\.(\d{1,6}))?$/;
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -52,12 +57,12 @@ function pathProblem(path) {
 
 const isObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-/** Throws, saying why, unless `m` is a format-1 manifest the launcher would read. */
+/** Throws, saying why, unless `m` is a format-2 manifest the launcher would read. */
 export function checkManifest(m) {
     const bad = (why) => { throw new Error(`not a track manifest: ${why}`); };
     if (!isObject(m)) bad('not an object');
     for (const k of Object.keys(m)) if (!FIELDS.has(k)) bad(`unknown field "${k}"`);
-    if (m.format !== 1) bad(`format ${JSON.stringify(m.format)}`);
+    if (m.format !== MANIFEST_FORMAT) bad(`format ${JSON.stringify(m.format)}`);
     if (!PACKAGE_TRACKS.includes(m.track)) bad(`the track ${JSON.stringify(m.track)}`);
     const schema = schemaOfBuild(m.build);
     if (!schema) bad(`the build ${JSON.stringify(m.build)} is not a track build`);
@@ -65,6 +70,8 @@ export function checkManifest(m) {
     if (!CHANNELS.includes(m.channel)) bad(`the channel ${JSON.stringify(m.channel)}`);
     if (!PLATFORMS.includes(m.platform)) bad(`the platform ${JSON.stringify(m.platform)}`);
     if (!ARCHES.includes(m.arch)) bad(`the architecture ${JSON.stringify(m.arch)}`);
+    if (m.track === 'host' && !(typeof m.withClient === 'string' && schemaOfBuild(m.withClient))) bad(`a host names the client build it ships with (withClient), and it is ${JSON.stringify(m.withClient)}`);
+    if (m.track !== 'host' && m.withClient !== undefined) bad(`only a host names withClient, and this is the ${m.track}`);
     if (m.minLauncher !== null && !schemaOfBuild(m.minLauncher)) bad(`minLauncher ${JSON.stringify(m.minLauncher)}`);
     if (typeof m.notes !== 'string' || m.notes.length > 65536) bad('the notes');
     if (m.nextKey !== undefined && (typeof m.nextKey !== 'string' || !KEY.test(m.nextKey))) bad('nextKey is not a 32-byte key');
@@ -109,7 +116,7 @@ async function filesOf(from) {
     return out;
 }
 
-/** The manifest for the folder `from`, as `meta` names it (track, build, channel, platform, arch, minLauncher, notes, nextKey). */
+/** The manifest for the folder `from`, as `meta` names it (track, build, channel, platform, arch, withClient, minLauncher, notes, nextKey). */
 export async function buildManifest(from, meta) {
     const files = [];
     for (const f of await filesOf(from)) {
@@ -117,8 +124,8 @@ export async function buildManifest(from, meta) {
         files.push({ path: f.path, size: data.length, sha256: createHash('sha256').update(data).digest('hex') });
     }
     const m = {
-        format: 1, track: meta.track, build: meta.build, schema: schemaOfBuild(meta.build), channel: meta.channel, platform: meta.platform,
-        arch: meta.arch, minLauncher: meta.minLauncher ?? null, files, notes: meta.notes ?? '',
+        format: MANIFEST_FORMAT, track: meta.track, build: meta.build, schema: schemaOfBuild(meta.build), channel: meta.channel, platform: meta.platform,
+        arch: meta.arch, ...(meta.withClient !== undefined ? { withClient: meta.withClient } : {}), minLauncher: meta.minLauncher ?? null, files, notes: meta.notes ?? '',
         ...(meta.nextKey !== undefined ? { nextKey: meta.nextKey } : {}),
     };
     return checkManifest(m);
@@ -259,7 +266,7 @@ export async function readArchive(path) {
 
 /** Packs `from` for one track, platform and architecture into `out`: the archive and its unsigned manifest. */
 export async function packTrack({ from, out, ...meta }) {
-    if (!PACKAGE_TRACKS.includes(meta.track)) throw new Error(`not a package track: ${JSON.stringify(meta.track)} (client, host or launcher)`);
+    if (!PACKAGE_TRACKS.includes(meta.track)) throw new Error(`not a package track: ${JSON.stringify(meta.track)} (${PACKAGE_TRACKS.join(', ')})`);
     if (!schemaOfBuild(meta.build)) throw new Error(`not a track build: ${JSON.stringify(meta.build)} (<YYYY.MM.DD>-<release>[.<hotfix>])`);
     const manifest = await buildManifest(from, meta);
     const entries = [];
@@ -293,7 +300,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
         const notes = a['notes-file'] ? await readFile(a['notes-file'], 'utf8') : (a.notes ?? '');
         const r = await packTrack({
             from: a.from, out: a.out, track: a.track, build: a.build, channel: a.channel, platform: a.platform, arch: a.arch,
-            minLauncher: a['min-launcher'] ?? null, notes, ...(a['next-key'] ? { nextKey: a['next-key'] } : {}),
+            minLauncher: a['min-launcher'] ?? null, notes, ...(a['with-client'] ? { withClient: a['with-client'] } : {}), ...(a['next-key'] ? { nextKey: a['next-key'] } : {}),
         });
         console.log(`${r.archive}\n${r.manifest}  (${r.value.files.length} files)`);
     } catch (e) {

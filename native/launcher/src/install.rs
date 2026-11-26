@@ -5,6 +5,14 @@
 //! Each file is checked (listed, size, sha256) as it is unpacked into `<build>.partial`; then the folder is renamed to
 //! `<build>`, its manifest and signature are written in, `.complete` LAST, and `state.json` points at it. Any failure
 //! deletes the partial folder and says why in words.
+//!
+//! Every profile installs the client and the browser (each its own track); `both` adds the host. A host installs only
+//! beside the client build it ships with (its manifest's `withClient`): the one installed in the same pass, or the client
+//! already current. A client or browser package alone never touches the host (the owner, 2026-11-26).
+//!
+//! On Linux a launcher package in the folder installs the launcher itself, at `<code root>/launcher/<build>/genie`, with
+//! `~/.local/bin/genie` and the desktop entry pointing at it (`desktop`). On Windows the NSIS installer puts the launcher
+//! at the Genie.exe path every shortcut already uses, so a launcher package is not read there.
 
 use crate::layout::{Roots, Track};
 use ed25519_dalek::VerifyingKey;
@@ -12,9 +20,9 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Profile {
-    /// The launcher, the client and a local host (the default; the owner, 2026-11-25).
+    /// The launcher, the client, the browser and a local host (the default; the owner, 2026-11-25).
     Both,
-    /// The launcher and the client: no host folder, no host at logon.
+    /// The launcher, the client and the browser: no host folder, no host at logon.
     Client,
 }
 
@@ -34,8 +42,8 @@ impl Profile {
     }
     pub fn tracks(self) -> &'static [Track] {
         match self {
-            Profile::Both => &[Track::Client, Track::Host],
-            Profile::Client => &[Track::Client],
+            Profile::Both => &[Track::Client, Track::Browser, Track::Host],
+            Profile::Client => &[Track::Client, Track::Browser],
         }
     }
 }
@@ -178,11 +186,33 @@ fn commit(s: &Staged) -> std::io::Result<()> {
     write_file(&s.target.join(COMPLETE), s.manifest.build.as_bytes())
 }
 
+/// A host's `withClient` is the client staged beside it, or else the client already current.
+fn host_ships_with_its_client(staged: &[Staged], st: &state::State) -> Result<(), String> {
+    let Some(host) = staged.iter().find(|s| s.track == Track::Host) else { return Ok(()) };
+    let Some(wanted) = host.manifest.with_client.as_deref() else {
+        return Err(format!("The host {} names no client build. Nothing was installed.", host.manifest.build));
+    };
+    let client = staged
+        .iter()
+        .find(|s| s.track == Track::Client)
+        .map(|s| s.manifest.build.clone())
+        .or_else(|| st.track(Track::Client.as_str()).and_then(|t| t.current.clone()));
+    match client {
+        Some(c) if c == wanted => Ok(()),
+        Some(c) => Err(format!("The host {} ships with client {wanted}, and the client here is {c}: a host is installed only with its own client. Nothing was installed.", host.manifest.build)),
+        None => Err(format!("The host {} ships with client {wanted}, and there is no client here. Nothing was installed.", host.manifest.build)),
+    }
+}
+
 pub fn install_from(roots: &Roots, options: &InstallOptions, keys: &[VerifyingKey]) -> Result<Vec<Installed>, String> {
     sweep(roots);
     let mut st = state::read(&roots.state_file())?;
     let mut staged: Vec<Staged> = Vec::new();
-    for track in options.profile.tracks() {
+    let mut tracks: Vec<Track> = options.profile.tracks().to_vec();
+    if cfg!(unix) && find_package(&options.from, Track::Launcher).is_ok() {
+        tracks.push(Track::Launcher);
+    }
+    for track in &tracks {
         match stage(roots, options, keys, &st, *track) {
             Ok(s) => staged.push(s),
             Err(why) => {
@@ -192,6 +222,12 @@ pub fn install_from(roots: &Roots, options: &InstallOptions, keys: &[VerifyingKe
                 return Err(why);
             }
         }
+    }
+    if let Err(why) = host_ships_with_its_client(&staged, &st) {
+        for s in &staged {
+            let _ = std::fs::remove_dir_all(&s.partial);
+        }
+        return Err(why);
     }
     let mut done = Vec::new();
     for s in &staged {
@@ -209,5 +245,9 @@ pub fn install_from(roots: &Roots, options: &InstallOptions, keys: &[VerifyingKe
     }
     st.profile = Some(options.profile.as_str().to_string());
     state::write_atomic(&roots.state_file(), &st).map_err(|e| format!("state.json could not be written: {e}"))?;
+    #[cfg(unix)]
+    if let Some(l) = done.iter().find(|d| d.track == Track::Launcher) {
+        crate::desktop::write_entries(roots, &l.build)?;
+    }
     Ok(done)
 }

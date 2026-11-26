@@ -1,5 +1,6 @@
-//! THE TRACK MANIFEST (`contracts/track-manifest.schema.json`, format 1; `src/core/track-manifest.ts` on the TypeScript
-//! side). Ed25519 over the exact bytes of manifest.json; manifest.json.sig is the signature in padded base64.
+//! THE TRACK MANIFEST (`contracts/track-manifest.schema.json`, format 2; `src/core/track-manifest.ts` on the TypeScript
+//! side). Ed25519 over the exact bytes of manifest.json; manifest.json.sig is the signature in padded base64. Format 2
+//! (L3) adds the browser track and a host's `withClient`: the client build a host ships with, applied with it.
 //!
 //! CHECKS, IN ORDER: the signature; the shape (an unknown field refuses); track, platform, arch and channel are the ones
 //! asked for (stable takes stable only; dev takes dev and stable); the build is newer than the installed one (equal
@@ -14,7 +15,9 @@ use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
 use std::fmt;
 
-pub const FORMAT: u64 = 1;
+pub const FORMAT: u64 = 2;
+/// The tracks a manifest may name (each updated on its own; GApps join later, in a new format).
+pub const TRACKS: [&str; 4] = ["client", "host", "browser", "launcher"];
 pub const MAX_PATH_CHARS: usize = 1024;
 pub const MAX_NOTES_CHARS: usize = 65536;
 
@@ -33,6 +36,8 @@ pub struct Manifest {
     pub channel: String,
     pub platform: String,
     pub arch: String,
+    /// A host's client build (required of a host, refused for any other track).
+    pub with_client: Option<String>,
     pub min_launcher: Option<String>,
     pub files: Vec<ManifestFile>,
     pub notes: String,
@@ -155,7 +160,7 @@ fn is_manifest_build(b: &str) -> bool {
 pub fn parse_manifest(bytes: &[u8]) -> Result<Manifest, Refusal> {
     let v: Value = serde_json::from_slice(bytes).map_err(|e| shape(format!("not JSON: {e}")))?;
     let o = v.as_object().ok_or_else(|| shape("not an object"))?;
-    const FIELDS: [&str; 11] = ["format", "track", "build", "schema", "channel", "platform", "arch", "minLauncher", "files", "notes", "nextKey"];
+    const FIELDS: [&str; 12] = ["format", "track", "build", "schema", "channel", "platform", "arch", "minLauncher", "files", "notes", "nextKey", "withClient"];
     if let Some(k) = o.keys().find(|k| !FIELDS.contains(&k.as_str())) {
         return Err(shape(format!("an unknown field '{k}' (a new field is a new format)")));
     }
@@ -166,12 +171,18 @@ pub fn parse_manifest(bytes: &[u8]) -> Result<Manifest, Refusal> {
     }
     // A JSON number, compared by value: 1, 1.0 and 1e0 are all 1 (JSON Schema's `const`, and all JSON.parse can see).
     if o["format"].as_f64() != Some(FORMAT as f64) {
-        return Err(shape("format is not 1"));
+        return Err(shape(format!("format is not {FORMAT}")));
     }
     let track = string_field(o, "track")?;
-    if !["client", "host", "launcher"].contains(&track) {
+    if !TRACKS.contains(&track) {
         return Err(shape(format!("track '{track}'")));
     }
+    let with_client = match (track, o.get("withClient")) {
+        ("host", Some(Value::String(c))) if is_manifest_build(c) => Some(c.clone()),
+        ("host", _) => return Err(shape("a host names the client build it ships with (withClient)")),
+        (_, None) => None,
+        (other, Some(_)) => return Err(shape(format!("only a host names withClient, and this is the {other}"))),
+    };
     let build = string_field(o, "build")?;
     if !is_manifest_build(build) {
         return Err(shape(format!("build '{build}' is not a track build")));
@@ -244,6 +255,7 @@ pub fn parse_manifest(bytes: &[u8]) -> Result<Manifest, Refusal> {
         channel: channel.into(),
         platform: platform.into(),
         arch: arch.into(),
+        with_client,
         min_launcher,
         files,
         notes: notes.into(),

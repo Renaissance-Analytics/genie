@@ -8,8 +8,11 @@ import type { UpdateChannel } from './update-channel.js';
 /**
  * THE SIGNED TRACK MANIFEST (Tynn #1058 L1; spec: .ai/plans/genie-2-host-split-2026-10-31.md, "Launcher build spec").
  *
- * Genie ships three programs, each on its own TRACK with its own build number (`<schema>-<release>[.<hotfix>]`,
- * core/protocol-version.ts): the client, the host and the launcher. Every package of every track carries a
+ * Genie ships its programs each on its own TRACK with its own build number (`<schema>-<release>[.<hotfix>]`,
+ * core/protocol-version.ts): the client, the host, the browser and the launcher. Each updates on its own (the owner,
+ * 2026-11-26): a client, browser or launcher update never restarts or stops the host; a host update always comes with a
+ * client, so a host package names the client build it ships with (`withClient`), and the updater (L6) applies the two
+ * together. GApps join later as tracks of their own, in a new format. Every package of every track carries a
  * `manifest.json` that lists each of its files with its size and SHA-256, signed with Ed25519. The launcher runs nothing
  * it has not verified: the signature, the shape, that it is the package asked for, that it is newer than what is
  * installed, and then every file. The format is the contract in contracts/track-manifest.schema.json; the Rust launcher
@@ -22,10 +25,21 @@ import type { UpdateChannel } from './update-channel.js';
  * vouches for it (`trustedKeysAfter`).
  */
 
-export const MANIFEST_FORMAT = 1;
-/** The tracks that ship as packages. The browser is the client package's `--genie-browser` mode in beta.66. */
-export const PACKAGE_TRACKS = ['client', 'host', 'launcher'] as const;
+/** Format 2 (L3): the browser track and a host's `withClient`. Format 1 was never published. */
+export const MANIFEST_FORMAT = 2;
+/** The tracks that ship as packages, each updated on its own. */
+export const PACKAGE_TRACKS = ['client', 'host', 'browser', 'launcher'] as const;
 export type PackageTrack = (typeof PACKAGE_TRACKS)[number];
+
+/** Only a host update restarts the host: a client, browser or launcher package is applied with the host left running. */
+export function restartsHost(track: PackageTrack): boolean {
+    return track === 'host';
+}
+
+/** The client build a host package ships with; `null` for any other track. */
+export function hostClient(m: Pick<TrackManifest, 'track' | 'withClient'>): string | null {
+    return m.track === 'host' ? m.withClient ?? null : null;
+}
 export const CHANNELS = ['stable', 'dev'] as const satisfies readonly UpdateChannel[];
 export const PLATFORMS = ['win32', 'linux'] as const;
 export type PackagePlatform = (typeof PLATFORMS)[number];
@@ -41,13 +55,15 @@ export interface ManifestFile {
 }
 
 export interface TrackManifest {
-    readonly format: 1;
+    readonly format: 2;
     readonly track: PackageTrack;
     readonly build: string;
     readonly schema: string;
     readonly channel: UpdateChannel;
     readonly platform: PackagePlatform;
     readonly arch: PackageArch;
+    /** A host package's client build: the two are applied together. Required of a host, absent from every other track. */
+    readonly withClient?: string;
     /** The oldest launcher build that may install it; `null` for none. */
     readonly minLauncher: string | null;
     readonly files: readonly ManifestFile[];
@@ -87,7 +103,7 @@ const MAX_NOTES = 65_536;
 const SHA256 = /^[0-9a-f]{64}$/;
 const KEY = /^[A-Za-z0-9+/]{43}=$/;
 const SIGNATURE = /^[A-Za-z0-9+/]{86}==$/;
-const FIELDS = new Set(['format', 'track', 'build', 'schema', 'channel', 'platform', 'arch', 'minLauncher', 'files', 'notes', 'nextKey']);
+const FIELDS = new Set(['format', 'track', 'build', 'schema', 'channel', 'platform', 'arch', 'withClient', 'minLauncher', 'files', 'notes', 'nextKey']);
 const FILE_FIELDS = new Set(['path', 'size', 'sha256']);
 
 /** A build a manifest may name: a track build with no `+metadata`. */
@@ -158,6 +174,8 @@ export function parseManifest(value: unknown): { ok: true; manifest: TrackManife
     if (!(CHANNELS as readonly unknown[]).includes(v.channel)) return bad(`the channel ${JSON.stringify(v.channel)}`);
     if (!(PLATFORMS as readonly unknown[]).includes(v.platform)) return bad(`the platform ${JSON.stringify(v.platform)}`);
     if (!(ARCHES as readonly unknown[]).includes(v.arch)) return bad(`the architecture ${JSON.stringify(v.arch)}`);
+    if (v.track === 'host' && !isManifestBuild(v.withClient)) return bad(`a host names the client build it ships with, and withClient is ${JSON.stringify(v.withClient)}`);
+    if (v.track !== 'host' && v.withClient !== undefined) return bad(`only a host names withClient, and this is the ${String(v.track)}`);
     if (v.minLauncher !== null && !isManifestBuild(v.minLauncher)) return bad(`minLauncher ${JSON.stringify(v.minLauncher)}`);
     if (typeof v.notes !== 'string' || v.notes.length > MAX_NOTES) return bad('the notes');
     if (v.nextKey !== undefined && (typeof v.nextKey !== 'string' || !KEY.test(v.nextKey))) return bad('nextKey is not a 32-byte key');
@@ -181,8 +199,9 @@ export function parseManifest(value: unknown): { ok: true; manifest: TrackManife
         files.push({ path, size: f.size as number, sha256: f.sha256 });
     }
     const manifest: TrackManifest = {
-        format: 1, track: v.track as PackageTrack, build: v.build, schema: v.schema as string, channel: v.channel as UpdateChannel,
-        platform: v.platform as PackagePlatform, arch: v.arch as PackageArch, minLauncher: v.minLauncher as string | null, files,
+        format: 2, track: v.track as PackageTrack, build: v.build, schema: v.schema as string, channel: v.channel as UpdateChannel,
+        platform: v.platform as PackagePlatform, arch: v.arch as PackageArch, ...(v.track === 'host' ? { withClient: v.withClient as string } : {}),
+        minLauncher: v.minLauncher as string | null, files,
         notes: v.notes, ...(v.nextKey !== undefined ? { nextKey: v.nextKey as string } : {}),
     };
     return { ok: true, manifest };

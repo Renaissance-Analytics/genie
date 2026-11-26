@@ -3,7 +3,7 @@
 //! | | Windows | Linux |
 //! |---|---|---|
 //! | code root | `%LOCALAPPDATA%\Genie\` | `$XDG_DATA_HOME/genie` (`~/.local/share/genie`) |
-//! | a build | `<code root>\<track>\<build>\` | the same |
+//! | a build | `<code root>\<track>\<build>\` (client, host, browser) | the same |
 //! | pointers | `<code root>\state.json` | the same |
 //! | data root | `~/.genie` (`GENIE_HOME`), unchanged | the same |
 //!
@@ -17,15 +17,18 @@ use std::path::{Path, PathBuf};
 pub enum Track {
     Client,
     Host,
+    /// The Genie browser: the client's app under its own name, on its own track (the owner, 2026-11-26).
+    Browser,
     Launcher,
 }
 
 impl Track {
-    pub const ALL: [Track; 3] = [Track::Client, Track::Host, Track::Launcher];
+    pub const ALL: [Track; 4] = [Track::Client, Track::Host, Track::Browser, Track::Launcher];
     pub fn as_str(self) -> &'static str {
         match self {
             Track::Client => "client",
             Track::Host => "host",
+            Track::Browser => "browser",
             Track::Launcher => "launcher",
         }
     }
@@ -42,6 +45,23 @@ pub const HOST_ENTRY: &str = "app/dist/main/host.js";
 /// The client's program inside a client build: never `Genie`, which names the launcher (the installer ends by name).
 pub fn client_executable_name() -> &'static str {
     if cfg!(windows) { "genie-client.exe" } else { "genie-client" }
+}
+/// The browser's program inside a browser build (scripts/track-packages.mjs `programName`).
+pub fn browser_executable_name() -> &'static str {
+    if cfg!(windows) { "genie-browser.exe" } else { "genie-browser" }
+}
+/// The launcher's own program (on Windows the NSIS folder's Genie.exe; on Linux `<code root>/launcher/<build>/genie`).
+pub fn launcher_executable_name() -> &'static str {
+    if cfg!(windows) { "Genie.exe" } else { "genie" }
+}
+/// The program a build of `track` runs.
+pub fn executable_name(track: Track) -> &'static str {
+    match track {
+        Track::Client => client_executable_name(),
+        Track::Host => host_executable_name(),
+        Track::Browser => browser_executable_name(),
+        Track::Launcher => launcher_executable_name(),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,12 +135,15 @@ impl Roots {
     pub fn logs_dir(&self) -> PathBuf {
         self.data.join("logs")
     }
+    /// The program of a `track` build, in its own folder.
+    pub fn program(&self, track: Track, build: &str) -> Option<Program> {
+        let folder = self.build_dir(track, build)?;
+        Some(Program { path: folder.join(executable_name(track)), folder })
+    }
     pub fn host_program(&self, build: &str) -> Option<Program> {
-        let folder = self.build_dir(Track::Host, build)?;
-        Some(Program { path: folder.join(host_executable_name()), folder })
+        self.program(Track::Host, build)
     }
     pub fn client_program(&self, build: &str) -> Option<Program> {
-        let folder = self.build_dir(Track::Client, build)?;
-        Some(Program { path: folder.join(client_executable_name()), folder })
+        self.program(Track::Client, build)
     }
 }

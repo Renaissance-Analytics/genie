@@ -125,10 +125,15 @@ pub fn ensure_host(roots: &Roots, keys: &[VerifyingKey]) -> Result<Value, String
     verify_build(roots, Track::Host, &build, keys, HashScope::Executables)?;
     let program = roots.host_program(&build).ok_or("the host's build is not a track build")?;
     let entry = HOST_ENTRY.split('/').fold(program.folder().to_path_buf(), |p, seg| p.join(seg));
+    // What the window used to hand the host it started (main.ts): its home, its build, the launcher whose Windows modes
+    // it uses (genie-launch.exe's, folded into the launcher: win-launcher.ts), and its OWN resources folder, where the
+    // bundled Caddy is (the host package's resources/runtime). Never anything of the client's.
     let env = [
         ("ELECTRON_RUN_AS_NODE".to_string(), "1".to_string()),
         ("GENIE_HOME".to_string(), roots.data.display().to_string()),
         ("GENIE_HOST_BUILD".to_string(), build.clone()),
+        ("GENIE_LAUNCHER_EXE".to_string(), crate::control::launcher_exe()?),
+        ("GENIE_RESOURCES".to_string(), program.folder().join("resources").display().to_string()),
     ];
     let log = host_log(roots);
     let pid = start_detached(&program, &[entry.display().to_string()], &env, &log)?;

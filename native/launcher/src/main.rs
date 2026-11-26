@@ -1,7 +1,11 @@
 //! `Genie.exe` / `genie`: the launcher's command line (Tynn #1058 L2).
 //!
-//!   genie                         run the launcher (one per user): its control wire, until it is ended
-//!   genie --logon                 the same, as the logon entry starts it (L5 adds what logon does)
+//!   genie                         open Genie, as the Start menu and the desktop entry run it: with a launcher already
+//!                                 running, ask it for a window and exit; else run the launcher (one per user), start
+//!                                 the host (profile both) and open a client window
+//!   genie serve | --logon | --hidden   run the launcher alone: its control wire, until it is ended (L5 adds logon)
+//!   genie --doctor                Genie's doctor mode: the client's --doctor, nothing else started
+//!   genie uninstall [--yes]       stop the host gracefully and remove the programs folder (the data root is kept)
 //!   genie install --from <folder> [--profile both|client] [--channel stable|dev] [--yes]
 //!   genie status [--json]         what is installed and running
 //!   genie ensure-host             adopt the running host or start the current one
@@ -35,7 +39,13 @@ fn main() -> ExitCode {
         Err(why) => return fail(&why),
     };
     match text.first().map(String::as_str) {
-        None | Some("serve") | Some("--logon") | Some("--hidden") => {
+        None => cmd_open(roots),
+        Some("--doctor") => match genie_launcher::components::component("client").ok_or_else(|| "no client component".to_string()).and_then(|c| control::start_component(&roots, c, vec!["--doctor".to_string()])) {
+            Ok(_) => ExitCode::SUCCESS,
+            Err(why) => fail(&why),
+        },
+        Some("uninstall") => cmd_uninstall(&roots),
+        Some("serve") | Some("--logon") | Some("--hidden") => {
             if let Err(why) = private_code_root(&roots) {
                 return fail(&why);
             }
@@ -78,8 +88,54 @@ fn main() -> ExitCode {
             println!("{}", LAUNCHER_BUILD);
             ExitCode::SUCCESS
         }
-        Some(other) => fail(&format!("unknown command '{other}' (install, status, ensure-host, stop-host, version, or none to run)")),
+        Some(other) => fail(&format!("unknown command '{other}' (install, status, ensure-host, stop-host, uninstall, version, --doctor, serve, or none to open Genie)")),
     }
+}
+
+/// Open Genie. A launcher already running is asked for a window; otherwise this one becomes the launcher, starts the host
+/// when this computer has one (profile both), then opens a client window. A host that cannot start is said in the client
+/// log's words and the window still opens (it shows the host as stopped: L4).
+fn cmd_open(roots: Roots) -> ExitCode {
+    match control::call_running(&roots, "launcher.openWindow", serde_json::json!([])) {
+        Ok(Some(_)) => return ExitCode::SUCCESS,
+        Ok(None) => {}
+        Err(why) => return fail(&why),
+    }
+    if let Err(why) = private_code_root(&roots) {
+        return fail(&why);
+    }
+    let opened = control::serve_then(roots, |roots| {
+        let has_host = genie_launcher::state::read(&roots.state_file()).ok().and_then(|s| s.track("host").and_then(|t| t.current.clone())).is_some();
+        if has_host {
+            if let Err(why) = host::ensure_host(roots, &keys::trusted_keys(roots)) {
+                eprintln!("genie: {why}");
+            }
+        }
+        if let Err(why) = genie_launcher::components::component("client").ok_or_else(|| "no client component".to_string()).and_then(|c| control::start_component(roots, c, vec!["--open-window".to_string()])) {
+            eprintln!("genie: {why}");
+        }
+    });
+    match opened {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(why) => fail(&why),
+    }
+}
+
+/// The NSIS uninstaller's (and Linux's) way out: the host stopped gracefully, then the programs folder removed. The data
+/// root (`~/.genie`) is kept, as it always was (`deleteAppDataOnUninstall: false`).
+fn cmd_uninstall(roots: &Roots) -> ExitCode {
+    if let Err(why) = host::stop_host(roots) {
+        return fail(&why);
+    }
+    #[cfg(unix)]
+    genie_launcher::desktop::remove_entries(roots);
+    if roots.code.exists() {
+        if let Err(e) = std::fs::remove_dir_all(&roots.code) {
+            return fail(&format!("the programs folder {} could not be removed: {e}", roots.code.display()));
+        }
+    }
+    println!("uninstalled: {}", roots.code.display());
+    ExitCode::SUCCESS
 }
 
 fn private_code_root(roots: &Roots) -> Result<(), String> {

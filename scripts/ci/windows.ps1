@@ -59,6 +59,8 @@ $Rows = @(
     'local-door-break', 'local-door', 'host-late-ready', 'files-watch', 'chat-drafts', 'gapp-open', 'artboard', 'ui-lag', 'plan-popover',
     'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash', 'quit-keeps-host', 'rebuilt-machine',
     'package', 'sign-plan', 'packed-tree', 'update-metadata', 'package-fuse', 'packaged-launcher',
+    'package-tracks', 'sign-plan-client', 'sign-plan-browser', 'sign-plan-host', 'sign-plan-launcher',
+    'packed-tree-client', 'packed-tree-browser', 'packed-tree-host', 'track-manifest', 'launcher-install',
     'logon',
     'launcher-unit',
     'client-only-update',
@@ -478,6 +480,55 @@ function Row-client-only-update { Need-Install; Need-Electron; Need-TestMachine;
 function Row-logon { Need-Build; Need-TestMachine; Run 'vm-logon' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-logon-windows.ps1 -Mode table } }
 # A host update drains and swaps (Tynn #1036 P6-2): last, as it replaces the install, the home and the build once more.
 function Row-host-update { Need-Install; Need-Electron; Need-TestMachine; Run 'vm-windows-update' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-windows-update.ps1 } }
+# THE PACKAGES PER TRACK (Tynn #1058 L3): the client (electron-builder's unpacked app named genie-client, no host bundle),
+# the browser (that app as genie-browser, its own track), the host (P6-1's copy laid out at build time) and the launcher,
+# each packed with its manifest (scripts/build-track-packages.mjs), signed with a THROWAWAY key made here and deleted with
+# the VM (scripts/ci/throwaway-manifest-key.mjs), the launcher built trusting that key, then the launcher's installer
+# (NSIS, electron-builder --prepackaged: Genie.exe and packages\). Unsigned (Authenticode) as the package row is. Never the release key.
+function Row-package-tracks {
+    Need-Build; Need-Rust
+    Run 'fetch-caddy' { npx tsx scripts/fetch-caddy.ts }
+    $build = (Get-Date).ToUniversalTime().ToString('yyyy.MM.dd') + '-1'
+    $pub = (node scripts/ci/throwaway-manifest-key.mjs $Setup | Select-Object -Last 1).Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $pub) { throw 'the throwaway key could not be made' }
+    Write-Output "--- track build $build; the launcher trusts the run's throwaway key $pub"
+    $env:GENIE_TRACK_BUILD = $build; $env:GENIE_MANIFEST_PUBLIC_KEYS = $pub
+    Push-Location (Join-Path $Repo 'native\launcher')
+    try {
+        $lockedArgs = @(); if (Test-Path 'Cargo.lock') { $lockedArgs = @('--locked') }
+        Run 'cargo build (the launcher of this build)' { cargo build @lockedArgs --release --bin genie --target-dir target-l3 }
+    } finally {
+        Pop-Location
+        Remove-Item Env:GENIE_TRACK_BUILD, Env:GENIE_MANIFEST_PUBLIC_KEYS -ErrorAction SilentlyContinue
+    }
+    $launcher = Join-Path $Repo 'native\launcher\target-l3\release\genie.exe'
+    Run 'build-track-packages packages' { node scripts/build-track-packages.mjs packages --build $build --channel dev --launcher $launcher }
+    $manifests = @(Get-ChildItem release\tracks\packages\*.manifest.json | ForEach-Object { $_.FullName })
+    $env:GENIE_MANIFEST_SIGNING_KEY = Get-Content -Raw (Join-Path $Setup 'THROWAWAY-manifest-signing-key.pem'); $env:GENIE_MANIFEST_PUBLIC_KEY = $pub
+    try { Run 'sign-manifest (throwaway key)' { node scripts/sign-manifest.mjs @manifests } }
+    finally { Remove-Item Env:GENIE_MANIFEST_SIGNING_KEY, Env:GENIE_MANIFEST_PUBLIC_KEY -ErrorAction SilentlyContinue }
+    Run 'build-track-packages installer' { node scripts/build-track-packages.mjs installer --build $build --launcher $launcher }
+    Set-Content -NoNewline release\tracks\build.txt $build
+    Get-ChildItem release\tracks\packages, release\tracks\installer -File | ForEach-Object { Write-Output ("{0,12} {1}" -f $_.Length, $_.Name) }
+}
+function Need-Tracks { if (-not (Test-Path 'release\tracks\build.txt')) { Block 'nothing was packaged per track (no release\tracks\build.txt): see the package-tracks row' } }
+# WHAT THE RELEASE SIGNS IN EACH PACKAGE: the client's and the browser's by electron-builder's rule (they are its output),
+# the host's and the launcher's by the same signExts (--package: the release's own sign step). None signed by another
+# publisher is signed again, and none that ships unsigned is left out.
+function Row-sign-plan-client { Need-Tracks; Run 'win-sign-plan client' { node scripts/win-sign-plan.mjs release/tracks/trees/client electron-builder.yml --check } }
+function Row-sign-plan-browser { Need-Tracks; Run 'win-sign-plan browser' { node scripts/win-sign-plan.mjs release/tracks/trees/browser electron-builder.yml --check } }
+function Row-sign-plan-host { Need-Tracks; Run 'win-sign-plan host' { node scripts/win-sign-plan.mjs release/tracks/trees/host electron-builder.yml --package --check } }
+function Row-sign-plan-launcher { Need-Tracks; Run 'win-sign-plan launcher' { node scripts/win-sign-plan.mjs release/tracks/trees/launcher electron-builder.yml --package --check } }
+# WHAT EACH PACKAGE HOLDS (scripts/track-tree-check.mjs): no host.js in the client's or the browser's app.asar, no launcher
+# or Caddy there; no app.asar and none of Tynn #437's leftovers in the host, and everything it runs with.
+function Row-packed-tree-client { Need-Tracks; Run 'track-tree-check client' { node scripts/track-tree-check.mjs release/tracks/trees client --asar-files release/tracks/packages/asar-files.json } }
+function Row-packed-tree-browser { Need-Tracks; Run 'track-tree-check browser' { node scripts/track-tree-check.mjs release/tracks/trees browser --asar-files release/tracks/packages/asar-files.json } }
+function Row-packed-tree-host { Need-Tracks; Run 'track-tree-check host' { node scripts/track-tree-check.mjs release/tracks/trees host } }
+# EVERY PACKAGE'S MANIFEST VERIFIES, EVERY FILE'S HASH MATCHES, A FLIPPED BYTE REFUSES (the spec's track-manifest).
+function Row-track-manifest { Need-Tracks; Need-Install; Run 'track-manifest-check' { npx tsx scripts/track-manifest-check.mts release/tracks/packages (Join-Path $Setup 'THROWAWAY-manifest-public-key.txt') } }
+# THE LAUNCHER INSTALLS GENIE (Tynn #1058 L3; was packaged-launcher): the installer as a person runs it, its choice page
+# and Genie running after it in screenshots (scripts/vm-launcher-install.ps1).
+function Row-launcher-install { Need-Tracks; Need-TestMachine; Run 'vm-launcher-install' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-launcher-install.ps1 } }
 function Row-packaged-launcher {
     Need-Packaged
     $saved = @{ USERPROFILE = $env:USERPROFILE; HOME = $env:HOME; APPDATA = $env:APPDATA; LOCALAPPDATA = $env:LOCALAPPDATA }
@@ -571,6 +622,9 @@ function Ceiling([string]$name) {
         { $_ -in 'safe-mode', 'hang' } { return 600 }
         'quit-keeps-host' { return 660 }
         'package' { return 1500 }
+        'package-tracks' { return 2400 }
+        { $_ -in 'sign-plan-client', 'sign-plan-browser', 'sign-plan-host', 'sign-plan-launcher', 'packed-tree-client', 'packed-tree-browser', 'packed-tree-host', 'track-manifest' } { return 300 }
+        'launcher-install' { return 900 }
         'logon' { return 900 }
         'client-only-update' { return 2400 }
         'host-update' { return 2400 }

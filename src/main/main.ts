@@ -81,6 +81,7 @@ import { loginTerminalOf } from './login-host.js';
 import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
 import { hostBuild } from './engine-launch.js';
 import { materializeHostRuntime } from './host-runtime.js';
+import { launcherLink } from '../core/launcher-link.js';
 import { HostRestart, HostWait } from './host-wait-window.js';
 import { scheduleScratchSweep } from './scratch-area.js';
 import { callRefusal, ownProtocolClient } from './own-protocol-client.js';
@@ -1275,12 +1276,16 @@ async function boot(): Promise<void> {
     {
         // P6: the host runs from a copy under Genie's home, so an update doesn't have to end it. Only the first run of a new
         // Electron copies the runtime; every failure answers the install, with the reason.
-        const hostBuildNow = hostBuild(app.getVersion(), join(here, 'host.js'));
+        // A CLIENT THE LAUNCHER STARTED (Tynn #1058 L3) carries no host bundle: it makes no copy, and links to the host build
+        // the launcher named (the host track's own build, never a hash of a host.js it does not have).
+        const launched = launcherLink(process.env);
+        const hostBuildNow = launched?.hostBuild ?? hostBuild(app.getVersion(), join(here, 'host.js'));
+        if (launched) lifecycleLog(`started by the launcher ${launched.launcherExe}; its host build ${launched.hostBuild ?? '(none)'}`);
         const hostCopyInput = { packaged: app.isPackaged, platform: process.platform, execPath: process.execPath, electronVersion: process.versions.electron ?? 'unknown', appRoot: app.getAppPath(), unpackedRoot: `${app.getAppPath()}.unpacked`, hostHash: hostHashOf(hostBuildNow) ?? hostBuildNow.replace(/[^A-Za-z0-9._-]/g, '_'), genieHome: genieRoot(), log: lifecycleLog };
-        const hostRuntime = await materializeHostRuntime(hostCopyInput);
+        const hostRuntime = launched ? { execPath: process.execPath, hostScript: join(here, 'host.js'), copied: false, error: null, cause: null } : await materializeHostRuntime(hostCopyInput);
         // Its own Deck item (Tynn #693): the error alone is the item's folded detail; the words are core/main-errors.ts's.
         if (hostRuntime.error !== null) mainErrors.record('host-copy', new Error(hostRuntime.cause ?? hostRuntime.error));
-        remakeHostCopy = () => materializeHostRuntime(hostCopyInput).then((made) => (made.error === null ? null : made.cause ?? made.error));
+        if (!launched) remakeHostCopy = () => materializeHostRuntime(hostCopyInput).then((made) => (made.error === null ? null : made.cause ?? made.error));
         // STARTING GENIE'S HOST, SAID (Tynn #700): a slow first start shows a window of its own that says so, until the link
         // is up; from 60 s it also offers Open the log and Restart Genie's host (host-wait-window.ts).
         let hostWaitWindow: BrowserWindow | null = null;
