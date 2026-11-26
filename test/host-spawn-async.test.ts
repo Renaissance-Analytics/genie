@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { spawnHostProcess } from '../src/main/engine-launch.js';
+import { spawnHostProcess } from '../src/main/legacy-host-start.js';
 
 /*
  * THE LAUNCHER IS NEVER WAITED FOR ON WINDOW MAIN (#1628 review). spawnHostProcess runs on window main when it starts

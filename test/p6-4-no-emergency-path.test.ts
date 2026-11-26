@@ -4,8 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 /*
- * HOST SPLIT P6-4 (Tynn #1036, task #1500): THE WINDOW HAS NO EMERGENCY PATH. A window whose host cannot start says so and
- * stops (main.ts `stopForNoHost`, Tynn #415, #1815); it never runs agents, flows, sites, stores or terminals itself. The
+ * HOST SPLIT P6-4 (Tynn #1036, task #1500): THE WINDOW HAS NO EMERGENCY PATH. A window with no host shows the host
+ * directory (main.ts `openHostDirectory`, Tynn #415, #1815, #1058 L4); it never runs agents, flows, sites, stores or terminals itself. The
  * code that let it (the window's own wake, compose's replica branches and safe-mode inputs, the no-host plugins stand-in)
  * reached nothing: main does not compose, and the tests compose alone. It is deleted, and this file keeps it deleted.
  *

@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { ENGINE_PROTOCOL } from '../src/core/engine-protocol.js';
-import { linkToHost, type EngineLaunchPorts } from '../src/main/engine-launch.js';
+// The single-app install's own start (Tynn #1058 L4: quarantined until the bridge, L9); a launched client starts none.
+import { legacyLinkToHost as linkToHost, type LegacyLaunchPorts as EngineLaunchPorts } from '../src/main/legacy-host-start.js';
 
 // The endpoint is reserved early, but no local window can authenticate or discover the new token
 // until the owned workspace API exists. Pin executable lines, not comments (Tynn #666).

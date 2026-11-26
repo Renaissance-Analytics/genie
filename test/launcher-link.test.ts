@@ -45,7 +45,8 @@ describe('the launcher\'s word to the client', () => {
     it('main.ts links a launched client to the launcher\'s host and makes no host copy for it', () => {
         const main = readFileSync(join('src', 'main', 'main.ts'), 'utf8');
         expect(main).toContain('launcherLink(process.env)');
-        expect(main).toMatch(/launched\s*\?\s*\{[^}]*copied: false/);
+        // L4: a launched client has no host copy at all, and never starts a host (test/client-never-starts-host.test.ts).
+        expect(main).toMatch(/launched \? null : await materializeHostRuntime\(/);
     });
 });
 

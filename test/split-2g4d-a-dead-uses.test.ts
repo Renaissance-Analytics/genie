@@ -97,8 +97,10 @@ describe('PROOF: no host tool’s call leaves the window for genie-host, and no 
 
     it('main stops before any tool is built when there is no host, so the forward’s "no host" arm never ran either', () => {
         const at = (needle: string) => { const i = main.indexOf(needle); expect(i, needle).toBeGreaterThan(-1); return i; };
-        expect(main).toMatch(/if \(agentEngineLink === null\) \{\s*await stopForNoHost\(hostRuntime\.error\);\s*return;\s*\}/);
-        expect(at('if (agentEngineLink === null) {')).toBeLessThan(at('withActionSignal(allGenieTools(genieToolDeps({'));
+        // Tynn #1058 L4: with no host the window shows the host directory and goes on only once it is linked, or ends.
+        expect(main).toContain("if (agentEngineLink !== null) break;");
+        expect(main).toContain("=== 'closed') { app.exit(0); return; }");
+        expect(at('if (agentEngineLink !== null) break;')).toBeLessThan(at('withActionSignal(allGenieTools(genieToolDeps({'));
     });
 });
 

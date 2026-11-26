@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ENGINE_PROTOCOL } from '../src/core/engine-protocol.js';
-import { linkToHost, type EngineLaunchPorts } from '../src/main/engine-launch.js';
+// The single-app install's own start (Tynn #1058 L4: quarantined until the bridge, L9); a launched client starts none.
+import { legacyLinkToHost as linkToHost, type LegacyLaunchPorts as EngineLaunchPorts } from '../src/main/legacy-host-start.js';
 import { HOST_WAIT_SHOW_AFTER_MS, HostWait, hostWaitWords, testReadyDelayMs } from '../src/main/host-wait-window.js';
 
 /**
@@ -102,7 +103,8 @@ describe('the window is wired to it', () => {
         const linked = main.indexOf('agentEngineLink = await connectAgentEngine(');
         const closed = main.indexOf('hostWait.done();', linked);
         expect(closed).toBeGreaterThan(linked);
-        expect(closed).toBeLessThan(main.indexOf('if (agentEngineLink === null) {', linked));
+        // Closed before the host directory can show (Tynn #1058 L4), and again after the link loop.
+        expect(closed).toBeLessThan(main.indexOf('openHostDirectory(', linked));
     });
 
     it('no fixed start deadline is given to the link', () => {

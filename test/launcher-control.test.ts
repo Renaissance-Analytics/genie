@@ -44,7 +44,7 @@ const files = (over: Record<string, string | null> = {}) => (file: string): stri
 const welcome = { kind: 'welcome', track: 'launcher', build: '2026.11.26-1', schema: '2026.11.25', minSchema: '2026.10.26', capabilities: ['launcher@1'] };
 
 describe('one call on the launcher\'s wire', () => {
-    it('hello with the token and the caller's offer (its track, launcher@1), then the call; the result is the answer, and the link is closed', async () => {
+    it('hello with the token and the caller\'s offer (its track, launcher@1), then the call; the result is the answer, and the link is closed', async () => {
         const fake = fakeLauncher((f) => (f.kind === 'hello' ? welcome : f.kind === 'call' ? { kind: 'result', id: f.id, ok: true, value: { how: 'started', pid: 9, build: '2026.11.26-1' } } : null));
         const endpoints: string[] = [];
         const wire: LauncherWire = { runtimeDir: runtime, track: 'client', readFile: files(), alive: (pid) => pid === 4242, connectTo: async (e) => { endpoints.push(e); return fake.transport; } };

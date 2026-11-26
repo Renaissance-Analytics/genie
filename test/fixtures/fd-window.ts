@@ -1,7 +1,7 @@
 /**
  * A WINDOW-LIKE PARENT for host-spawn-fds.test.ts. It is started with a LISTENING socket on fd 3 that has no
  * close-on-exec flag — what Chromium's `--remote-debugging-port` socket is in Electron's main process. It spawns a host
- * exactly the way the product does (engine-launch.ts `spawnHostProcess`, its real options), waits until that host has run
+ * exactly the way the product does (legacy-host-start.ts `spawnHostProcess`, its real options), waits until that host has run
  * its first module, prints `{hostPid, ready}`, then stays alive until the test writes `<dir>/go` (so the test can look at
  * BOTH processes while both live), and exits — the window gone, the host left running.
  *
@@ -9,7 +9,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { spawnHostProcess } from '../../src/main/engine-launch.js';
+import { spawnHostProcess } from '../../src/main/legacy-host-start.js';
 
 const [hostScript, dir] = process.argv.slice(2);
 if (!hostScript || !dir) throw new Error('usage: fd-window.ts <hostScript> <dir>');

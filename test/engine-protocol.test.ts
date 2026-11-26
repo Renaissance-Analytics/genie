@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { ENGINE_PROTOCOL, hostDecision, hostEndpoint, parseEngineFrame, parseHostRecord, type HostRecord } from '../src/core/engine-protocol.js';
 import { lineTransport, UNTRUSTED_LINE_LIMIT, type LineTransport } from '../src/core/line-transport.js';
 import { parseMessage } from '../src/core/remote-protocol.js';
-import { linkToHost, type EngineLaunchPorts } from '../src/main/engine-launch.js';
+// The single-app install's own start (Tynn #1058 L4: quarantined until the bridge, L9); a launched client starts none.
+import { legacyLinkToHost as linkToHost, type LegacyLaunchPorts as EngineLaunchPorts } from '../src/main/legacy-host-start.js';
 
 /** The host split's wire (phase 1): the remote bridge's envelope over the engine's table, a line transport, and discovery. */
 
@@ -93,7 +94,7 @@ describe('the line transport', () => {
     });
 });
 
-describe('linkToHost: the window finds its host', () => {
+describe('the single-app install’s legacyLinkToHost: the window finds its host', () => {
     const fakeTransport = (): LineTransport => ({ send: () => {}, onMessage: () => () => {}, onClose: () => () => {}, close: () => {}, trusted: () => {} });
 
     function ports(over: Partial<EngineLaunchPorts>, files: Map<string, string>, alive: Set<number>): EngineLaunchPorts {
