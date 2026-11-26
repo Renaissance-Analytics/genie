@@ -210,16 +210,20 @@ try {
     shots += SIZES.length;
 
     // Genie's own pass installs it by itself (a minute after start, then the download and its checksum).
-    const installed = target !== null && (await waitFor(cdp, `(() => { const p = document.querySelector('${PANEL}'); if (!p) { document.querySelector('[data-select-tool="php"]')?.click(); return false; } return Boolean(p.querySelector('[data-php-version=${JSON.stringify(String(target))}]')); })()`, 10 * 60_000, 3000));
-    if (!installed) problems.push(`PHP ${target} was not installed by itself within 10 min`);
-    note(installed ? `PHP ${target} installed by itself` : 'not installed');
+    // Any 8.4 newer than 8.4.27 listed as installed: the panel is pushed the new list (no click, no re-scan).
+    const NEWER = `([...(document.querySelector('${PANEL}')?.querySelectorAll('[data-php-version]') ?? [])].map((li) => li.getAttribute('data-php-version')).find((v) => /^8[.]4[.]/.test(v) && Number(v.split('.')[2]) > 27) ?? null)`;
+    const installed = await waitFor(cdp, `(() => { if (!document.querySelector('${PANEL}')) { document.querySelector('[data-select-tool="php"]')?.click(); return false; } return ${NEWER} !== null; })()`, 10 * 60_000, 3000);
+    const got = installed ? await cdp.evaluate(NEWER) : null;
+    if (!installed) problems.push(`no newer PHP 8.4 was installed by itself within 10 min (the patch button offered ${target})`);
+    else if (target !== null && got !== target) problems.push(`the panel offered ${target} and Genie installed ${got}`);
+    note(installed ? `PHP ${got} installed by itself` : 'not installed');
     await shootAt(cdp, 'after', SIZES);
     shots += SIZES.length;
 
     // THE DECK: what the person is told.
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
     await cdp.evaluate(`window.location.hash = '#genie://dashboard'; true`);
-    await sleep(2500);
+    await waitFor(cdp, `/PHP [0-9.]+ installed: a security release/.test(document.body.innerText)`, 60_000, 1000);
     const deck = await cdp.evaluate(`(document.body.innerText.match(/PHP [0-9.]+ installed: a security release[^\\n]*\\n?[^\\n]*/) ?? [null])[0]`);
     note(`Deck text: ${deck}`);
     if (!deck) problems.push('the Deck does not show the PHP security update');
@@ -232,7 +236,10 @@ try {
     if (cdp) cdp.close();
     await stop(app);
     const logText = existsSync(log) ? readFileSync(log, 'utf8') : '';
-    for (const line of logText.split(/\r?\n/).filter((l) => /php (updates|releases)/.test(l))) note(`log: ${line}`);
+    // What Genie's host said about it: its lifecycle log, on this run's own home.
+    const life = join(home, '.genie', 'runtime', 'lifecycle.log');
+    const lifeText = existsSync(life) ? readFileSync(life, 'utf8') : '';
+    for (const line of [...logText.split(/\r?\n/), ...lifeText.split(/\r?\n/)].filter((l) => /php (updates|releases)/.test(l))) note(`log: ${line}`);
     if (problems.length > 0) console.log(logText.slice(-2000));
     try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 }); } catch { /* the runner cleans up */ }
 }

@@ -2,9 +2,10 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { phpAdvisoryText } from '../core/php-advisories.js';
-import { catalogVersions, currentPhpCatalog } from '../core/php-releases.js';
+import { catalogLine, catalogVersions, currentPhpCatalog } from '../core/php-releases.js';
 import {
     PHP_VERSION,
+    compareVersionsDesc,
     managedCgiCommand,
     managedVersions,
     missingPinReason,
@@ -278,9 +279,17 @@ const psQuote = (s: string) => `'${s.replace(/'/g, "''")}'`;
  * this version as an NTS build, and php loads the extensions the ini enables without a complaint. Any failure after the
  * unpack deletes what was written.
  */
-export async function installPhpVersion(version: string, consent: boolean, ports: PhpVersionsPorts): Promise<PhpInstallOutcome> {
-    if (consent !== true) return { kind: 'refused', reason: `Genie installs nothing without your go-ahead; PHP ${version} was not installed` };
+export async function installPhpVersion(asked: string, consent: boolean, ports: PhpVersionsPorts): Promise<PhpInstallOutcome> {
+    if (consent !== true) return { kind: 'refused', reason: `Genie installs nothing without your go-ahead; PHP ${asked} was not installed` };
     if (ports.platform === 'darwin') return { kind: 'refused', reason: NOT_HERE };
+    // AN OLDER PATCH OF A LINE IS THAT LINE'S NEWEST (Tynn #1066). beta.66 on a fresh Windows machine offered "Install
+    // 8.5.12" and then refused it: windows.php.net publishes 8.5.13, and an archived build has no checksum. A patch is a
+    // patch: asked for 8.5.12 (a card drawn before php.net moved on, a site pinned to it), Genie installs the newest 8.5
+    // php.net publishes with a checksum — the same line, never another — and a pin to 8.5.12 runs it (pickPinned).
+    const askedLine = asked.split('.').slice(0, 2).join('.');
+    const lineNewest = asked.split('.').length === 3 ? catalogLine(currentPhpCatalog(), askedLine)?.newest ?? null : null;
+    const version = lineNewest !== null && compareVersionsDesc(lineNewest, asked) < 0 ? lineNewest : asked;
+    if (version !== asked) ports.progress?.(`PHP ${asked} is not php.net's newest ${askedLine}: installing PHP ${version}`);
     // THE FLOOR FIRST (PHP2Shell, 2026-10-22): a version under it is refused by name — the CVEs and the release to take
     // instead — before the recipe list is consulted and before a byte is fetched. "Genie has no installer for 8.4.24"
     // would be true and would hide the reason there is none.

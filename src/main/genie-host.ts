@@ -2226,6 +2226,7 @@ async function main(): Promise<void> {
                 }
             },
             log: (line) => { say(line); lifecycleLog(line); },
+            changed: (view) => { hostFeatures?.setToolchainPhp(view); },
         },
         activity: async () => ({
             sessions: hostRegistry.listAgents().filter(a => host.probe(a.id)?.running === true).map(a => ({ label: a.name, provider: a.provider })),

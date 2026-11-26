@@ -16,7 +16,7 @@ import { installRubyVersion, listRubyVersions, managedRuby, removeRubyVersion, r
 import { installPlaywrightBrowsers, listPlaywrightBrowsers, nodePlaywrightFs, type PlaywrightBrowsersPorts } from './playwright-browsers.js';
 import { installJavaVersion, javaVersionsRoot, listJavaVersions, managedJava, removeJavaVersion, type JavaVersionsPorts } from './java-versions.js';
 import { installNodeVersion, listNodeVersions, managedNode, nodeVersionsRoot, removeNodeVersion, type NodeVersionsPorts } from './node-versions.js';
-import { httpFetchOver, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, phpVersionsRoot, refreshAllManagedInis, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCaPort, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
+import { httpFetchOver, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, phpVersionsRoot, refreshAllManagedInis, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCaPort, type PhpCgiPorts, type PhpVersionsPorts, type PhpVersionsView } from './php-versions.js';
 import { availableParallelism, userInfo } from 'node:os';
 import { dockerAccount, probeDockerHealth, startDocker, withDockerHealth } from './docker-engine.js';
 import type { ToolStatus } from '../core/toolchain.js';
@@ -39,7 +39,9 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
      * PHP security patches within a line (Tynn #1066, main/php-patch-keeper.ts): the php sites, their restart, the
      * person's Deck items and the agents' mail. Absent = a pass installs and moves the default, and tells nobody.
      */
-    phpPatch?: { sites(): readonly PhpPatchSite[]; restartSite?(siteId: string): Promise<void>; notices: PhpPatchNotices; tellAgents(workspaceId: string, subject: string, text: string): Promise<void>; log?(line: string): void } }): NonNullable<FeaturePorts['toolchain']> {
+    phpPatch?: { sites(): readonly PhpPatchSite[]; restartSite?(siteId: string): Promise<void>; notices: PhpPatchNotices; tellAgents(workspaceId: string, subject: string, text: string): Promise<void>; log?(line: string): void;
+        /** The PHP list after a pass changed it (a patch installed, php.net's catalog moved): every window's Toolchain shows it. */
+        changed?(view: PhpVersionsView): void } }): NonNullable<FeaturePorts['toolchain']> {
     const { providerHealth } = deps;
     // Tynn #970: Docker on Linux is a HEALTH beside its version, read as the user Genie runs as.
     const linuxUser = () => userInfo().username;
@@ -256,15 +258,21 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
             },
             // T4: managed PHP versions (main/php-versions.ts) — the installer's progress is the same pushed busy line.
             php: {
-                // The list never waits on php.net: it shows the catalog in use, and a stale one is read again behind it.
-                list: (pins) => { void phpFeed.refresh(); return listPhpVersions(phpVersionsPorts(), pins); },
+                // The list waits on php.net at most 5 s (the feed caches for 6 h): past that it shows the catalog in use.
+                list: async (pins) => {
+                    let timer: ReturnType<typeof setTimeout> | undefined;
+                    await Promise.race([phpFeed.refresh(), new Promise((resolve) => { timer = setTimeout(resolve, 5_000); })]);
+                    if (timer !== undefined) clearTimeout(timer);
+                    return listPhpVersions(phpVersionsPorts(), pins);
+                },
                 install: async (version, consent) => { await phpFeed.refresh(); return installPhpVersion(version, consent, phpVersionsPorts()); },
                 remove: (version, pins) => removePhpVersion(version, pins, phpVersionsBase()),
                 // Tynn #1066: the security patches due in each installed line, installed, the default and sites moved, told.
-                applyDue: (progress) => {
+                applyDue: async (progress) => {
+                    const catalogBefore = phpFeed.catalog();
                     const linkPorts = { platform: process.platform as Platform, toolchainDir: toolchainDataDir(), fs: nodeLinkFs(process.platform as Platform) };
                     const p = deps.phpPatch;
-                    return applyDuePhpUpdates({
+                    const result = await applyDuePhpUpdates({
                         refresh: () => phpFeed.refresh(),
                         managed: () => managedPhp(phpVersionsBase()),
                         install: (version, step) => installPhpVersion(version, true, { ...phpVersionsPorts(), progress: (s) => { busyLine(s); step(s); } }),
@@ -276,6 +284,12 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
                         tellAgents: (workspaceId, subject, text) => p?.tellAgents(workspaceId, subject, text) ?? Promise.resolve(),
                         ...(p?.log ? { log: p.log } : {}),
                     }, progress);
+                    // What the Toolchain shows moves with it: a patch installed, or php.net's catalog read anew.
+                    if (p?.changed && (result.updated.length > 0 || phpFeed.catalog() !== catalogBefore)) {
+                        const pins = (p.sites()).flatMap((s) => (s.pin ? [{ host: s.host, pin: s.pin }] : []));
+                        try { p.changed(await listPhpVersions(phpVersionsPorts(), pins)); } catch { /* the next scan shows it */ }
+                    }
+                    return result;
                 },
             },
             // Genie's own Node (main/node-versions.ts) — same busy line.

@@ -147,6 +147,8 @@ export class HostFeatures {
     readonly #checkRuns = new Map<symbol, NonNullable<FeatureState['toolchainCheckRun']>>();
     readonly #work = new Map<symbol, NonNullable<FeatureState['toolchainUpdating']>>();
     #toolFacts: Pick<FeatureState, 'toolStatuses' | 'toolchainCheckedAt'> = { toolStatuses: null };
+    /** Tynn #1066: the newest PHP list, shared by every caller (a background security install changes it for all of them). */
+    #sharedPhp: FeatureState['toolchainPhp'] = null;
     #progressProbe: Promise<void> | null = null;
     #seq = 0;
     #closed = false;
@@ -307,6 +309,8 @@ export class HostFeatures {
             this.#toolFacts = { toolStatuses: next.toolStatuses, toolchainCheckedAt: next.toolchainCheckedAt ?? null };
             this.#changed();
         }
+        // A caller's own PHP list, just read, is the newest one: every caller sees it from here (Tynn #1066).
+        if (action.kind.startsWith('toolchain.') && next.toolchainPhp && next.toolchainPhp !== state.toolchainPhp) this.#sharedPhp = next.toolchainPhp;
         const answer = await this.#snapshot(next, context);
         this.#check(context);
         // These are replies to the action that requested them, never the next read or a broadcast.
@@ -387,6 +391,16 @@ export class HostFeatures {
 
     invalidate(): void { this.#changed(); }
 
+    /**
+     * Tynn #1066: the PHP list after Genie changed it by itself (a security patch installed in the background, php.net's
+     * live data read). Every caller's Toolchain shows it, and a change is pushed: the person never reads 8.4.27 as
+     * vulnerable after Genie installed 8.4.28.
+     */
+    setToolchainPhp(view: NonNullable<FeatureState['toolchainPhp']>): void {
+        this.#sharedPhp = view;
+        this.#changed();
+    }
+
     #changed(): void { if (!this.#closed && this.#listeners.size > 0) this.#push.request(); }
 
     #presentation(context: CallContext, required = false): HostFeaturePresentation | undefined {
@@ -415,7 +429,7 @@ export class HostFeatures {
             }).finally(() => { this.#progressProbe = null; });
             await this.#progressProbe;
         }
-        const toolchain = toolchainSection({ ...state, toolchainBusy: [...this.#busy.values()].at(-1) ?? state.toolchainBusy ?? null, toolStatuses: this.#toolFacts.toolStatuses ?? state.toolStatuses,
+        const toolchain = toolchainSection({ ...withSharedToolchainPhp(state, this.#sharedPhp), toolchainBusy: [...this.#busy.values()].at(-1) ?? state.toolchainBusy ?? null, toolStatuses: this.#toolFacts.toolStatuses ?? state.toolStatuses,
             toolchainCheckedAt: this.#toolFacts.toolchainCheckedAt ?? state.toolchainCheckedAt ?? null,
             toolchainUpdating: [...this.#work.values()].at(-1) ?? null,
             toolchainCheckRun: [...this.#checkRuns.values()].at(-1) ?? state.toolchainCheckRun ?? null });
@@ -431,4 +445,9 @@ function needsPresentation(action: FeatureAction): boolean {
         || action.kind.startsWith('browser.') || action.kind === 'rendererNotice.dismiss'
         || action.kind === 'integrations.githubOpen' || action.kind === 'tailscale.install'
         || ((action.kind === 'deck.answer' || action.kind === 'deck.answerForm') && typeof action.item?.id === 'string' && action.item.id.startsWith(MAIN_ERROR_DECK_PREFIX));
+}
+
+/** A caller's state with the host's newest PHP list in place of its own, when the host has one (Tynn #1066). */
+export function withSharedToolchainPhp<S extends Pick<FeatureState, 'toolchainPhp'>>(state: S, shared: FeatureState['toolchainPhp']): S {
+    return shared ? { ...state, toolchainPhp: shared } : state;
 }
