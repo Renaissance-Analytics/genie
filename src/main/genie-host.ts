@@ -508,6 +508,10 @@ async function main(): Promise<void> {
      */
     // Opened here, before the start's updates (Tynn #1067), so their downloads take the OS's proxy routes like every other.
     const proxyMemory = ProxyMemory.open(join(runtime, 'host-proxy.json'), say);
+    // PHP SECURITY PATCHES (Tynn #1066): what Genie installed by itself, or could not, as the person's Deck items. Made
+    // before the start's updates, so a security patch installed there is on the Deck too (no site runs yet: none restarts,
+    // no agent is mailed).
+    const phpPatchNotices = new PhpPatchNotices(() => Date.now());
     {
         const startupHealth = new ProviderHealthBook(async (provider) => {
             if (!isAcpProvider(provider)) throw new Error('Unknown provider account');
@@ -518,6 +522,7 @@ async function main(): Promise<void> {
         const startupRoutes = (url: string) => startupMemory?.routesFor(url) ?? [{ kind: 'direct' as const }];
         const startupToolchain = nativeFeatureToolchain({ home, providerHealth: startupHealth, busy: () => {},
             download: featureDownload({ proxyRoutes: startupRoutes }),
+            phpPatch: { sites: () => [], notices: phpPatchNotices, tellAgents: async () => {}, log: (line) => { say(line); lifecycleLog(line); } },
             activity: async () => ({ sessions: [], processes: [], engines: [] }) });
         const startupSend = hostHttpsFetch({ proxyRoutes: startupRoutes, log: say });
         await applyStartupUpdates({
@@ -1769,8 +1774,6 @@ async function main(): Promise<void> {
     // After the host is up, not during it: a download competes with nothing the person is waiting for.
     const playwrightAtLaunch = setTimeout(() => { void playwrightInstaller.ensureAtLaunch(); }, 20_000);
     playwrightAtLaunch.unref();
-    // PHP SECURITY PATCHES (Tynn #1066): what Genie installed by itself, or could not, as the person's Deck items.
-    const phpPatchNotices = new PhpPatchNotices(() => Date.now());
     // GENIE'S PLAYWRIGHT (Tynn #604): the browsers path is Genie's own environment; the server and a workspace's endpoint are made here, on demand.
     const playwrightHost = new PlaywrightHost({
         toolchainDir: join(home, 'genie2-toolchain'),
