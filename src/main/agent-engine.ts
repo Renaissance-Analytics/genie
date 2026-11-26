@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseHostRecord } from '../core/engine-protocol.js';
+import { ENGINE_PROTOCOL, parseHostRecord } from '../core/engine-protocol.js';
 import type { AgentId } from '../core/identity.js';
 import { linkToHost, pidAlive, type EngineLaunchPorts, type EngineLink } from './engine-launch.js';
 import { SessionEngineClient, type EngineClientOptions } from './session-engine-client.js';
@@ -104,7 +104,8 @@ export async function connectAgentEngine(options: AgentEngineLinkOptions & { rea
     const liveHostPid = (): number | null => {
         const read = options.launch.readFile ?? ((file: string) => { try { return readFileSync(file, 'utf8'); } catch { return null; } });
         const record = parseHostRecord(read(join(options.launch.runtimeDir, 'host.json')));
-        return record !== null && (options.launch.alive ?? pidAlive)(record.pid) ? record.pid : null;
+        // A host of another engine protocol is not this client's to reach (Tynn #1058 L4): the directory says it needs an update.
+        return record !== null && record.protocol === ENGINE_PROTOCOL && (options.launch.alive ?? pidAlive)(record.pid) ? record.pid : null;
     };
     const found = await link();
     let how: AgentEngineLink['how'];
