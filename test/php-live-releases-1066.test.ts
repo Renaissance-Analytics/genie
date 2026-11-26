@@ -21,7 +21,7 @@ import { applyDuePhpUpdates, PhpPatchNotices, type PhpPatchPorts, type PhpPatchS
 import { plainRefusal } from '../src/renderer/toolchain-view.js';
 import { withSharedToolchainPhp } from '../src/main/features-host.js';
 import { PhpReleaseFeed } from '../src/main/php-release-feed.js';
-import { ensureVcRuntimeAtLeast } from '../src/main/vc-runtime.js';
+import { VC_REDIST_URL, ensureVcRuntimeAtLeast } from '../src/main/vc-runtime.js';
 import { installPhpVersion, listPhpVersions, resolvePhpCgi, type Fetched, type PhpVersionsFs, type PhpVersionsPorts } from '../src/main/php-versions.js';
 
 /**
@@ -504,76 +504,65 @@ describe('a build needs the Visual C++ runtime its toolset links (8.6 is vs18: V
     });
 });
 
-describe('bringing the Visual C++ runtime up to a toolset (main/vc-runtime.ts)', () => {
-    /** A machine whose vcruntime140.dll reports `versions` in turn, one per read; records every command. */
-    const machine = (versions: string[], wingetExit = 0) => {
+describe('the Visual C++ runtime, brought up with Microsoft’s own signed redistributable — never winget (main/vc-runtime.ts)', () => {
+    // Windows Server has no winget (the test VM: `spawn winget ENOENT`), and the owner: "don't rely on winget".
+    const machine = (opts: { signature?: string; versions: string[]; exit?: number }) => {
         const ran: string[] = [];
-        let reads = 0;
-        const run = async (binary: string, args: readonly string[]) => {
-            ran.push(`${binary} ${args.join(' ')}`);
-            if (binary === 'powershell.exe') return { stdout: `${versions[Math.min(reads++, versions.length - 1)]}\r\n`, exitCode: 0 };
-            if (binary === 'winget') return { stdout: '', exitCode: wingetExit };
-            throw new Error(`unexpected ${binary}`);
-        };
-        return { run, ran };
-    };
-
-    it('already new enough: nothing is installed', async () => {
-        const m = machine(['14.51.36231.0']);
-        expect(await ensureVcRuntimeAtLeast('14.50', { run: m.run, systemRoot: 'C:/Windows' })).toEqual({ ok: true });
-        expect(m.ran.filter((c) => c.startsWith('winget'))).toEqual([]);
-    });
-
-    it('14.44 for a vs18 build: winget brings Microsoft.VCRedist.2015+.x64 up, and the DLL is read again', async () => {
-        const m = machine(['14.44.35211.0', '14.51.36231.0']);
-        expect(await ensureVcRuntimeAtLeast('14.50', { run: m.run, systemRoot: 'C:/Windows' })).toEqual({ ok: true });
-        expect(m.ran.some((c) => c.startsWith('winget') && c.includes('Microsoft.VCRedist.2015+.x64'))).toBe(true);
-    });
-
-    it('still old after winget: refused, naming what the machine has and what is needed', async () => {
-        const m = machine(['14.44.35211.0'], 1);
-        const r = await ensureVcRuntimeAtLeast('14.50', { run: m.run, systemRoot: 'C:/Windows' });
-        expect(r.ok).toBe(false);
-        expect(!r.ok && r.reason).toMatch(/14[.]44[.]35211[.]0/);
-    });
-});
-
-describe('no winget (Windows Server, measured on the test VM: spawn winget ENOENT): Microsoft’s own redistributable, signature-checked', () => {
-    const serverMachine = (opts: { signature: string; versions: string[] }) => {
-        const ran: string[] = [];
-        const written: string[] = [];
         let reads = 0;
         const run = async (binary: string, args: readonly string[]) => {
             const line = `${binary} ${args.join(' ')}`;
             ran.push(line);
-            if (binary === 'winget') throw new Error('spawn winget ENOENT');
+            if (binary === 'winget') throw new Error('winget must not be used');
+            if (line.includes('Get-AuthenticodeSignature')) return { stdout: `${opts.signature ?? 'Valid|CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'}\r\n`, exitCode: 0 };
+            if (line.includes('ProductVersion')) return { stdout: '14.52.37029.0\r\n', exitCode: 0 };
             if (line.includes('VersionInfo')) return { stdout: `${opts.versions[Math.min(reads++, opts.versions.length - 1)]}\r\n`, exitCode: 0 };
-            if (line.includes('Get-AuthenticodeSignature')) return { stdout: `${opts.signature}\r\n`, exitCode: 0 };
-            if (line.includes('Start-Process')) return { stdout: '', exitCode: 0 };
+            if (line.includes('Start-Process')) return { stdout: '', exitCode: opts.exit ?? 0 };
             throw new Error(`unexpected ${line}`);
         };
         const ports = {
             run, systemRoot: 'C:/Windows', tempDir: 'C:/genie/tmp',
             download: async (url: string) => { ran.push(`GET ${url}`); return { ok: true as const, body: new Uint8Array([1, 2, 3]) }; },
-            writeFile: (path: string) => { written.push(path); },
+            writeFile: () => {},
         };
-        return { ports, ran, written };
+        return { ports, ran };
     };
 
-    it('downloads aka.ms/vc14/vc_redist.x64.exe, runs it only once its Authenticode signature is Microsoft’s and valid, and reads the DLL again', async () => {
-        const m = serverMachine({ signature: 'Valid|CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US', versions: ['14.44.35211.0', '14.51.36231.0'] });
-        expect(await ensureVcRuntimeAtLeast('14.50', m.ports)).toEqual({ ok: true });
-        expect(m.ran).toContain('GET https://aka.ms/vc14/vc_redist.x64.exe');
+    it('already new enough: nothing is downloaded or run', async () => {
+        const m = machine({ versions: ['14.51.36231.0'] });
+        expect(await ensureVcRuntimeAtLeast('14.50', m.ports, { install: true })).toEqual({ ok: true });
+        expect(m.ran.some((c) => c.startsWith('GET') || c.includes('Start-Process'))).toBe(false);
+    });
+
+    it('during a PHP install (no install asked): the redistributable is fetched and signature-checked, NOT run; the answer says it is ready', async () => {
+        const m = machine({ versions: ['14.44.35211.0'] });
+        const r = await ensureVcRuntimeAtLeast('14.50', m.ports, { install: false });
+        expect(r.ok).toBe(false);
+        expect(!r.ok && r.reason).toMatch(/14[.]44[.]35211[.]0/);
+        expect(m.ran).toContain(`GET ${VC_REDIST_URL}`);
+        expect(m.ran.some((c) => c.includes('Get-AuthenticodeSignature'))).toBe(true);
+        expect(m.ran.some((c) => c.includes('Start-Process'))).toBe(false);
+    });
+
+    it('the button (install asked): it runs elevated, only after the signature is Microsoft’s and valid, and the DLL is read again', async () => {
+        const m = machine({ versions: ['14.44.35211.0', '14.52.37029.0'] });
+        expect(await ensureVcRuntimeAtLeast('14.50', m.ports, { install: true })).toEqual({ ok: true });
         const sig = m.ran.findIndex((c) => c.includes('Get-AuthenticodeSignature'));
         const start = m.ran.findIndex((c) => c.includes('Start-Process'));
-        expect(sig).toBeGreaterThan(-1);
         expect(start).toBeGreaterThan(sig);
-        expect(m.ran[start]).toMatch(/\/install \/quiet \/norestart/);
+        expect(m.ran[start]).toMatch(/-Verb RunAs/);
+        expect(m.ran[start]).toMatch(/\/install/);
+    });
+
+    it('exit 3010: installed, Windows must restart before the new runtime is the one loaded — said so', async () => {
+        const m = machine({ versions: ['14.44.35211.0'], exit: 3010 });
+        const r = await ensureVcRuntimeAtLeast('14.50', m.ports, { install: true });
+        expect(r.ok).toBe(false);
+        expect(!r.ok && r.reason).toMatch(/restart/i);
     });
 
     it('a file whose signature is not Microsoft’s (or not valid) is never run', async () => {
-        const m = serverMachine({ signature: 'HashMismatch|CN=Someone Else', versions: ['14.44.35211.0'] });
-        const r = await ensureVcRuntimeAtLeast('14.50', m.ports);
+        const m = machine({ signature: 'HashMismatch|CN=Someone Else', versions: ['14.44.35211.0'] });
+        const r = await ensureVcRuntimeAtLeast('14.50', m.ports, { install: true });
         expect(r.ok).toBe(false);
         expect(!r.ok && r.reason).toMatch(/signature/);
         expect(m.ran.some((c) => c.includes('Start-Process'))).toBe(false);
