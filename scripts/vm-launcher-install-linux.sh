@@ -56,14 +56,19 @@ echo "--- 1. the downloaded launcher's setup window installs Genie ($BUILD) into
 as_person "$H" setsid "$H/Downloads/genie" setup --from "$PKG" >"$SETUP_LOG" 2>&1 </dev/null &
 pids_started+=($!)
 wait_for() { local what="$1" secs="$2" i; for i in $(seq 1 "$secs"); do grep -q "$what" "$SETUP_LOG" 2>/dev/null && return 0; sleep 1; done; return 1; }
-press_return() { hyprctl dispatch focuswindow 'title:^(Set up Genie)$' >/dev/null 2>&1; sleep 0.4; hyprctl dispatch sendshortcut ', Return, title:^(Set up Genie)$' >"$OUT/hyprctl.log" 2>&1; }
+# Keys as a person's keyboard sends them (wtype: the Wayland virtual-keyboard protocol) to the focused window, which is the
+# setup window Hyprland focused when it opened. (`hyprctl dispatch` is evaluated as Lua on this Hyprland: item 1126-094349-6c2f68.)
+if ! command -v wtype >/dev/null 2>&1; then
+    sudo -n pacman -S --needed --noconfirm wtype >"$OUT/pacman-wtype.log" 2>&1 || sudo -n pacman -Sy --needed --noconfirm wtype >>"$OUT/pacman-wtype.log" 2>&1 || { tail -20 "$OUT/pacman-wtype.log"; fail 'wtype could not be installed: no way to press a key in the setup window'; }
+fi
+press_return() { wtype -k Return >>"$OUT/keys.log" 2>&1; }
 command -v grim >/dev/null 2>&1 || fail 'grim is not on this machine: no visual proof'
 wait_for 'setup: choose' 60 || { cat "$SETUP_LOG"; fail 'the setup window did not open within 60 s'; }
 sleep 3
 grim "$OUT/launcher-setup-choose-linux.png" && echo "SCREENSHOT $OUT/launcher-setup-choose-linux.png"
 # Install (the button the page focuses), with the default: Genie + this computer as a host.
 press_return
-wait_for 'setup: installing' 20 || { cat "$SETUP_LOG" "$OUT/hyprctl.log"; fail 'Install was not pressed (Return to the setup window)'; }
+wait_for 'setup: installing' 20 || { cat "$SETUP_LOG" "$OUT/keys.log"; hyprctl clients >"$OUT/clients.txt" 2>&1; grim "$OUT/launcher-setup-no-install-linux.png"; fail 'Install was not pressed (Return to the setup window)'; }
 sleep 1.5
 grim "$OUT/launcher-setup-installing-linux.png" && echo "SCREENSHOT $OUT/launcher-setup-installing-linux.png"
 wait_for 'setup: \(ready\|failed\)' 300 || { cat "$SETUP_LOG"; fail 'the install did not finish within 5 minutes'; }

@@ -158,9 +158,12 @@ pub fn run_setup(roots: &Roots, options: InstallOptions, keys: Vec<VerifyingKey>
     let webview = builder.build(&window).map_err(|e| format!("the setup window's webview (WebView2) could not start: {e}"))?;
     #[cfg(unix)]
     let webview = {
+        // Into tao's own box: the window already holds it, and a GTK window holds one child (measured, item
+        // 1126-094349-6c2f68: "a GtkApplicationWindow can only contain one widget at a time", and no window showed).
         use tao::platform::unix::WindowExtUnix;
         use wry::WebViewBuilderExtUnix;
-        builder.build_gtk(window.gtk_window()).map_err(|e| format!("the setup window's webview (WebKitGTK) could not start: {e}"))?
+        let vbox = window.default_vbox().ok_or("the setup window has no GTK box for its webview")?;
+        builder.build_gtk(vbox).map_err(|e| format!("the setup window's webview (WebKitGTK) could not start: {e}"))?
     };
     // Each screen as it comes, on the launcher's output: the rows read it (WebKitGTK has no CDP), and so does a person's log.
     println!("setup: choose");

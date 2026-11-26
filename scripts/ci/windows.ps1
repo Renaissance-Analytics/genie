@@ -508,10 +508,16 @@ function Row-package-tracks {
     try { Run 'sign-manifest (throwaway key)' { node scripts/sign-manifest.mjs @manifests } }
     finally { Remove-Item Env:GENIE_MANIFEST_SIGNING_KEY, Env:GENIE_MANIFEST_PUBLIC_KEY -ErrorAction SilentlyContinue }
     Run 'build-track-packages installer' { node scripts/build-track-packages.mjs installer --build $build --launcher $launcher }
-    Set-Content -NoNewline release\tracks\build.txt $build
+    Set-Content -NoNewline -LiteralPath (Join-Path $Repo 'release\tracks\build.txt') -Value $build
+    Write-Output "--- this run's track build, for the rows after: $build ($(Join-Path $Repo 'release\tracks\build.txt'))"
     Get-ChildItem release\tracks\packages, release\tracks\installer -File | ForEach-Object { Write-Output ("{0,12} {1}" -f $_.Length, $_.Name) }
 }
-function Need-Tracks { if (-not (Test-Path 'release\tracks\build.txt')) { Block 'nothing was packaged per track (no release\tracks\build.txt): see the package-tracks row' } }
+function Need-Tracks {
+    $at = Join-Path $Repo 'release\tracks\build.txt'
+    if (Test-Path -LiteralPath $at) { return }
+    Write-Output "--- looked for $at from $((Get-Location).Path); release\tracks holds: $(@(Get-ChildItem (Join-Path $Repo 'release\tracks') -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }) -join ', ')"
+    Block 'nothing was packaged per track (no release\tracks\build.txt): see the package-tracks row'
+}
 # WHAT THE RELEASE SIGNS IN EACH PACKAGE: the client's and the browser's by electron-builder's rule (they are its output),
 # the host's and the launcher's by the same signExts (--package: the release's own sign step). None signed by another
 # publisher is signed again, and none that ships unsigned is left out.
