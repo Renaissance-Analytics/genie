@@ -86,8 +86,17 @@ describe('the client, built by electron-builder', () => {
         // measured: the Windows build's builder-debug.yml had only `**/*` and win.files' exclusions, so the repository went
         // into the client's asar, item 1126-191543-b3aa95). Each platform list therefore carries the top-level patterns
         // first, then its own.
-        expect(c.win.files).toEqual([...c.files, ...((base.win as any).files as string[])]);
         expect(c.win.files.slice(0, 2)).toEqual(['dist/**', 'package.json']);
+        for (const p of (base.win as any).files as string[]) expect(c.win.files).toContain(p);
+        // An include after an exclusion takes the file back (electron-builder's matcher: the last match wins; the gate
+        // 1126-195203-d667d9 found host.js in the client once win.files began with dist/**). So every exclusion of the
+        // client's own comes after the last include.
+        const lastInclude = Math.max(...c.win.files.map((p: string, i: number) => (p.startsWith('!') ? -1 : i)));
+        for (const own of ['!dist/main/host.js', '!dist/main/host.js.map', '!**/node_modules/**/*.map']) {
+            expect(c.win.files.indexOf(own), own).toBeGreaterThan(lastInclude);
+            expect(c.files.indexOf(own), own).toBeGreaterThan(Math.max(...c.files.map((p: string, i: number) => (p.startsWith('!') ? -1 : i))));
+        }
+        expect(new Set(c.win.files).size, 'no pattern twice').toBe(c.win.files.length);
         expect(c.appId).toBe(base.appId);
         // The launcher is its own program now (Genie.exe / genie): the client carries no genie-launch.exe.
         expect(JSON.stringify(c.extraResources)).not.toContain('genie-launch.exe');
@@ -186,7 +195,8 @@ describe('the host package: P6-1\'s copy, made at build time', () => {
         expect(await readFile(join(out, 'app/node_modules/node-pty/build/Release/pty.node'), 'utf8')).toBe('native pty');
         // The bundle is the build's dist, host.js and all (the client's asar has none).
         expect(await readFile(join(out, 'app/dist/main/host.js'), 'utf8')).toBe('host');
-        if (platform === 'linux') expect((await stat(join(out, 'genie-host'))).mode & 0o111).toBe(0o111);
+        // Execute bits exist only where the file system has them (the Windows unit run has none).
+        if (platform === 'linux' && process.platform !== 'win32') expect((await stat(join(out, 'genie-host'))).mode & 0o111).toBe(0o111);
     });
 
     it('the launcher starts the entry where layout.rs says it is (HOST_ENTRY)', () => {
