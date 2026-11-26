@@ -228,6 +228,11 @@ describe('what each package must hold, and must not', () => {
             .toEqual([expect.objectContaining({ file: 'resources/app.asar:/dist/main/host.js' })]);
         expect(trackTreeProblems({ track: 'client', platform: 'win32', arch: 'x64', files: ['genie-client.exe', 'resources/app.asar', 'resources/bin/genie-launch.exe'], asarFiles: [] }))
             .toEqual([expect.objectContaining({ file: 'resources/bin/genie-launch.exe' })]);
+        // The client's app.asar holds the app and its production modules, nothing of the repository (the Windows build packed
+        // scripts/, test/ and CI screenshots into a 956 MiB asar: item 1126-183942-7000a7).
+        expect(trackTreeProblems({ track: 'client', platform: 'win32', arch: 'x64', files, asarFiles: ['/package.json', '/dist/main/main.js', '/node_modules/react/index.js'] })).toEqual([]);
+        expect(trackTreeProblems({ track: 'client', platform: 'win32', arch: 'x64', files, asarFiles: ['/dist/main/main.js', '/scripts/smoke-cdp.mjs', '/test/a.test.ts', '/session-shot-20s.png', '\\contracts\\workspace-ux.json'] }).map((p: { file: string }) => p.file))
+            .toEqual(['resources/app.asar:/scripts', 'resources/app.asar:/test', 'resources/app.asar:/session-shot-20s.png', 'resources/app.asar:/contracts']);
         expect(trackTreeProblems({ track: 'client', platform: 'win32', arch: 'x64', files: ['resources/app.asar'], asarFiles: [] }))
             .toEqual([expect.objectContaining({ file: 'genie-client.exe', why: 'missing' })]);
     });
@@ -305,5 +310,4 @@ describe('the setup window: the owner\'s direction C, "Wish Orb", in the launche
     it('honours reduce motion (the mockup\'s own rule, in the bundled CSS)', () => {
         expect(readFileSync('native/launcher/ui/base.css', 'utf8')).toContain('@media (prefers-reduced-motion: reduce)');
     });
-});
 });
