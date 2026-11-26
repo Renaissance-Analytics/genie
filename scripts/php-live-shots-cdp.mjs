@@ -68,6 +68,9 @@ const env = {
     XDG_CONFIG_HOME: join(home, '.config'), XDG_DATA_HOME: join(home, '.local', 'share'),
 };
 for (const key of ['ANTHROPIC_API_KEY', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_OAUTH_TOKEN', 'GENIE_HOME']) delete env[key];
+// THE PATCH RUN photographs the panel BEFORE Genie's pass: the start-up updates run a stand-in (no PHP pass at start), and
+// the first pass waits 150 s (GENIE_PHP_PATCH_FIRST_MS). The last run lost its "before" to the start-up pass.
+if (!CARD) Object.assign(env, { GENIE_TEST_MACHINE: '1', GENIE_TEST_STARTUP_UPDATE_MS: '1', GENIE_PHP_PATCH_FIRST_MS: '150000' });
 const electron = createRequire(import.meta.url)('electron');
 
 function launch() {
@@ -248,11 +251,19 @@ async function cardRun(cdp) {
         if (runtimeBound && (await cdp.evaluate(`Boolean(document.querySelector('${PANEL} [data-refusal-vcruntime]'))`))) {
             note(`the refusal shows: ${await cdp.evaluate(`document.querySelector('${PANEL} [data-refusal-vcruntime]').parentElement.innerText.split('\\n')[0]`)}`);
             await click(cdp, `${PANEL} [data-refusal-vcruntime]`);
-            const done = await waitFor(cdp, `(() => { const p = document.querySelector('${PANEL}'); if (!p) return false; return Boolean(p.querySelector('[data-php-version=${JSON.stringify(next)}]')) || (!p.querySelector('[data-refusal-vcruntime]') ? false : !document.querySelector('[data-toolchain-busy]') && /restart|declined|exited/i.test(p.innerText)); })()`, 10 * 60_000, 3000);
-            const result = await cdp.evaluate(`Boolean(document.querySelector('${PANEL} [data-php-version=${JSON.stringify(next)}]')) ? 'installed' : (document.querySelector('${PANEL}')?.innerText.match(/[^\\n]*(restart|declined|exited)[^\\n]*/i) ?? ['no answer'])[0]`);
-            note(`after "Install it (asks for administrator)": PHP ${next} ${result}${done ? '' : ' (no answer within 10 min)'}`);
+            // WHILE IT RUNS: the panel says what it waits on (data-panel-busy).
+            const waiting = await waitFor(cdp, `Boolean(document.querySelector('[data-panel-busy]'))`, 60_000, 500);
+            note(waiting ? `while it runs, the panel says: ${await cdp.evaluate(`document.querySelector('[data-panel-busy]').innerText`)}` : 'NO busy line after the click');
+            if (!waiting) problems.push('the runtime button showed no busy line');
+            await shot(cdp, `${OS}-card-${n}-${next}-runtime-waiting.png`);
+            taken++;
+            // THEN WHAT CAME OF IT: installed, or the refusal line naming the ending (declined, no approval, failed, restart).
+            const ended = await waitFor(cdp, `!document.querySelector('[data-panel-busy]')`, 7 * 60_000, 2000);
             await openPhpPanel(cdp);
             await sleep(800);
+            const result = await cdp.evaluate(`Boolean(document.querySelector('${PANEL} [data-php-version=${JSON.stringify(next)}]')) ? 'installed' : (document.querySelector('${PANEL}')?.innerText.match(/[^\\n]*Visual C\\+\\+ runtime[^\\n]*/) ?? ['NOTHING SAID'])[0]`);
+            note(`after "Install it (asks for administrator)": PHP ${next}: ${result}${ended ? '' : ' (still running after 7 min)'}`);
+            if (!ended || result === 'NOTHING SAID' || /needs a newer/.test(result)) problems.push(`the runtime button's outcome is not on the card: ${result}`);
             await shot(cdp, `${OS}-card-${n}-${next}-after-runtime.png`);
             taken++;
         }
@@ -262,11 +273,12 @@ async function cardRun(cdp) {
     }
     // THE HEADER, at the two widths people use (Tynn #1066 review): the controls in one place, and what "need you" counts
     // named on this page while a tool's panel is open.
-    for (const [w, h] of [[1600, 900], [1280, 800]]) {
+    for (const [w, h] of [[1600, 900], [1280, 800], [1100, 760]]) {
         await cdp.send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false });
         await sleep(1000);
         await openPhpPanel(cdp);
-        await cdp.evaluate(`document.querySelector('[data-toolchain-toolbar]')?.scrollIntoView({ block: 'start' }); true`);
+        // Everything at its top, as a person lands on it: the page, the panel side.
+        await cdp.evaluate(`(() => { for (const el of document.querySelectorAll('[data-surface="toolchain"], [data-surface="toolchain"] *, [data-settings-page], [data-settings-page] *')) { if (el.scrollTop) el.scrollTop = 0; } return true; })()`);
         await sleep(600);
         const header = await cdp.evaluate(`JSON.stringify((() => {
             const box = (el) => { if (!el) return null; const r = el.getBoundingClientRect(); return [r.left, r.top, r.width, r.height].map(Math.round); };
@@ -274,6 +286,13 @@ async function cardRun(cdp) {
                 problemsBesidePanel: document.querySelector('[data-toolchain-aside-problems]')?.innerText.replace(/\\s+/g, ' ').slice(0, 300) ?? null };
         })())`);
         note(`MEASURE header ${w}x${h} ${header}`);
+        // NOTHING CUT OFF: every toolbar control lies inside the toolbar's own box (the 1280x800 shot clipped "Fix" past it).
+        const clipped = await cdp.evaluate(`(() => {
+            const bar = document.querySelector('[data-toolchain-toolbar]'); if (!bar) return ['no toolbar'];
+            const b = bar.getBoundingClientRect();
+            return [...bar.querySelectorAll('button')].filter((el) => { const r = el.getBoundingClientRect(); return r.width > 0 && (r.right > b.right + 1 || r.left < b.left - 1); }).map((el) => el.innerText.trim() || el.getAttribute('aria-label'));
+        })()`);
+        if (clipped.length > 0) problems.push(`at ${w}x${h} the toolbar cuts off: ${clipped.join(', ')}`);
         await shot(cdp, `${OS}-header-${w}x${h}.png`);
         taken++;
     }

@@ -6,6 +6,7 @@ import type { FeatureAction, ToolchainRefusal, ToolchainSection } from '../rende
 import type { FeaturePorts, FeatureState } from './feature-ipc.js';
 import { sitePins, type HostingFeatureServices } from './feature-hosting.js';
 import type { SitePin } from './php-versions.js';
+import { vcRuntimeOutcomeText } from '../core/php-versions.js';
 import { shouldCheckUpdates } from './toolchain-prober.js';
 import type { InstallOutcome } from './toolchain-ops.js';
 
@@ -595,7 +596,9 @@ export async function applyToolchainCoreFeatureAction(services: ToolchainFeature
             }
             const vc = await tc.php.installVcRuntime(action.version);
             if (!vc.ok) {
-                refuse(next, 'php', `PHP ${action.version.split('.').slice(0, 2).join('.')} needs a newer Microsoft Visual C++ runtime (${vc.reason})`, action.version);
+                // Every ending is said on the card (Tynn #1066): declined, no answer, failed with why, restart needed.
+                refuse(next, 'php', vcRuntimeOutcomeText(action.version, { ok: false, outcome: vc.outcome ?? 'failed', reason: vc.reason }), action.version);
+                next.toolchainPhp = await tc.php.list(sitePins(services));
                 break;
             }
             const outcome = await tc.php.install(action.version, true);

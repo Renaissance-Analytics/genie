@@ -1200,7 +1200,7 @@ export function ToolchainCheckBar({ tc, busy, onAction }: { tc: ToolchainData | 
     const at = tc?.checkedAt ?? null;
     return (
         <>
-            <span data-toolchain-checked={at ?? ''} className="ml-auto hidden w-28 truncate whitespace-nowrap text-right text-xs text-[var(--fg-3)] @min-[440px]:inline" {...(at !== null ? { title: new Date(at).toLocaleString() } : {})}>
+            <span data-toolchain-checked={at ?? ''} className="ml-auto hidden w-28 truncate whitespace-nowrap text-right text-xs text-[var(--fg-3)] @min-[700px]:inline" {...(at !== null ? { title: new Date(at).toLocaleString() } : {})}>
                 {at === null ? 'Not checked yet' : `Checked ${agoText(at, Date.now())}`}
             </span>
             {running ? (
@@ -1303,7 +1303,7 @@ export function ToolchainSurface({ data, onAction: act, selected: initial }: Sur
                 {tc !== null ? <ToolchainTallies tally={tally} /> : null}
                 {/* ONE GROUP, KEPT TOGETHER ON THE RIGHT (Tynn #1066): "Checked just now" growing into "Checked 8m ago" wrapped
                     "Fix 2 problems" under the counts on one page and not the next. The group never wraps inside itself. */}
-                <div data-toolchain-actions="" className="ml-auto flex flex-nowrap shrink-0 items-center gap-x-2 @min-[440px]:gap-x-3">
+                <div data-toolchain-actions="" className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-x-2 gap-y-2 @min-[700px]:flex-nowrap @min-[440px]:gap-x-3">
                     <ToolchainCheckBar tc={tc} busy={busy !== null} onAction={onAction} />
                     <Button size="xs" type="button" labelClassName="contents" className="shrink-0 gap-1.5 whitespace-nowrap" aria-label="Check and repair" title="Check and repair" disabled={busy !== null} onClick={() => onAction({ kind: 'toolchain.repair' })}>
                         <Icon name="stethoscope" size="xs" /><span className="hidden @min-[440px]:inline">Check and repair</span>
@@ -1690,6 +1690,13 @@ function ToolPanel({ card, tc, busy, check, onAction, onClose }: { card: ToolCar
                     ) : null}
                 </div>
             </div>
+            {/* WHAT IS RUNNING NOW, in the panel the person is looking at (Tynn #1066: a click on "Install it (asks for
+                administrator)" showed nothing while Windows waited for approval). */}
+            {tc.busy ? (
+                <p data-panel-busy={card.key} role="status" className="flex items-center gap-2 border-b border-[var(--border-1)] px-5 py-2 text-xs text-[var(--fg-2)]">
+                    <Icon name="loader-circle" size="xs" className="shrink-0 animate-spin" />{tc.busy}
+                </p>
+            ) : null}
             {card.lang && view ? (
                 <LanguagePanel lang={card.lang} view={view} current={current} busy={busy} check={check} onAction={onAction} refusals={(tc.refusals ?? []).filter((r) => r.tool === card.lang && r.version !== undefined)} />
             ) : card.key === 'playwright' && tc.playwright ? (
@@ -1751,6 +1758,8 @@ function LanguagePanel({ lang, view, current, busy, check, onAction, refusals }:
                         </li>
                     );
                 })}
+                {/* No system PHP, no row to choose (Tynn #1066: "System · none on this machine" looked selectable). */}
+                {view.system ? (
                 <li {...attr('system-row', '')} className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--border-1)] bg-[var(--bg-2)] px-2.5 py-2 text-sm">
                     {current === null ? (
                         <span role="radio" aria-checked="true" data-system-default={lang} title="The default" className="grid size-4 shrink-0 place-items-center rounded-full border-2 border-[var(--primary)]"><span className="size-1.5 rounded-full bg-[var(--primary)]" /></span>
@@ -1763,6 +1772,7 @@ function LanguagePanel({ lang, view, current, busy, check, onAction, refusals }:
                     <Badge variant="soft" size="sm" color="zinc" className="inline-flex items-center gap-1"><Icon name="monitor" size="xs" />System</Badge>
                     {view.system ? null : <span className="text-[11px] text-[var(--fg-3)]">none on this machine</span>}
                 </li>
+                ) : null}
             </ul>
             {lang === 'php' ? (
                 <p {...attr('system', '')} className="text-xs text-[var(--fg-3)]">

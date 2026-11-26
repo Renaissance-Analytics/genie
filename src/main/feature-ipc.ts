@@ -178,7 +178,7 @@ export interface FeaturePorts {
              * rejects; offline it does nothing. main/php-patch-keeper.ts.
              */
             /** Tynn #1066: install the Visual C++ runtime PHP `version`'s build needs — Microsoft's signed redistributable, elevated. */
-            installVcRuntime?(version: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+            installVcRuntime?(version: string): Promise<{ ok: true } | { ok: false; reason: string; outcome?: 'declined' | 'no-answer' | 'restart' | 'failed' | 'not-ready' }>;
             applyDue?(progress: (step: string | null) => void): Promise<{ updated: string[]; failed: Array<{ version: string; reason: string }> }>;
         };
         /** Genie's own Node (main/node-versions.ts): nodejs.org zips, checksum-verified, under its toolchain directory. */

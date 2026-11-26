@@ -2242,7 +2242,8 @@ async function main(): Promise<void> {
     // PHP STAYS ON THE NEWEST PATCH OF ITS LINE (Tynn #1066): php.net read and the security patches due applied a minute
     // after start (the sites are up by then, so they are restarted onto it), then every six hours. Never rejects.
     const phpPatchPass = () => { void featureNative.php?.applyDue?.(() => {}); };
-    const phpPatchFirst = setTimeout(phpPatchPass, 60_000);
+    // GENIE_PHP_PATCH_FIRST_MS: a test row photographs the panel BEFORE the pass (php-live-shots); default a minute.
+    const phpPatchFirst = setTimeout(phpPatchPass, Number(process.env.GENIE_PHP_PATCH_FIRST_MS) > 0 ? Number(process.env.GENIE_PHP_PATCH_FIRST_MS) : 60_000);
     phpPatchFirst.unref();
     const phpPatchEvery = setInterval(phpPatchPass, 6 * 3_600_000);
     phpPatchEvery.unref();

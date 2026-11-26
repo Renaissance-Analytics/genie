@@ -94,8 +94,8 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
     // THE VISUAL C++ RUNTIME (Tynn #1066): Microsoft's signed redistributable, never winget. A PHP install only fetches and
     // checks it; the refusal's own button runs it, elevated (php.installVcRuntime below).
     const vcRuntimePorts = () => ({
-        // Ten minutes, not the build's thirty: an installer waiting on a permission nobody gives must end.
-        run: ((binary, args, options) => execFileRunner(binary, args, { timeoutMs: 10 * 60_000, ...(options?.env ? { env: options.env } : {}) })) as CommandRunner,
+        // Five minutes, not the build's thirty: an installer waiting on an approval nobody gives ends, and the card says so.
+        run: ((binary, args, options) => execFileRunner(binary, args, { timeoutMs: 5 * 60_000, ...(options?.env ? { env: options.env } : {}) })) as CommandRunner,
         systemRoot: process.env.SystemRoot ?? 'C:/Windows',
         progress: (step: string) => deps.busy(step),
         tempDir: toolchainDataDir(),
@@ -289,7 +289,7 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
                 installVcRuntime: async (version) => {
                     const toolset = catalogLine(currentPhpCatalog(), version.split('.').slice(0, 2).join('.'))?.toolset;
                     const min = toolset ? VC_RUNTIME_FOR_TOOLSET[toolset] : undefined;
-                    if (!min) return { ok: false, reason: `Genie does not know which Visual C++ runtime PHP ${version} needs` };
+                    if (!min) return { ok: false, outcome: 'failed' as const, reason: `Genie does not know which Visual C++ runtime PHP ${version} needs` };
                     try { return await ensureVcRuntimeAtLeast(min, vcRuntimePorts(), { install: true }); } finally { deps.busy(null); }
                 },
                 // Tynn #1066: the security patches due in each installed line, installed, the default and sites moved, told.

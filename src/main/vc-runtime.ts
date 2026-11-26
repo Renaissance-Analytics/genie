@@ -76,24 +76,36 @@ async function prepare(ports: VcRuntimePorts): Promise<{ ok: true; exe: string; 
 /** The installer's exit codes that mean it is in: 0, and 3010 / 1641 (in, after a restart); 1638: a newer one already is. */
 const RESTART = new Set([3010, 1641]);
 
-export async function ensureVcRuntimeAtLeast(min: string, ports: VcRuntimePorts, options: { install: boolean }): Promise<{ ok: true } | { ok: false; reason: string }> {
+/**
+ * What came of it. `outcome` says which of the endings the card names (core/php-versions.ts vcRuntimeOutcomeText):
+ * `declined` (the administrator prompt was refused), `no-answer` (no approval came: the run gave up waiting — a test VM's
+ * consent.exe failed, 2026-11-26), `restart` (installed; Windows loads it after a restart), `failed` (with why),
+ * `not-ready` (it could not even be fetched and checked).
+ */
+export type VcRuntimeResult = { ok: true } | { ok: false; outcome: 'declined' | 'no-answer' | 'restart' | 'failed' | 'not-ready'; reason: string };
+
+export async function ensureVcRuntimeAtLeast(min: string, ports: VcRuntimePorts, options: { install: boolean }): Promise<VcRuntimeResult> {
     const before = await dllVersion(ports.run, ports.systemRoot);
     if (before !== null && vcRuntimeAtLeast(before, min)) return { ok: true };
     const has = `this machine's vcruntime140.dll is ${before ?? 'not readable'}`;
     const ready = await prepare(ports);
-    if (!ready.ok) return { ok: false, reason: `${has}; ${ready.reason}` };
-    if (!options.install) return { ok: false, reason: `${has}; Microsoft's signed redistributable ${ready.version || ''} is ready to install`.replace(/ {2}/g, ' ') };
-    ports.progress?.(`Installing the Microsoft Visual C++ runtime ${ready.version} — Windows asks for an administrator`);
+    if (!ready.ok) return { ok: false, outcome: 'not-ready', reason: `${has}; ${ready.reason}` };
+    if (!options.install) return { ok: false, outcome: 'not-ready', reason: `${has}; Microsoft's signed redistributable ${ready.version || ''} is ready to install`.replace(/ {2}/g, ' ') };
+    ports.progress?.(`Waiting for administrator approval to install the Microsoft Visual C++ runtime ${ready.version}`.trim());
     let exit: number;
+    let said = '';
     try {
         const r = await ps(ports.run, `$ErrorActionPreference='Stop'; $p = Start-Process -Wait -PassThru -Verb RunAs -FilePath ${psQuote(ready.exe)} -ArgumentList @('/install','/quiet','/norestart'); if ($null -eq $p) { exit 1 }; exit $p.ExitCode`);
         exit = r.exitCode;
+        said = r.stdout;
     } catch (error) {
-        return { ok: false, reason: `${has}; the redistributable could not be run (${error instanceof Error ? error.message : String(error)})` };
+        const words = error instanceof Error ? error.message : String(error);
+        if (/timed? ?out/i.test(words)) return { ok: false, outcome: 'no-answer', reason: `no administrator approval came (${words}); ${has}` };
+        return { ok: false, outcome: 'failed', reason: `the redistributable could not be run (${words}); ${has}` };
     }
     const after = await dllVersion(ports.run, ports.systemRoot);
     if (after !== null && vcRuntimeAtLeast(after, min)) return { ok: true };
-    if (RESTART.has(exit)) return { ok: false, reason: `the Microsoft Visual C++ runtime ${ready.version} is installed, and Windows must restart before it is the one loaded (vcruntime140.dll is still ${after ?? 'not readable'})` };
-    if (exit === 1602 || exit === 1223) return { ok: false, reason: `the administrator prompt was declined; ${has}` };
-    return { ok: false, reason: `the redistributable ${ready.version} exited ${exit}; vcruntime140.dll is still ${after ?? 'not readable'}` };
+    if (RESTART.has(exit)) return { ok: false, outcome: 'restart', reason: `the Microsoft Visual C++ runtime ${ready.version} is installed, and Windows must restart before it is the one loaded (vcruntime140.dll is still ${after ?? 'not readable'})` };
+    if (exit === 1602 || exit === 1223 || /canceled by the user|cancelled by the user/i.test(said)) return { ok: false, outcome: 'declined', reason: `the administrator prompt was declined; ${has}` };
+    return { ok: false, outcome: 'failed', reason: `the redistributable ${ready.version} exited ${exit}; vcruntime140.dll is still ${after ?? 'not readable'}` };
 }

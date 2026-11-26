@@ -89,6 +89,21 @@ export function vcRuntimeAtLeast(version: string, min: string): boolean {
     return compareVersionsDesc(version, min) <= 0;
 }
 
+/**
+ * WHAT THE RUNTIME BUTTON CAME TO, in the words the card shows (Tynn #1066: a click on "Install it (asks for
+ * administrator)" showed nothing on a test VM). Declined, no answer and failed keep the button (toolchain-view
+ * plainRefusal), to try again; a restart needs none.
+ */
+export function vcRuntimeOutcomeText(version: string, result: { readonly ok: false; readonly outcome: string; readonly reason: string }): string {
+    const lead = 'The Microsoft Visual C++ runtime was not installed';
+    switch (result.outcome) {
+        case 'declined': return `${lead}: administrator approval was declined.`;
+        case 'no-answer': return `${lead}: no administrator approval came.`;
+        case 'restart': return `The Microsoft Visual C++ runtime is installed. Restart Windows, then install PHP ${version}.`;
+        default: return `${lead}: ${result.reason.replace(/[.\s]+$/, '')}.`;
+    }
+}
+
 /** windows.php.net's own index of its CURRENT builds: per line, each build's zip with its sha256. */
 export const PHP_WINDOWS_RELEASES_JSON = 'https://windows.php.net/downloads/releases/releases.json';
 
