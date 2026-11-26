@@ -59,9 +59,13 @@ export function SafeModeBanner({ view, agentName, clock = clockAmPm, onStart, on
         <div role="alert" data-safe-mode={view.crashLoop ? 'crash-loop' : 'on'} className="flex shrink-0 flex-col gap-1.5 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-2 text-[12px] text-[var(--fg-2)]">
             <div className="flex items-center gap-3">
                 <span className="text-[var(--warning)]" title={view.at === null ? undefined : fullDateTime(view.at)}>{safeModeWords(view, clock)}</span>
-                <Button type="button" size="xs" data-action="safe-mode-leave" disabled={leave?.phase === 'busy'} onClick={() => run('leave', onLeave)}>
-                    {leave?.phase === 'busy' ? 'Leaving…' : 'Leave safe mode'}
-                </Button>
+                {leave?.phase === 'done' ? (
+                    <span data-safe-mode-outcome="leave" role="status" className="text-[var(--fg-3)]">Left safe mode. Automatic starts are back on.</span>
+                ) : (
+                    <Button type="button" size="xs" data-action="safe-mode-leave" disabled={leave?.phase === 'busy'} onClick={() => run('leave', onLeave)}>
+                        {leave?.phase === 'busy' ? 'Leaving…' : 'Leave safe mode'}
+                    </Button>
+                )}
                 {leave?.phase === 'failed' ? <span data-safe-mode-outcome="leave" className="text-[var(--danger,#d33)]">Not left: {leave.reason}</span> : null}
             </div>
             {view.crashLoop ? <div>{CRASH_LOOP_WORDS}</div> : null}
