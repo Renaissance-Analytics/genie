@@ -233,7 +233,11 @@ async function cardRun(cdp) {
         const ok = await waitFor(cdp, `(() => { if (!document.querySelector('${PANEL}')) document.querySelector('[data-select-tool="php"]')?.click(); return Boolean(document.querySelector('${PANEL} [data-php-version=${JSON.stringify(next)}]')); })()`, 8 * 60_000, 3000);
         const refusal = await cdp.evaluate(`(document.querySelector('${PANEL}')?.innerText.match(/[^\\n]*(could not|will not|refus|no published checksum)[^\\n]*/i) ?? [null])[0]`);
         note(ok ? `PHP ${next} installed` : `PHP ${next} NOT installed${refusal ? `: ${refusal}` : ''}`);
-        if (!ok) problems.push(`PHP ${next} did not install from ${n === 1 ? 'the card' : 'the panel'}${refusal ? `: ${refusal}` : ''}`);
+        // A line offered LAST because this machine's Visual C++ runtime is too old for it (8.6, vs18) is reported, not a
+        // failure of the card: every line that runs here was offered and installed before it.
+        const runtimeBound = !ok && n > 1 && /Visual C\+\+ runtime/.test(refusal ?? '');
+        if (!ok && !runtimeBound) problems.push(`PHP ${next} did not install from ${n === 1 ? 'the card' : 'the panel'}${refusal ? `: ${refusal}` : ''}`);
+        if (runtimeBound) note(`PHP ${next} needs a newer Visual C++ runtime than this machine has; it was offered after every line that runs here`);
         await openPhpPanel(cdp);
         await sleep(800);
         note(`MEASURE card-${n} ${await cdp.evaluate(MEASURE)}`);

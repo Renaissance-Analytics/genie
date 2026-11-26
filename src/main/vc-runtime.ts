@@ -66,12 +66,18 @@ async function viaMicrosoftDownload(ports: VcRuntimePorts): Promise<string | nul
     }
     const [status, subject = ''] = signature.split('|');
     if (status !== 'Valid' || !/^CN=Microsoft Corporation,/.test(subject)) return `its Authenticode signature is not a valid Microsoft one (${signature.slice(0, 160) || 'none'}), so it was not run`;
+    let offered = '';
+    try {
+        offered = (await ps(ports.run, `(Get-Item -LiteralPath ${psQuote(exe)}).VersionInfo.ProductVersion`)).stdout.trim().split(/\s+/)[0] ?? '';
+    } catch {
+        offered = '';
+    }
     try {
         await ps(ports.run, `Start-Process -FilePath ${psQuote(exe)} -ArgumentList '/install /quiet /norestart' -Verb RunAs -Wait`);
     } catch (error) {
         return `it could not be run (${error instanceof Error ? error.message : String(error)})`;
     }
-    return null;
+    return offered ? `ran (it is version ${offered})` : null;
 }
 
 export async function ensureVcRuntimeAtLeast(min: string, ports: VcRuntimePorts): Promise<{ ok: true } | { ok: false; reason: string }> {
@@ -93,7 +99,7 @@ export async function ensureVcRuntimeAtLeast(min: string, ports: VcRuntimePorts)
     }
     if (!wingetHere || tried.length > 0) {
         const why = await viaMicrosoftDownload(ports);
-        tried.push(why === null ? `Microsoft's redistributable ran` : `Microsoft's redistributable: ${why}`);
+        tried.push(`Microsoft's redistributable ${why ?? 'ran'}`);
         const now = await dllVersion(ports.run, ports.systemRoot);
         if (now !== null && vcRuntimeAtLeast(now, min)) return { ok: true };
     }
