@@ -1,7 +1,7 @@
 // A WINDOWS .EXE FOR THE STUB CLAUDE CODE (Tynn #1067's drain row). Genie runs a native Claude Code by its own path and
 // updates it with `<program> update` only when that program is an .exe (core/cli-repair.ts planCliUpdate), so on Windows
 // the stub must be one. Built on the test VM with the .NET Framework's own csc.exe; it runs
-// `node stub-claude-cli-1067.mjs <args>` from its own folder (STUB_CLI_NODE names node), its streams relayed both ways and
+// `node stub-claude-cli-1067.mjs <args>` from its own folder (node-path.txt beside it names node), its streams relayed both ways and
 // flushed at once (the session protocol is line by line), and exits with the stub's exit code.
 using System;
 using System.Diagnostics;
@@ -33,9 +33,11 @@ class StubCli {
     }
 
     static int Main(string[] args) {
-        string node = Environment.GetEnvironmentVariable("STUB_CLI_NODE");
-        if (string.IsNullOrEmpty(node)) node = "node.exe";
-        var line = new StringBuilder(Quote(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "stub-claude-cli-1067.mjs")));
+        // node's path BESIDE THIS .EXE (node-path.txt), never an environment variable: a session's is filtered.
+        string dir = AppDomain.CurrentDomain.BaseDirectory;
+        string pathFile = Path.Combine(dir, "node-path.txt");
+        string node = File.Exists(pathFile) ? File.ReadAllText(pathFile).Trim() : "node.exe";
+        var line = new StringBuilder(Quote(Path.Combine(dir, "stub-claude-cli-1067.mjs")));
         foreach (var a in args) { line.Append(' '); line.Append(Quote(a)); }
         var psi = new ProcessStartInfo(node, line.ToString()) {
             UseShellExecute = false, CreateNoWindow = true,

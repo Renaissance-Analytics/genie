@@ -46,8 +46,12 @@ const npm = (args) => execFileSync(WIN ? 'npm.cmd' : 'npm', args, { encoding: 'u
 const lines = (text) => text.split(/\r?\n/);
 const at = (text, pattern) => lines(text).findIndex((l) => pattern.test(l));
 
+/** Claude Code's card in view and selected, so the picture shows its row and its progress, not another tool's panel. */
+const focusClaude = (cdp) => cdp.evaluate(`(() => { const li = document.querySelector('li[data-tool="claude-code"]'); if (!li) return false; li.scrollIntoView({ block: 'center' }); (li.querySelector('button, [role="button"]') ?? li).click(); return true; })()`).catch(() => false);
+
 async function shoot(cdp, name, size = { width: 1280, height: 800 }) {
     try {
+        if (size && /toolchain|manual/.test(name)) await focusClaude(cdp);
         if (size) await cdp.send('Emulation.setDeviceMetricsOverride', { width: size.width, height: size.height, deviceScaleFactor: 1, mobile: false });
         await sleep(400);
         const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
@@ -67,6 +71,15 @@ function seedAgent(h, { interrupted }) {
     const now = new Date().toISOString();
     writeFileSync(join(h.genie, 'runtime', 'agents.json'), JSON.stringify([{ id: AGENT, workspaceId: 'crash', provider: 'claude', name: 'atlas', instructions: null, threadId: null, createdAt: now, lastUsedAt: null, mode: 'manual', accessScope: 'none' }], null, 2));
     if (interrupted) writeFileSync(join(h.genie, 'runtime', 'interrupted-at-quit.json'), JSON.stringify([AGENT]));
+}
+
+/** What a reader needs after the VM is gone: the host's logs, the window's, the stub's events (copied into ci-out). */
+function keepLogs(h, part) {
+    const dir = join(OUT, `cli-drain-${part}-${OS}`);
+    mkdirSync(dir, { recursive: true });
+    for (const [from, to] of [[h.lifecycle, 'lifecycle.log'], [h.hostLog, 'genie-host.log'], [join(h.root, `electron-${part}.log`), 'electron.log'], [join(h.root, 'stub-bin', 'state', 'events.log'), 'stub-events.log']]) {
+        try { if (existsSync(from)) copyFileSync(from, join(dir, to)); } catch { /* a held file */ }
+    }
 }
 
 async function stopGenie(h, app) {
@@ -98,7 +111,7 @@ async function partStart() {
 
     step('2', 'Genie launched: the host updates Claude Code before anything starts');
     const app = launch(h, { port: PORT, inspect: INSPECT, label: 'start' });
-    cleanups.push(() => stopGenie(h, app));
+    cleanups.push(() => { keepLogs(h, 'start'); return stopGenie(h, app); });
     // The wait window: found by its file, read and photographed while it says what is being updated.
     let waitText = '';
     let waitShot = null;
@@ -141,7 +154,9 @@ async function partStart() {
 function stubCli(root) {
     const dir = join(root, 'stub-bin');
     mkdirSync(dir, { recursive: true });
-    for (const f of ['stub-claude-cli-1067.mjs', 'stub-claude.mjs']) copyFileSync(resolve('scripts', f), join(dir, f));
+    copyFileSync(resolve('scripts', 'stub-claude-cli-1067.mjs'), join(dir, 'stub-claude-cli-1067.mjs'));
+    mkdirSync(join(dir, 'state'), { recursive: true });
+    writeFileSync(join(dir, 'node-path.txt'), process.execPath);
     if (!WIN) {
         const file = join(dir, 'claude');
         writeFileSync(file, `#!/bin/sh\nexec "${process.execPath}" "${join(dir, 'stub-claude-cli-1067.mjs')}" "$@"\n`);
@@ -161,15 +176,17 @@ const card = (cdp) => cdp.evaluate(`(() => { const li = document.querySelector('
 async function partDrain() {
     step('3', 'Genie on a stub Claude Code that refuses its update while a session of it runs');
     const h = makeHome('cli-drain-manual');
-    const state = join(h.root, 'stub-state');
-    mkdirSync(state, { recursive: true });
     const program = stubCli(h.root);
-    h.env = { ...h.env, GENIE2_CLAUDE_BINARY: program, STUB_CLI_STATE: state, STUB_CLI_NODE: process.execPath, STUB_CLI_UPDATE_MS: '8000' };
+    const state = join(h.root, 'stub-bin', 'state');
+    writeFileSync(join(state, 'update-ms'), '8000');
+    // On PATH as `claude` too: the Toolchain row reads the `claude` on PATH, the agents and the health check the configured one.
+    h.env = { ...h.env, GENIE2_CLAUDE_BINARY: program, PATH: `${join(h.root, 'stub-bin')}${delimiter}${h.env.PATH ?? h.env.Path ?? ''}` };
     seedAgent(h, { interrupted: false });
     const app = launch(h, { port: PORT, inspect: INSPECT, label: 'manual' });
-    cleanups.push(() => stopGenie(h, app));
+    cleanups.push(() => { keepLogs(h, 'manual'); return stopGenie(h, app); });
     const { cdp } = await attach({ port: PORT, inspect: INSPECT, label: 'manual' });
     await closeWhatsNew((expression) => cdp.evaluate(expression));
+    for (const line of lines(readOr(h.lifecycle)).filter((l) => /startup update/.test(l))) console.log(`  lifecycle: ${line.slice(0, 220)}`);
     const atStart = events(state);
     const firstSession = atStart.findIndex((l) => / session start/.test(l));
     const startUpdate = atStart.findIndex((l) => / update ok/.test(l));

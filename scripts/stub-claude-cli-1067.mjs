@@ -7,11 +7,15 @@
  * person with a non-standard install points it), with the one property the drain exists for, made strict: `update` FAILS
  * while any session of it is still running ("in use", as Windows' locked file is), and succeeds only once none is.
  *
- *   --version        `<version> (Claude Code)` from the state folder (STUB_CLI_STATE; 2.0.0 at first)
+ * Its state is the `state` folder BESIDE THIS FILE, never an environment variable: prism-acp hands a session a filtered
+ * environment (as scripts/esc-unsend-stub-claude.mjs found), so the row copies this file into a folder of its own.
+ *
+ *   --version        `<version> (Claude Code)` from the state folder (2.0.0 at first)
  *   auth status      exit 0: signed in
  *   update           refused (exit 1, EBUSY) while a session's pid is alive; otherwise the patch version + 1, after
- *                    STUB_CLI_UPDATE_MS (so a screenshot can see the step); `fail-update` in the state folder fails it
- *   anything else    a session: its pid recorded until it exits, then stub-claude.mjs's protocol (initialize, set_model)
+ *                    the ms in <state>/update-ms (so a screenshot can see the step); <state>/fail-update fails it
+ *   anything else    a session: its pid recorded until it exits; every control request answered (initialize with its
+ *                    models), and each `user` frame answered with a short turn (as scripts/esc-unsend-stub-claude.mjs)
  *
  * Every event is a line in <state>/events.log, with its time and pid: the row reads the order from it.
  */
@@ -20,7 +24,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const state = process.env.STUB_CLI_STATE || join(here, 'stub-cli-state');
+const state = join(here, 'state');
 const sessions = join(state, 'sessions');
 mkdirSync(sessions, { recursive: true });
 const versionFile = join(state, 'version.txt');
@@ -50,7 +54,7 @@ if (args[0] === 'update') {
         console.error('Error: the stub was told to fail this update (fail-update)');
         process.exit(1);
     }
-    const wait = Number(process.env.STUB_CLI_UPDATE_MS ?? 0);
+    const wait = existsSync(join(state, 'update-ms')) ? Number(readFileSync(join(state, 'update-ms'), 'utf8').trim()) : 0;
     if (wait > 0) await new Promise((r) => setTimeout(r, Math.min(wait, 120_000)));
     const [a, b, c] = from.split('.').map(Number);
     const to = `${a}.${b}.${c + 1}`;
@@ -64,7 +68,47 @@ if (args[0] === 'update') {
 const mine = join(sessions, `${process.pid}.pid`);
 writeFileSync(mine, String(process.pid));
 event(`session start version=${version()} args=${args.filter((x) => !x.startsWith('{')).join(' ').slice(0, 200)}`);
-const end = () => { try { rmSync(mine, { force: true }); } catch { /* gone */ } };
-process.on('exit', () => { event('session end'); end(); });
+process.on('exit', () => { event('session end'); try { rmSync(mine, { force: true }); } catch { /* gone */ } });
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => process.exit(0));
-await import('./stub-claude.mjs');
+
+const SESSION = '5c1e7a2d-3b4f-4a6e-9c0d-1f2e3a4b5c6d';
+const MODELS = [{ value: 'default', displayName: 'Default (recommended)', description: 'Use the default model', resolvedModel: 'claude-opus-5-5' }];
+const send = (frame) => process.stdout.write(`${JSON.stringify(frame)}\n`);
+const stream = (e) => send({ type: 'stream_event', session_id: SESSION, parent_tool_use_id: null, event: e });
+let turns = 0;
+function turn() {
+    const n = ++turns;
+    const id = `msg_cli_${n}`;
+    event(`turn ${n}`);
+    send({ type: 'system', subtype: 'init', session_id: SESSION, claude_code_version: version(), model: 'claude-opus-5-5', tools: [], mcp_servers: [], cwd: process.cwd() });
+    stream({ type: 'message_start', message: { id, usage: { input_tokens: 10, output_tokens: 1 } } });
+    stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
+    stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: `turn ${n} done` } });
+    stream({ type: 'content_block_stop', index: 0 });
+    stream({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 3 } });
+    stream({ type: 'message_stop' });
+    send({ type: 'assistant', session_id: SESSION, parent_tool_use_id: null, message: { id, model: 'claude-opus-5-5', content: [{ type: 'text', text: `turn ${n} done` }], usage: { input_tokens: 10, output_tokens: 3 } } });
+    send({ type: 'result', subtype: 'success', is_error: false, stop_reason: 'end_turn', session_id: SESSION, num_turns: 1, result: `turn ${n} done`, usage: { input_tokens: 10, output_tokens: 3 } });
+}
+function handle(frame) {
+    if (frame?.type === 'control_request') {
+        const id = frame.request_id;
+        const response = frame.request?.subtype === 'initialize' ? { models: MODELS, claude_code_version: version() } : {};
+        return send({ type: 'control_response', response: { subtype: 'success', request_id: id, response } });
+    }
+    if (frame?.type === 'user') return turn();
+}
+let buffer = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+    buffer += chunk;
+    let nl = buffer.indexOf('\n');
+    while (nl !== -1) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        nl = buffer.indexOf('\n');
+        if (!line) continue;
+        try { handle(JSON.parse(line)); } catch { /* not a frame */ }
+    }
+});
+process.stdin.on('end', () => process.exit(0));
