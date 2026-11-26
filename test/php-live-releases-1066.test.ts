@@ -578,3 +578,24 @@ describe('no winget (Windows Server, measured on the test VM: spawn winget ENOEN
         expect(m.ran.some((c) => c.includes('Start-Process'))).toBe(false);
     });
 });
+
+describe('the card offers the newest PHP this machine can run (a fresh Windows VM: VCRUNTIME140 14.44, 8.6 needs 14.50)', () => {
+    const bodies = {
+        ...NEW_DAY,
+        [PHP_NET_SUPPORTED_JSON]: supportedBody(['8.2', '8.3', '8.4', '8.5', '8.6']),
+        [phpNetLineJson('8.6')]: phpNetLineJsonBody([{ version: '8.6.0', security: false }]),
+        [PHP_WINDOWS_RELEASES_JSON]: windowsJson({ '8.6': { version: '8.6.0', vs: 'vs18' }, '8.5': { version: '8.5.13', vs: 'vs17' }, '8.4': { version: '8.4.28', vs: 'vs17' }, '8.3': { version: '8.3.37', vs: 'vs16' }, '8.2': { version: '8.2.36', vs: 'vs16' } }),
+    };
+    const listWith = async (runtime: string | null) => {
+        await liveCatalog('win32', bodies);
+        const { ports } = winInstallPorts(sha(ZIP));
+        return (await listPhpVersions({ ...ports, vcRuntimeVersion: async () => runtime })).available.map((a) => a.version);
+    };
+    it('14.44: 8.5.13 is offered first, 8.6.0 (vs18) after every line that runs here', async () => {
+        expect(await listWith('14.44.35211.0')).toEqual(['8.5.13', '8.4.28', '8.3.37', '8.2.36', '8.6.0']);
+    });
+    it('control: 14.51 (or a runtime Genie cannot read) keeps newest first', async () => {
+        expect(await listWith('14.51.36231.0')).toEqual(['8.6.0', '8.5.13', '8.4.28', '8.3.37', '8.2.36']);
+        expect(await listWith(null)).toEqual(['8.6.0', '8.5.13', '8.4.28', '8.3.37', '8.2.36']);
+    });
+});
