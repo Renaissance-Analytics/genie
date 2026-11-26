@@ -55,6 +55,22 @@ describe('the tasks a start runs', () => {
         expect(none).toEqual([]);
     });
 
+    it('WHY NOTHING IS DUE is said per CLI, so a start that updated nothing can be read (the VM row could not tell)', async () => {
+        const said: string[] = [];
+        await startupTasks(base({
+            log: (line) => { said.push(line); },
+            check: async (p) => (p === 'claude' ? health({ version: '2.2.0 (Claude Code)' }) : (() => { throw new Error('codex is not installed'); })()),
+        }));
+        // Checked side by side: in either order.
+        expect([...said].sort()).toEqual([
+            'startup updates: Claude Code 2.2.0 is current (latest 2.2.0)',
+            'startup updates: Codex could not be checked: codex is not installed',
+        ]);
+        said.length = 0;
+        await startupTasks(base({ log: (line) => { said.push(line); }, latest: async () => null, check: async (p) => (p === 'claude' ? health() : health({ provider: 'codex', installed: false, version: null })) }));
+        expect([...said].sort()).toEqual(['startup updates: Claude Code 2.1.0: no newest version could be read', 'startup updates: Codex is not installed']);
+    });
+
     it('PHP failures are said, version by version', async () => {
         const tasks = await startupTasks(base({ latest: async () => null, php: async () => ({ updated: [], failed: [{ version: '8.3.20', reason: 'checksum mismatch' }] }) }));
         await expect(tasks[0]!.run(() => {})).rejects.toThrow('8.3.20: checksum mismatch');

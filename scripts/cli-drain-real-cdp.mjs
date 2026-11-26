@@ -192,31 +192,41 @@ async function partDrain() {
     const startUpdate = atStart.findIndex((l) => / update ok/.test(l));
     check(startUpdate >= 0 && (firstSession === -1 || firstSession > startUpdate), '3a. at start the stub was updated before any session of it began', atStart.slice(0, 4).join(' | '));
 
-    step('4', 'the agent started; then Update on Claude Code’s Toolchain row');
+    step('4', 'the agent started and given a turn (its Claude Code session is spawned for it); then Update on Claude Code’s row');
     await cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(AGENT)}, "graceful"); true`);
     const running = await until(() => cdp.evaluate(`window.genieTest.agentDetail(${JSON.stringify(AGENT)}).then((d) => d?.session?.running === true && d.session.starting === false)`), 60_000);
-    const sessionsBefore = events(state).filter((l) => / session start/.test(l)).length;
-    check(running === true && sessionsBefore >= 1, '4a. CONTROL: the agent runs, on a session of the stub', `running ${running}; ${sessionsBefore} session(s)`);
+    // The CLI is spawned for a turn: the first one the stub holds open for 12 s, so the drain has a turn to wait for.
+    const prompted = await cdp.evaluate(`(window.genieTest ?? window.genie).prompt(${JSON.stringify(AGENT)}, 'Work on it for a while.').then((r) => JSON.stringify(r))`, 30_000);
+    const live = await until(() => events(state).some((l) => / session start/.test(l)), 60_000);
+    check(running === true && Boolean(live), '4a. CONTROL: the agent runs, and a session of the stub runs for its turn', `running ${running}; prompt ${prompted}; ${events(state).filter((l) => / session start/.test(l)).length} session(s)`);
     await cdp.evaluate(`window.location.hash = '#genie://toolchain'; true`);
     await until(() => cdp.evaluate(`Boolean(document.querySelector('li[data-tool="claude-code"]'))`), 120_000);
     const mark = events(state).length;
     await cdp.evaluate(`(window.genieTest ?? window.genie).features.act({ kind: 'toolchain.update', tool: 'claude-code' }).then((r) => { window.__cliDrain = r?.toolchain ?? r; }, (e) => { window.__cliDrain = { error: String(e) }; }); true`);
-    const during = await until(async () => { const c = await card(cdp); return c?.updating && /Updating Claude Code/.test(c.updating) ? c : null; }, 60_000, 250);
-    check(Boolean(during), '4b. the row shows the drain’s steps while it runs', during?.updating ?? 'no step shown');
+    const waiting = await until(async () => { const c = await card(cdp); return c?.updating && /finish its turn|Stopping atlas/.test(c.updating) ? c : null; }, 60_000, 200);
+    check(Boolean(waiting), '4b. the row says it asks atlas to finish its turn (the drain waits for the safe point)', waiting?.updating ?? 'not shown');
+    await shoot(cdp, 'cli-drain-manual-waiting');
+    const during = await until(async () => { const c = await card(cdp); return c?.updating && /Updating Claude Code/.test(c.updating) ? c : null; }, 120_000, 250);
+    check(Boolean(during), '4c. then it says it is updating Claude Code', during?.updating ?? 'no step shown');
     await shoot(cdp, 'cli-drain-manual-updating');
     const result = await until(() => cdp.evaluate(`window.__cliDrain ?? null`), 300_000, 500);
     const ev = events(state).slice(mark);
     const ended = ev.findIndex((l) => / session end/.test(l));
     const ok = ev.findIndex((l) => / update ok/.test(l));
-    const again = ev.findIndex((l, i) => i > ok && / session start/.test(l));
-    check(!ev.some((l) => / update refused/.test(l)), '4c. the stub never found a session alive at its update', ev.filter((l) => /refused/.test(l)).join(' | ') || 'none refused');
-    check(ended >= 0 && ok > ended && again > ok, '4d. the stub’s order: the session ended, THEN the update, THEN a new session', ev.join(' | '));
+    const turnEnded = ev.findIndex((l) => / turn 1 ended/.test(l));
+    check(!ev.some((l) => / update refused/.test(l)) && ok >= 0, '4d. the update ran, and the stub never found a session alive at it', ev.join(' | '));
+    check(ended >= 0 && ok > ended && (turnEnded === -1 || turnEnded < ended), '4e. the stub’s order: its turn ended at the safe point, the session ended, THEN the update', ev.join(' | '));
     const runningAgain = await until(() => cdp.evaluate(`window.genieTest.agentDetail(${JSON.stringify(AGENT)}).then((d) => d?.session?.running === true)`), 60_000);
-    check(runningAgain === true, '4e. the agent runs again', String(runningAgain));
-    check(/Stopped and started again: atlas/.test(String(result?.result ?? '')), '4f. the result names who was started again', String(result?.result ?? JSON.stringify(result)).slice(0, 300));
+    check(runningAgain === true, '4f. the agent runs again', String(runningAgain));
+    check(/Stopped and started again: atlas/.test(String(result?.result ?? '')), '4g. the result names who was started again', String(result?.result ?? JSON.stringify(result)).slice(0, 300));
     const log = readOr(h.lifecycle);
     const order = [/cli drain provider=claude agents=atlas/, /cli drain provider=claude stopped=atlas/, /cli drain provider=claude update=ok/, /cli drain provider=claude restarted=atlas/].map((p) => at(log, p));
-    check(order.every((n, i) => n >= 0 && (i === 0 || n > order[i - 1])), '4g. the lifecycle log has the drain’s lines in order', order.join(' < '));
+    check(order.every((n, i) => n >= 0 && (i === 0 || n > order[i - 1])), '4h. the lifecycle log has the drain’s lines in order', order.join(' < '));
+    // ON ITS CONVERSATION: the next turn's session is the updated CLI, resuming the stub's session id.
+    const before = events(state).length;
+    await cdp.evaluate(`(window.genieTest ?? window.genie).prompt(${JSON.stringify(AGENT)}, 'Carry on.').then((r) => JSON.stringify(r))`, 30_000);
+    const resumed = await until(() => events(state).slice(before).find((l) => / session start/.test(l)) ?? null, 60_000);
+    check(Boolean(resumed) && String(resumed).includes(`version=${readOr(join(state, 'version.txt')).trim()}`) && readOr(join(state, 'version.txt')).trim() !== '2.0.0' && /--resume/.test(String(resumed)), '4i. the next turn runs on the updated CLI and resumes the conversation', String(resumed));
     await shoot(cdp, 'cli-drain-manual-done');
 
     step('5', 'a failing update: the agent is started again all the same, and the row says why');

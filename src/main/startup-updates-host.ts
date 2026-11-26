@@ -59,6 +59,7 @@ export async function applyStartupUpdates(input: StartupUpdatesHostInput): Promi
         tasks: async () => (test ? [test] : startupTasks({
             providers,
             check: input.check,
+            log: input.log,
             latest: (pkg) => npmLatest(input.fetchJson, pkg),
             update: (provider, progress) => input.toolchain.update(PROVIDER_TOOL[provider]!, undefined, progress),
             ...(applyDue ? { php: applyDue } : {}),
