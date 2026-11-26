@@ -6,6 +6,7 @@ import { featureDownload } from './feature-download.js';
 import { HostFeatures } from './features-host.js';
 import { FeatureCallers } from './feature-callers.js';
 import { nativeFeatureToolchain, adoptFeatureEnvironment } from './feature-native-toolchain.js';
+import { applyStartupUpdates } from './startup-updates-host.js';
 import { featureWorkspaceFiles } from './feature-workspace-files.js';
 import { syncWorkspaceFiles } from './host-workspace-files.js';
 import { AgentFilesHealth } from '../core/agent-files-health.js';
@@ -110,6 +111,8 @@ import { spawnBrowserProcess, spawnGenieWindow, spawnUpdaterProcess, windowExitO
 import { clearUpdateFailed, helperLaunch, hostDrainAgents, hostInstallDir, hostRunsFromCopy, readUpdateFailed, relaunchSpec, remoteUpdatesPort, updaterDefaultLaunch, updaterHelperEnv, UpdatesService, writeUpdateFailed } from './updates-host.js';
 import { shareLinksOver } from './tynn-share-links.js';
 import { AgentShutdownDrain } from '../core/agent-shutdown-drain.js';
+import { drainedCliUpdate, resumeAfterCliUpdate } from '../core/cli-update-drain.js';
+import type { FeaturePorts } from './feature-ipc.js';
 import { killProcessAsync, listProcessesAsync, tcpSocketsOwnedByAsync } from './process-list.js';
 import { windowReleased } from './window-release.js';
 import { channelFrom } from '../core/update-channel.js';
@@ -493,6 +496,43 @@ async function main(): Promise<void> {
     missingWorkspaces.onChange(() => { phoneRegistryNow?.touch(); });
     void missingWorkspaces.start();
     bootStep('registry', stepAt);
+    /*
+     * THE START'S DUE UPDATES, BEFORE ANYTHING STARTS (Tynn #1067; the owner: "the genie should be handling cli upgrades
+     * automatically on startup before any other processes start happening"). Here, before hosting is composed (its sites
+     * start), before the process book and the flows open (kept processes, schedules) and before this host serves a window
+     * (which starts agents): no agent runs yet, so a provider CLI is replaced with nothing in use. The toolchain's own
+     * Update (the program the agents run) and PHP's patch source when this build has it, within a limit: past it the host
+     * starts as usual and the log says so. A waiting window shows each step (startup-updates-file.ts).
+     */
+    // Opened here, before the start's updates (Tynn #1067), so their downloads take the OS's proxy routes like every other.
+    const proxyMemory = ProxyMemory.open(join(runtime, 'host-proxy.json'), say);
+    {
+        const startupHealth = new ProviderHealthBook(async (provider) => {
+            if (!isAcpProvider(provider)) throw new Error('Unknown provider account');
+            return checkProviderHealth(provider, realProviderHealthPorts(execFileRunner), accounts.activeFor(provider));
+        });
+        // The host's own HTTPS (host-https-fetch.ts: the OS's roots and proxy routes), never Node's plain fetch.
+        const startupMemory = await proxyMemory;
+        const startupRoutes = (url: string) => startupMemory?.routesFor(url) ?? [{ kind: 'direct' as const }];
+        const startupToolchain = nativeFeatureToolchain({ home, providerHealth: startupHealth, busy: () => {},
+            download: featureDownload({ proxyRoutes: startupRoutes }),
+            activity: async () => ({ sessions: [], processes: [], engines: [] }) });
+        const startupSend = hostHttpsFetch({ proxyRoutes: startupRoutes, log: say });
+        await applyStartupUpdates({
+            runtime,
+            toolchain: startupToolchain,
+            check: (provider) => startupHealth.refresh(provider),
+            fetchJson: async (url) => {
+                const res = await startupSend(url, { method: 'GET', headers: { Accept: 'application/json', 'User-Agent': 'Genie' }, credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(15_000) });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                return JSON.parse(await res.text()) as unknown;
+            },
+            log: (line) => { say(line); lifecycleLog(line); },
+            env: process.env,
+            safeMode: safeNow(),
+        }).catch((error: unknown) => { const line = `startup updates: stopped: ${error instanceof Error ? error.message : String(error)}`; say(line); lifecycleLog(line); });
+    }
+    bootStep('startup updates', stepAt);
     const hiddenWorkspaces = () => hostRegistry.workspaceStates().filter((w) => w.asleep === true).map((w) => w.id);
     own.knowledge.setHiddenWorkspaces(hiddenWorkspaces);
     own.inbox.setVisibility((message) => hostRegistry.mailParticipantVisible(message.from) && hostRegistry.mailParticipantVisible(message.to), () => hostRegistry.mailVisibilityVersion());
@@ -798,7 +838,6 @@ async function main(): Promise<void> {
     /** What tells the host summary (below) to read again: the relay host's role, and the Tynn account (Tynn #954, 2g-3a). */
     const summaryPokes = new Set<() => void>();
     const pokeSummary = (): void => { for (const l of [...summaryPokes]) l(); };
-    const proxyMemory = ProxyMemory.open(join(runtime, 'host-proxy.json'), say);
     const tynnOpening = proxyMemory.then((memory) => TynnAccount.open(hostTynnPorts({
         file: join(home, 'credentials', 'tynn.json'),
         host: () => TYNN_HOST,
@@ -2120,7 +2159,51 @@ async function main(): Promise<void> {
     const tailscaleNow = tailscaleLive({ probe: () => getTailscaleStatus(), install: () => installTailscale({ download: url => downloadFeature(url) }),
         up: () => tailscaleUp(), online: () => remoteSwitch.apply(), changed: () => featureChanged(), say });
     void tailscaleNow.refresh();
-    const featureNative = nativeFeatureToolchain({ home, providerHealth, download: downloadFeature, busy: step => hostFeatures?.busy(step),
+    /*
+     * A PROVIDER CLI'S UPDATE DRAINS ITS AGENTS (Tynn #1067; the owner: "when updating cli it should send a stop command to all
+     * running agents like genie upgrade process"). The host update's drain (P6-2, AgentShutdownDrain), for that provider's
+     * running agents only: told, given up to 120 seconds to reach a safe point (a thumbsUp "shutdown" ends the wait early),
+     * stopped and waited for; the CLI updated; each started again on its conversation, the ones cut mid-turn told to carry on.
+     */
+    const cliDrains = new Set<AgentShutdownDrain>();
+    const hostCliDrain: NonNullable<NonNullable<FeaturePorts['toolchain']>['cliDrain']> = (provider, label, progress, update) => drainedCliUpdate(provider, label, {
+        agents: () => hostRegistry.listAgents().map((a) => {
+            const session = host.probe(a.id);
+            return { id: a.id, name: a.name, provider: a.provider, running: session?.running === true, inTurn: session?.inTurn === true };
+        }),
+        waitForSafe: async (ids) => {
+            const scoped = new AgentShutdownDrain({
+                agents: () => hostRegistry.listAgents().filter((a) => ids.includes(a.id)).map(({ id, name }) => {
+                    const session = host.probe(id as AgentId);
+                    return { id, name, running: session?.running === true, inTurn: session?.inTurn === true };
+                }),
+                notify: (id) => { host.handOff(id as AgentId, `Genie is about to update ${label}, which this session runs on. Finish your current turn at a safe point; do not start new work. If you are ready sooner, call thumbsUp with reason "shutdown". Genie waits up to 120 seconds, then stops this session, updates ${label} and starts it again on this conversation.`, 'genie', { retold: true }); },
+            });
+            cliDrains.add(scoped);
+            try {
+                const outcome = await scoped.begin('upgrade', () => {});
+                return { interrupted: outcome.interrupted.map((a) => a.id) };
+            } finally {
+                cliDrains.delete(scoped);
+            }
+        },
+        stop: async (id) => {
+            host.stop(id as AgentId);
+            const verdict = await host.ended(id as AgentId);
+            return verdict && !verdict.verified && verdict.survivors.length > 0 ? { ok: false, reason: verdict.reason } : { ok: true };
+        },
+        start: async (id, resume) => {
+            const record = hostRegistry.find(id);
+            if (!record) return { ok: false, reason: 'it is no longer registered here' };
+            const started = await host.start(record, phoneCwd(record));
+            if (!started.ok) return started;
+            await host.deliverOwed(record.id, resume ? { text: resumeAfterCliUpdate(label), by: 'genie' } : undefined);
+            return { ok: true };
+        },
+        progress,
+        log: (line) => { say(line); lifecycleLog(line); },
+    }, update, (outcome) => (outcome.kind === 'repaired' ? null : outcome.reason));
+    const featureNative = nativeFeatureToolchain({ home, cliDrain: hostCliDrain, providerHealth, download: downloadFeature, busy: step => hostFeatures?.busy(step),
         activity: async () => ({
             sessions: hostRegistry.listAgents().filter(a => host.probe(a.id)?.running === true).map(a => ({ label: a.name, provider: a.provider })),
             processes: processSupervisor.list().filter(p => p.state === 'running' || p.state === 'restarting').map(p => ({ id: p.id, label: p.name, command: processSupervisor.command(p.id) ?? '' })),
@@ -2745,7 +2828,7 @@ async function main(): Promise<void> {
         openFileLater: (call) => engine.callback({ name: 'openFileForUser', call }),
         capabilities,
         signal: (signal) => {
-            if (signal.kind === 'action' && signal.action === 'thumbsup' && signal.reason?.trim().toLowerCase() === 'shutdown') agentShutdown.acknowledge(signal.agentId);
+            if (signal.kind === 'action' && signal.action === 'thumbsup' && signal.reason?.trim().toLowerCase() === 'shutdown') { agentShutdown.acknowledge(signal.agentId); for (const d of cliDrains) d.acknowledge(signal.agentId); }
             engine.callback({ name: 'toolSignal', signal });
         },
         // `checkIssues` and imDone's count line (Tynn #934 task #1474): this host's own IssueWatch, a window open or not.

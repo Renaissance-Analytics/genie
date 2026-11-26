@@ -110,7 +110,9 @@ export function refuse(next: FeatureState, tool: string, reason: string, version
     next.toolchainRefusals = [...(next.toolchainRefusals ?? []), { tool, reason, ...(version !== undefined ? { version } : {}), ...(retry !== undefined ? { retry } : {}) }];
 }
 
-const LABELS: Readonly<Record<string, string>> = { php: 'PHP', node: 'Node', python: 'Python', go: 'Go' };
+const LABELS: Readonly<Record<string, string>> = { php: 'PHP', node: 'Node', python: 'Python', go: 'Go', 'claude-code': 'Claude Code', codex: 'Codex' };
+/** The provider whose agents run each agent CLI (Tynn #1067's drain). */
+const CLI_PROVIDER: Readonly<Record<string, string>> = { 'claude-code': 'claude', codex: 'codex' };
 
 /**
  * AFTER AN UPDATE (genie#1306; Genie 1 told the person what keeps the old version until it restarts — toolchain-page.ts
@@ -297,8 +299,10 @@ export async function applyToolchainCoreFeatureAction(services: ToolchainFeature
             const known = (state.toolStatuses ?? []).find((t) => t.tool === action.tool);
             const activity = await tc.activity();
             const risk = updateRisk(action.tool, activity, { installed: known ? known.installed !== null : true });
-            if (risk.risk === 'blocked') {
-                refuse(next, action.tool, risk.reason);
+            // Tynn #1067: agents on this CLI are drained around the update; with no drain wired it is refused, as before.
+            const drain = risk.risk === 'drain' ? tc.cliDrain : undefined;
+            if (risk.risk === 'blocked' || (risk.risk === 'drain' && !drain)) {
+                refuse(next, action.tool, risk.risk === 'drain' ? `${risk.reason.replace(/ Genie asks.*$/, '')} Genie cannot stop agents here: stop ${risk.affected.length === 1 ? 'it' : 'them'} first, then update.` : risk.reason);
                 break;
             }
             if (risk.risk === 'warn' && action.confirmed !== true) {
@@ -310,9 +314,23 @@ export async function applyToolchainCoreFeatureAction(services: ToolchainFeature
             const onOld = risk.risk === 'warn' ? activity.processes.filter((p) => p.id !== undefined && risk.affected.includes(p.label)) : [];
             const row = (step: string) => tc.updating?.({ tool: action.tool, ...(action.version ? { version: action.version } : {}), step });
             let outcome: Awaited<ReturnType<typeof tc.update>>;
+            let drained: { restarted: readonly string[]; notRestarted: readonly { name: string; reason: string }[] } | null = null;
             try {
                 row('Starting');
-                outcome = await tc.update(action.tool, action.version, (step) => { if (step) row(step); });
+                const runUpdate = () => tc.update(action.tool, action.version, (step) => { if (step) row(step); });
+                if (drain) {
+                    const result = await drain(CLI_PROVIDER[action.tool] ?? action.tool, LABELS[action.tool] ?? action.tool, row, runUpdate);
+                    if (result.kind === 'refused') {
+                        const back = result.restarted.length > 0 ? ` Started again: ${result.restarted.join(', ')}.` : '';
+                        const notBack = result.notRestarted.length > 0 ? ` Not started again: ${result.notRestarted.map((n) => `${n.name} (${n.reason})`).join(', ')}.` : '';
+                        refuse(next, action.tool, `${result.reason}.${back}${notBack}`);
+                        break;
+                    }
+                    outcome = result.outcome;
+                    drained = result;
+                } else {
+                    outcome = await runUpdate();
+                }
                 if (outcome.kind === 'repaired' && onOld.length > 0 && action.restart !== false) row('Restarting');
             } finally {
                 tc.updating?.(null);
@@ -337,6 +355,8 @@ export async function applyToolchainCoreFeatureAction(services: ToolchainFeature
                     notes.push(`Restart to use it: ${onOld.map((p) => p.label).join(', ')}.`);
                 }
                 if (sessions.length > 0) notes.push(`${sessions.join(', ')} ${sessions.length === 1 ? 'picks' : 'pick'} it up when next started.`);
+                if (drained && drained.restarted.length > 0) notes.push(`Stopped and started again: ${drained.restarted.join(', ')}.`);
+                if (drained && drained.notRestarted.length > 0) notes.push(`Not started again: ${drained.notRestarted.map((n) => `${n.name} (${n.reason})`).join(', ')}.`);
                 next.toolchainResult = `${label} ${outcome.from ?? ''}${outcome.from ? ' → ' : ''}${outcome.to}.${notes.length > 0 ? ` ${notes.join(' ')}` : ''}${outcome.note ? ` (${outcome.note})` : ''}`;
             }
             // The snapshot shows the RE-PROBE, never the command's word; and the cache is dropped.

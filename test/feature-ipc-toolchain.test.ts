@@ -71,7 +71,7 @@ afterEach(async () => {
 });
 
 describe('T3 — the update guard, at the click', () => {
-    it('updating claude-code while a Claude session runs is REFUSED naming it, and the updater is never called', async () => {
+    it('updating claude-code while a Claude session runs, with NO drain wired, is REFUSED naming it, and the updater is never called', async () => {
         activity = { ...IDLE, sessions: [{ label: 'atlas', provider: 'claude' }] };
         const snap = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'claude-code' }, scanned(), ports());
         expect(updates).toEqual([]);
@@ -107,7 +107,7 @@ describe('T3 — the update guard, at the click', () => {
         expect(done.toolchain!.warning).toBeUndefined();
     });
 
-    it('a REFUSAL is not confirmable: confirmed:true on a blocked update is still refused', async () => {
+    it('a REFUSAL is not confirmable: confirmed:true on an update that cannot drain is still refused', async () => {
         activity = { ...IDLE, sessions: [{ label: 'atlas', provider: 'claude' }] };
         const snap = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'claude-code', confirmed: true }, scanned(), ports());
         expect(updates).toEqual([]);
@@ -121,6 +121,56 @@ describe('T3 — the update guard, at the click', () => {
         const snap = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'node' }, scanned(), { toolchain: rest });
         expect(updates).toEqual([]);
         expect(snap.toolchain!.refusals).toEqual([{ tool: 'node', reason: expect.stringMatching(/update guard is not wired/) }]);
+    });
+});
+
+describe('Tynn #1067 — a CLI update with agents on it DRAINS them: stopped, updated, started again', () => {
+    type Drain = NonNullable<NonNullable<FeaturePorts['toolchain']>['cliDrain']>;
+    const drained = (calls: string[], answer?: Partial<Awaited<ReturnType<Drain>>>): Drain => async (provider, label, progress, update) => {
+        calls.push(`drain ${provider} ${label}`);
+        progress('Stopping atlas');
+        if (answer?.kind === 'refused') return { kind: 'refused', reason: (answer as { reason: string }).reason, restarted: ['atlas'], notRestarted: [] };
+        const outcome = await update();
+        calls.push('restart');
+        return { kind: 'ran', outcome, restarted: ['atlas'], notRestarted: [], ...(answer ?? {}) } as Awaited<ReturnType<Drain>>;
+    };
+
+    it('the update runs INSIDE the drain of that provider; the row shows the drain’s steps; the result names who was started again', async () => {
+        activity = { ...IDLE, sessions: [{ label: 'atlas', provider: 'claude' }] };
+        const calls: string[] = [];
+        const steps: string[] = [];
+        const p = ports();
+        const snap = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'claude-code' }, scanned(), { toolchain: { ...p.toolchain!, cliDrain: drained(calls), updating: (u) => { if (u) steps.push(u.step); }, update: async (tool) => { calls.push(`update ${tool}`); updates.push(tool); return { kind: 'repaired', from: '2.1.0', to: '2.2.0' }; } } });
+        expect(calls).toEqual(['drain claude Claude Code', 'update claude-code', 'restart']);
+        expect(steps).toContain('Stopping atlas');
+        expect(snap.toolchain!.refusals).toBeUndefined();
+        expect(snap.toolchain!.warning).toBeUndefined();
+        expect(snap.toolchain!.result).toBe('Claude Code 2.1.0 → 2.2.0. Stopped and started again: atlas.');
+    });
+
+    it('a drain that refuses (an agent did not stop) is said on the row and the updater is never called', async () => {
+        activity = { ...IDLE, sessions: [{ label: 'atlas', provider: 'claude' }] };
+        const calls: string[] = [];
+        const p = ports();
+        const snap = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'claude-code' }, scanned(), { toolchain: { ...p.toolchain!, cliDrain: drained(calls, { kind: 'refused', reason: 'vega did not stop (pid 41), so Claude Code was not updated' } as never) } });
+        expect(updates).toEqual([]);
+        expect(snap.toolchain!.refusals).toEqual([{ tool: 'claude-code', reason: 'vega did not stop (pid 41), so Claude Code was not updated. Started again: atlas.' }]);
+    });
+
+    it('an agent not started again is named with why, beside the result', async () => {
+        activity = { ...IDLE, sessions: [{ label: 'atlas', provider: 'claude' }] };
+        const p = ports();
+        const snap = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'claude-code' }, scanned(), { toolchain: { ...p.toolchain!, cliDrain: drained([], { restarted: [], notRestarted: [{ name: 'atlas', reason: 'its workspace is asleep' }] }) } });
+        expect(snap.toolchain!.result).toBe('Claude Code 1 → 2. Not started again: atlas (its workspace is asleep).');
+    });
+
+    it('CONTROL: with no agent on it the drain is not asked; Codex’s update ignores a Claude session', async () => {
+        activity = { ...IDLE, sessions: [{ label: 'atlas', provider: 'claude' }] };
+        const calls: string[] = [];
+        const p = ports();
+        await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'codex' }, scanned(), { toolchain: { ...p.toolchain!, cliDrain: drained(calls) } });
+        expect(calls).toEqual([]);
+        expect(updates).toEqual(['codex']);
     });
 });
 

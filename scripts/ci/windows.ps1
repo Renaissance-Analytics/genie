@@ -57,7 +57,7 @@ $Rows = @(
     'unit-build', 'unit',
     'build', 'seed', 'no-pty', 'smoke', 'layout', 'app-stopped',
     'local-door-break', 'local-door', 'host-late-ready', 'files-watch', 'chat-drafts', 'gapp-open', 'artboard', 'ui-lag', 'plan-popover',
-    'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash', 'quit-keeps-host', 'rebuilt-machine',
+    'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash', 'quit-keeps-host', 'rebuilt-machine', 'cli-drain',
     'package', 'sign-plan', 'packed-tree', 'update-metadata', 'package-fuse', 'packaged-launcher',
     'logon',
     'launcher-unit',
@@ -426,6 +426,9 @@ function Row-spawn-host {
 function Row-safe-mode { Need-Build; Need-TestMachine; Run 'safe-mode-cdp' { node scripts/safe-mode-cdp.mjs } }
 function Row-hang { Need-Build; Need-TestMachine; Run 'hang-cdp' { node scripts/hang-cdp.mjs } }
 function Row-renderer-crash { Need-Build; Need-TestMachine; Run 'renderer-crash-cdp' { node scripts/renderer-crash-cdp.mjs } }
+# CLI UPDATES IN THE REAL APP (Tynn #1067): at start an older Claude Code is updated before anything starts; then a manual
+# Update with an agent running drains it around the update and starts it again (scripts/cli-drain-real-cdp.mjs).
+function Row-cli-drain { Need-Build; Need-TestMachine; $env:CLI_DRAIN_CDP_PORT = '9471'; $env:CLI_DRAIN_INSPECT = '9472'; Run 'cli-drain-real-cdp' { node scripts/cli-drain-real-cdp.mjs } }
 # QUIT KEEPS THE HOST (Tynn #1036, the host split's promise): three agents stream, the REAL window is closed ("Just close the
 # UI") and built again from the tray, then by a second launch, and every agent keeps streaming through it: the same
 # genie-host pid, the same provider pid per agent, every tick streamed while no window was open in its ledger, in order;
@@ -570,6 +573,7 @@ function Ceiling([string]$name) {
         { $_ -in 'ui-lag', 'renderer-crash' } { return 480 }
         { $_ -in 'safe-mode', 'hang' } { return 600 }
         'quit-keeps-host' { return 660 }
+        'cli-drain' { return 1560 }
         'package' { return 1500 }
         'logon' { return 900 }
         'client-only-update' { return 2400 }

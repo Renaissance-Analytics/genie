@@ -3,9 +3,10 @@
  *
  * Genie 1's rules (toolchain-update-risk.ts, including its genie#448 lessons), on Genie 2's model:
  *
- * - **An agent CLI** (claude-code, codex): `npm install -g` overwrites the very executable a running session is
- *   executing — on Windows the write fails outright (the file is locked), elsewhere the session is left half-replaced.
- *   REFUSED, but only for the sessions running THAT CLI: a running Claude session says nothing about replacing Codex.
+ * - **An agent CLI** (claude-code, codex): an update overwrites the very executable a running session is executing — on
+ *   Windows the write fails outright (the file is locked), elsewhere the session is left half-replaced. DRAINED (Tynn
+ *   #1067, was refused): the sessions running THAT CLI are asked to finish their turn, stopped, the CLI updated, and each
+ *   started again with its conversation (core/cli-update-drain.ts). A running Claude session says nothing about Codex.
  * - **node**: Genie 1 REFUSED it while anything ran on it, because its update replaced the runtime in place. Genie 2
  *   installs each Node into its own directory and moves `current/node` (genie#1306), so nothing running loses its
  *   binary: it is WARNED, naming the agents and processes that keep the old Node until they next start. A refusal here
@@ -31,7 +32,7 @@ export interface ToolchainActivity {
 
 export type UpdateRisk =
     | { readonly risk: 'safe' }
-    | { readonly risk: 'blocked' | 'warn'; readonly reason: string; readonly affected: readonly string[] };
+    | { readonly risk: 'blocked' | 'warn' | 'drain'; readonly reason: string; readonly affected: readonly string[] };
 
 /** tool → the provider whose sessions execute it. */
 const CLI_PROVIDER: Readonly<Record<string, { provider: string; label: string }>> = {
@@ -80,10 +81,11 @@ export function updateRisk(tool: string, activity: ToolchainActivity, target: { 
     if (cli) {
         const running = activity.sessions.filter((s) => s.provider === cli.provider).map((s) => s.label);
         if (running.length > 0) {
+            const one = running.length === 1;
             return {
-                risk: 'blocked',
+                risk: 'drain',
                 affected: running,
-                reason: `${list(running)} ${are(running.length)} running on ${cli.label}. Updating it replaces the program ${running.length === 1 ? 'that session is' : 'those sessions are'} running — on Windows the update fails, elsewhere the session breaks mid-turn. Stop ${running.length === 1 ? 'it' : 'them'} first, then update.`,
+                reason: `${list(running)} ${are(running.length)} running on ${cli.label}. Genie asks ${one ? 'it' : 'them'} to finish ${one ? 'its turn' : 'their turns'}, stops ${one ? 'it' : 'them'}, updates ${cli.label}, then starts ${one ? 'it' : 'them'} again with ${one ? 'its conversation' : 'their conversations'}.`,
             };
         }
         return { risk: 'safe' };

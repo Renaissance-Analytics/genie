@@ -9,21 +9,21 @@ import { runsOnNode, updateRisk, type ToolchainActivity } from '../src/core/tool
 
 const IDLE: ToolchainActivity = { sessions: [], processes: [], engines: [] };
 
-describe('agent CLIs — refused only for the sessions running THAT CLI', () => {
-    it('a running Claude session blocks updating claude-code, naming it; idle → safe (control)', () => {
+describe('agent CLIs — DRAINED (Tynn #1067), only the sessions running THAT CLI', () => {
+    it('a running Claude session makes updating claude-code a DRAIN naming it (stopped, updated, started again); idle → safe (control)', () => {
         const busy: ToolchainActivity = { ...IDLE, sessions: [{ label: 'atlas', provider: 'claude' }] };
         const r = updateRisk('claude-code', busy, { installed: true });
-        expect(r).toMatchObject({ risk: 'blocked', affected: ['atlas'] });
-        expect(r.risk !== 'safe' && r.reason).toContain('atlas is running on Claude Code');
+        expect(r).toMatchObject({ risk: 'drain', affected: ['atlas'] });
+        expect(r.risk !== 'safe' && r.reason).toBe('atlas is running on Claude Code. Genie asks it to finish its turn, stops it, updates Claude Code, then starts it again with its conversation.');
         expect(updateRisk('claude-code', IDLE, { installed: true })).toEqual({ risk: 'safe' });
     });
 
-    it('a running Claude session does NOT block Codex (Genie 1’s genie#448); a Codex one does', () => {
+    it('a running Claude session does NOT drain Codex (Genie 1’s genie#448); a Codex one does', () => {
         expect(updateRisk('codex', { ...IDLE, sessions: [{ label: 'atlas', provider: 'claude' }] }, { installed: true })).toEqual({ risk: 'safe' });
-        expect(updateRisk('codex', { ...IDLE, sessions: [{ label: 'nova', provider: 'codex' }, { label: 'vega', provider: 'codex' }] }, { installed: true })).toMatchObject({ risk: 'blocked', affected: ['nova', 'vega'], reason: expect.stringContaining('nova and vega are running on Codex') });
+        expect(updateRisk('codex', { ...IDLE, sessions: [{ label: 'nova', provider: 'codex' }, { label: 'vega', provider: 'codex' }] }, { installed: true })).toMatchObject({ risk: 'drain', affected: ['nova', 'vega'], reason: expect.stringContaining('nova and vega are running on Codex. Genie asks them to finish their turns, stops them') });
     });
 
-    it('installing a CLI that is not there replaces nothing — never refused', () => {
+    it('installing a CLI that is not there replaces nothing — nothing is drained', () => {
         expect(updateRisk('claude-code', { ...IDLE, sessions: [{ label: 'atlas', provider: 'claude' }] }, { installed: false })).toEqual({ risk: 'safe' });
     });
 });
