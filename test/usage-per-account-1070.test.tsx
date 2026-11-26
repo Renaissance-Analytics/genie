@@ -54,6 +54,7 @@ interface Driver { readonly events: DriverEvents; readonly account: AccountRecor
 function world(dir: string, hosts: SessionHost[]) {
     let active: AccountRecord = A;
     const drivers: Driver[] = [];
+    const actions: Array<[string, string]> = [];
     let processes: ProcessInfo[] = [{ pid: process.pid, ppid: 1, started: 1, name: 'genie-test' }];
     const tree: ProcessTree = {
         snapshot: () => [...processes],
@@ -88,12 +89,13 @@ function world(dir: string, hosts: SessionHost[]) {
         activeAccount: () => active,
         threadInAccount: () => 'present',
         onHeadroom: headroomArrival({ watch, attribution, offer: (p, room, stamp) => feed.offer(p, room, stamp) }),
+        onAction: (id, kind) => { actions.push([id, kind]); },
     });
     hosts.push(host);
     const agent = (name: string, threadId: string): AgentRecord => ({ ...agentRecord({ id: mintAgentId(), workspaceId: 'workspace', provider: 'claude', name }), threadId });
     const switchTo = (a: AccountRecord) => { active = a; host.accountChanged('claude'); host.accountSwitched('claude', { account: a, headroom: null }); };
     const view = () => accountsView([A, B, C].map(known), feed.accounts(), { claude: active.id }).find((p) => p.provider === 'claude')!;
-    return { host, drivers, feed, agent, switchTo, view };
+    return { host, drivers, actions, feed, agent, switchTo, view };
 }
 
 const settle = async () => { for (let i = 0; i < 4; i += 1) await new Promise((r) => setTimeout(r, 10)); };
@@ -160,8 +162,20 @@ describe('each account\'s windows come from that account (the host, end to end)'
         expect(w.host.heldLogins().map((l) => l.account)).not.toContain(B.id);
         w.host.prompt(w.two.id, 'go on', 'you');
         await vi.waitFor(() => expect(w.drivers[1]!.prompts.map(String).join('\n')).toContain('go on'));
-        // CONTROL: the refusal did land on A's login.
-        expect(w.host.heldLogins().map((l) => l.account)).toContain(A.id);
+        // CONTROL: the refusal did land, on A's agent: it was held (the one 'limited' for A's login), and only it.
+        expect(w.actions.filter(([, k]) => k === 'limited').map(([id]) => id)).toEqual([w.one.id]);
+    });
+
+    it('the agent the OLD account refused after the switch moves to the new account at once, and is not left held on A', async () => {
+        const w = await twoAccounts();
+        w.drivers[0]!.events.onUpdate?.(frame('rejected', 'five_hour', { five_hour: { utilization: 1, resetsAtMs: Date.now() + 72 * MIN } }));
+        // CONTROL: it was held by A's refusal.
+        await vi.waitFor(() => expect(w.actions.filter(([, k]) => k === 'limited').map(([id]) => id)).toEqual([w.one.id]));
+        // Then it moves: a new run on B, its limit open, and A's login holds nobody.
+        await vi.waitFor(() => expect(w.drivers).toHaveLength(3));
+        expect(w.drivers[2]!.account?.id).toBe(B.id);
+        await vi.waitFor(() => expect(w.host.probe(w.one.id)?.limit).toEqual({ state: 'open' }));
+        expect(w.host.heldLogins()).toEqual([]);
     });
 });
 
