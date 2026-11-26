@@ -152,6 +152,13 @@ export interface ChatContext {
     planView?: ChatPlanView;
     /** A turn its PROVIDER stopped (Tynn #859): the stop in words and how many times it has stopped for that reason. */
     stop?: ProviderStopView;
+    /** An overload's retry waiting (Tynn #1060): when it fires, epoch ms, so the line counts down. Absent = none. */
+    retryAt?: number;
+}
+
+/** `Provider busy, retrying in N s` (Tynn #1060): the seconds left, never below 0. */
+export function overloadRetryWords(at: number, now: number): string {
+    return `Provider busy, retrying in ${Math.max(0, Math.ceil((at - now) / 1000))} s`;
 }
 
 export interface ChatThreadView {
@@ -191,6 +198,8 @@ export function chatContext(detail: ChatDetail): ChatContext {
     // Held for its provider's limit (Tynn #794): until when, never Idle.
     const held = limitWords(s.limit);
     if (held) { const title = limitTitle(s.limit); return { text: `Paused · ${held}`, tone: 'warn', ...(title ? { title } : {}) }; }
+    // AN OVERLOADED PROVIDER IS WAITED OUT (Tynn #1060): the retry's count-down, and Stop beside it.
+    if (s.overloadRetry) return { text: overloadRetryWords(s.overloadRetry.at, Date.now()), tone: 'warn', retryAt: s.overloadRetry.at, title: `Try ${s.overloadRetry.attempt} of ${s.overloadRetry.of} (${s.overloadRetry.reason})` };
     // ENDED AS STALLED (Tynn #855): the line says so, with how long it was silent.
     if (s.stalled && s.turnState !== 'working') return { text: stalledWords(s.stalled), tone: 'bad' };
     if (s.failure !== null) {

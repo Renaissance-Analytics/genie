@@ -95,8 +95,26 @@ export function sanitizeMockupHtml(html: string): string {
     // The policy goes FIRST, after a doctype (a doctype not first is quirks mode), in a <head> of its own: a `<head>` found
     // by a regex might be in a comment, a <title> or an attribute. The page's own <html> and <head> after it are merged and
     // ignored by the parser, and what was in its head (title, style) still goes into this one.
-    const doctype = /^(?:\s|<!--[\s\S]*?-->)*<!doctype\b[^>]*>/i.exec(s)?.[0] ?? '';
+    const doctype = leadingDoctype(s);
     return `${doctype}<head>${MOCKUP_CSP}</head>${s.slice(doctype.length)}`;
+}
+
+/**
+ * The page's leading doctype, after any whitespace and complete comments, or '' when there is none. A linear scan (CodeQL
+ * js/redos, alert #130): the pattern it replaces, `^(?:\s|<!--[\s\S]*?-->)*<!doctype…`, backtracked polynomially on a
+ * page of many unclosed `<!--`.
+ */
+function leadingDoctype(s: string): string {
+    let i = 0;
+    for (;;) {
+        while (i < s.length && /\s/.test(s[i]!)) i += 1;
+        if (!s.startsWith('<!--', i)) break;
+        const end = s.indexOf('-->', i + 4);
+        if (end === -1) return '';
+        i = end + 3;
+    }
+    const m = /^<!doctype\b[^>]*>/i.exec(s.slice(i, i + 512));
+    return m ? s.slice(0, i) + m[0] : '';
 }
 
 /**

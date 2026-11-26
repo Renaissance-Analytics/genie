@@ -339,6 +339,19 @@ function outputField(update: Record<string, unknown>): { output?: string } {
     return text === null ? {} : { output: text };
 }
 
+/**
+ * prism-acp 0.48.0 opens every model-written plan title with "Step: " (`PLAN_TITLE_NEUTRAL`, G-362), so model text never
+ * stands where a host label (`[failed] `, `(you) `) does. Genie's plan views show the step (Tynn #1060): the prefix is taken
+ * off here, ONLY when it is exactly the leading "Step: " and something is left. Any other entry is passed through as it is.
+ */
+export const PLAN_STEP_PREFIX = 'Step: ';
+function withoutStepPrefix(entry: unknown): unknown {
+    if (!isRecord(entry)) return entry;
+    const content = entry['content'];
+    if (typeof content !== 'string' || !content.startsWith(PLAN_STEP_PREFIX) || content.length === PLAN_STEP_PREFIX.length) return entry;
+    return { ...entry, content: content.slice(PLAN_STEP_PREFIX.length) };
+}
+
 export function toStreamEvent(update: Record<string, unknown>): StreamEvent | null {
     const kind = update['sessionUpdate'];
     if (typeof kind !== 'string') return null;
@@ -394,7 +407,7 @@ export function toStreamEvent(update: Record<string, unknown>): StreamEvent | nu
         case 'plan_update': {
             // A plan is only what carries its steps. An explicit `entries: []` is still a plan, cleared.
             const entries = Array.isArray(update['entries']) ? update['entries'] : update['plan'];
-            if (Array.isArray(entries)) return { kind: 'plan', entries };
+            if (Array.isArray(entries)) return { kind: 'plan', entries: entries.map(withoutStepPrefix) };
             // The same driver sends Codex's `turn/plan/delta` as a `plan_update` with only a `delta`: a fragment of
             // the plan's text, many a second. Read as a plan it was one of NO steps and blanked the plan already
             // shown; kept as `unknown` it was drawn as an "(unmapped: plan_update)" row per fragment. It is no row at

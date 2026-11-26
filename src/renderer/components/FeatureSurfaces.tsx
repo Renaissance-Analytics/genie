@@ -16,7 +16,8 @@ import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import { mobilePageUrl } from '../../core/mobile.js';
 import { PairGuide } from './PairGuide.js';
 import { toneLabel, type ToolStatus } from '../../core/toolchain.js';
-import { INSTALL_KIND, REMOVE_KIND, cardKeyOfTool, cardOfAction, defaultSelection, formatElapsed, installNote, langView, nextFix, patchFor, toolchainActivity, toolchainCards, toolchainProblems, toolchainTally, type LangKey, type ToolCard, type ToolchainProblem } from '../toolchain-view.js';
+import { DOCKER_DAEMON_WORDS } from '../../core/docker-engine.js';
+import { INSTALL_KIND, REMOVE_KIND, cardKeyOfTool, cardOfAction, defaultSelection, formatElapsed, installNote, langView, nextFix, nextInFlight, patchFor, toolchainActivity, toolchainCards, toolchainProblems, toolchainTally, type InFlight, type LangKey, type ToolCard, type ToolchainProblem } from '../toolchain-view.js';
 import { ToolLogo } from './ToolLogo.js';
 import { NAV_GROUPS, NEW_PROJECT_DEFAULTS, sectionOf, type SectionId } from '../../core/settings-nav.js';
 import { SETTINGS, searchSettings, type SettingDef } from '../../core/settings.js';
@@ -947,8 +948,16 @@ function ServicesPanel({ services, workspaces, onAction, onNavigate }: { service
     const [confirming, setConfirming] = useState<string | null>(null);
     if (services === null) return <Skeletons />;
     const logs = services.logs ?? null;
+    // Tynn #970: a service waits on Docker; the Toolchain's Docker card says why and starts it.
+    const dockerDown = services.instances.some((s) => s.status === 'docker-not-running');
     return (
         <div className="flex flex-col">
+            {dockerDown ? (
+                <p data-services-docker-down="" className="flex items-center gap-2 border-b border-[var(--border-1)] px-5 py-2 text-sm text-[var(--warning)]">
+                    <span>Docker is not running, so these services cannot start.</span>
+                    <Button type="button" size="xs" variant="ghost" className="ml-auto" data-action="services-open-docker" onClick={() => onNavigate('genie://settings/toolchain')}>Docker in Toolchain</Button>
+                </p>
+            ) : null}
             <form
                 className="flex items-center gap-2 px-5 py-2"
                 onSubmit={(e) => { e.preventDefault(); const w = pickedWorkspace(e.currentTarget, workspaces, 'workspace'); if (w) onAction({ kind: 'services.add', workspaceId: w.id }); }}
@@ -1223,18 +1232,19 @@ export function ToolchainSurface({ data, onAction: act, selected: initial }: Sur
     const [pending, setPending] = useState<{ tool: string; version?: string } | null>(null);
     useEffect(() => { setPending(null); }, [tc]);
     // Main reports every install through ONE busy line; the card it is drawn on is the one the person clicked.
-    const [inFlight, setInFlight] = useState<{ card: string; at: number } | null>(null);
+    const [inFlight, setInFlight] = useState<InFlight | null>(null);
     const [chosen, setChosen] = useState<string | null>(initial ?? null);
     const [now, setNow] = useState(() => Date.now());
     const onAction: SurfaceProps['onAction'] = (action) => {
         if (action.kind === 'toolchain.update') setPending({ tool: action.tool, ...(action.version ? { version: action.version } : {}) });
         const card = cardOfAction(action);
-        if (card !== null && action.kind !== 'toolchain.setDefault' && action.kind !== 'toolchain.login') setInFlight({ card, at: Date.now() });
+        if (card !== null && action.kind !== 'toolchain.setDefault' && action.kind !== 'toolchain.login') setInFlight({ card, at: Date.now(), started: false });
         return act(action);
     };
     const updating = tc?.updating ?? (pending ? { ...pending, step: 'Starting' } : null);
     const running = busy !== null || updating !== null;
-    useEffect(() => { if (tc && tc.busy === undefined && tc.updating === undefined && pending === null) setInFlight(null); }, [tc, pending]);
+    // Tynn #968: the mark ends when its work has ended, never on a snapshot that came before the work started.
+    useEffect(() => { if (tc) setInFlight((f) => nextInFlight(f, tc, Date.now(), pending !== null)); }, [tc, pending]);
     useEffect(() => {
         if (!running) return undefined;
         const tick = setInterval(() => setNow(Date.now()), 1000);
@@ -1325,9 +1335,9 @@ export function ToolchainSurface({ data, onAction: act, selected: initial }: Sur
                                             busy={running}
                                             updating={updating}
                                             updated={tc.updated ?? null}
-                                            refusal={c.tool ? toolRefusal(c.tool.tool) : null}
+                                            refusal={c.tool ? toolRefusal(c.tool.tool) : c.systemTool ? toolRefusal(c.systemTool) : null}
                                             check={c.tool ? checkRows[c.tool.tool] : undefined}
-                                            install={c.tool ? tc.installs?.[c.tool.tool] : undefined}
+                                            install={c.tool ? tc.installs?.[c.tool.tool] : c.systemTool ? tc.installs?.[c.systemTool] : undefined}
                                             progress={progressOf(c.key)}
                                             onSelect={() => setChosen(c.key)}
                                             onAction={onAction}
@@ -1408,7 +1418,7 @@ function CardStatus({ card }: { card: ToolCard }) {
 /** The step, the elapsed time, and a bar, ON the card; the rest of the page goes on working. */
 function CardProgress({ card, progress }: { card: ToolCard; progress: { step: string; elapsed: string | null } }) {
     return (
-        <div data-card-progress={card.key} {...(card.tool ? { 'data-tool-updating': card.tool.tool } : {})} className="mt-auto flex flex-col gap-1.5">
+        <div data-card-progress={card.key} {...(card.tool ? { 'data-tool-updating': card.tool.tool } : card.systemTool ? { 'data-tool-updating': card.systemTool } : {})} className="mt-auto flex flex-col gap-1.5">
             <div className="flex items-center justify-between gap-2 text-[11px] text-[var(--fg-2)]">
                 <span className="flex min-w-0 items-center gap-1.5"><Icon name="loader-circle" size="xs" className="shrink-0 animate-spin" /><span className="truncate">{progress.step}</span></span>
                 {progress.elapsed !== null ? <span data-card-elapsed="" className="shrink-0 font-mono">{progress.elapsed}</span> : null}
@@ -1434,9 +1444,26 @@ export function ToolCardView({ card, selected, busy, updating, updated, refusal,
         ? <Button type="button" size="sm" variant="ghost" data-open-panel={card.key} onClick={onSelect}>{card.key === 'playwright' ? 'Browsers' : 'Versions'}</Button>
         : null;
     const note = installNote(install);
+    // The system's package (pacman, Tynn #968), beside Genie's own build, for a language Genie manages no version of yet.
+    const sys = !t && card.systemTool && missing && install && 'label' in install ? card.systemTool : null;
+    const systemInstall = sys ? (
+        <>
+            <Button type="button" size="sm" data-action="toolchain-install" data-install-system={sys} title={install && 'label' in install ? install.label : undefined} disabled={busy} onClick={() => onAction({ kind: 'toolchain.install', tool: sys, consent: true })}>Install</Button>
+            <span data-install-note={sys} className="font-mono text-[11px] text-[var(--fg-3)]">system package, asks once</span>
+        </>
+    ) : null;
     let actions: React.ReactNode = null;
     if (t && t.tone === 'broken') {
         actions = <span data-card-primary="repair" className="contents"><CliRepairAction t={t} busy={busy} updating={updating} onAction={onAction} /></span>;
+    } else if (t && t.installed !== null && t.daemon) {
+        // Tynn #970: Docker installed and not usable says so, ahead of any version talk; Start is one password prompt.
+        const words = DOCKER_DAEMON_WORDS[t.daemon];
+        actions = (
+            <>
+                {t.daemon === 'needs-login' ? null : <Button type="button" size="sm" color="blue" data-card-primary="start" data-action="toolchain-start-docker" disabled={busy} title="Enable and start Docker; asks for your password once" onClick={() => onAction({ kind: 'toolchain.startDocker' })}>Start</Button>}
+                <Badge variant="soft" size="sm" color="amber" data-docker-daemon={t.daemon}>{words.badge}</Badge>
+            </>
+        );
     } else if (t && t.signedOut) {
         actions = (
             <>
@@ -1478,17 +1505,20 @@ export function ToolCardView({ card, selected, busy, updating, updated, refusal,
             <>
                 <Button type="button" size="sm" color="blue" data-card-primary="install" data-version={version} disabled={busy} onClick={() => onAction({ kind: INSTALL_KIND[lang], version, consent: true } as FeatureAction)}>{card.primary.label}</Button>
                 <span className="font-mono text-[11px] text-[var(--fg-3)]">no password</span>
+                {systemInstall}
             </>
         );
     } else if (card.refused) {
-        actions = <span data-card-refused={card.key} className="text-xs text-[var(--fg-3)]">{card.refused}</span>;
+        actions = <><span data-card-refused={card.key} className="text-xs text-[var(--fg-3)]">{card.refused}</span>{systemInstall}</>;
+    } else if (systemInstall) {
+        actions = systemInstall;
     } else {
         actions = versionsButton;
     }
     return (
         <li
             data-tool-card={card.key}
-            {...(t ? { 'data-tool': t.tool, 'data-tone': t.tone } : {})}
+            {...(t ? { 'data-tool': t.tool, 'data-tone': t.tone } : card.systemTool ? { 'data-tool': card.systemTool } : {})}
             data-card-state={card.state}
             data-selected={selected ? 'true' : 'false'}
             className={`relative flex min-h-28 flex-col gap-2 rounded-xl border p-3 ${missing ? 'border-dashed border-[var(--border-1)] bg-transparent' : 'border-[var(--border-1)] bg-[var(--bg-1)]'} ${selected ? 'border-[var(--primary)] ring-1 ring-[var(--primary)]' : ''}`}
@@ -1516,12 +1546,14 @@ export function ToolCardView({ card, selected, busy, updating, updated, refusal,
             {t?.advisory ? <span data-tool-advisory={t.tool} className="text-xs text-[var(--danger)]">{t.advisory}</span> : null}
             {/* Tynn #698: an agent CLI the health check found cannot run says why; an Update cannot fix it (the repair is its own action). */}
             {t?.problem ? <span data-tool-problem={t.tool} className="text-xs text-[var(--danger)]">{t.problem}</span> : null}
+            {t?.daemon && t.installed !== null ? <span data-docker-why={t.daemon} className="text-xs text-[var(--warning)]">{DOCKER_DAEMON_WORDS[t.daemon].why}</span> : null}
             {progress ? (
                 <CardProgress card={card} progress={progress} />
             ) : (
                 <div data-card-actions="" className="mt-auto flex flex-wrap items-center gap-1.5 [&_.ml-auto]:ml-0">{actions}</div>
             )}
-            {refusal && t && (t.installed === null || t.tone === 'broken') ? <span data-tool-refusal={t.tool} className="text-xs text-[var(--danger)]">{refusal.reason}</span> : null}
+            {refusal && t && (t.installed === null || t.tone === 'broken' || t.daemon !== undefined) ? <span data-tool-refusal={t.tool} className="text-xs text-[var(--danger)]">{refusal.reason}</span> : null}
+            {refusal && !t && card.systemTool ? <span data-tool-refusal={card.systemTool} className="text-xs text-[var(--danger)]">{refusal.reason}</span> : null}
         </li>
     );
 }

@@ -14,7 +14,8 @@ import { deckActionForWire } from '../core/deck-answer-wire.js';
 import { bytesToBase64 } from '../core/mobile.js';
 import { BATON_REFUSAL } from '../core/remote.js';
 import { refusalSkew, shownBuild, welcomeSkew, type DroneSkew } from '../core/drone-version.js';
-import { hostUpdate, negotiate, offerOf, remoteOffer, type HostUpdateAnswer, type HostUpdateView, type Negotiated, type ProtocolOffer } from '../core/protocol-version.js';
+import { capability, hostUpdate, negotiate, offerOf, remoteOffer, type HostUpdateAnswer, type HostUpdateView, type Negotiated, type ProtocolOffer } from '../core/protocol-version.js';
+import { CAP_ELEVATION_PROMPT, ELEVATION_ANSWER_METHOD, ELEVATION_EVENT, elevationPromptEvent } from '../core/elevation.js';
 import { UPLOAD_CHUNK_BYTES, WindowReceiver, type WindowCursor, type WindowRows } from '../core/mobile-wire.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import type { BlobClient, BlobInfo, BlobChunk } from '../core/local-blobs.js';
@@ -148,6 +149,12 @@ export interface RemoteOptions {
     readonly minBuild?: string;
     /** This client's offer (Tynn #894); absent = this build's (`remoteOffer('client')`). Tests set it to move the window. */
     readonly protocol?: ProtocolOffer;
+    /**
+     * THIS CLIENT SHOWS GENIE'S PASSWORD PROMPT (Tynn #973): it says so in its hello (CAP_ELEVATION_PROMPT), and the host
+     * asks it, and only it, for the administrator password of an elevated step it clicked. The main window and a window
+     * driving another machine; never a phone or the question window.
+     */
+    readonly elevationPrompt?: true;
 }
 
 /**
@@ -195,7 +202,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
     /** Which method each pending call asked: an older host's bare refusal names the method, never the id (Tynn #894). */
     const pendingMethods = new Map<number, string>();
     let nextId = 0;
-    const offer = options.protocol ?? remoteOffer('client');
+    const offer = options.protocol ?? remoteOffer('client', null, options.elevationPrompt ? [capability(CAP_ELEVATION_PROMPT, 1)] : []);
     let closed = false;
     const events = new Map<string, Set<(payload: unknown) => void>>();
     const on = (channel: string, listener: (payload: unknown) => void): (() => void) => {
@@ -960,6 +967,17 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             tynnIssuesWatch: tynnFollow('issues'),
             tynnFeaturesWatch: tynnFollow('features'),
         });
+    }
+    // The host's password prompt for an elevated step this client clicked (Tynn #973). The event carries no secret; the
+    // password goes back once, as the answer's argument, and nowhere else: never kept, logged or sent on any other channel.
+    if (options.elevationPrompt) {
+        bridge.elevation = {
+            onPrompt: (listener) => on(ELEVATION_EVENT, (payload) => { const event = elevationPromptEvent(payload); if (event) listener(event); }),
+            answer: async (id, password) => {
+                const r = await call(ELEVATION_ANSWER_METHOD, id, password);
+                return r.ok && r.value === true;
+            },
+        };
     }
 
     return {

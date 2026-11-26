@@ -1,10 +1,11 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error an .mjs script without types
-import { archiveBase, heldBackOf, holdBackCheck, holdBackLog, holdGitBack, readListing } from '../scripts/toolchain-hold-back.mjs';
+import { HELD_GIT, archiveBase, fetchPinned, heldBackOf, holdBackCheck, holdBackLog, holdGitBack, pinnedPlan, pinnedSources, readListing, resolveHeldGit } from '../scripts/toolchain-hold-back.mjs';
 
 /*
  * THE TOOLCHAIN ROW'S UPDATE CONTROL, AND AN ARCHIVE THAT IS DOWN (Tynn #968; gates 1122-000845-50ab63 and its control
@@ -23,6 +24,17 @@ describe('holding git back', () => {
         expect(heldBackOf(LISTING)).toEqual({ held: '2.47.0-1', newest: '2.47.1-1' });
         expect(heldBackOf('<a href="git-2.47.1-1-x86_64.pkg.tar.zst">x</a>')).toBeNull();
         expect(heldBackOf('')).toBeNull();
+    });
+
+    it("held back BELOW the version this machine's repositories have (Tynn #968): a newer pkgver than the repos' is no update Genie can offer", () => {
+        // Measured on omarchy-genie (job 1125-191913-5de173): Omarchy's stable mirror has git 2.56.0-1 while the archive's
+        // newest is 2.56.1-1. Held at 2.56.0-2 (the second newest), git was NEWER than anything pacman could install.
+        const listing = ['2.53.0-1', '2.54.0-1', '2.55.0-1', '2.56.0-1', '2.56.0-2', '2.56.1-1'].map((v) => `<a href="git-${v}-x86_64.pkg.tar.zst">x</a>`).join('\n');
+        expect(heldBackOf(listing, '2.56.0-1')).toEqual({ held: '2.55.0-1', newest: '2.56.0-1' });
+        // The epoch is not part of the archive's file name; the pkgrel never makes an update `git --version` can see.
+        expect(heldBackOf(listing, '1:2.56.0-3')).toEqual({ held: '2.55.0-1', newest: '1:2.56.0-3' });
+        expect(heldBackOf(listing, '2.53.0-1')).toBeNull();
+        expect(heldBackOf(listing)).toEqual({ held: '2.56.0-2', newest: '2.56.1-1' });
     });
 
     it('the archive is the Arch Linux Archive unless a job names a mirror', () => {
@@ -52,12 +64,189 @@ describe('holding git back', () => {
         expect(Date.now() - at).toBeLessThan(2_000);
     });
 
-    it('wired: the row reads the listing through this, and an archive that cannot be read is BLOCKED by archive, not a FAIL', () => {
+    it('wired: the row gets the held git through resolveHeldGit, and one it could not get is BLOCKED by archive, not a FAIL', () => {
         const row = readFileSync(join(root, 'scripts', 'toolchain-real-cdp.mjs'), 'utf8');
-        expect(row).toMatch(/import \{ archiveBase, heldBackOf, holdBackCheck, holdBackLog, holdGitBack, readListing \} from '\.\/toolchain-hold-back\.mjs';/);
-        expect(row).toMatch(/const listing = await readListing\(fetch, `\$\{archiveBase\(process\.env\)\}\/packages\/g\/git\/`\);/);
-        expect(row).toMatch(/track\('git-update', 'BLOCKED', 'archive', /);
+        expect(row).toMatch(/import \{ holdBackCheck, holdBackLog, holdGitBack, repoVersion, resolveHeldGit \} from '\.\/toolchain-hold-back\.mjs';/);
+        // Held below the repositories' version (Tynn #968): the pin when it is below them, the archive's listing otherwise.
+        expect(row).toMatch(/const got = await resolveHeldGit\(\{ fetchFn: fetch, env: process\.env, repoGit, dir: mkdtempSync\(join\(tmpdir\(\), 'tc968-pkg-'\)\), write: writeFileSync \}\);/);
+        expect(row).toMatch(/for \(const line of got\.log\) say\(line\);/);
+        expect(row).toMatch(/track\('git-update', 'BLOCKED', got\.reason, got\.detail\);/);
         expect(row).not.toMatch(/fetch\('https:\/\/archive\.archlinux\.org/);
+        expect(row).not.toMatch(/readListing\(/);
+    });
+});
+
+/*
+ * THE HELD GIT, PINNED AND OURS (gate 1125-223010-b05ea9 on the beta.66 release commit 86baeb26): every row green but
+ * linux/toolchain, 1 of 29 checks not passing, `git-update BLOCKED archive`, "the Arch archive (https://archive.archlinux.org)
+ * could not be read". The control depended on a third-party website being up at gate time, so a release gate's verdict
+ * did too. Now the harness holds git back to ONE pinned package (its version, and the sha256 of the package and of its
+ * signature), fetched first from our own Azure blob (the test VMs' region) and only then, with retries, from the archive;
+ * bytes that do not hash to the pin are never installed, whichever source served them. pacman -U then checks the
+ * package's signature (the .sig beside it) against the machine's keyring. The archive's listing is read only when the pin
+ * is not below the repositories' version.
+ */
+const sha = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
+const PKG = new TextEncoder().encode('a git package');
+const SIG = new TextEncoder().encode('its signature');
+const PIN = { version: '2.55.0-1', file: 'git-2.55.0-1-x86_64.pkg.tar.zst', sha256: sha(PKG), sigSha256: sha(SIG) };
+const CACHE = 'https://cache.example/arch/git';
+const ARCHIVE = 'https://archive.example/packages/g/git';
+const SOURCES = [{ name: 'cache', url: `${CACHE}/${PIN.file}` }, { name: 'archive', url: `${ARCHIVE}/${PIN.file}` }];
+type Init = { signal?: AbortSignal };
+type Attempt = { source: string; url: string; outcome: string };
+/** A fetch that serves `files` (url -> bytes), throws for `down` prefixes, and records every url it was asked for. */
+function server(files: Record<string, Uint8Array>, down: string[] = []) {
+    const asked: string[] = [];
+    const signals: Array<AbortSignal | undefined> = [];
+    const fetchFn = async (url: string, init?: Init) => {
+        asked.push(url);
+        signals.push(init?.signal);
+        if (down.some((h) => url.startsWith(h))) throw new Error('connect timeout');
+        const body = files[url];
+        return body
+            ? { ok: true, status: 200, arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength), text: async () => '' }
+            : { ok: false, status: 404, arrayBuffer: async () => new ArrayBuffer(0), text: async () => 'not found' };
+    };
+    return { fetchFn, asked, signals };
+}
+const both = (base: string, pkg = PKG, sig = SIG) => ({ [`${base}/${PIN.file}`]: pkg, [`${base}/${PIN.file}.sig`]: sig });
+const noWait = { sleep: async () => {}, timeoutMs: 50 };
+const slash = (p: string) => p.split('\\').join('/');
+
+describe('the held git: one pinned package, from our cache first, never installed unless it hashes to the pin', () => {
+    it('the pin: the git below the repositories at the time, its file, and the sha256 of the package and of its signature', () => {
+        expect(HELD_GIT).toEqual({
+            version: '2.55.0-1',
+            file: 'git-2.55.0-1-x86_64.pkg.tar.zst',
+            sha256: 'fbb24f455cb1de1c004a76b5a4dab92e4a9137764fbc3bc46afe13b7a38814fe',
+            sigSha256: '53c9abe5f6b7610b1f0c915f90e7a73f95fade7bd8d5ed9c53568575deae82ab',
+        });
+        expect(Object.isFrozen(HELD_GIT)).toBe(true);
+    });
+
+    it('the sources, in order: our Azure blob, then the archive; a job may name either', () => {
+        expect(pinnedSources({}, HELD_GIT)).toEqual([
+            { name: 'cache', url: 'https://genietestpkgs.blob.core.windows.net/arch/git/git-2.55.0-1-x86_64.pkg.tar.zst' },
+            { name: 'archive', url: 'https://archive.archlinux.org/packages/g/git/git-2.55.0-1-x86_64.pkg.tar.zst' },
+        ]);
+        expect(pinnedSources({ GENIE_PKG_CACHE: 'https://cache.example/arch/', GENIE_ARCH_ARCHIVE: 'https://archive.example' }, PIN)).toEqual(SOURCES);
+    });
+
+    it("the pin is the held git only when its pkgver is BELOW the repositories' (an update `git --version` can see)", () => {
+        expect(pinnedPlan(PIN, '2.56.0-1')).toEqual({ held: '2.55.0-1', newest: '2.56.0-1' });
+        expect(pinnedPlan(PIN, '1:2.57.1-2')).toEqual({ held: '2.55.0-1', newest: '1:2.57.1-2' });
+        expect(pinnedPlan(PIN, '2.55.0-3')).toBeNull();
+        expect(pinnedPlan(PIN, '2.54.2-1')).toBeNull();
+        expect(pinnedPlan(PIN, null)).toBeNull();
+    });
+
+    it('THE ARCHIVE DOWN: served by our cache at the first try, and the archive is never asked', async () => {
+        const s = server(both(CACHE), ['https://archive.example']);
+        const got = await fetchPinned(s.fetchFn, PIN, SOURCES, noWait);
+        expect(got.ok).toBe(true);
+        expect(got.from).toBe('cache');
+        expect(sha(got.pkg)).toBe(PIN.sha256);
+        expect(sha(got.sig)).toBe(PIN.sigSha256);
+        expect(s.asked.length).toBeGreaterThan(0);
+        expect(s.asked.every((u) => u.startsWith(CACHE))).toBe(true);
+        for (const signal of s.signals) expect(signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it('bytes that do not hash to the pin are refused, from any source, and the next source is tried', async () => {
+        const s = server({ ...both(CACHE, new TextEncoder().encode('tampered')), ...both(ARCHIVE) });
+        const got = await fetchPinned(s.fetchFn, PIN, SOURCES, noWait);
+        expect(got.ok).toBe(true);
+        expect(got.from).toBe('archive');
+        const fromCache = (got.attempts as Attempt[]).filter((a) => a.source === 'cache');
+        expect(fromCache).toHaveLength(3);
+        for (const a of fromCache) expect(a.outcome).toMatch(/^sha256 [0-9a-f]{64} is not the pin$/);
+        // A wrong signature file is refused too, and nothing is handed back.
+        const badSig = server(both(CACHE, PKG, new TextEncoder().encode('other')));
+        const refused = await fetchPinned(badSig.fetchFn, PIN, SOURCES, noWait);
+        expect(refused.ok).toBe(false);
+        expect(refused.pkg).toBeUndefined();
+        expect(refused.sig).toBeUndefined();
+        // Wrong everywhere: nothing.
+        const bad = server({ ...both(CACHE, SIG), ...both(ARCHIVE, SIG) });
+        expect((await fetchPinned(bad.fetchFn, PIN, SOURCES, noWait)).ok).toBe(false);
+    });
+
+    it('a source that fails is tried again after a wait, up to its tries; then the next; every try is kept', async () => {
+        const waits: number[] = [];
+        let n = 0;
+        const files = server(both(CACHE));
+        const flaky = async (url: string, init?: Init) => { n += 1; if (n <= 2) throw new Error('connect timeout'); return files.fetchFn(url, init); };
+        const got = await fetchPinned(flaky, PIN, SOURCES, { ...noWait, waitMs: 7_000, sleep: async (ms: number) => { waits.push(ms); } });
+        expect(got.ok).toBe(true);
+        expect(got.from).toBe('cache');
+        expect(waits).toEqual([7_000, 7_000]);
+        expect((got.attempts as Attempt[]).map((a) => `${a.source} ${a.outcome === 'ok' ? 'ok' : 'failed'}`)).toEqual(['cache failed', 'cache failed', 'cache ok']);
+        // Everything down: three tries of each, in order, then not ok.
+        const down = server({}, ['https://']);
+        const none = await fetchPinned(down.fetchFn, PIN, SOURCES, noWait);
+        expect(none.ok).toBe(false);
+        expect((none.attempts as Attempt[]).map((a) => a.source)).toEqual(['cache', 'cache', 'cache', 'archive', 'archive', 'archive']);
+        expect(none.attempts[0].outcome).toContain('connect timeout');
+        // A 404 is said as one.
+        const gone = await fetchPinned(server({}).fetchFn, PIN, SOURCES, { ...noWait, tries: 1 });
+        expect((gone.attempts as Attempt[]).map((a) => a.outcome)).toEqual(['http 404', 'http 404']);
+    });
+
+    it('a fetch that never answers ends at its deadline', async () => {
+        const hang = (_url: string, init?: Init) => new Promise((_resolve, reject) => { init?.signal?.addEventListener('abort', () => reject(new Error('aborted'))); });
+        const at = Date.now();
+        const got = await fetchPinned(hang, PIN, SOURCES, { ...noWait, timeoutMs: 40 });
+        expect(got.ok).toBe(false);
+        expect(Date.now() - at).toBeLessThan(5_000);
+    });
+
+    it('resolveHeldGit: the pin below the repositories is written beside its signature and installed from that file; no listing is read', async () => {
+        const s = server(both(CACHE), ['https://archive.example']);
+        const written: Record<string, Uint8Array> = {};
+        const env = { GENIE_PKG_CACHE: 'https://cache.example/arch', GENIE_ARCH_ARCHIVE: 'https://archive.example' };
+        const got = await resolveHeldGit({ fetchFn: s.fetchFn, env, repoGit: '2.56.0-1', pin: PIN, dir: '/tmp/tc968-pkg-x', write: (p: string, b: Uint8Array) => { written[slash(p)] = b; }, ...noWait });
+        expect(got.ok).toBe(true);
+        expect(got.plan).toEqual({ held: '2.55.0-1', newest: '2.56.0-1' });
+        expect(got.from).toBe('cache');
+        expect(slash(got.target)).toBe(`/tmp/tc968-pkg-x/${PIN.file}`);
+        expect(Object.keys(written).sort()).toEqual([`/tmp/tc968-pkg-x/${PIN.file}`, `/tmp/tc968-pkg-x/${PIN.file}.sig`]);
+        expect(sha(written[`/tmp/tc968-pkg-x/${PIN.file}`]!)).toBe(PIN.sha256);
+        expect(sha(written[`/tmp/tc968-pkg-x/${PIN.file}.sig`]!)).toBe(PIN.sigSha256);
+        expect(s.asked.some((u) => u.endsWith('/packages/g/git/'))).toBe(false);
+        // Every line it logs is a note, never a verdict linux.sh could read; it names the pin it verified.
+        expect(got.log.length).toBeGreaterThan(0);
+        for (const line of got.log as string[]) { expect(/^(TRACK|ROW) /.test(line)).toBe(false); expect(line).not.toMatch(/[\r\n]/); }
+        expect(got.log.join('\n')).toContain(`sha256 ${PIN.sha256}`);
+    });
+
+    it('resolveHeldGit: the pin could not be fetched from either source: BLOCKED by archive, naming both and what each said', async () => {
+        const env = { GENIE_PKG_CACHE: 'https://cache.example/arch', GENIE_ARCH_ARCHIVE: 'https://archive.example' };
+        let wrote = 0;
+        const got = await resolveHeldGit({ fetchFn: server({}, ['https://']).fetchFn, env, repoGit: '2.56.0-1', pin: PIN, dir: '/tmp/x', write: () => { wrote += 1; }, ...noWait });
+        expect(got.ok).toBe(false);
+        expect(wrote).toBe(0);
+        expect(got.reason).toBe('archive');
+        expect(got.detail).toMatch(/^CONTROL not set up: git 2\.55\.0-1 could not be fetched/);
+        expect(got.detail).toContain(SOURCES[0]!.url);
+        expect(got.detail).toContain(SOURCES[1]!.url);
+        expect(got.detail).toContain('connect timeout');
+        expect(got.detail).not.toMatch(/[\r\n]/);
+    });
+
+    it('resolveHeldGit: the pin NOT below the repositories: the archive listing, held below them, as before; and its failures said', async () => {
+        const listing = ['2.56.0-1', '2.57.0-1', '2.57.1-1'].map((v) => `<a href="git-${v}-x86_64.pkg.tar.zst">x</a>`).join('\n');
+        const listed = async (url: string) => ({ ok: url === `${ARCHIVE}/`, status: 200, text: async () => listing, arrayBuffer: async () => new ArrayBuffer(0) });
+        const env = { GENIE_PKG_CACHE: 'https://cache.example/arch', GENIE_ARCH_ARCHIVE: 'https://archive.example' };
+        const later = { ...PIN, version: '2.58.0-1' };
+        const got = await resolveHeldGit({ fetchFn: listed, env, repoGit: '2.57.1-1', pin: later, dir: '/tmp/x', write: () => {}, ...noWait });
+        expect(got).toMatchObject({ ok: true, from: 'archive listing', plan: { held: '2.57.0-1', newest: '2.57.1-1' }, target: `${ARCHIVE}/git-2.57.0-1-x86_64.pkg.tar.zst` });
+        const unread = await resolveHeldGit({ fetchFn: server({}, ['https://']).fetchFn, env, repoGit: '2.57.1-1', pin: later, dir: '/tmp/x', write: () => {}, ...noWait });
+        expect(unread).toMatchObject({ ok: false, reason: 'archive', detail: 'CONTROL not set up: the Arch archive (https://archive.example) could not be read' });
+        const nothingBelow = await resolveHeldGit({ fetchFn: listed, env, repoGit: '2.56.0-1', pin: later, dir: '/tmp/x', write: () => {}, ...noWait });
+        expect(nothingBelow).toMatchObject({ ok: false, reason: 'archive', detail: "CONTROL not set up: the Arch archive lists no git older than the repositories' 2.56.0-1" });
+        const norepo = await resolveHeldGit({ fetchFn: listed, env, repoGit: null, pin: PIN, dir: '/tmp/x', write: () => {}, ...noWait });
+        expect(norepo).toMatchObject({ ok: false, reason: 'archive', detail: "CONTROL not set up: this machine's repositories could not be read (checkupdates)" });
     });
 });
 
@@ -74,7 +263,8 @@ describe('holding git back', () => {
 const FAILED = { status: 1, signal: null, stdout: ':: Retrieving packages...\n git-2.56.0-2-x86_64 downloading...\n', stderr: 'error: failed retrieving file \'git-2.56.0-2-x86_64.pkg.tar.zst\' from archive.example : Operation too slow\nwarning: failed to retrieve some files\nerror: failed to commit transaction (download library error)\n' };
 const INSTALLED = { status: 0, signal: null, stdout: ':: Processing package changes...\ninstalling git...\n', stderr: '' };
 /** The row's other harness controls that are a FAIL with no reason when they cannot be set up: untouched by this. */
-const FAIL_NONE_ELSEWHERE = 15;
+// 16 since Tynn #973: the keyring-elevation step's own control (gnome-keyring could not be removed) is one.
+const FAIL_NONE_ELSEWHERE = 16;
 const URL_HELD = 'https://archive.example/packages/g/git/git-2.56.0-2-x86_64.pkg.tar.zst';
 
 describe('the held-back install: tried once more, its words kept, and never a FAIL of Genie\'s', () => {
@@ -149,6 +339,7 @@ describe('the held-back install: tried once more, its words kept, and never a FA
     it('wired: the row holds git back through this, prints every try, and reports a control it could not set up as BLOCKED by control', () => {
         const row = readFileSync(join(root, 'scripts', 'toolchain-real-cdp.mjs'), 'utf8');
         expect(row).toMatch(/const heldRun = url \? await holdGitBack\(\(\) => sudoP\('pacman', '-U', '--noconfirm', url\)\) : null;/);
+        expect(row).toMatch(/const url = got\.ok \? got\.target : null;/);
         expect(row).toMatch(/if \(heldRun\) for \(const line of holdBackLog\(url, heldRun\)\) console\.log\(line\.replaceAll\(PW, '<password>'\)\);/);
         expect(row).toMatch(/const control = holdBackCheck\(url, heldRun\);\s+track\('git-update', control\.verdict, control\.reason, control\.detail\);/);
         // The old verdict is gone: the harness's own setup step is never a FAIL with no reason.

@@ -20,6 +20,8 @@
  *   - Docker: the image's "installed, daemon inactive" state, then Start; then the real install path after the harness
  *     removes it; then a Genie service (redis) started on it (#970).
  *   - A Genie-managed language install and its default (Node), which work today and must keep working.
+ *   - The keyring's Install (#973 on its own: its pacman table is its own): gnome-keyring removed, the button pressed here,
+ *     Genie's prompt in this client naming it, a wrong password asking again, the right one installing it.
  *
  * OUTPUT: one `TRACK <check> PASS|RED|BLOCKED|FAIL <reason> <what a person sees>` line per check (linux.sh's
  * tracked_verdict reads them against TRACKED_RED[toolchain]). <reason> is what turns the check green: `pacman` (#968),
@@ -35,7 +37,7 @@ import { mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, statSync, 
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { mainWindow } from './cdp-main-window.mjs';
-import { archiveBase, heldBackOf, holdBackCheck, holdBackLog, holdGitBack, readListing } from './toolchain-hold-back.mjs';
+import { holdBackCheck, holdBackLog, holdGitBack, repoVersion, resolveHeldGit } from './toolchain-hold-back.mjs';
 import { closeWhatsNew } from './cdp-whats-new.mjs';
 
 if (process.env.GENIE_TEST_MACHINE !== '1' && userInfo().username !== 'genie') {
@@ -246,6 +248,12 @@ let wrongTried = false;
  * An action that needs root, as a person meets it: start it, wait for Genie's password prompt in this client, answer it
  * (the first time with a wrong password, which must ask again), and wait for `done`. Returns what happened.
  */
+/**
+ * A card that shows a VERSION (Tynn #968): a card with none reads "not here", and a language card (PHP's) has no
+ * data-tone, so any text counting judged php's card while pacman was still installing, before Genie's rescan.
+ */
+const shows = (c) => Boolean(c?.version && /\d/.test(c.version));
+
 async function elevated(name, start, done, names, waitMs = 600_000) {
     const r = { prompted: false, promptText: '', reasked: null, refused: null, done: false };
     if (!(await start())) { r.refused = 'its button was not there to press'; return r; }
@@ -400,7 +408,7 @@ try {
             track(`${tool}-install-progress`, 'BLOCKED', 'pacman', 'not reached');
             continue;
         }
-        const r = await elevated(tool, () => press(tool, '^Install$'), async () => { if (!pkgVersion(pkg)) return null; const c = await card(tool); return c && c.tone !== 'not-installed' && c.version ? c : null; }, pkg);
+        const r = await elevated(tool, () => press(tool, '^Install$'), async () => { if (!pkgVersion(pkg)) return null; const c = await card(tool); return c && c.tone !== 'not-installed' && shows(c) ? c : null; }, pkg);
         const prompted = elevationVerdict(`${tool}-elevation`, r, pkg);
         const after = await card(tool);
         const have = pkgVersion(pkg);
@@ -427,23 +435,29 @@ try {
         track('pacman-no-partial-upgrade', 'BLOCKED', 'pacman', 'nothing was installed through Genie to check');
     }
 
-    // 8. AN UPDATE: git held one version back by the harness (from the Arch archive), then Update on its card.
+    // 8. AN UPDATE: git held back by the harness (a pinned package, from our cache), then Update on its card.
     {
-        // The archive is outside Genie (Tynn #968): read with a deadline and once more, and when it cannot be read the control is
-        // not set up, so the check is BLOCKED by `archive` (linux.sh TRACKED_ENV), never a failure of Genie's.
-        const base = archiveBase(process.env);
-        const listing = await readListing(fetch, `${archiveBase(process.env)}/packages/g/git/`);
-        const plan = listing === null ? null : heldBackOf(listing);
+        // Held below what THIS machine's repositories have (Tynn #968: Omarchy's mirror lags the archive), read without root
+        // and without touching the system's sync databases, as Genie reads them.
+        const repoGit = repoVersion(run, 'git', join(mkdtempSync(join(tmpdir(), 'tc968-')), 'db'));
+        say(`git in this machine's repositories: ${repoGit ?? 'could not be read'}`);
+        // The held git is ONE pinned package (gate 1125-223010-b05ea9: the archive could not be read, and a release gate
+        // must not depend on a third-party website): from our Azure blob first, the archive only after, never installed
+        // unless it hashes to the pin; pacman checks the signature beside it. Not had at all: the control is not set up,
+        // so the check is BLOCKED by `archive` (linux.sh TRACKED_ENV), never a failure of Genie's.
+        const got = await resolveHeldGit({ fetchFn: fetch, env: process.env, repoGit, dir: mkdtempSync(join(tmpdir(), 'tc968-pkg-')), write: writeFileSync });
+        for (const line of got.log) say(line);
+        const plan = got.ok ? got.plan : null;
         const held = plan?.held ?? null;
         const newest = plan?.newest ?? null;
-        const url = held ? `${base}/packages/g/git/git-${held}-x86_64.pkg.tar.zst` : null;
+        const url = got.ok ? got.target : null;
         // The install is the harness's own control too (the archive read a second time, and pacman's hooks on a machine this
         // row has just changed): tried once more after a wait, with every try's output and status in this log.
         const heldRun = url ? await holdGitBack(() => sudoP('pacman', '-U', '--noconfirm', url)) : null;
         if (heldRun) for (const line of holdBackLog(url, heldRun)) console.log(line.replaceAll(PW, '<password>'));
         const heldOk = heldRun?.ok === true;
-        if (!plan) {
-            track('git-update', 'BLOCKED', 'archive', `CONTROL not set up: ${listing === null ? `the Arch archive (${base}) could not be read` : 'the Arch archive lists fewer than two versions of git'}`);
+        if (!got.ok) {
+            track('git-update', 'BLOCKED', got.reason, got.detail);
         } else if (!heldOk) {
             // Still not set up: a control the harness could not make says nothing about Genie, so it BLOCKS (by `control`,
             // linux.sh TRACKED_ENV) with pacman's own words. The checks below, which measure Genie, are not reached.
@@ -560,6 +574,27 @@ try {
                 track('node-default', isDefault ? 'PASS' : 'FAIL', 'none', !made ? `Node ${pick}'s default radio could not be pressed` : isDefault ? `Node ${pick}'s radio reads the default in its row; a login shell's node: ${nodeNow || 'none'}` : `Node ${pick}'s row does not read the default; ${JSON.stringify(await snapshot(['toolchain', 'defaults']))?.slice(0, 160)}`);
             }
         }
+    }
+    // 13. ELEVATION IN THE CLIENT, ON ITS OWN (Tynn #973): the one elevated step on this machine that waits on nothing
+    // but #973 — the keyring's Install, which has its own pacman table. Its package really removed and its daemon ended,
+    // then the card's button pressed from THIS window: Genie's prompt must appear here naming the packages, a wrong
+    // password must ask again, and the right one must install it (pacman -Q). Last, so nothing before it meets a machine
+    // without a keyring; the keyring is back at the end of the step whatever happened.
+    {
+        const keyringPkgs = 'gnome-keyring';
+        const hadKeyring = Boolean(pkgVersion(keyringPkgs));
+        const gone = hadKeyring && sudoP('pacman', '-Rdd', '--noconfirm', keyringPkgs).status === 0 && !pkgVersion(keyringPkgs);
+        run('pkill', ['-f', 'gnome-keyring-daemon']);
+        if (!gone) track('keyring-elevation', 'FAIL', 'none', `CONTROL: ${hadKeyring ? 'the harness could not remove gnome-keyring' : 'gnome-keyring was not installed to begin with'}`);
+        else {
+            // Not awaited: the button's action answers once the install is done, which waits on the prompt this step answers.
+            const r = await elevated('keyring', async () => { void act({ kind: 'keyring.fix' }).catch(() => {}); return true; }, async () => (pkgVersion(keyringPkgs) ? true : null), keyringPkgs);
+            elevationVerdict('keyring-elevation', r, keyringPkgs);
+            // What the card said, when the install did not land: its failure in Genie's words (pacman's last line among them).
+            const card = await snapshot(['integrations', 'keyring']).catch(() => null);
+            track('keyring-install', r.done && pkgVersion(keyringPkgs) ? 'PASS' : r.prompted ? 'FAIL' : 'BLOCKED', r.prompted ? 'none' : 'elevation', `pacman -Q gnome-keyring ${pkgVersion(keyringPkgs) || 'not installed'}${r.refused ? `; Genie said "${r.refused}"` : ''}${card ? `; the card: ${JSON.stringify(card).slice(0, 300)}` : ''}`);
+        }
+        if (hadKeyring && !pkgVersion(keyringPkgs)) sudoP('pacman', '-S', '--needed', '--noconfirm', keyringPkgs);
     }
 } catch (error) {
     track('the-row-threw', 'FAIL', 'none', error instanceof Error ? error.message : String(error));
