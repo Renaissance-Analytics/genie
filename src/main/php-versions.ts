@@ -420,7 +420,17 @@ async function putInPlace(a: { version: string; file: string; dir: string; zip: 
         }
         if (!banner) return fail(`PHP ${version} unpacked, but ${join(dir, 'php-cgi.exe')} did not run${said ? `: ${said.slice(0, 300)}` : ''}`);
         if (banner.version !== version) return fail(`PHP ${version} was asked for, but the binary reports ${banner.version}`);
-        if (banner.threadSafe !== false) return fail(`PHP ${version} ${banner.threadSafe ? 'is a thread-safe build' : 'did not say it is an NTS build'}, and Genie's php-cgi runs the NTS build`);
+        // A banner that names no thread safety (8.3.37's, on a fresh Windows VM — Tynn #1066) is ASKED: PHP_ZTS.
+        let threadSafe = banner.threadSafe;
+        if (threadSafe === null) {
+            try {
+                const asked = (await ports.run(join(dir, 'php.exe'), ['-c', ini, '-r', "echo PHP_ZTS ? 'ZTS' : 'NTS';"])).stdout.trim();
+                threadSafe = asked === 'NTS' ? false : asked === 'ZTS' ? true : null;
+            } catch {
+                threadSafe = null;
+            }
+        }
+        if (threadSafe !== false) return fail(`PHP ${version} ${threadSafe ? 'is a thread-safe build' : `did not say it is an NTS build (it said: ${said.split(/\r?\n/)[0]?.slice(0, 200) ?? ''})`}, and Genie's php-cgi runs the NTS build`);
         let modules = '';
         try {
             modules = (await ports.run(join(dir, 'php.exe'), ['-c', ini, '-m'])).stdout;
