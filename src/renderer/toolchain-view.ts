@@ -9,7 +9,7 @@
  *   the card is the one the person clicked;
  * - a SIDE PANEL per tool ({@link defaultSelection} picks the first);
  * - an ACTIVITY FEED ({@link toolchainActivity});
- * - no raw shell command: only "asks once" or "no password" ({@link installNote}).
+ * - no raw shell command: an install that asks for a password shows a lock ({@link installNote}); Genie's own say nothing.
  *
  * Pure: nothing here renders or runs. FeatureSurfaces' ToolchainSurface draws it.
  */
@@ -59,7 +59,12 @@ export interface ToolCard {
     readonly lang: LangKey | null;
     /** The version under its name: the default, else the one installed. */
     readonly version: string | null;
-    /** Its installed versions (the default starred); one `system` chip when only the PATH copy is here. */
+    /**
+     * What the card is using, said in words (Tynn #1062): `default` — Genie's copy, the default; `system` — the copy that
+     * came with the machine (on its PATH); `null` — a tool Genie keeps one copy of, or nothing chosen.
+     */
+    readonly inUse: 'default' | 'system' | null;
+    /** Its installed versions (the default marked); one `system` chip when only the PATH copy is here. */
     readonly chips: readonly { readonly version: string; readonly isDefault: boolean; readonly system?: boolean }[];
     readonly state: CardState;
     /** A side-by-side language card's primary: the default's patch (installed beside it), or its first install. */
@@ -124,6 +129,7 @@ function langCard(tc: ToolchainSection, lang: LangKey, view: View, tool: ToolSta
         tool,
         lang,
         version: current ?? view.managed[0]?.version ?? view.system?.version ?? tool?.installed ?? null,
+        inUse: current !== null && view.managed.some((m) => m.version === current) ? 'default' : current === null && view.system !== null ? 'system' : null,
         chips,
         state,
         ...(primary ? { primary } : {}),
@@ -146,7 +152,7 @@ export function toolchainCards(tc: ToolchainSection): Array<{ group: CardGroupId
         if (lang && view) {
             cards.push(langCard(tc, lang, view, (SIDE_BY_SIDE_LANGS as readonly string[]).includes(lang) ? null : t, t));
         } else {
-            cards.push({ key, title: toolTitle(key), tool: t, lang: null, version: t.installed, chips: [], state: stateOfTool(t) });
+            cards.push({ key, title: toolTitle(key), tool: t, lang: null, version: t.installed, inUse: null, chips: [], state: stateOfTool(t) });
         }
     }
     // A language Genie keeps versions of that the scan has no row for (Java, .NET, Ruby): its card comes from its view.
@@ -160,7 +166,7 @@ export function toolchainCards(tc: ToolchainSection): Array<{ group: CardGroupId
         const pw = tc.playwright;
         const ready = pw.sets.filter((s) => s.ready);
         cards.push({
-            key: 'playwright', title: 'Playwright', tool: null, lang: null,
+            key: 'playwright', title: 'Playwright', tool: null, lang: null, inUse: null,
             version: ready.find((s) => s.version === pw.stable)?.version ?? ready[0]?.version ?? null,
             chips: pw.sets.map((s) => ({ version: s.version, isDefault: s.version === pw.stable })),
             state: pw.sets.length === 0 ? 'missing' : pw.sets.some((s) => !s.ready) ? 'update' : 'ok',
@@ -175,10 +181,13 @@ export function toolchainCards(tc: ToolchainSection): Array<{ group: CardGroupId
     return out.filter((g) => g.cards.length > 0);
 }
 
-/** How an install asks: the system package manager asks for the password once; Genie's own copies never do. */
-export function installNote(preview: InstallPreview | undefined): 'asks once' | 'no password' | null {
+/**
+ * Whether an install asks for the password (the system package manager does, once). Genie's own copies never do, and
+ * say nothing about it (Tynn #1062: "no password" beside every button was noise; the prompt explains itself).
+ */
+export function installNote(preview: InstallPreview | undefined): 'asks once' | null {
     if (!preview || !('label' in preview)) return null;
-    return preview.elevated ? 'asks once' : 'no password';
+    return preview.elevated ? 'asks once' : null;
 }
 
 export interface ToolchainProblem {
@@ -280,15 +289,6 @@ export function toolchainTally(groups: ReadonlyArray<{ readonly cards: readonly 
         security: problems.filter((p) => / has a security fix$/.test(p.title)).length,
         needYou: problems.length,
     };
-}
-
-/** The panel that opens first: the first problem's tool; else the first tool Genie keeps versions of; else the first. */
-export function defaultSelection(groups: ReadonlyArray<{ readonly cards: readonly ToolCard[] }>, problems: readonly ToolchainProblem[]): string | null {
-    const cards = groups.flatMap((g) => g.cards);
-    const known = (key: string) => cards.some((c) => c.key === key);
-    const problem = problems.find((p) => known(p.card));
-    if (problem) return problem.card;
-    return cards.find((c) => c.lang !== null || c.key === 'playwright')?.key ?? cards[0]?.key ?? null;
 }
 
 /** The card an action is for: where its progress is drawn while main's one busy line runs. `null`: no one card's. */

@@ -14,12 +14,12 @@ import { isOsAgent } from './os-agent.js';
  * is not managed and has no settings at all).
  */
 
-export type SettingsSection = 'general' | 'permissions' | 'issuewatch' | 'persona' | 'skills';
+export type SettingsSection = 'general' | 'mcp' | 'permissions' | 'issuewatch' | 'persona' | 'skills';
 
 export type SettingsControl =
     | 'provider' | 'model' | 'mode' | 'app-wake-cap' | 'run' | 'tui' | 'remove'
     | 'tools' | 'access' | 'autonomous' | 'manage-tabs' | 'drive-pages'
-    | 'issuewatch' | 'persona' | 'skills';
+    | 'issuewatch' | 'persona' | 'skills' | 'mcp';
 
 /** What the view knows: the agent, and which setters the window was given (absent setter = absent control). */
 export interface SettingsFacts {
@@ -47,6 +47,11 @@ export interface SettingsFacts {
     readonly persona: boolean;
     /** The provider reported its skills and commands. */
     readonly skills: boolean;
+    /**
+     * The window can switch the agent's MCP servers (Tynn #628). Its own tab, "MCP servers", right after General (Tynn
+     * #1062: under "Skills", and only once skills were reported, the owner could not find the Fancy Dev Kit switch).
+     */
+    readonly mcp?: boolean | undefined;
 }
 
 export interface SettingsSectionView {
@@ -57,6 +62,7 @@ export interface SettingsSectionView {
 
 export const SETTINGS_LABEL: Record<SettingsSection, string> = {
     general: 'General',
+    mcp: 'MCP servers',
     permissions: 'Permissions',
     issuewatch: 'IssueWatch',
     persona: 'Persona',
@@ -69,6 +75,7 @@ export function settingsSections(f: SettingsFacts): SettingsSectionView[] {
     const push = (id: SettingsSection, controls: SettingsControl[]) => { if (controls.length > 0) out.push({ id, label: SETTINGS_LABEL[id], controls }); };
     if (f.ops) {
         push('general', ['provider', ...(f.model ? ['model' as const] : []), 'mode', ...(f.appWakeCap ? ['app-wake-cap' as const] : []), 'run', ...(f.tui ? ['tui' as const] : []), 'remove']);
+        if (f.mcp) push('mcp', ['mcp']);
         if (!isOsAgent(f)) push('permissions', [
             ...(f.provider === 'claude' && f.tools ? ['tools' as const] : []),
             'access',

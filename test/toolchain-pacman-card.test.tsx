@@ -22,12 +22,12 @@ const render = (toolchain: FeatureData['toolchain']) => renderToStaticMarkup(<To
 const card = (html: string, key: string) => { const at = html.indexOf(`data-tool-card="${key}"`); return html.slice(at, html.indexOf('data-tool-card=', at + 10)); };
 
 describe('PHP on Arch: the system package beside Genie’s own build', () => {
-    it('a missing PHP card offers BOTH: Genie’s build (no password) and the system package (asks once), each said', () => {
+    it('a missing PHP card offers BOTH, each named: Genie’s build, and the system package (a lock: it asks for the password)', () => {
         const c = card(render(missingPhp), 'php');
         expect(c).toContain('data-tool="php"');
-        expect(c).toMatch(/<button[^>]*data-action="toolchain-install"[^>]*data-install-system="php"[^>]*title="pacman -S --needed --noconfirm php \(as administrator\)"[^>]*>(?:<span[^>]*>)?Install(?:<\/span>)?<\/button>/);
-        expect(c).toMatch(/data-install-note="php"[^>]*>system package, asks once</);
-        expect(c).toMatch(/data-card-primary="install"[^>]*data-version="8\.5\.12"[^>]*>(?:<span[^>]*>)?Install 8\.5\.12</);
+        expect(c).toMatch(/<button[^>]*data-action="toolchain-install"[^>]*data-install-system="php"[^>]*title="pacman -S --needed --noconfirm php \(as administrator\)"[^>]*>(?:<span[^>]*>)?Install system PHP(?:<\/span>)?<\/button>/);
+        expect(c).toMatch(/data-install-note="php"[^>]*title="Asks for your password"/);
+        expect(c).toMatch(/data-card-primary="install"[^>]*data-version="8\.5\.12"[^>]*>(?:<span[^>]*>)?Install Genie(?:&#x27;|')s 8\.5\.12</);
     });
 
     it('once the system PHP is there, its card is still the system copy (data-tool) and offers no second install', () => {

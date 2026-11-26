@@ -1110,7 +1110,7 @@ function AgentViewBody({
                             model: ops?.onSetModel !== undefined, tools: ops?.onSetPermissions !== undefined, autonomous: ops?.onSetAutoApprove !== undefined,
                             manageTabs: ops?.onSetManageTabs !== undefined, drivePages: ops?.onSetDrivePages !== undefined,
                             issueWatch: ops?.onSetIssueWatch !== undefined && ops.issueWatch !== undefined,
-                            persona: persona !== null, skills: session?.extensions != null || ops?.mcp !== undefined,
+                            persona: persona !== null, skills: session?.extensions != null, mcp: ops?.mcp !== undefined,
                             tui: onTakeOver !== undefined,
                             appWakeCap: ops?.onSetAppWakeCap !== undefined,
                         });
@@ -1453,8 +1453,8 @@ function AgentViewBody({
                                             ) : null}
 
                                             {/* ── SKILLS: what the agent's OWN CLI can run (the owner, 2026-10-14), read-only; run one from the chat's `/` menu. */}
-                                            {/* ── MCP SERVERS: one switch each, kept on the agent, applied at its next session start (Tynn #628). */}
-                                            {ops?.mcp && has.has('skills') ? (
+                                            {/* ── MCP SERVERS: one switch each, kept on the agent, applied at its next session start (Tynn #628); its own tab (Tynn #1062). */}
+                                            {ops?.mcp && has.has('mcp') ? (
                                                 <McpServerSwitches rows={ops.mcp} agentName={agent.name} onSet={ops.onSetMcpServer} />
                                             ) : null}
                                             {session?.extensions && has.has('skills') ? (

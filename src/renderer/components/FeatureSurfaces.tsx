@@ -17,7 +17,7 @@ import { mobilePageUrl } from '../../core/mobile.js';
 import { PairGuide } from './PairGuide.js';
 import { toneLabel, type ToolStatus } from '../../core/toolchain.js';
 import { DOCKER_DAEMON_WORDS } from '../../core/docker-engine.js';
-import { INSTALL_KIND, REMOVE_KIND, cardKeyOfTool, cardOfAction, defaultSelection, formatElapsed, installNote, langView, nextFix, nextInFlight, patchFor, toolchainActivity, toolchainCards, toolchainProblems, toolchainTally, type InFlight, type LangKey, type ToolCard, type ToolchainProblem } from '../toolchain-view.js';
+import { INSTALL_KIND, REMOVE_KIND, cardKeyOfTool, cardOfAction, formatElapsed, installNote, langView, nextFix, nextInFlight, patchFor, toolchainActivity, toolchainCards, toolchainProblems, toolchainTally, type InFlight, type LangKey, type ToolCard, type ToolchainProblem } from '../toolchain-view.js';
 import { ToolLogo } from './ToolLogo.js';
 import { NAV_GROUPS, NEW_PROJECT_DEFAULTS, sectionOf, type SectionId } from '../../core/settings-nav.js';
 import { SETTINGS, searchSettings, type SettingDef } from '../../core/settings.js';
@@ -1200,15 +1200,15 @@ export function ToolchainCheckBar({ tc, busy, onAction }: { tc: ToolchainData | 
     const at = tc?.checkedAt ?? null;
     return (
         <>
-            <span data-toolchain-checked={at ?? ''} className="ml-auto text-xs text-[var(--fg-3)]" {...(at !== null ? { title: new Date(at).toLocaleString() } : {})}>
+            <span data-toolchain-checked={at ?? ''} className="ml-auto whitespace-nowrap text-xs text-[var(--fg-3)]" {...(at !== null ? { title: new Date(at).toLocaleString() } : {})}>
                 {at === null ? 'Not checked yet' : `Checked ${agoText(at, Date.now())}`}
             </span>
             {running ? (
-                <Button size="xs" type="button" color="red" data-action="toolchain-check-stop" onClick={() => onAction({ kind: 'toolchain.stopCheck' })}>
+                <Button size="xs" type="button" color="red" className="shrink-0 whitespace-nowrap" data-action="toolchain-check-stop" onClick={() => onAction({ kind: 'toolchain.stopCheck' })}>
                     <Icon name="square" size="xs" />Stop
                 </Button>
             ) : (
-                <Button size="xs" type="button" data-action="toolchain-check-updates" disabled={busy} onClick={() => onAction({ kind: 'toolchain.checkUpdates' })}>
+                <Button size="xs" type="button" className="shrink-0 whitespace-nowrap" data-action="toolchain-check-updates" disabled={busy} onClick={() => onAction({ kind: 'toolchain.checkUpdates' })}>
                     <Icon name="refresh-cw" size="xs" />Check for updates
                 </Button>
             )}
@@ -1233,7 +1233,8 @@ export function ToolchainSurface({ data, onAction: act, selected: initial }: Sur
     useEffect(() => { setPending(null); }, [tc]);
     // Main reports every install through ONE busy line; the card it is drawn on is the one the person clicked.
     const [inFlight, setInFlight] = useState<InFlight | null>(null);
-    const [chosen, setChosen] = useState<string | null>(initial ?? null);
+    // `undefined`: nothing chosen yet; `null`: the person closed the panel; a key: the tool they chose.
+    const [chosen, setChosen] = useState<string | null | undefined>(initial ?? undefined);
     const [now, setNow] = useState(() => Date.now());
     const onAction: SurfaceProps['onAction'] = (action) => {
         if (action.kind === 'toolchain.update') setPending({ tool: action.tool, ...(action.version ? { version: action.version } : {}) });
@@ -1276,7 +1277,12 @@ export function ToolchainSurface({ data, onAction: act, selected: initial }: Sur
         // onAction is a fresh closure every render; the queue advances on the snapshot, not on it.
     }, [fix, tc]);
     const cards = groups.flatMap((g) => g.cards);
-    const selectedKey = chosen !== null && cards.some((c) => c.key === chosen) ? chosen : defaultSelection(groups, problems);
+    // The panel opens when the person chooses a tool, and only then (Tynn #1062): at the owner's window size a panel that
+    // opened by itself took the cards' room before anything was asked of it.
+    // One exception: a refused action on a language's version is said in that language's panel, so the panel opens for it
+    // (a "Fix N problems" run starts such an install from the strip, with no panel open) unless the person closed it.
+    const refusedCard = (tc?.refusals ?? []).map((r) => (r.version !== undefined ? cardKeyOfTool(r.tool) : null)).find((key) => key !== null && cards.some((c) => c.key === key)) ?? null;
+    const selectedKey = typeof chosen === 'string' && cards.some((c) => c.key === chosen) ? chosen : chosen === undefined ? refusedCard : null;
     const selectedCard = cards.find((c) => c.key === selectedKey) ?? null;
     const checkRows = tc?.checkRun?.rows ?? {};
     // A refused or failed action, drawn on the card it was for (who or what is busy, verbatim); a language version's goes to
@@ -1289,38 +1295,36 @@ export function ToolchainSurface({ data, onAction: act, selected: initial }: Sur
         if (busy !== null && inFlight?.card === key) return { step: busy, elapsed: formatElapsed(now - inFlight.at) };
         return null;
     };
-    const elevated = Object.values(tc?.installs ?? {}).some((p) => 'label' in p && p.elevated);
     const tally = toolchainTally(groups, problems);
     return (
-        <div data-surface="toolchain" className="flex h-full min-h-0 flex-col">
-            <Header title="Toolchain">
-                {elevated ? (
-                    <span data-toolchain-asks="" title="Installs and updates run as you; only the system package manager asks for your password, once per install" className="inline-flex h-6 items-center gap-1.5 rounded-full border border-[var(--border-1)] bg-[var(--bg-2)] px-2.5 text-xs text-[var(--fg-2)]">
-                        <Icon name="lock" size="xs" />Asks once per system install
-                    </span>
-                ) : null}
+        // ONE TITLE (Tynn #1062): Settings already heads this page "Toolchain"; the surface brings only its toolbar.
+        <div data-surface="toolchain" className="flex h-full min-h-0 flex-1 flex-col">
+            <div data-toolchain-toolbar="" className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-[var(--border-1)] px-6 py-2.5">
+                {tc !== null ? <ToolchainTallies tally={tally} /> : null}
                 <ToolchainCheckBar tc={tc} busy={busy !== null} onAction={onAction} />
-                <Button size="xs" type="button" variant="ghost" disabled={busy !== null} onClick={() => onAction({ kind: 'toolchain.repair' })}>
+                <Button size="xs" type="button" className="shrink-0 whitespace-nowrap" disabled={busy !== null} onClick={() => onAction({ kind: 'toolchain.repair' })}>
                     <Icon name="stethoscope" size="xs" />Check and repair
                 </Button>
                 {fixable.length > 0 ? (
-                    <Button size="sm" type="button" color="blue" data-action="toolchain-fix-all" disabled={running || fix !== null} loading={fix !== null} onClick={() => setFix({ queue: fixable, waiting: false, refusals: refusals.length })}>
+                    <Button size="sm" type="button" color="blue" className="shrink-0 whitespace-nowrap" data-action="toolchain-fix-all" disabled={running || fix !== null} loading={fix !== null} onClick={() => setFix({ queue: fixable, waiting: false, refusals: refusals.length })}>
                         <Icon name="wrench" size="xs" />Fix {fixable.length} {fixable.length === 1 ? 'problem' : 'problems'}
                     </Button>
                 ) : null}
-            </Header>
+            </div>
             {tc === null ? (
                 <Skeletons rows={6} />
             ) : (
-                <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] lg:grid-cols-[minmax(0,1fr)_360px] lg:grid-rows-1">
-                    <div className="min-h-0 overflow-y-auto pb-4">
+                // ONE LAYOUT AT EVERY WIDTH (Tynn #1062): measured on the space the page really has (a container query, not
+                // the window's width, which the chat and the Settings menu share). With room, the chosen tool's panel sits
+                // beside the cards; without it, the panel takes the cards' place and "All tools" brings them back.
+                <div data-toolchain-body="" className="@container relative flex min-h-0 flex-1">
+                    <div data-toolchain-main="" className={`min-h-0 min-w-0 flex-1 overflow-y-auto pb-4 ${selectedCard ? 'hidden @min-[860px]:block' : ''}`}>
                         {tc.warning ? <ToolchainUpdateWarning warning={tc.warning} busy={running} onAction={onAction} /> : null}
                         {rowless.map((r) => (
                             <p key={r.tool} data-tool-refusal={r.tool} className="px-6 pt-3 text-sm text-[var(--danger)]">{r.reason}</p>
                         ))}
-                        <ToolchainTallies tally={tally} />
                         {problems.length > 0 ? <ProblemsStrip problems={problems} busy={running} onAction={onAction} onOpen={setChosen} /> : null}
-                        {tc.machinePath ? <div className="mx-6 mt-3 overflow-hidden rounded-xl border border-[var(--border-1)]"><MachinePathCard mp={tc.machinePath} busy={busy !== null} onAction={onAction} refusal={refusals.find((r) => r.tool === 'machine-path')?.reason ?? null} /></div> : null}
+                        {tc.machinePath ? <div className="mx-6 mt-3 overflow-hidden rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)]"><MachinePathCard mp={tc.machinePath} busy={busy !== null} onAction={onAction} refusal={refusals.find((r) => r.tool === 'machine-path')?.reason ?? null} /></div> : null}
                         {groups.map((g) => (
                             <section key={g.group} data-card-group={g.group} className="px-6">
                                 <h3 className="mb-2 mt-4 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--fg-3)]">
@@ -1346,30 +1350,32 @@ export function ToolchainSurface({ data, onAction: act, selected: initial }: Sur
                                 </ul>
                             </section>
                         ))}
-                    </div>
-                    <aside className="flex min-h-0 flex-col overflow-y-auto border-t border-[var(--border-1)] bg-[var(--bg-1)] lg:border-l lg:border-t-0">
-                        {selectedCard ? <ToolPanel card={selectedCard} tc={tc} busy={busy !== null} check={selectedCard.lang ? checkRows[selectedCard.lang] : undefined} onAction={onAction} onClose={() => setChosen(null)} /> : null}
                         <ActivityFeed tc={tc} />
-                    </aside>
+                    </div>
+                    {selectedCard ? (
+                        <aside data-toolchain-aside="" className="flex min-h-0 w-full flex-col overflow-y-auto bg-[var(--bg-1)] @min-[860px]:w-[340px] @min-[860px]:shrink-0 @min-[860px]:border-l @min-[860px]:border-[var(--border-1)]">
+                            <ToolPanel card={selectedCard} tc={tc} busy={busy !== null} check={selectedCard.lang ? checkRows[selectedCard.lang] : undefined} onAction={onAction} onClose={() => setChosen(null)} />
+                        </aside>
+                    ) : null}
                 </div>
             )}
         </div>
     );
 }
 
-/** The three tiles: ready, updates (and how many of them are security fixes), and what needs the person. */
+/** The counts, on ONE line in the toolbar (Tynn #1062: three big tiles took a screen's worth of room): ready, updates, need you. */
 function ToolchainTallies({ tally }: { tally: ReturnType<typeof toolchainTally> }) {
-    const tile = (id: string, n: number, word: string, dot: string) => (
-        <div data-tally={id} className="flex items-center gap-3 rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] px-3.5 py-3">
-            <span aria-hidden="true" className={`size-2.5 shrink-0 rounded-full ${dot}`} />
-            <div className="leading-tight"><b className="text-xl font-semibold">{n}</b><br /><span className="text-xs text-[var(--fg-2)]">{word}</span></div>
-        </div>
+    const item = (id: string, n: number, word: string, dot: string) => (
+        <span data-tally={id} className={`inline-flex items-center gap-1.5 ${n === 0 && id !== 'ready' ? 'text-[var(--fg-3)]' : 'text-[var(--fg-1)]'}`}>
+            <span aria-hidden="true" className={`size-2 shrink-0 rounded-full ${n === 0 && id !== 'ready' ? 'bg-[var(--fg-4)]' : dot}`} />
+            <b className="font-semibold">{n}</b><span>{word}</span>
+        </span>
     );
     return (
-        <div data-toolchain-tallies="" className="grid grid-cols-3 gap-3 px-6 pt-4">
-            {tile('ready', tally.ready, 'ready', 'bg-[var(--success)]')}
-            {tile('updates', tally.updates, tally.security > 0 ? `updates · ${tally.security} security` : 'updates', 'bg-[var(--warning)]')}
-            {tile('need-you', tally.needYou, 'need you', 'bg-[var(--danger)]')}
+        <div data-toolchain-tallies="" className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+            {item('ready', tally.ready, 'ready', 'bg-[var(--success)]')}
+            {item('updates', tally.updates, tally.security > 0 ? `updates · ${tally.security} security` : tally.updates === 1 ? 'update' : 'updates', 'bg-[var(--warning)]')}
+            {item('need-you', tally.needYou, 'need you', 'bg-[var(--danger)]')}
         </div>
     );
 }
@@ -1379,14 +1385,14 @@ export function ProblemsStrip({ problems, busy, onAction, onOpen }: { problems: 
     return (
         <ul data-toolchain-problems={problems.length} className="mx-6 mt-3 divide-y divide-[var(--border-1)] overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--danger)_45%,transparent)] bg-[color-mix(in_srgb,var(--danger)_6%,var(--bg-1))]">
             {problems.map((p) => (
-                <li key={p.key} data-problem={p.key} className="flex items-center gap-3 px-3.5 py-2.5">
+                <li key={p.key} data-problem={p.key} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3.5 py-2.5">
                     <ToolLogo tool={p.card} />
-                    <div className="min-w-0">
+                    <div className="min-w-[10rem] flex-1">
                         <b className="text-sm font-semibold">{p.title}</b>
                         {p.why ? <div className="text-xs text-[var(--fg-2)]">{p.why}</div> : null}
                     </div>
                     <span className="ml-auto flex shrink-0 items-center gap-2">
-                        {p.note ? <span className="font-mono text-[11px] text-[var(--fg-3)]">{p.note}</span> : null}
+                        {p.note ? <AsksPassword data-problem-note={p.key} /> : null}
                         {p.action ? (
                             <Button type="button" size="sm" color="red" data-problem-action={p.key} disabled={busy} onClick={() => onAction(p.action!)}>{p.label}</Button>
                         ) : (
@@ -1396,6 +1402,37 @@ export function ProblemsStrip({ problems, busy, onAction, onOpen }: { problems: 
                 </li>
             ))}
         </ul>
+    );
+}
+
+/**
+ * AN INSTALL THAT ASKS FOR THE PASSWORD: a lock, named for a screen reader and on hover (Tynn #1062: the words "asks
+ * once" and "no password" beside every button were noise). Genie's own installs never ask, and show nothing.
+ */
+function AsksPassword(props: Record<`data-${string}`, string>) {
+    return (
+        <span {...props} role="img" aria-label="Asks for your password" title="Asks for your password" className="inline-flex shrink-0 items-center text-[var(--fg-3)]">
+            <Icon name="lock" size="xs" />
+        </span>
+    );
+}
+
+/**
+ * WHAT A CARD IS USING, in words (Tynn #1062: "8.4.27 ★" and "system 3.13.15" read as nothing): the version, and
+ * "Default" (Genie's copy, the default) or "System" (the copy that came with the machine), each with its icon. The
+ * version is the card's first mono span (scripts/toolchain-real-cdp.mjs reads it there).
+ */
+function InUse({ card }: { card: ToolCard }) {
+    const chip = card.version !== null ? card.chips.find((c) => c.version === card.version) : undefined;
+    return (
+        <span data-in-use={card.key} data-in-use-kind={card.inUse ?? 'none'} className="flex min-w-0 flex-wrap items-center gap-1.5">
+            <span {...(chip ? { 'data-version-chip': `${card.key}:${chip.version}`, 'data-default': chip.isDefault ? 'true' : 'false' } : {})} className={`font-mono text-xs ${card.version === null ? 'text-[var(--fg-3)]' : 'text-[var(--fg-1)]'}`}>{card.version ?? 'not here'}</span>
+            {card.inUse === 'default' ? (
+                <Badge variant="soft" size="sm" color="blue" data-in-use-badge="default" title={`Genie's copy, the default: what ${card.title} commands run`} className="inline-flex items-center gap-1"><Icon name="star" size="xs" />Default</Badge>
+            ) : card.inUse === 'system' ? (
+                <Badge variant="soft" size="sm" color="zinc" data-in-use-badge="system" title="The copy that came with this machine" className="inline-flex items-center gap-1"><Icon name="monitor" size="xs" />System</Badge>
+            ) : null}
+        </span>
     );
 }
 
@@ -1440,18 +1477,24 @@ export function ToolCardView({ card, selected, busy, updating, updated, refusal,
 }) {
     const t = card.tool;
     const missing = card.state === 'missing';
+    // A real button (Tynn #1062: a ghost "Versions" read as plain text).
     const versionsButton = card.lang !== null || card.key === 'playwright'
-        ? <Button type="button" size="sm" variant="ghost" data-open-panel={card.key} onClick={onSelect}>{card.key === 'playwright' ? 'Browsers' : 'Versions'}</Button>
+        ? <Button type="button" size="sm" data-open-panel={card.key} onClick={onSelect}><Icon name="layers" size="xs" />{card.key === 'playwright' ? 'Browsers' : 'Versions'}</Button>
         : null;
     const note = installNote(install);
     // The system's package (pacman, Tynn #968), beside Genie's own build, for a language Genie manages no version of yet.
     const sys = !t && card.systemTool && missing && install && 'label' in install ? card.systemTool : null;
     const systemInstall = sys ? (
         <>
-            <Button type="button" size="sm" data-action="toolchain-install" data-install-system={sys} title={install && 'label' in install ? install.label : undefined} disabled={busy} onClick={() => onAction({ kind: 'toolchain.install', tool: sys, consent: true })}>Install</Button>
-            <span data-install-note={sys} className="font-mono text-[11px] text-[var(--fg-3)]">system package, asks once</span>
+            <Button type="button" size="sm" data-action="toolchain-install" data-install-system={sys} title={install && 'label' in install ? install.label : undefined} disabled={busy} onClick={() => onAction({ kind: 'toolchain.install', tool: sys, consent: true })}>{`Install system ${card.title}`}</Button>
+            <AsksPassword data-install-note={sys} />
         </>
     ) : null;
+    // The versions beside the one in use, said once each ("Also 8.3.26"); the one in use is on the line under the name.
+    const others = card.chips.filter((c) => c.version !== card.version);
+    // Genie's copy, named as Genie's where the machine has (or offers) its own beside it (Tynn #1062: "Install 3.15.1" beside
+    // "system 3.13.15" did not say which copy it installs).
+    const genies = (label: string) => (card.inUse === 'system' || sys ? label.replace(/^Install /, "Install Genie's ") : label);
     let actions: React.ReactNode = null;
     if (t && t.tone === 'broken') {
         actions = <span data-card-primary="repair" className="contents"><CliRepairAction t={t} busy={busy} updating={updating} onAction={onAction} /></span>;
@@ -1483,7 +1526,7 @@ export function ToolCardView({ card, selected, busy, updating, updated, refusal,
         actions = install && 'label' in install ? (
             <>
                 <Button type="button" size="sm" color={card.key === 'docker' ? 'red' : 'blue'} data-card-primary="install" data-action="toolchain-install" disabled={busy} title={install.label} onClick={() => onAction({ kind: 'toolchain.install', tool: t.tool, consent: true })}>Install</Button>
-                {note ? <span data-install-note={t.tool} title={install.label} className="font-mono text-[11px] text-[var(--fg-3)]">{note}</span> : null}
+                {note ? <AsksPassword data-install-note={t.tool} /> : null}
             </>
         ) : install ? (
             <span data-install-refused={t.tool} className="text-xs text-[var(--fg-3)]">{install.refused}</span>
@@ -1503,8 +1546,7 @@ export function ToolCardView({ card, selected, busy, updating, updated, refusal,
         const version = card.primary.version;
         actions = (
             <>
-                <Button type="button" size="sm" color="blue" data-card-primary="install" data-version={version} disabled={busy} onClick={() => onAction({ kind: INSTALL_KIND[lang], version, consent: true } as FeatureAction)}>{card.primary.label}</Button>
-                <span className="font-mono text-[11px] text-[var(--fg-3)]">no password</span>
+                <Button type="button" size="sm" color="blue" data-card-primary="install" data-version={version} disabled={busy} onClick={() => onAction({ kind: INSTALL_KIND[lang], version, consent: true } as FeatureAction)}>{genies(card.primary.label)}</Button>
                 {systemInstall}
             </>
         );
@@ -1525,18 +1567,17 @@ export function ToolCardView({ card, selected, busy, updating, updated, refusal,
         >
             <Button type="button" variant="ghost" data-select-tool={card.key} aria-pressed={selected} className="h-auto justify-start gap-2.5 p-0 pr-6 text-left hover:bg-transparent" onClick={onSelect}>
                 <ToolLogo tool={card.key} />
-                <span className="flex min-w-0 flex-col">
+                <span className="flex min-w-0 flex-col gap-0.5">
                     <span className="text-sm font-semibold text-[var(--fg-1)]">{card.title}</span>
-                    <span className={`truncate font-mono text-xs ${card.version === null ? 'text-[var(--fg-3)]' : 'text-[var(--fg-2)]'}`}>{card.version ?? 'not here'}</span>
+                    <InUse card={card} />
                 </span>
             </Button>
             <CardStatus card={card} />
-            {card.chips.length > 0 ? (
-                <span data-version-chips={card.key} className="flex flex-wrap gap-1">
-                    {card.chips.map((c) => (
-                        <span key={c.version} data-version-chip={`${card.key}:${c.version}`} data-default={c.isDefault ? 'true' : 'false'} className={`rounded-md border px-1.5 py-0.5 font-mono text-[11px] ${c.isDefault ? 'border-[color-mix(in_srgb,var(--primary)_50%,transparent)] bg-[color-mix(in_srgb,var(--primary)_14%,transparent)] text-[var(--primary)]' : 'border-[var(--border-1)] bg-[var(--bg-2)] text-[var(--fg-2)]'}`}>
-                            {c.system ? `system ${c.version}` : c.version}{c.isDefault && !c.system ? ' ★' : ''}
-                        </span>
+            {others.length > 0 ? (
+                <span data-version-chips={card.key} className="flex flex-wrap items-center gap-1 text-[11px] text-[var(--fg-3)]">
+                    <span>Also</span>
+                    {others.map((c) => (
+                        <span key={c.version} data-version-chip={`${card.key}:${c.version}`} data-default={c.isDefault ? 'true' : 'false'} className="font-mono text-[var(--fg-2)]">{c.version}</span>
                     ))}
                 </span>
             ) : null}
@@ -1578,17 +1619,32 @@ const LANG_COPY: Readonly<Record<LangKey, { readonly heading: string; readonly n
 function ToolPanel({ card, tc, busy, check, onAction, onClose }: { card: ToolCard; tc: ToolchainData; busy: boolean; check: ToolCheckState | undefined; onAction: SurfaceProps['onAction']; onClose: () => void }) {
     const view = card.lang ? langView(tc, card.lang) : undefined;
     const current = card.lang ? tc.defaults?.[card.lang] ?? null : null;
-    const binary = card.lang ? LANG_COPY[card.lang].binary : card.tool?.tool ?? card.key;
-    const dir = view?.managed.find((m) => m.version === current) as { dir?: string } | undefined;
+    const dir = (view?.managed.find((m) => m.version === current) as { dir?: string } | undefined)?.dir;
+    // WHERE IT COMES FROM, in words (Tynn #1062: "php → 8.4.27 · C:\Users\<name>\.g…" was cut off and showed the home
+    // folder). The folder is only behind the copy button.
+    const origin = card.inUse === 'default' ? 'Installed by Genie · the default' : card.inUse === 'system' ? 'On your system' : card.version === null ? 'Not on this machine' : null;
+    const copied = useCopyText();
     return (
-        <div data-toolchain-panel={card.key} className="border-b border-[var(--border-1)]">
+        <div data-toolchain-panel={card.key} className="flex flex-col">
+            <div className="flex items-center gap-2 border-b border-[var(--border-1)] px-3 py-2">
+                <Button type="button" size="sm" variant="ghost" data-panel-close="" onClick={onClose}><Icon name="arrow-left" size="xs" />All tools</Button>
+            </div>
             <div className="flex items-center gap-3 border-b border-[var(--border-1)] px-5 py-4">
                 <ToolLogo tool={card.key} size="lg" />
                 <div className="min-w-0">
-                    <div className="text-base font-semibold">{card.title}</div>
-                    <div className="truncate font-mono text-[11px] text-[var(--fg-3)]">{binary} → {card.version ?? 'not here'}{dir?.dir ? ` · ${dir.dir}` : ''}</div>
+                    <div className="flex flex-wrap items-baseline gap-x-2 text-base font-semibold">{card.title}<span className="font-mono text-sm font-normal text-[var(--fg-2)]">{card.version ?? ''}</span></div>
+                    {origin ? (
+                        <div data-panel-origin={card.inUse ?? 'none'} className="flex items-center gap-1 text-xs text-[var(--fg-3)]">
+                            <span>{origin}</span>
+                            {dir ? (
+                                <Button type="button" size="xs" variant="ghost" data-copy-path="" aria-label="Copy the folder it is in" title={copied.state === 'copied' ? 'Copied' : copied.state === 'failed' ? 'Copy failed' : dir} className="size-6 p-0" onClick={() => { void copied.copy(dir); }}>
+                                    <Icon name={copied.state === 'copied' ? 'check' : 'copy'} size="xs" />
+                                </Button>
+                            ) : null}
+                            <CopyAnnounce state={copied.state} />
+                        </div>
+                    ) : null}
                 </div>
-                <Button type="button" size="xs" variant="ghost" className="ml-auto" aria-label="Close" onClick={onClose}><Icon name="x" size="xs" /></Button>
             </div>
             {card.lang && view ? (
                 <LanguagePanel lang={card.lang} view={view} current={current} busy={busy} check={check} onAction={onAction} refusals={(tc.refusals ?? []).filter((r) => r.tool === card.lang && r.version !== undefined)} />
@@ -1620,10 +1676,9 @@ function LanguagePanel({ lang, view, current, busy, check, onAction, refusals }:
     return (
         <section {...attr('versions', view.managed.length)} className="flex flex-col gap-1.5 px-5 py-3.5">
             <h4 className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--fg-3)]">
-                <span>Default · what <span className="font-mono normal-case">{copy.binary}</span> means everywhere</span>
+                <span>Which version <span className="font-mono normal-case">{copy.binary}</span> runs</span>
                 {check ? <CheckStateMark tool={lang} check={check} /> : null}
             </h4>
-            {current !== null ? <p className="text-xs text-[var(--fg-3)]">{copy.means} {copy.name} {current}, Genie's default.</p> : null}
             {refusals.map((r) => (
                 <p key={r.version} {...attr('refusal', r.version ?? '')} className="text-xs text-[var(--danger)]">{r.reason}</p>
             ))}
@@ -1640,13 +1695,14 @@ function LanguagePanel({ lang, view, current, busy, check, onAction, refusals }:
                             <b className="font-semibold">{m.version}</b>
                             {advisory ? <Badge variant="soft" size="sm" color="red">security fix</Badge> : null}
                             <span className="flex-1" />
-                            {pinned ? <span title={`pinned by ${usedBy!.join(', ')}`} className="rounded bg-[var(--bg-3)] px-1.5 text-[11px] text-[var(--fg-2)]">{usedBy!.length === 1 ? usedBy![0] : `${usedBy!.length} sites`}</span> : null}
+                            {/* "Used by 2 sites" (Tynn #1062: "2 sites · Remove" read as one thing). */}
+                            {pinned ? <span data-used-by={usedBy!.length} title={usedBy!.join(', ')} className="rounded bg-[var(--bg-3)] px-1.5 text-[11px] text-[var(--fg-2)]">{`Used by ${usedBy!.length === 1 ? usedBy![0] : `${usedBy!.length} sites`}`}</span> : null}
                             {patch !== null ? (
-                                <Button size="xs" type="button" color={advisory ? 'red' : 'blue'} data-patch-update={`${lang}:${m.version}`} data-version={patch} disabled={busy} title={`Install ${copy.name} ${patch}, beside ${m.version}`} onClick={() => onAction({ kind: INSTALL_KIND[lang], version: patch, consent: true } as FeatureAction)}>
-                                    → {patch}
+                                <Button size="xs" type="button" color={advisory ? 'red' : 'blue'} data-patch-update={`${lang}:${m.version}`} data-version={patch} disabled={busy} title={`Installs ${copy.name} ${patch} beside ${m.version}`} onClick={() => onAction({ kind: INSTALL_KIND[lang], version: patch, consent: true } as FeatureAction)}>
+                                    {`Install ${patch}`}
                                 </Button>
                             ) : null}
-                            <Button size="xs" type="button" variant="ghost" disabled={busy || pinned || isDefault} title={pinned ? `Pinned by ${usedBy!.join(', ')} — change their PHP version first` : isDefault ? `${copy.name} ${m.version} is the default — make another version the default first` : undefined} onClick={() => onAction({ kind: REMOVE_KIND[lang], version: m.version } as FeatureAction)}>Remove</Button>
+                            <Button size="xs" type="button" variant="ghost" aria-label={`Remove ${copy.name} ${m.version}`} disabled={busy || pinned || isDefault} title={pinned ? `Used by ${usedBy!.join(', ')}: move them to another version first` : isDefault ? `${copy.name} ${m.version} is the default: make another version the default first` : `Remove ${copy.name} ${m.version}`} onClick={() => onAction({ kind: REMOVE_KIND[lang], version: m.version } as FeatureAction)}><Icon name="trash-2" size="xs" />Remove</Button>
                             {advisory ? <span {...attr('advisory', m.version)} className="basis-full text-xs text-[var(--danger)]">{advisory}</span> : null}
                         </li>
                     );
@@ -1655,19 +1711,22 @@ function LanguagePanel({ lang, view, current, busy, check, onAction, refusals }:
                     {current === null ? (
                         <span role="radio" aria-checked="true" data-system-default={lang} title="The default" className="grid size-4 shrink-0 place-items-center rounded-full border-2 border-[var(--primary)]"><span className="size-1.5 rounded-full bg-[var(--primary)]" /></span>
                     ) : (
-                        <Button size="xs" type="button" variant="ghost" role="radio" aria-checked="false" data-use-system={lang} disabled={busy} title="Use the one on your PATH instead" className="size-4 shrink-0 rounded-full border-2 border-[var(--border-1)] p-0" onClick={() => onAction({ kind: 'toolchain.setDefault', lang, version: null })}>
-                            <span className="sr-only">Use the one on your PATH instead</span>
+                        <Button size="xs" type="button" variant="ghost" role="radio" aria-checked="false" data-use-system={lang} disabled={busy} title="Use the system's copy instead" className="size-4 shrink-0 rounded-full border-2 border-[var(--border-1)] p-0" onClick={() => onAction({ kind: 'toolchain.setDefault', lang, version: null })}>
+                            <span className="sr-only">Use the system's copy instead</span>
                         </Button>
                     )}
-                    <span>System</span>
-                    <span className="font-mono text-[11px] text-[var(--fg-3)]">{view.system ? `${copy.binary} ${view.system.version}` : 'none on your PATH'}</span>
+                    {view.system ? <b className="font-semibold">{view.system.version}</b> : null}
+                    <Badge variant="soft" size="sm" color="zinc" className="inline-flex items-center gap-1"><Icon name="monitor" size="xs" />System</Badge>
+                    {view.system ? null : <span className="text-[11px] text-[var(--fg-3)]">none on this machine</span>}
                 </li>
             </ul>
-            <p {...attr('system', '')} className="text-xs text-[var(--fg-3)]">
-                {lang === 'php'
-                    ? view.system ? `Unpinned php sites run PHP ${view.system.version} from your PATH.` : 'No php-cgi on your PATH: an unpinned php site cannot start until PHP is installed above.'
-                    : view.system ? `The ${copy.binary} on your PATH is ${view.system.version}.` : `No ${copy.binary} on your PATH.`}
-            </p>
+            {lang === 'php' ? (
+                <p {...attr('system', '')} className="text-xs text-[var(--fg-3)]">
+                    {view.system ? `Sites with no version chosen run PHP ${view.system.version}, the system's.` : "Sites with no version chosen cannot start until PHP is installed: there is no system PHP."}
+                </p>
+            ) : (
+                <p {...attr('system', '')} className="text-xs text-[var(--fg-3)]">{view.system ? `The ${copy.binary} on your PATH is ${view.system.version}.` : `No ${copy.binary} on your PATH.`}</p>
+            )}
             {/* THE FLOOR (PHP2Shell, core/php-advisories.ts): a version under it says so in red, beside the number — never a quiet "update available". */}
             {lang === 'php' && view.system?.advisory ? <p data-php-system-advisory="" className="text-xs text-[var(--danger)]">{view.system.advisory}</p> : null}
             {view.installRefused ? (
@@ -1695,7 +1754,6 @@ function InstallAnother({ lang, addable, busy, onAction }: { lang: LangKey; adda
                 className="w-40"
             />
             <Button size="sm" type="button" color="blue" {...{ [`data-${lang}-install`]: version }} disabled={busy} title={`From ${copy.source}`} onClick={() => onAction({ kind: INSTALL_KIND[lang], version, consent: true } as FeatureAction)}>Install</Button>
-            <span className="font-mono text-[11px] text-[var(--fg-3)]">no password</span>
         </div>
     );
 }
@@ -1796,24 +1854,23 @@ function PlaywrightBrowsers({ playwright, busy, onAction, refusals = [] }: { pla
  */
 function MachinePathCard({ mp, busy, onAction, refusal }: { mp: NonNullable<NonNullable<FeatureData['toolchain']>['machinePath']>; busy: boolean; onAction: SurfaceProps['onAction']; refusal: string | null }) {
     return (
-        <section data-machine-path={mp.applied ? 'on' : 'off'} className="border-b border-[var(--border-1)] px-5 py-3 text-sm">
-            <h3 className="text-sm font-medium">Your terminals</h3>
-            {refusal ? <p className="py-1 text-xs text-[var(--danger)]">{refusal}</p> : null}
+        // IN PLAIN WORDS (Tynn #1062: "set in the user PATH (HKCU\Environment)" and a bare "Undo"): what is true, and one
+        // button that names what it does. Where it is set, and what it adds, are the button's tooltip, never text.
+        <section data-machine-path={mp.applied ? 'on' : 'off'} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3.5 py-2.5 text-sm">
+            <Icon name="square-terminal" size="sm" className="shrink-0 text-[var(--fg-3)]" />
+            <span className="min-w-0 flex-1">
+                {mp.applied ? 'Terminals outside Genie use these versions too.' : "Only Genie's own terminals and agents use these versions."}
+            </span>
             {mp.applied ? (
-                <div className="flex flex-wrap items-center gap-2 pt-1 text-xs text-[var(--fg-3)]">
-                    <span>Terminals outside Genie use Genie's defaults too (set in {mp.where.join(', ')}).</span>
-                    <Button size="xs" type="button" data-machine-path-undo="" disabled={busy} className="text-[12px]" onClick={() => onAction({ kind: 'toolchain.machinePath', apply: false })}>Undo</Button>
-                </div>
+                <Button size="sm" type="button" data-machine-path-undo="" disabled={busy} title={`Takes Genie's versions back out of ${mp.where.join(', ')}; nothing else changes`} onClick={() => onAction({ kind: 'toolchain.machinePath', apply: false })}>
+                    Stop using them outside Genie
+                </Button>
             ) : (
-                <div className="flex flex-col gap-1 pt-1 text-xs text-[var(--fg-3)]">
-                    <span>Genie's defaults apply to Genie's own terminals, processes and agents. To use them in every terminal, Genie adds these to the front of your PATH, once:</span>
-                    <ul className="font-mono">{mp.entries.map((e) => <li key={e}>{e}</li>)}</ul>
-                    <span>in {mp.targets.join(', ')}. Nothing else changes, and Undo puts it back exactly.</span>
-                    <Button size="xs" type="button" data-machine-path-apply="" disabled={busy} className="self-start rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px] text-[var(--fg-1)]" onClick={() => onAction({ kind: 'toolchain.machinePath', apply: true, consent: true })}>
-                        Use Genie's defaults in every terminal
-                    </Button>
-                </div>
+                <Button size="sm" type="button" color="blue" data-machine-path-apply="" disabled={busy} title={`Adds ${mp.entries.join(', ')} to the front of ${mp.targets.join(', ')}; nothing else changes, and you can turn it off again`} onClick={() => onAction({ kind: 'toolchain.machinePath', apply: true, consent: true })}>
+                    Use them outside Genie too
+                </Button>
             )}
+            {refusal ? <p className="basis-full text-xs text-[var(--danger)]">{refusal}</p> : null}
         </section>
     );
 }
@@ -1944,8 +2001,11 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
     // General's "Defaults for new projects": Primary workspace's own row, then the env file name (Genie 1's pair).
     const newProjectRows = SETTINGS.filter((def) => NEW_PROJECT_DEFAULTS.includes(def.key));
     const label = NAV_GROUPS.flatMap((g) => g.items).find((i) => i.id === active)?.label ?? 'General';
+    // THE MENU FOLDS TO ITS ICONS WHEN SETTINGS IS NARROW (Tynn #1062): at the owner's 1050 px window, with the chat and the
+    // app's sidebar open, the full menu (224 px) left the Toolchain about 90 px. Measured on Settings' own width.
+    const [settingsRef, narrow] = useWidthBelow<HTMLDivElement>(SETTINGS_MENU_FOLDS_BELOW);
     return (
-        <div data-surface="settings" className="flex h-full min-h-0 flex-col">
+        <div ref={settingsRef} data-surface="settings" data-settings-menu={narrow ? 'icons' : 'full'} className="flex h-full min-h-0 flex-col">
             <Header title="Settings" />
             <div className="flex min-h-0 flex-1">
                 {/* GENIE 1'S SIDEBAR: grouped sections, one page each (core/settings-nav.ts). */}
@@ -1953,17 +2013,17 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
                     Sidebar, embedded in the page; its items sit left, the page on screen is aria-current="page", and they ring on
                     keyboard focus only. The Sidebar draws the <nav aria-label="Settings"> itself (`navLabel`), and `keyboardNav` makes
                     the items one tab stop that Up / Down / Home / End move through. The search box sits above it, outside the nav. */}
-                <div data-settings-sidebar="" className="flex w-56 shrink-0 flex-col gap-3 overflow-auto border-r border-[var(--border-1)] px-2 py-3">
-                    <Input data-settings-search type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search settings" leading={<Icon name="search" size="xs" />} />
-                    <Sidebar embedded navLabel="Settings" keyboardNav>
+                <div data-settings-sidebar="" className={`flex shrink-0 flex-col gap-3 overflow-auto border-r border-[var(--border-1)] py-3 ${narrow ? 'w-14 px-1.5' : 'w-56 px-2'}`}>
+                    {narrow ? null : <Input data-settings-search type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search settings" leading={<Icon name="search" size="xs" />} />}
+                    <Sidebar embedded navLabel="Settings" keyboardNav collapsed={narrow}>
                         {NAV_GROUPS.map((g) => (
-                            <div key={g.label} data-settings-nav-group={g.label} className="mb-3 last:mb-0">
+                            <div key={g.label} data-settings-nav-group={g.label} className={narrow ? 'mb-2 border-b border-[var(--border-1)] pb-2 last:mb-0 last:border-b-0' : 'mb-3 last:mb-0'}>
                                 <Sidebar.Group label={g.label} className="flex flex-col gap-0.5 py-0">
                                     {g.items.map((i) => (
                                         <Sidebar.Item key={i.id} data-settings-nav={i.id} data-nav-target={`genie://settings/${i.id}`} active={i.id === active && results === null}
                                             icon={<Icon name={i.icon} size="sm" className="text-[var(--fg-4)]" />}
                                             onClick={() => { setQ(''); onNavigate(`genie://settings/${i.id}`); }}
-                                            className="h-[30px] px-2 text-[13px]">
+                                            className={narrow ? 'h-[30px] justify-center px-0' : 'h-[30px] px-2 text-[13px]'}>
                                             {i.label}
                                         </Sidebar.Item>
                                     ))}
@@ -1995,7 +2055,8 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
                             </ul>
                         )
                     ) : (
-                        <div data-settings-page={active}>
+                        // The Toolchain fills the page's height, so its cards and its panel each scroll on their own.
+                        <div data-settings-page={active} {...(active === 'toolchain' ? { className: 'flex h-full min-h-0 flex-col' } : {})}>
                             <h1 className="px-6 pt-4 text-base font-semibold">{label}</h1>
                             {active === 'general' ? (
                                 <>
@@ -2037,13 +2098,36 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
                             {active === 'remote' ? <RemoteAccess remote={data.remote} workspaces={workspaces} onAction={onAction} connect={remoteConnect} /> : null}
                             {active === 'terminals' ? <SetSection title="Terminals" desc="Shells and builds in your workspaces.">{rows('terminals')}</SetSection> : null}
                             {/* TOOLCHAIN LIVES HERE (beta.33 item 20; the owner: "Tool chain is a Settings thing, it should not be its own page in the menu"): the whole of it, in this section. */}
-                            {active === 'toolchain' ? <div data-settings-toolchain="" className="min-h-0"><ToolchainSurface data={data} onAction={onAction} onNavigate={onNavigate} /></div> : null}
+                            {active === 'toolchain' ? <div data-settings-toolchain="" className="flex min-h-0 flex-1 flex-col"><ToolchainSurface data={data} onAction={onAction} onNavigate={onNavigate} /></div> : null}
                         </div>
                     )}
                 </div>
             </div>
         </div>
     );
+}
+
+/** Below this width of its own, Settings shows its menu as icons (Tynn #1062). */
+export const SETTINGS_MENU_FOLDS_BELOW = 900;
+
+/**
+ * WHETHER AN ELEMENT IS NARROWER THAN `limit`, measured as it is drawn (a ResizeObserver): the room a page really has,
+ * which the window's width does not say once the chat and the app's sidebar share it. `false` until measured.
+ */
+export function useWidthBelow<T extends HTMLElement>(limit: number): [React.RefObject<T | null>, boolean] {
+    const ref = useRef<T | null>(null);
+    const [below, setBelow] = useState(false);
+    useEffect(() => {
+        const el = ref.current;
+        if (!el || typeof ResizeObserver === 'undefined') return undefined;
+        const observer = new ResizeObserver((entries) => {
+            const width = entries[0]?.contentRect.width;
+            if (typeof width === 'number' && width > 0) setBelow(width < limit);
+        });
+        observer.observe(el);
+        return () => observer.disconnect();
+    }, [limit]);
+    return [ref, below];
 }
 
 /** A provider as the Providers page shows it: installed (Toolchain), and an agent of it that is signed out (#971), if any. */
