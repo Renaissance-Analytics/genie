@@ -10,7 +10,7 @@
  * Its state is the `state` folder BESIDE THIS FILE, never an environment variable: prism-acp hands a session a filtered
  * environment (as scripts/esc-unsend-stub-claude.mjs found), so the row copies this file into a folder of its own.
  *
- *   --version        `<version> (Claude Code)` from the state folder (2.0.0 at first)
+ *   --version        `<version> (Claude Code)` from the state folder (2.1.300 at first: Genie needs 2.1.295 or later to start an agent)
  *   auth status      exit 0: signed in
  *   update           refused (exit 1, EBUSY) while a session's pid is alive; otherwise the patch version + 1, after
  *                    the ms in <state>/update-ms (so a screenshot can see the step); <state>/fail-update fails it
@@ -28,7 +28,7 @@ const state = join(here, 'state');
 const sessions = join(state, 'sessions');
 mkdirSync(sessions, { recursive: true });
 const versionFile = join(state, 'version.txt');
-const version = () => (existsSync(versionFile) ? readFileSync(versionFile, 'utf8').trim() : '2.0.0');
+const version = () => (existsSync(versionFile) ? readFileSync(versionFile, 'utf8').trim() : '2.1.300');
 const event = (line) => appendFileSync(join(state, 'events.log'), `${Date.now()} pid=${process.pid} ${line}\n`);
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
 const args = process.argv.slice(2);

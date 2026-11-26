@@ -165,7 +165,7 @@ function stubCli(root) {
     }
     const csc = join(process.env.SystemRoot ?? 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
     const file = join(dir, 'claude.exe');
-    const built = spawnSync(csc, ['/nologo', '/target:exe', `/out:${file}`, resolve('scripts', 'stub-cli-exe-1067.cs')], { encoding: 'utf8', timeout: 120_000, windowsHide: true });
+    const built = spawnSync(csc, ['/nologo', '/target:exe', '/platform:x64', `/out:${file}`, resolve('scripts', 'stub-cli-exe-1067.cs')], { encoding: 'utf8', timeout: 120_000, windowsHide: true });
     if (built.status !== 0) throw new Error(`csc could not build the stub .exe: ${(built.stdout + built.stderr).slice(-400)}`);
     return file;
 }
@@ -232,7 +232,7 @@ async function partDrain() {
     const before = events(state).length;
     await cdp.evaluate(`(window.genieTest ?? window.genie).prompt(${JSON.stringify(AGENT)}, 'Carry on.').then((r) => JSON.stringify(r))`, 30_000);
     const resumed = await until(() => events(state).slice(before).find((l) => / session start/.test(l)) ?? null, 60_000);
-    check(Boolean(resumed) && String(resumed).includes(`version=${readOr(join(state, 'version.txt')).trim()}`) && readOr(join(state, 'version.txt')).trim() !== '2.0.0' && /--resume/.test(String(resumed)), '4i. the next turn runs on the updated CLI and resumes the conversation', String(resumed));
+    check(Boolean(resumed) && String(resumed).includes(`version=${readOr(join(state, 'version.txt')).trim()}`) && readOr(join(state, 'version.txt')).trim() !== '2.1.300' && /--resume/.test(String(resumed)), '4i. the next turn runs on the updated CLI and resumes the conversation', String(resumed));
     await shoot(cdp, 'cli-drain-manual-done');
 
     step('5', 'a failing update: the agent is started again all the same, and the row says why');
