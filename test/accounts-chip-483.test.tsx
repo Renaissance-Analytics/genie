@@ -70,7 +70,7 @@ describe('S10: the accounts a window is shown (pure)', () => {
 
 const OFFER: SwitchOffer = {
     id: 'switch-offer:a:5h:1', provider: 'claude', accountId: A, label: 'Work Max', window: '5h', leftPct: 8, over: false, resetsAtMs: NOW + HOUR,
-    targets: [{ accountId: B, label: 'ada@example.invalid', room: 'unknown', leftPct: null, resetsAtMs: null window: null }],
+    targets: [{ accountId: B, label: 'ada@example.invalid', room: 'unknown', leftPct: null, resetsAtMs: null, window: null }],
 };
 const SNAPSHOT = (offers: SwitchOffer[] = []): AccountsSnapshot => ({
     providers: accountsView(KNOWN, [reading(A, [live('5h', 8, NOW + HOUR), live('7d', 60, NOW + 50 * HOUR)])], { claude: A }), offers,

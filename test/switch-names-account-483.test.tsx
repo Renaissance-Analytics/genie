@@ -58,7 +58,7 @@ describe('a Switch on one account names it', () => {
     ];
     const readings = [{ provider: 'claude', accountId: A, runId: 'r', windows: [live('5h', 8)], room: { plan: null, window: '5h', leftPct: 8, resetsAtMs: 0, over: false, windows: [] } }];
     const OFFER: SwitchOffer = { id: 'o1', provider: 'claude', accountId: A, label: 'Work Max', window: '5h', leftPct: 8, over: false, resetsAtMs: NOW + 3_600_000,
-        targets: [{ accountId: B, label: 'Home', room: 'unknown', leftPct: null, resetsAtMs: null window: null }] };
+        targets: [{ accountId: B, label: 'Home', room: 'unknown', leftPct: null, resetsAtMs: null, window: null }] };
     const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
     let host: HTMLDivElement;
     let root: Root;

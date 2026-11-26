@@ -24,7 +24,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 process.env.GENIE_PAGE_PROBE ??= '1';
 
-const PORT = Number(process.env.ACCOUNTS_POPOVER_CDP_PORT ?? 9351);
+let PORT = Number(process.env.ACCOUNTS_POPOVER_CDP_PORT ?? 9351);
 const failures = [];
 /** When this row began: nothing older is ever taken for one of its own processes (end-own-tree.mjs). */
 const RUN_BEGAN = Date.now();
@@ -34,24 +34,28 @@ function check(ok, label, detail = '') {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const root = mkdtempSync(join(tmpdir(), 'accounts-popover-'));
-const home = join(root, 'home');
-mkdirSync(join(home, 'AppData', 'Roaming'), { recursive: true });
-mkdirSync(join(home, 'AppData', 'Local'), { recursive: true });
-// What's new for this version already seen: a fresh home would open it late, over the chip (Tynn #1009).
-seedWhatsNewSeen(join(home, '.genie'));
-const log = join(root, 'electron.log');
-const env = {
-    ...process.env,
-    HOME: home,
-    USERPROFILE: home,
-    APPDATA: join(home, 'AppData', 'Roaming'),
-    LOCALAPPDATA: join(home, 'AppData', 'Local'),
-    XDG_CONFIG_HOME: join(home, '.config'),
-    XDG_DATA_HOME: join(home, '.local', 'share'),
-};
-// Nobody is signed in to Claude here: the host's identity read at boot must not move the seeded active account.
-for (const key of ['ANTHROPIC_API_KEY', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_OAUTH_TOKEN', 'GENIE_HOME']) delete env[key];
+/** A home of its own for one launch: a fresh folder, What's new seen, and an environment that points only at it. */
+function freshHome() {
+    const r = mkdtempSync(join(tmpdir(), 'accounts-popover-'));
+    const h = join(r, 'home');
+    mkdirSync(join(h, 'AppData', 'Roaming'), { recursive: true });
+    mkdirSync(join(h, 'AppData', 'Local'), { recursive: true });
+    // What's new for this version already seen: a fresh home would open it late, over the chip (Tynn #1009).
+    seedWhatsNewSeen(join(h, '.genie'));
+    const e = {
+        ...process.env,
+        HOME: h,
+        USERPROFILE: h,
+        APPDATA: join(h, 'AppData', 'Roaming'),
+        LOCALAPPDATA: join(h, 'AppData', 'Local'),
+        XDG_CONFIG_HOME: join(h, '.config'),
+        XDG_DATA_HOME: join(h, '.local', 'share'),
+    };
+    // Nobody is signed in to Claude here: the host's identity read at boot must not move the seeded active account.
+    for (const key of ['ANTHROPIC_API_KEY', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_OAUTH_TOKEN', 'GENIE_HOME']) delete e[key];
+    return { root: r, home: h, log: join(r, 'electron.log'), env: e };
+}
+let { root, home, log, env } = freshHome();
 const electron = createRequire(import.meta.url)('electron');
 
 // THE SEED. Names are fixtures (no person). The expected order on the right, by the rule (core/switch-next.ts):
@@ -329,6 +333,10 @@ const windowsIn = async (c, id) => JSON.parse(await c.evaluate(`JSON.stringify([
 const escape = async (c) => { for (const type of ['keyDown', 'keyUp']) await c.send('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }); };
 async function phase1070(active, tag) {
     console.log(`\n#1070 — ${tag}\n`);
+    // A home and a debugger port of its own, as the first launch had: nothing of an earlier launch is inherited.
+    ({ root, home, log, env } = freshHome());
+    PORT += 1;
+    mkdirSync(join(home, '.genie', 'runtime'), { recursive: true });
     seed1070(active);
     const app2 = launch();
     let c = null;
@@ -369,12 +377,16 @@ async function phase1070(active, tag) {
         }
     } catch (error) {
         check(false, `${tag}: the phase did not finish`, error instanceof Error ? error.message : String(error));
+        if (existsSync(log)) console.log(readFileSync(log, 'utf8').slice(-2000));
     } finally {
         if (c) c.close();
         await stop(app2);
+        try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 }); } catch { /* the runner cleans up */ }
     }
 }
-try { await phase1070(MAIN, 'main-active'); await phase1070(WEEKLY, 'weekly-active'); } finally { try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 }); } catch { /* the runner cleans up */ } }
+try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 }); } catch { /* the runner cleans up */ }
+await phase1070(MAIN, 'main-active');
+await phase1070(WEEKLY, 'weekly-active');
 
 if (failures.length > 0) {
     console.log(`\nACCOUNTS POPOVER FAILED — ${failures.length} check(s):`);
