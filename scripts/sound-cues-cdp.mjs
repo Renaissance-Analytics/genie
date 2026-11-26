@@ -210,7 +210,9 @@ try {
     await closeWhatsNew((expression) => cdp.evaluate(expression));
     await go(cdp, 'genie://dashboard');
     check(await waitFor(cdp, `document.querySelectorAll('[data-rail="expanded"] [data-workspace]').length === 3`, 60_000), '1. the sidebar lists the three workspaces (the positive control for every row check below)', await cdp.evaluate(ROWS));
-    check(await waitFor(cdp, `document.querySelectorAll('[data-dashboard-list] [data-row], [data-dashboard-list] > *').length > 0`, 30_000), '2. the Dashboard lists the agents');
+    // A fresh home's agents are stopped, and Stopped is hidden by default (on the Dashboard and the sidebar's Agents view alike).
+    if (!(await cdp.evaluate(`document.querySelector('[data-dashboard-filter="stopped"]')?.getAttribute('aria-pressed') === 'true'`))) await click(cdp, '[data-dashboard-filter="stopped"]');
+    check(await waitFor(cdp, `document.querySelectorAll('[data-dashboard-list] [data-agent]').length === 4`, 30_000), '2. the Dashboard lists the four agents', await cdp.evaluate(`String(document.querySelectorAll('[data-dashboard-list] [data-agent]').length)`));
     await sleep(1000);
     const before = JSON.parse(await cdp.evaluate(ROWS));
     console.log(`  before: ${JSON.stringify(before)}`);
