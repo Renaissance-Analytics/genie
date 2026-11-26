@@ -67,7 +67,7 @@ if (args[0] === 'update') {
 // A session.
 const mine = join(sessions, `${process.pid}.pid`);
 writeFileSync(mine, String(process.pid));
-event(`session start version=${version()} args=${args.filter((x) => !x.startsWith('{')).join(' ').slice(0, 200)}`);
+event(`session start version=${version()} args=${args.filter((x) => !x.startsWith('{')).join(' ').slice(0, 1200)}`);
 process.on('exit', () => { event('session end'); try { rmSync(mine, { force: true }); } catch { /* gone */ } });
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => { event(`signal ${signal}`); process.exit(0); });
 process.on('uncaughtException', (error) => { event(`crash ${String(error?.stack ?? error).slice(0, 300)}`); process.exit(1); });

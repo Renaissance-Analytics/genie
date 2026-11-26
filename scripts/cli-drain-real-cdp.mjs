@@ -228,11 +228,16 @@ async function partDrain() {
     const log = readOr(h.lifecycle);
     const order = [/cli drain provider=claude agents=atlas/, /cli drain provider=claude stopped=atlas/, /cli drain provider=claude update=ok/, /cli drain provider=claude restarted=atlas/].map((p) => at(log, p));
     check(order.every((n, i) => n >= 0 && (i === 0 || n > order[i - 1])), '4h. the lifecycle log has the drain’s lines in order', order.join(' < '));
-    // ON ITS CONVERSATION: the next turn's session is the updated CLI, resuming the stub's session id.
-    const before = events(state).length;
+    // ON ITS CONVERSATION: the session started again after the update is the UPDATED CLI, resuming the stub's session id
+    // (`--resume`; the restart starts it at once), and a turn asked of it now is answered by that same session.
+    const after = events(state).slice(mark);
+    const updatedAt = after.findIndex((l) => / update ok/.test(l));
+    const resumed = after.slice(updatedAt + 1).find((l) => / session start/.test(l)) ?? null;
+    const updatedTo = / to=(\S+)/.exec(after[updatedAt] ?? '')?.[1] ?? '?';
+    const turnsBefore = events(state).filter((l) => / turn \d+$/.test(l)).length;
     await cdp.evaluate(`(window.genieTest ?? window.genie).prompt(${JSON.stringify(AGENT)}, 'Carry on.').then((r) => JSON.stringify(r))`, 30_000);
-    const resumed = await until(() => events(state).slice(before).find((l) => / session start/.test(l)) ?? null, 60_000);
-    check(Boolean(resumed) && String(resumed).includes(`version=${readOr(join(state, 'version.txt')).trim()}`) && readOr(join(state, 'version.txt')).trim() !== '2.1.300' && /--resume/.test(String(resumed)), '4i. the next turn runs on the updated CLI and resumes the conversation', String(resumed));
+    const answered = await until(() => events(state).filter((l) => / turn \d+$/.test(l)).length > turnsBefore, 60_000);
+    check(Boolean(resumed) && String(resumed).includes(`version=${updatedTo}`) && /--resume 5c1e7a2d/.test(String(resumed)) && Boolean(answered), '4i. the agent came back on the updated CLI, resuming its conversation, and answers the next turn', `${String(resumed).slice(0, 300)}; next turn answered ${Boolean(answered)}`);
     await shoot(cdp, 'cli-drain-manual-done');
 
     step('5', 'a failing update: the agent is started again all the same, and the row says why');
