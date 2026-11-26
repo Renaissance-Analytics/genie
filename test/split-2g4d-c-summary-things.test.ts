@@ -216,8 +216,10 @@ describe('genie-host says the sounds of what it runs', () => {
 
     it('READER: main passes on only an agentless thing sound; an agent’s name, another kind or anything more is not one', () => {
         for (const kind of ['exits', 'siteup', 'sitedown', 'serviceup', 'flowdone']) expect(readThingSignal({ agentId: null, kind })).toEqual({ agentId: null, kind });
-        // What goes on is the reader's own two members, never what else came with them.
-        expect(readThingSignal({ agentId: null, kind: 'exits', workspaceId: 'ws_a', sound: 'alarm' })).toEqual({ agentId: null, kind: 'exits' });
+        // What goes on is the reader's own members — and the workspace it happened in (Tynn #1057: its sidebar row shows it) —
+        // never what else came with them.
+        expect(readThingSignal({ agentId: null, kind: 'exits', workspaceId: 'ws_a', sound: 'alarm' })).toEqual({ agentId: null, kind: 'exits', workspaceId: 'ws_a' });
+        expect(readThingSignal({ agentId: null, kind: 'exits', workspaceId: '', sound: 'alarm' })).toEqual({ agentId: null, kind: 'exits' });
         for (const bad of [null, 7, 'exits', {}, { kind: 'exits' }, { agentId: 'a1', kind: 'exits' }, { agentId: null, kind: 'question' }, { agentId: null, kind: 'limit-alert' }, { agentId: null, kind: 'terminal-needs-you' }, { agentId: null, kind: 'account-switch' }, { agentId: null, kind: 'toString' }, { agentId: null, kind: ['exits'] }, { agentId: undefined, kind: 'exits' }]) {
             expect(readThingSignal(bad), JSON.stringify(bad)).toBeNull();
         }
