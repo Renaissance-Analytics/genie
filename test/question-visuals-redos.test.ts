@@ -7,8 +7,8 @@ import { sanitizeMockupHtml } from '../src/core/question-visuals.js';
  * `<!--` and no doctype. The doctype is found by a linear scan instead, with the same answer.
  */
 describe('sanitizeMockupHtml: the leading doctype is found in linear time', () => {
-    it('a page of many unclosed comment openers is answered quickly', () => {
-        const page = '<!--'.repeat(20_000) + ' '.repeat(20_000) + 'x';
+    it('a page of many short comments and no doctype is answered quickly (each comment could also swallow the next)', () => {
+        const page = '<!--a-->'.repeat(32) + 'x';
         const started = performance.now();
         sanitizeMockupHtml(page);
         expect(performance.now() - started).toBeLessThan(1_000);
