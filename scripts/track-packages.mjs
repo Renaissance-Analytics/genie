@@ -54,6 +54,13 @@ export function clientBuilderConfig(base) {
     // Third-party sourcemaps are not shipped: nothing loads them at runtime (the Linux breakdown, item 1126-110558-adb0a2:
     // lucide-react's maps alone were 13 MiB). Genie's own dist maps stay, for its stack traces.
     c.files = [...(c.files ?? []), '!dist/main/host.js', '!dist/main/host.js.map', '!**/node_modules/**/*.map'];
+    // A platform's own `files` TAKE THE PLACE of the top-level list for the app's files (electron-builder 26.15.3, measured:
+    // the Windows build's builder-debug.yml had only `**/*` and win.files' exclusions, and the repository, its cargo output
+    // and CI screenshots went into a 956 MiB asar: item 1126-191543-b3aa95). So each platform list carries the top-level
+    // patterns first, then its own.
+    for (const os of ['win', 'linux', 'mac']) {
+        if (Array.isArray(c[os]?.files)) c[os].files = [...c.files, ...c[os].files];
+    }
     c.extraResources = (c.extraResources ?? []).filter((e) => !JSON.stringify(e).includes('genie-launch.exe'));
     c.directories = { ...(c.directories ?? {}), output: 'release/tracks/client-app' };
     c.publish = null;
