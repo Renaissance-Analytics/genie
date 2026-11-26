@@ -178,13 +178,7 @@ html,body{height:100%;overflow:hidden;user-select:none}
   $('retry').addEventListener('click', function () { send({ kind: 'retry' }); });
   $('fail-close').addEventListener('click', function () { send({ kind: 'close' }); });
 
-  // What a step says when it is the one that failed.
-  var FAILED = {
-    'Checked that everything is from Genie': 'Couldn’t confirm this package',
-    'Installed Genie': 'Couldn’t install Genie',
-    'Installing the host': 'Couldn’t install the host',
-    'Starting the host': 'The host didn’t start',
-  };
+  // A step's words come from the launcher with its state (src/ui.rs step_label); the failed words too (failedLabels).
   var lastSteps = [];
 
   function li(step) {
@@ -235,7 +229,8 @@ html,body{height:100%;overflow:hidden;user-select:none}
       $('install-hero').style.setProperty('--p', '100');
       $('install-title').textContent = f.title;
       $('install-sub').textContent = 'Nothing was changed on this computer.';
-      var steps = lastSteps.length ? lastSteps : [{ label: 'Checked that everything is from Genie', state: 'now' }];
+      var steps = lastSteps.length ? lastSteps : [{ id: 'check', label: '', state: 'now' }];
+      var FAILED = f.failedLabels || {};
       var failedAt = steps.findIndex(function (s) { return s.state === 'now'; });
       if (failedAt < 0) failedAt = steps.findIndex(function (s) { return s.state !== 'done'; });
       var ul = $('steps');
@@ -245,7 +240,7 @@ html,body{height:100%;overflow:hidden;user-select:none}
           var el = document.createElement('li');
           el.className = 'failed';
           el.innerHTML = '<span class="st"><svg><use href="#i-x"/></svg></span>';
-          el.appendChild(document.createTextNode(FAILED[s.label] || s.label));
+          el.appendChild(document.createTextNode(FAILED[s.id] || s.label));
           ul.appendChild(el);
         } else {
           ul.appendChild(li({ label: s.label, state: s.state === 'done' ? 'done' : 'todo' }));

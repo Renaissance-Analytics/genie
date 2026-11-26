@@ -67,17 +67,26 @@ impl Steps {
     }
     fn view(&self) -> Value {
         let state = |done: bool, now: bool| if done { "done" } else if now { "now" } else { "todo" };
+        // A step's words follow its state (the coordinator, 2026-11-26): "Install Genie" waiting, "Installing Genie…"
+        // running, "Installed Genie" done; never a done word on a running row.
+        let step = |id: &str, st: &str, percent: Option<u32>| {
+            let mut v = json!({"id": id, "label": step_label(id, st), "state": st});
+            if let Some(p) = percent {
+                v["percent"] = json!(p);
+            }
+            v
+        };
         let windows_done = self.window_files.1 > 0 && self.window_files.0 >= self.window_files.1;
         let host_done = self.host_files.1 > 0 && self.host_files.0 >= self.host_files.1;
         let pct = |(d, o): (usize, usize)| if o == 0 { 0 } else { (d * 100 / o) as u32 };
         let mut steps = vec![
-            json!({"label": "Checked that everything is from Genie", "state": state(self.checked, !self.checked)}),
-            json!({"label": "Installed Genie", "state": state(windows_done, self.checked && !windows_done), "percent": pct(self.window_files)}),
+            step("check", state(self.checked, !self.checked), None),
+            step("client", state(windows_done, self.checked && !windows_done), Some(pct(self.window_files))),
         ];
         let sub;
         if self.profile == Profile::Both {
-            steps.push(json!({"label": "Installing the host", "state": state(host_done, windows_done && !host_done), "percent": pct(self.host_files)}));
-            steps.push(json!({"label": "Starting the host", "state": state(false, self.starting_host)}));
+            steps.push(step("host", state(host_done, windows_done && !host_done), Some(pct(self.host_files))));
+            steps.push(step("start", state(false, self.starting_host), None));
             sub = if self.starting_host { "Starting your host." } else if !self.checked { "Checking that everything is from Genie." } else { "About a minute left." };
         } else {
             sub = if !self.checked { "Checking that everything is from Genie." } else { "Almost there." };
@@ -111,6 +120,34 @@ pub fn failure_view(why: &str) -> Value {
         ("Genie could not be set up", "Something stopped the install. Try again.".to_string(), true)
     };
     json!({"title": title, "words": words, "detail": why, "retry": retry})
+}
+
+/// A step's words in each state: waiting (`todo`), running (`now`), `done`, and `failed` (the failure screen's).
+pub fn step_label(id: &str, state: &str) -> &'static str {
+    match (id, state) {
+        ("check", "now") => "Checking that everything is from Genie…",
+        ("check", "done") => "Checked that everything is from Genie",
+        ("check", "failed") => "Couldn’t confirm this package",
+        ("check", _) => "Check that everything is from Genie",
+        ("client", "now") => "Installing Genie…",
+        ("client", "done") => "Installed Genie",
+        ("client", "failed") => "Couldn’t install Genie",
+        ("client", _) => "Install Genie",
+        ("host", "now") => "Installing the host…",
+        ("host", "done") => "Installed the host",
+        ("host", "failed") => "Couldn’t install the host",
+        ("host", _) => "Install the host",
+        ("start", "now") => "Starting the host…",
+        ("start", "done") => "Host started",
+        ("start", "failed") => "The host didn’t start",
+        ("start", _) => "Start the host",
+        _ => "",
+    }
+}
+
+/// Every step's words in every state, for the page's failure screen (it marks the running step failed).
+pub fn failed_labels() -> Value {
+    json!({"check": step_label("check", "failed"), "client": step_label("client", "failed"), "host": step_label("host", "failed"), "start": step_label("start", "failed")})
 }
 
 fn eval(proxy: &EventLoopProxy<UserEvent>, call: &str, arg: &Value) {
@@ -227,7 +264,9 @@ pub fn run_setup(roots: &Roots, options: InstallOptions, keys: Vec<VerifyingKey>
                     }
                     Err(why) => {
                         println!("setup: failed: {why}");
-                        eval(&proxy, "failed", &failure_view(&why))
+                        let mut view = failure_view(&why);
+                        view["failedLabels"] = failed_labels();
+                        eval(&proxy, "failed", &view)
                     }
                 }
             }
