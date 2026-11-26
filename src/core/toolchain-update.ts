@@ -1,6 +1,7 @@
 import { GO_RECIPES } from './go-versions.js';
 import { NODE_RECIPES } from './node-versions.js';
-import { PHP_RECIPES, compareVersionsDesc } from './php-versions.js';
+import { catalogVersions, currentPhpCatalog } from './php-releases.js';
+import { compareVersionsDesc } from './php-versions.js';
 import { PYTHON_RECIPES } from './python-versions.js';
 import { langManagedOn, type DefaultsPlatform } from './toolchain-defaults.js';
 
@@ -30,9 +31,13 @@ export function isLanguageTool(tool: string): tool is LanguageTool {
 
 export const LANGUAGE_LABEL: Record<LanguageTool, string> = { php: 'PHP', node: 'Node', python: 'Python', go: 'Go' };
 
-/** The versions this release of Genie installs, per language (each installer's own static list). */
+/**
+ * The versions Genie installs, per language: PHP's from php.net's live release data (Tynn #1066, core/php-releases.ts —
+ * the baked list offline), the others each installer's own static list.
+ */
 export function installableVersions(tool: LanguageTool): readonly string[] {
-    const recipes = tool === 'php' ? PHP_RECIPES : tool === 'node' ? NODE_RECIPES : tool === 'python' ? PYTHON_RECIPES : GO_RECIPES;
+    if (tool === 'php') return catalogVersions(currentPhpCatalog());
+    const recipes = tool === 'node' ? NODE_RECIPES : tool === 'python' ? PYTHON_RECIPES : GO_RECIPES;
     return recipes.map((r) => r.version);
 }
 

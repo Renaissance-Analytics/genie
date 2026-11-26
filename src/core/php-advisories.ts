@@ -1,3 +1,5 @@
+import { catalogLine, currentPhpCatalog, type PhpCatalog } from './php-releases.js';
+
 /**
  * THE PHP VERSIONS GENIE WILL NOT RUN QUIETLY (the owner, 2026-10-22: "there is a big security issue with php. we need
  * to make sure we not supporting the bad versions").
@@ -48,29 +50,49 @@ function below(a: string, b: string): boolean {
 }
 
 /**
- * What a PHP version is, against every advisory: safe, vulnerable (and the first fixed release of its line), or on a
- * line no advisory has a fix for. A version that is not `major.minor.patch` is judged on the segments it has: `8.4` is
- * `8.4.0`, which is under every floor — a bare line is never called safe.
+ * What a PHP version is, against every advisory AND the live floor (Tynn #1066): safe, vulnerable (and the first fixed
+ * release of its line), or on a line no advisory has a fix for. A version that is not `major.minor.patch` is judged on
+ * the segments it has: `8.4` is `8.4.0`, which is under every floor — a bare line is never called safe.
+ *
+ * The live floor is php.net's newest SECURITY release of the line (core/php-releases.ts). It only RAISES what the table
+ * says: a version under the table's floor is vulnerable whatever the feed claims. A line newer than every line in an
+ * advisory's table (8.6, released after PHP2Shell) is not that advisory's to judge once php.net supports it; an older
+ * line missing from it still has no fix.
  */
-export function phpVersionRisk(version: string): PhpVersionRisk {
+export function phpVersionRisk(version: string, catalog: PhpCatalog = currentPhpCatalog()): PhpVersionRisk {
     const m = /^(\d+)\.(\d+)(?:\.(\d+))?/.exec(version.trim());
     if (!m) return { risk: 'safe' };
     const line = `${m[1]}.${m[2]}`;
     const full = `${m[1]}.${m[2]}.${m[3] ?? '0'}`;
+    const live = catalogLine(catalog, line);
+    let baked: PhpVersionRisk = { risk: 'safe' };
     for (const advisory of PHP_ADVISORIES) {
         const fixed = advisory.fixedIn[line];
         if (fixed === undefined) {
+            const afterIt = Object.keys(advisory.fixedIn).every((l) => below(`${l}.0`, `${line}.0`));
+            if (afterIt && live !== null) continue;
             return { risk: 'unsupported', cves: advisory.cves, url: advisory.url, supported: Object.values(advisory.fixedIn) };
         }
-        if (below(full, fixed)) return { risk: 'vulnerable', fixedIn: fixed, cves: advisory.cves, url: advisory.url };
+        if (below(full, fixed)) {
+            baked = { risk: 'vulnerable', fixedIn: fixed, cves: advisory.cves, url: advisory.url };
+            break;
+        }
     }
-    return { risk: 'safe' };
+    const floor = live?.securityFloor ?? null;
+    if (floor !== null && below(full, floor) && (baked.risk !== 'vulnerable' || below(baked.fixedIn, floor))) {
+        return { risk: 'vulnerable', fixedIn: floor, cves: baked.risk === 'vulnerable' ? baked.cves : [], url: `https://www.php.net/ChangeLog-${m[1]}.php#${floor}` };
+    }
+    return baked;
 }
 
-/** The words a person reads beside the version, or `null` for a safe one. Names the CVEs and what to do. */
-export function phpAdvisoryText(version: string): string | null {
-    const r = phpVersionRisk(version);
+/** The words a person reads beside the version, or `null` for a safe one. Names the CVEs (or php.net's release) and what to do. */
+export function phpAdvisoryText(version: string, catalog: PhpCatalog = currentPhpCatalog()): string | null {
+    const r = phpVersionRisk(version, catalog);
     if (r.risk === 'safe') return null;
-    if (r.risk === 'vulnerable') return `PHP ${version} is vulnerable to ${r.cves.join(' / ')} (remote code execution); update to ${r.fixedIn}`;
+    if (r.risk === 'vulnerable') {
+        return r.cves.length > 0
+            ? `PHP ${version} is vulnerable to ${r.cves.join(' / ')} (remote code execution); update to ${r.fixedIn}`
+            : `PHP ${version} is missing the fixes of PHP ${r.fixedIn}, a php.net security release; update to ${r.fixedIn}`;
+    }
     return `PHP ${version} is vulnerable to ${r.cves.join(' / ')} (remote code execution) and its line gets no fix; move to ${r.supported.join(', ')}`;
 }

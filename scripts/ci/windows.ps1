@@ -64,6 +64,11 @@ $Rows = @(
     'host-update'
 )
 
+# ROWS ONLY ASKED FOR BY NAME (-Only), never in a full run: they read the real internet and install from it, so a full
+# gate would be as green as php.net is reachable. php-live-shots (Tynn #1066): PHP 8.4.27 on disk, Genie's own pass
+# installs php.net's newest 8.4 security patch by itself, the Toolchain's PHP panel photographed before and after.
+$OptInRows = @('php-live-shots')
+
 if ($List) { $Rows | ForEach-Object { Write-Output $_ }; exit 0 }
 
 # The arguments In-Session could not pass, from the file the job wrote.
@@ -79,8 +84,8 @@ if (-not $Only -and -not $From -and (Test-Path $argsFile)) {
 $selected = @()
 if ($Only) {
     $asked = $Only -split ','
-    foreach ($r in $asked) { if ($Rows -notcontains $r) { Write-Output "no such row: $r (see -List)"; exit 64 } }
-    $selected = @($Rows | Where-Object { $asked -contains $_ })
+    foreach ($r in $asked) { if ($Rows -notcontains $r -and $OptInRows -notcontains $r) { Write-Output "no such row: $r (see -List)"; exit 64 } }
+    $selected = @(($Rows + $OptInRows) | Where-Object { $asked -contains $_ })
 } elseif ($From) {
     if ($Rows -notcontains $From) { Write-Output "no such row: $From (see -List)"; exit 64 }
     $selected = @($Rows[([array]::IndexOf($Rows, $From))..($Rows.Count - 1)])
@@ -357,6 +362,7 @@ function Row-gapp-open { Need-Build; Need-TestMachine; Run 'gapp-open-cdp' { nod
 function Row-artboard { Need-Build; Need-TestMachine; Run 'artboard-cdp' { node scripts/artboard-cdp.mjs --trace-main } }
 function Row-ui-lag { Need-Build; Need-TestMachine; Run 'ui-lag-cdp' { node scripts/ui-lag-cdp.mjs --budget } }
 function Row-plan-popover { Need-Build; Need-TestMachine; Run 'plan-popover-cdp' { node scripts/plan-popover-cdp.mjs } }
+function Row-php-live-shots { Need-Build; Need-TestMachine; Run 'php-live-shots-cdp' { node scripts/php-live-shots-cdp.mjs } }
 function Row-trust-step { Need-Build; Need-TestMachine; Run 'trust-step-cdp' { node scripts/trust-step-cdp.mjs } }
 function Row-accounts-popover { Need-Build; Need-TestMachine; Run 'accounts-popover-cdp' { node scripts/accounts-popover-cdp.mjs } }
 function Row-claude-accounts { Need-Build; Need-TestMachine; Run 'claude-accounts-cdp' { node scripts/claude-accounts-cdp.mjs } }
@@ -511,6 +517,7 @@ function Ceiling([string]$name) {
         { $_ -in 'no-pty', 'smoke', 'layout', 'local-door-break', 'local-door', 'gapp-open', 'trust-step' } { return 360 }
         'accounts-popover' { return 300 }
         'plan-popover' { return 480 }
+        'php-live-shots' { return 1200 }
         'claude-accounts' { return 300 }
         'sound-picker' { return 300 }
         'question-maximize' { return 300 }

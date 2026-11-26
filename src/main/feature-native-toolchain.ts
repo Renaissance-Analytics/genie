@@ -22,14 +22,21 @@ import { dockerAccount, probeDockerHealth, startDocker, withDockerHealth } from 
 import type { ToolStatus } from '../core/toolchain.js';
 import { userHome } from './paths.js';
 import { join } from 'node:path';
-import { statSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { PhpReleaseFeed } from './php-release-feed.js';
+import { applyDuePhpUpdates, PhpPatchNotices, type PhpPatchSite } from './php-patch-keeper.js';
 import type { FeaturePorts } from './feature-ipc.js';
 import type { ProviderHealthBook } from './provider-health.js';
 import type { ToolchainActivity } from '../core/toolchain-risk.js';
 
 /** Real native planners moved from the window. Stores and service graphs are supplied by genie-host. */
 export function nativeFeatureToolchain(deps: { home: string; providerHealth: ProviderHealthBook;
-    activity(): Promise<ToolchainActivity>; busy(step: string | null): void; download(url: string): Promise<Response> }): NonNullable<FeaturePorts['toolchain']> {
+    activity(): Promise<ToolchainActivity>; busy(step: string | null): void; download(url: string): Promise<Response>;
+    /**
+     * PHP security patches within a line (Tynn #1066, main/php-patch-keeper.ts): the php sites, their restart, the
+     * person's Deck items and the agents' mail. Absent = a pass installs and moves the default, and tells nobody.
+     */
+    phpPatch?: { sites(): readonly PhpPatchSite[]; restartSite?(siteId: string): Promise<void>; notices: PhpPatchNotices; tellAgents(workspaceId: string, subject: string, text: string): Promise<void>; log?(line: string): void } }): NonNullable<FeaturePorts['toolchain']> {
     const { providerHealth } = deps;
     // Tynn #970: Docker on Linux is a HEALTH beside its version, read as the user Genie runs as.
     const linuxUser = () => userInfo().username;
@@ -62,6 +69,19 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
         genieNode: () => managedNode({ platform: process.platform as NodeVersionsPorts['platform'], root: nodeVersionsRoot(toolchainDataDir()), fs: nodePhpVersionsFs() })[0] ?? null,
         // Tynn #970: the account Docker's install adds to the docker group.
         dockerAccount: () => dockerAccount(execFileRunner, linuxUser()),
+    });
+    // PHP'S LIVE RELEASE DATA (Tynn #1066): php.net's versions and security releases, cached, stored for an offline start.
+    const silentNotices = new PhpPatchNotices(Date.now);
+    const phpReleasesFile = () => join(toolchainDataDir(), 'php-releases.json');
+    const phpFeed = new PhpReleaseFeed({
+        platform: process.platform as PhpVersionsPorts['platform'],
+        fetchText: httpFetch.text,
+        now: Date.now,
+        ...(deps.phpPatch?.log ? { log: deps.phpPatch.log } : {}),
+        store: {
+            read: () => { try { return readFileSync(phpReleasesFile(), 'utf8'); } catch { return null; } },
+            write: (text) => { mkdirSync(toolchainDataDir(), { recursive: true }); writeFileSync(phpReleasesFile(), text, 'utf8'); },
+        },
     });
     const phpVersionsPorts = (): PhpVersionsPorts => ({
         ...phpVersionsBase(),
@@ -172,7 +192,7 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
         const progress = (step: string | null) => { busyLine(step); if (step) row?.(step); };
         return {
             install: async (tool, version) => {
-                if (tool === 'php') return installPhpVersion(version, true, { ...phpVersionsPorts(), progress });
+                if (tool === 'php') { await phpFeed.refresh(); return installPhpVersion(version, true, { ...phpVersionsPorts(), progress }); }
                 if (tool === 'go') return installGoVersion(version, true, { ...goVersionsPorts(), progress });
                 if (tool === 'python') return installPythonVersion(version, true, { ...pythonVersionsPorts(), progress });
                 const outcome = await installNodeVersion(version, true, { ...nodeVersionsPorts(), progress });
@@ -232,9 +252,27 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
             },
             // T4: managed PHP versions (main/php-versions.ts) — the installer's progress is the same pushed busy line.
             php: {
-                list: (pins) => listPhpVersions(phpVersionsPorts(), pins),
-                install: (version, consent) => installPhpVersion(version, consent, phpVersionsPorts()),
+                // The list never waits on php.net: it shows the catalog in use, and a stale one is read again behind it.
+                list: (pins) => { void phpFeed.refresh(); return listPhpVersions(phpVersionsPorts(), pins); },
+                install: async (version, consent) => { await phpFeed.refresh(); return installPhpVersion(version, consent, phpVersionsPorts()); },
                 remove: (version, pins) => removePhpVersion(version, pins, phpVersionsBase()),
+                // Tynn #1066: the security patches due in each installed line, installed, the default and sites moved, told.
+                applyDue: (progress) => {
+                    const linkPorts = { platform: process.platform as Platform, toolchainDir: toolchainDataDir(), fs: nodeLinkFs(process.platform as Platform) };
+                    const p = deps.phpPatch;
+                    return applyDuePhpUpdates({
+                        refresh: () => phpFeed.refresh(),
+                        managed: () => managedPhp(phpVersionsBase()),
+                        install: (version, step) => installPhpVersion(version, true, { ...phpVersionsPorts(), progress: (s) => { busyLine(s); step(s); } }),
+                        defaultVersion: () => listDefaults(linkPorts).php,
+                        setDefault: (version) => setLanguageDefault('php', version),
+                        sites: () => p?.sites() ?? [],
+                        ...(p?.restartSite ? { restartSite: p.restartSite } : {}),
+                        notices: p?.notices ?? silentNotices,
+                        tellAgents: (workspaceId, subject, text) => p?.tellAgents(workspaceId, subject, text) ?? Promise.resolve(),
+                        ...(p?.log ? { log: p.log } : {}),
+                    }, progress);
+                },
             },
             // Genie's own Node (main/node-versions.ts) — same busy line.
             node: {
