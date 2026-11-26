@@ -17,7 +17,7 @@ import { mobilePageUrl } from '../../core/mobile.js';
 import { PairGuide } from './PairGuide.js';
 import { toneLabel, type ToolStatus } from '../../core/toolchain.js';
 import { DOCKER_DAEMON_WORDS } from '../../core/docker-engine.js';
-import { INSTALL_KIND, REMOVE_KIND, cardKeyOfTool, cardOfAction, formatElapsed, installNote, langView, plainRefusal, toolTitle, nextFix, nextInFlight, patchFor, toolchainActivity, toolchainCards, toolchainProblems, toolchainTally, type InFlight, type LangKey, type ToolCard, type ToolchainProblem } from '../toolchain-view.js';
+import { INSTALL_KIND, REMOVE_KIND, cardKeyOfTool, cardOfAction, formatElapsed, installNote, langView, plainRefusal, nextFix, nextInFlight, patchFor, toolchainActivity, toolchainCards, toolchainProblems, toolchainTally, type InFlight, type LangKey, type ToolCard, type ToolchainProblem } from '../toolchain-view.js';
 import { ToolLogo } from './ToolLogo.js';
 import { NAV_GROUPS, NEW_PROJECT_DEFAULTS, sectionOf, type SectionId } from '../../core/settings-nav.js';
 import { SETTINGS, searchSettings, type SettingDef } from '../../core/settings.js';
@@ -1391,7 +1391,6 @@ export function ProblemsStrip({ problems, busy, onAction, onOpen }: { problems: 
         <div data-problems-summary={problems.length} className="flex items-center gap-2 rounded-lg border border-[color-mix(in_srgb,var(--danger)_45%,transparent)] bg-[color-mix(in_srgb,var(--danger)_6%,var(--bg-1))] px-3 py-2 text-sm @min-[440px]:hidden">
             <span aria-hidden="true" className="size-2 shrink-0 rounded-full bg-[var(--danger)]" />
             <b className="shrink-0 font-semibold">{`${problems.length} need you`}</b>
-            <span title={[...new Set(problems.map((p) => toolTitle(p.card)))].join(', ')} className="min-w-0 truncate text-xs text-[var(--fg-2)]">{[...new Set(problems.map((p) => toolTitle(p.card)))].join(', ')}</span>
             <Button size="xs" type="button" labelClassName="contents" data-problems-toggle="" aria-expanded={open} className="ml-auto shrink-0 gap-1" onClick={() => setOpen(!open)}>
                 {open ? 'Hide' : 'Show'}<Icon name={open ? 'chevron-up' : 'chevron-down'} size="xs" />
             </Button>
@@ -1462,7 +1461,7 @@ function InUse({ card }: { card: ToolCard }) {
     const chip = card.version !== null ? card.chips.find((c) => c.version === card.version) : undefined;
     return (
         <span data-in-use={card.key} data-in-use-kind={card.inUse ?? 'none'} className="flex min-w-0 flex-wrap items-center gap-1.5">
-            <span {...(chip ? { 'data-version-chip': `${card.key}:${chip.version}`, 'data-default': chip.isDefault ? 'true' : 'false' } : {})} className={`font-mono text-xs ${card.version === null ? 'text-[var(--fg-3)]' : 'text-[var(--fg-1)]'}`}>{card.version ?? 'not here'}</span>
+            <span {...(chip ? { 'data-version-chip': `${card.key}:${chip.version}`, 'data-default': chip.isDefault ? 'true' : 'false' } : {})} className={card.version === null ? 'text-xs text-[var(--fg-3)]' : 'font-mono text-xs text-[var(--fg-1)]'}>{card.version ?? 'Not installed'}</span>
             {card.inUse === 'default' ? (
                 <Badge variant="soft" size="sm" color="blue" data-in-use-badge="default" title={`Genie's copy, the default: what ${card.title} commands run`} className="inline-flex items-center gap-1"><Icon name="star" size="xs" />Default</Badge>
             ) : card.inUse === 'system' ? (
@@ -1482,7 +1481,7 @@ function CardStatus({ card }: { card: ToolCard }) {
     }[card.state as 'ok' | 'update' | 'problem'];
     if (!look) return null;
     return (
-        <span data-card-status={card.state} role="img" aria-label={look.word} title={look.word} className={`grid size-5 shrink-0 place-items-center rounded-full @min-[440px]:absolute @min-[440px]:right-3 @min-[440px]:top-3 ${look.tone}`}>
+        <span data-card-status={card.state} role="img" aria-label={look.word} title={look.word} className={`hidden size-5 shrink-0 place-items-center rounded-full @min-[440px]:absolute @min-[440px]:right-3 @min-[440px]:top-3 @min-[440px]:grid ${look.tone}`}>
             <Icon name={look.icon} size="xs" />
         </span>
     );
@@ -1658,7 +1657,7 @@ function ToolPanel({ card, tc, busy, check, onAction, onClose }: { card: ToolCar
     const dir = (view?.managed.find((m) => m.version === current) as { dir?: string } | undefined)?.dir;
     // WHERE IT COMES FROM, in words (Tynn #1062: "php → 8.4.27 · C:\Users\<name>\.g…" was cut off and showed the home
     // folder). The folder is only behind the copy button.
-    const origin = card.inUse === 'default' ? 'Installed by Genie · the default' : card.inUse === 'system' ? 'On your system' : card.version === null ? 'Not on this machine' : null;
+    const origin = card.inUse === 'default' ? 'Installed by Genie · the default' : card.inUse === 'system' ? 'On your system' : card.version === null ? 'Not installed' : null;
     const copied = useCopyText();
     return (
         <div data-toolchain-panel={card.key} className="flex flex-col">

@@ -202,3 +202,22 @@ describe('#1062 — the problems collapse to one row on a narrow page', () => {
         expect((html.match(/data-problem-action=/g) ?? []).length).toBe(3);
     });
 });
+
+describe('#1062 — the narrow list, as the coordinator reviewed it (1050x720)', () => {
+    it('a tool that is not on the machine says "Not installed", never "not here"', () => {
+        const docker = card(render(OWNER), 'docker');
+        expect(text(docker)).toMatch(/Not installed/);
+        expect(text(render(OWNER))).not.toMatch(/not here/i);
+    });
+    it('the status mark has no place in the narrow row (the tallies say it): drawn only with room', () => {
+        const git = card(render(OWNER), 'git');
+        expect(git).toMatch(/data-card-status="ok"[^>]*class="[^"]*\bhidden\b[^"]*@min-\[440px\]:grid/);
+    });
+    it('the folded problems row names no tools, so nothing in it is cut off', () => {
+        const html = render({ ...OWNER, tools: [...OWNER.tools, t('codex', '0.71.0', 'broken', { problem: 'no codex program' })] });
+        const at = html.indexOf('data-problems-summary=');
+        const summary = html.slice(at, html.indexOf('</button>', at));
+        expect(text(summary)).not.toMatch(/Codex|Docker/);
+        expect(text(summary)).toMatch(/2 need you/);
+    });
+});
