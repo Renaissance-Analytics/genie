@@ -17,7 +17,7 @@ import { mobilePageUrl } from '../../core/mobile.js';
 import { PairGuide } from './PairGuide.js';
 import { toneLabel, type ToolStatus } from '../../core/toolchain.js';
 import { DOCKER_DAEMON_WORDS } from '../../core/docker-engine.js';
-import { INSTALL_KIND, REMOVE_KIND, cardKeyOfTool, cardOfAction, formatElapsed, installNote, langView, nextFix, nextInFlight, patchFor, toolchainActivity, toolchainCards, toolchainProblems, toolchainTally, type InFlight, type LangKey, type ToolCard, type ToolchainProblem } from '../toolchain-view.js';
+import { INSTALL_KIND, REMOVE_KIND, cardKeyOfTool, cardOfAction, formatElapsed, installNote, langView, plainRefusal, toolTitle, nextFix, nextInFlight, patchFor, toolchainActivity, toolchainCards, toolchainProblems, toolchainTally, type InFlight, type LangKey, type ToolCard, type ToolchainProblem } from '../toolchain-view.js';
 import { ToolLogo } from './ToolLogo.js';
 import { NAV_GROUPS, NEW_PROJECT_DEFAULTS, sectionOf, type SectionId } from '../../core/settings-nav.js';
 import { SETTINGS, searchSettings, type SettingDef } from '../../core/settings.js';
@@ -1200,16 +1200,16 @@ export function ToolchainCheckBar({ tc, busy, onAction }: { tc: ToolchainData | 
     const at = tc?.checkedAt ?? null;
     return (
         <>
-            <span data-toolchain-checked={at ?? ''} className="ml-auto whitespace-nowrap text-xs text-[var(--fg-3)]" {...(at !== null ? { title: new Date(at).toLocaleString() } : {})}>
+            <span data-toolchain-checked={at ?? ''} className="ml-auto hidden whitespace-nowrap text-xs text-[var(--fg-3)] @min-[440px]:inline" {...(at !== null ? { title: new Date(at).toLocaleString() } : {})}>
                 {at === null ? 'Not checked yet' : `Checked ${agoText(at, Date.now())}`}
             </span>
             {running ? (
-                <Button size="xs" type="button" color="red" className="shrink-0 whitespace-nowrap" data-action="toolchain-check-stop" onClick={() => onAction({ kind: 'toolchain.stopCheck' })}>
-                    <Icon name="square" size="xs" />Stop
+                <Button size="xs" type="button" color="red" labelClassName="contents" className="shrink-0 gap-1.5 whitespace-nowrap" data-action="toolchain-check-stop" onClick={() => onAction({ kind: 'toolchain.stopCheck' })}>
+                    <Icon name="square" size="xs" /><span className="hidden @min-[440px]:inline">Stop</span>
                 </Button>
             ) : (
-                <Button size="xs" type="button" className="shrink-0 whitespace-nowrap" data-action="toolchain-check-updates" disabled={busy} onClick={() => onAction({ kind: 'toolchain.checkUpdates' })}>
-                    <Icon name="refresh-cw" size="xs" />Check for updates
+                <Button size="xs" type="button" labelClassName="contents" className="ml-auto shrink-0 gap-1.5 whitespace-nowrap @min-[440px]:ml-0" data-action="toolchain-check-updates" aria-label="Check for updates" title={at === null ? 'Not checked yet' : `Checked ${agoText(at, Date.now())}`} disabled={busy} onClick={() => onAction({ kind: 'toolchain.checkUpdates' })}>
+                    <Icon name="refresh-cw" size="xs" /><span className="hidden @min-[440px]:inline">Check for updates</span>
                 </Button>
             )}
         </>
@@ -1298,15 +1298,15 @@ export function ToolchainSurface({ data, onAction: act, selected: initial }: Sur
     const tally = toolchainTally(groups, problems);
     return (
         // ONE TITLE (Tynn #1062): Settings already heads this page "Toolchain"; the surface brings only its toolbar.
-        <div data-surface="toolchain" className="flex h-full min-h-0 flex-1 flex-col">
-            <div data-toolchain-toolbar="" className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-[var(--border-1)] px-6 py-2.5">
+        <div data-surface="toolchain" className="@container flex h-full min-h-0 flex-1 flex-col">
+            <div data-toolchain-toolbar="" className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-2 border-b border-[var(--border-1)] px-4 py-2.5 @min-[440px]:gap-x-3 @min-[440px]:px-6">
                 {tc !== null ? <ToolchainTallies tally={tally} /> : null}
                 <ToolchainCheckBar tc={tc} busy={busy !== null} onAction={onAction} />
-                <Button size="xs" type="button" className="shrink-0 whitespace-nowrap" disabled={busy !== null} onClick={() => onAction({ kind: 'toolchain.repair' })}>
-                    <Icon name="stethoscope" size="xs" />Check and repair
+                <Button size="xs" type="button" labelClassName="contents" className="shrink-0 gap-1.5 whitespace-nowrap" aria-label="Check and repair" title="Check and repair" disabled={busy !== null} onClick={() => onAction({ kind: 'toolchain.repair' })}>
+                    <Icon name="stethoscope" size="xs" /><span className="hidden @min-[440px]:inline">Check and repair</span>
                 </Button>
                 {fixable.length > 0 ? (
-                    <Button size="sm" type="button" color="blue" className="shrink-0 whitespace-nowrap" data-action="toolchain-fix-all" disabled={running || fix !== null} loading={fix !== null} onClick={() => setFix({ queue: fixable, waiting: false, refusals: refusals.length })}>
+                    <Button size="sm" type="button" color="blue" labelClassName="contents" className="shrink-0 gap-1.5 whitespace-nowrap" data-action="toolchain-fix-all" disabled={running || fix !== null} loading={fix !== null} onClick={() => setFix({ queue: fixable, waiting: false, refusals: refusals.length })}>
                         <Icon name="wrench" size="xs" />Fix {fixable.length} {fixable.length === 1 ? 'problem' : 'problems'}
                     </Button>
                 ) : null}
@@ -1321,16 +1321,17 @@ export function ToolchainSurface({ data, onAction: act, selected: initial }: Sur
                     <div data-toolchain-main="" className={`min-h-0 min-w-0 flex-1 overflow-y-auto pb-4 ${selectedCard ? 'hidden @min-[860px]:block' : ''}`}>
                         {tc.warning ? <ToolchainUpdateWarning warning={tc.warning} busy={running} onAction={onAction} /> : null}
                         {rowless.map((r) => (
-                            <p key={r.tool} data-tool-refusal={r.tool} className="px-6 pt-3 text-sm text-[var(--danger)]">{r.reason}</p>
+                            <RefusalLine key={r.tool} reason={r.reason} attrs={{ 'data-tool-refusal': r.tool }} className="mx-4 mt-3 @min-[440px]:mx-6" busy={running} {...(r.tool in INSTALL_KIND ? { onInstall: (version: string) => { void onAction({ kind: INSTALL_KIND[r.tool as LangKey], version, consent: true } as FeatureAction); } } : {})} />
                         ))}
                         {problems.length > 0 ? <ProblemsStrip problems={problems} busy={running} onAction={onAction} onOpen={setChosen} /> : null}
-                        {tc.machinePath ? <div className="mx-6 mt-3 overflow-hidden rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)]"><MachinePathCard mp={tc.machinePath} busy={busy !== null} onAction={onAction} refusal={refusals.find((r) => r.tool === 'machine-path')?.reason ?? null} /></div> : null}
+                        {tc.machinePath ? <div className="mx-4 mt-3 overflow-hidden @min-[440px]:mx-6 rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)]"><MachinePathCard mp={tc.machinePath} busy={busy !== null} onAction={onAction} refusal={refusals.find((r) => r.tool === 'machine-path')?.reason ?? null} /></div> : null}
                         {groups.map((g) => (
-                            <section key={g.group} data-card-group={g.group} className="px-6">
+                            <section key={g.group} data-card-group={g.group} className="px-4 @min-[440px]:px-6">
                                 <h3 className="mb-2 mt-4 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--fg-3)]">
                                     {g.label}<span aria-hidden="true" className="h-px flex-1 bg-[var(--border-1)]" />
                                 </h3>
-                                <ul className="grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-2.5">
+                                {/* NARROW, A LIST (Tynn #1062): one row per tool (logo, name, what is in use, its status, one action); with room, cards. */}
+                                <ul className="grid grid-cols-1 gap-1.5 @min-[440px]:grid-cols-[repeat(auto-fill,minmax(190px,1fr))] @min-[440px]:gap-2.5">
                                     {g.cards.map((c) => (
                                         <ToolCardView
                                             key={c.key}
@@ -1382,8 +1383,20 @@ function ToolchainTallies({ tally }: { tally: ReturnType<typeof toolchainTally> 
 
 /** THE PROBLEMS STRIP: each problem, why it matters, and its ONE button (or, with nothing one click fixes, its panel). */
 export function ProblemsStrip({ problems, busy, onAction, onOpen }: { problems: readonly ToolchainProblem[]; busy: boolean; onAction: SurfaceProps['onAction']; onOpen: (card: string) => void }) {
+    // NARROW, ONE ROW (Tynn #1062: two "can't run" cards filled the owner's narrow view): "2 need you", their names, and a
+    // button that shows them. With room, every problem is its own row, as before.
+    const [open, setOpen] = useState(false);
     return (
-        <ul data-toolchain-problems={problems.length} className="mx-6 mt-3 divide-y divide-[var(--border-1)] overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--danger)_45%,transparent)] bg-[color-mix(in_srgb,var(--danger)_6%,var(--bg-1))]">
+        <div data-toolchain-problems-wrap="" className="mx-4 mt-3 @min-[440px]:mx-6">
+        <div data-problems-summary={problems.length} className="flex items-center gap-2 rounded-lg border border-[color-mix(in_srgb,var(--danger)_45%,transparent)] bg-[color-mix(in_srgb,var(--danger)_6%,var(--bg-1))] px-3 py-2 text-sm @min-[440px]:hidden">
+            <span aria-hidden="true" className="size-2 shrink-0 rounded-full bg-[var(--danger)]" />
+            <b className="shrink-0 font-semibold">{`${problems.length} need you`}</b>
+            <span title={[...new Set(problems.map((p) => toolTitle(p.card)))].join(', ')} className="min-w-0 truncate text-xs text-[var(--fg-2)]">{[...new Set(problems.map((p) => toolTitle(p.card)))].join(', ')}</span>
+            <Button size="xs" type="button" labelClassName="contents" data-problems-toggle="" aria-expanded={open} className="ml-auto shrink-0 gap-1" onClick={() => setOpen(!open)}>
+                {open ? 'Hide' : 'Show'}<Icon name={open ? 'chevron-up' : 'chevron-down'} size="xs" />
+            </Button>
+        </div>
+        <ul data-toolchain-problems={problems.length} className={`${open ? 'mt-2' : 'hidden'} divide-y divide-[var(--border-1)] overflow-hidden rounded-xl border border-[color-mix(in_srgb,var(--danger)_45%,transparent)] bg-[color-mix(in_srgb,var(--danger)_6%,var(--bg-1))] @min-[440px]:mt-0 @min-[440px]:block`}>
             {problems.map((p) => (
                 <li key={p.key} data-problem={p.key} className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3.5 py-2.5">
                     <ToolLogo tool={p.card} />
@@ -1402,6 +1415,29 @@ export function ProblemsStrip({ problems, busy, onAction, onOpen }: { problems: 
                 </li>
             ))}
         </ul>
+        </div>
+    );
+}
+
+/**
+ * A REFUSAL, SAID IN PLAIN WORDS (Tynn #1062): a short line (toolchain-view plainRefusal), the version to install instead
+ * as a button when there is one, and the engine's own sentence only under "Details".
+ */
+function RefusalLine({ reason, attrs, className = '', busy = false, onInstall }: { reason: string; attrs: Record<string, string>; className?: string; busy?: boolean; onInstall?: ((version: string) => void) | undefined }) {
+    const r = plainRefusal(reason);
+    return (
+        <div {...attrs} className={`flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--danger)] ${className}`}>
+            {r.text}
+            {r.install && onInstall ? (
+                <Button size="xs" type="button" color="blue" data-refusal-install={r.install} disabled={busy} onClick={() => onInstall(r.install!)}>{`Install ${r.install}`}</Button>
+            ) : null}
+            {r.details ? (
+                <details className="w-full text-[var(--fg-3)]">
+                    <summary className="cursor-pointer select-none text-[11px] font-medium hover:text-[var(--fg-1)]">Details</summary>
+                    <p className="mt-1">{r.details}</p>
+                </details>
+            ) : null}
+        </div>
     );
 }
 
@@ -1446,7 +1482,7 @@ function CardStatus({ card }: { card: ToolCard }) {
     }[card.state as 'ok' | 'update' | 'problem'];
     if (!look) return null;
     return (
-        <span data-card-status={card.state} role="img" aria-label={look.word} title={look.word} className={`absolute right-3 top-3 grid size-5 place-items-center rounded-full ${look.tone}`}>
+        <span data-card-status={card.state} role="img" aria-label={look.word} title={look.word} className={`grid size-5 shrink-0 place-items-center rounded-full @min-[440px]:absolute @min-[440px]:right-3 @min-[440px]:top-3 ${look.tone}`}>
             <Icon name={look.icon} size="xs" />
         </span>
     );
@@ -1455,7 +1491,7 @@ function CardStatus({ card }: { card: ToolCard }) {
 /** The step, the elapsed time, and a bar, ON the card; the rest of the page goes on working. */
 function CardProgress({ card, progress }: { card: ToolCard; progress: { step: string; elapsed: string | null } }) {
     return (
-        <div data-card-progress={card.key} {...(card.tool ? { 'data-tool-updating': card.tool.tool } : card.systemTool ? { 'data-tool-updating': card.systemTool } : {})} className="mt-auto flex flex-col gap-1.5">
+        <div data-card-progress={card.key} {...(card.tool ? { 'data-tool-updating': card.tool.tool } : card.systemTool ? { 'data-tool-updating': card.systemTool } : {})} className="mt-auto flex w-full flex-col gap-1.5">
             <div className="flex items-center justify-between gap-2 text-[11px] text-[var(--fg-2)]">
                 <span className="flex min-w-0 items-center gap-1.5"><Icon name="loader-circle" size="xs" className="shrink-0 animate-spin" /><span className="truncate">{progress.step}</span></span>
                 {progress.elapsed !== null ? <span data-card-elapsed="" className="shrink-0 font-mono">{progress.elapsed}</span> : null}
@@ -1479,7 +1515,7 @@ export function ToolCardView({ card, selected, busy, updating, updated, refusal,
     const missing = card.state === 'missing';
     // A real button (Tynn #1062: a ghost "Versions" read as plain text).
     const versionsButton = card.lang !== null || card.key === 'playwright'
-        ? <Button type="button" size="sm" data-open-panel={card.key} onClick={onSelect}><Icon name="layers" size="xs" />{card.key === 'playwright' ? 'Browsers' : 'Versions'}</Button>
+        ? <Button type="button" size="sm" labelClassName="contents" className="gap-1.5" data-open-panel={card.key} onClick={onSelect}><Icon name="layers" size="xs" />{card.key === 'playwright' ? 'Browsers' : 'Versions'}</Button>
         : null;
     const note = installNote(install);
     // The system's package (pacman, Tynn #968), beside Genie's own build, for a language Genie manages no version of yet.
@@ -1563,9 +1599,9 @@ export function ToolCardView({ card, selected, busy, updating, updated, refusal,
             {...(t ? { 'data-tool': t.tool, 'data-tone': t.tone } : card.systemTool ? { 'data-tool': card.systemTool } : {})}
             data-card-state={card.state}
             data-selected={selected ? 'true' : 'false'}
-            className={`relative flex min-h-28 flex-col gap-2 rounded-xl border p-3 ${missing ? 'border-dashed border-[var(--border-1)] bg-transparent' : 'border-[var(--border-1)] bg-[var(--bg-1)]'} ${selected ? 'border-[var(--primary)] ring-1 ring-[var(--primary)]' : ''}`}
+            className={`relative flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border px-3 py-2 @min-[440px]:min-h-28 @min-[440px]:flex-col @min-[440px]:flex-nowrap @min-[440px]:items-stretch @min-[440px]:gap-2 @min-[440px]:rounded-xl @min-[440px]:p-3 ${missing ? 'border-dashed border-[var(--border-1)] bg-transparent' : 'border-[var(--border-1)] bg-[var(--bg-1)]'} ${selected ? 'border-[var(--primary)] ring-1 ring-[var(--primary)]' : ''}`}
         >
-            <Button type="button" variant="ghost" data-select-tool={card.key} aria-pressed={selected} className="h-auto justify-start gap-2.5 p-0 pr-6 text-left hover:bg-transparent" onClick={onSelect}>
+            <Button type="button" variant="ghost" data-select-tool={card.key} aria-pressed={selected} className="h-auto min-w-0 flex-1 justify-start gap-2.5 p-0 text-left hover:bg-transparent @min-[440px]:flex-none @min-[440px]:pr-6" onClick={onSelect}>
                 <ToolLogo tool={card.key} />
                 <span className="flex min-w-0 flex-col gap-0.5">
                     <span className="text-sm font-semibold text-[var(--fg-1)]">{card.title}</span>
@@ -1574,7 +1610,7 @@ export function ToolCardView({ card, selected, busy, updating, updated, refusal,
             </Button>
             <CardStatus card={card} />
             {others.length > 0 ? (
-                <span data-version-chips={card.key} className="flex flex-wrap items-center gap-1 text-[11px] text-[var(--fg-3)]">
+                <span data-version-chips={card.key} className="hidden flex-wrap items-center gap-1 text-[11px] text-[var(--fg-3)] @min-[440px]:flex">
                     <span>Also</span>
                     {others.map((c) => (
                         <span key={c.version} data-version-chip={`${card.key}:${c.version}`} data-default={c.isDefault ? 'true' : 'false'} className="font-mono text-[var(--fg-2)]">{c.version}</span>
@@ -1584,17 +1620,17 @@ export function ToolCardView({ card, selected, busy, updating, updated, refusal,
             {check ? <CheckStateMark tool={t?.tool ?? card.key} check={check} /> : null}
             {/* A SECURITY UPDATE is not a badge colour away from "update available" (PHP2Shell, 2026-10-22): the danger colour, and the advisory in words. */}
             {t?.tone === 'security-update' ? <span data-tool-security={t.tool} className="self-start rounded-md bg-[var(--danger)] px-1.5 py-0.5 text-xs font-medium text-white">{toneLabel(t.tone)}</span> : null}
-            {t?.advisory ? <span data-tool-advisory={t.tool} className="text-xs text-[var(--danger)]">{t.advisory}</span> : null}
+            {t?.advisory ? <span data-tool-advisory={t.tool} className="w-full text-xs text-[var(--danger)]">{t.advisory}</span> : null}
             {/* Tynn #698: an agent CLI the health check found cannot run says why; an Update cannot fix it (the repair is its own action). */}
-            {t?.problem ? <span data-tool-problem={t.tool} className="text-xs text-[var(--danger)]">{t.problem}</span> : null}
-            {t?.daemon && t.installed !== null ? <span data-docker-why={t.daemon} className="text-xs text-[var(--warning)]">{DOCKER_DAEMON_WORDS[t.daemon].why}</span> : null}
+            {t?.problem ? <span data-tool-problem={t.tool} className="w-full text-xs text-[var(--danger)]">{t.problem}</span> : null}
+            {t?.daemon && t.installed !== null ? <span data-docker-why={t.daemon} className="w-full text-xs text-[var(--warning)]">{DOCKER_DAEMON_WORDS[t.daemon].why}</span> : null}
             {progress ? (
                 <CardProgress card={card} progress={progress} />
             ) : (
-                <div data-card-actions="" className="mt-auto flex flex-wrap items-center gap-1.5 [&_.ml-auto]:ml-0">{actions}</div>
+                <div data-card-actions="" className="ml-auto flex flex-wrap items-center gap-1.5 @min-[440px]:ml-0 @min-[440px]:mt-auto [&_.ml-auto]:ml-0">{actions}</div>
             )}
-            {refusal && t && (t.installed === null || t.tone === 'broken' || t.daemon !== undefined) ? <span data-tool-refusal={t.tool} className="text-xs text-[var(--danger)]">{refusal.reason}</span> : null}
-            {refusal && !t && card.systemTool ? <span data-tool-refusal={card.systemTool} className="text-xs text-[var(--danger)]">{refusal.reason}</span> : null}
+            {refusal && t && (t.installed === null || t.tone === 'broken' || t.daemon !== undefined) ? <RefusalLine reason={refusal.reason} attrs={{ 'data-tool-refusal': t.tool }} className="w-full" /> : null}
+            {refusal && !t && card.systemTool ? <RefusalLine reason={refusal.reason} attrs={{ 'data-tool-refusal': card.systemTool }} className="w-full" /> : null}
         </li>
     );
 }
@@ -1627,7 +1663,7 @@ function ToolPanel({ card, tc, busy, check, onAction, onClose }: { card: ToolCar
     return (
         <div data-toolchain-panel={card.key} className="flex flex-col">
             <div className="flex items-center gap-2 border-b border-[var(--border-1)] px-3 py-2">
-                <Button type="button" size="sm" variant="ghost" data-panel-close="" onClick={onClose}><Icon name="arrow-left" size="xs" />All tools</Button>
+                <Button type="button" size="sm" variant="ghost" labelClassName="contents" className="gap-1.5" data-panel-close="" onClick={onClose}><Icon name="arrow-left" size="xs" />All tools</Button>
             </div>
             <div className="flex items-center gap-3 border-b border-[var(--border-1)] px-5 py-4">
                 <ToolLogo tool={card.key} size="lg" />
@@ -1676,11 +1712,11 @@ function LanguagePanel({ lang, view, current, busy, check, onAction, refusals }:
     return (
         <section {...attr('versions', view.managed.length)} className="flex flex-col gap-1.5 px-5 py-3.5">
             <h4 className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--fg-3)]">
-                <span>Which version <span className="font-mono normal-case">{copy.binary}</span> runs</span>
+                <span>{`Which version ${copy.name} runs`}</span>
                 {check ? <CheckStateMark tool={lang} check={check} /> : null}
             </h4>
             {refusals.map((r) => (
-                <p key={r.version} {...attr('refusal', r.version ?? '')} className="text-xs text-[var(--danger)]">{r.reason}</p>
+                <RefusalLine key={r.version} reason={r.reason} attrs={attr('refusal', r.version ?? '')} busy={busy} onInstall={(version) => onAction({ kind: INSTALL_KIND[lang], version, consent: true } as FeatureAction)} />
             ))}
             <ul role="radiogroup" aria-label={`${copy.name}: the default`} className="flex flex-col gap-1.5">
                 {view.managed.map((m) => {
@@ -1702,7 +1738,7 @@ function LanguagePanel({ lang, view, current, busy, check, onAction, refusals }:
                                     {`Install ${patch}`}
                                 </Button>
                             ) : null}
-                            <Button size="xs" type="button" variant="ghost" aria-label={`Remove ${copy.name} ${m.version}`} disabled={busy || pinned || isDefault} title={pinned ? `Used by ${usedBy!.join(', ')}: move them to another version first` : isDefault ? `${copy.name} ${m.version} is the default: make another version the default first` : `Remove ${copy.name} ${m.version}`} onClick={() => onAction({ kind: REMOVE_KIND[lang], version: m.version } as FeatureAction)}><Icon name="trash-2" size="xs" />Remove</Button>
+                            <Button size="xs" type="button" variant="ghost" aria-label={`Remove ${copy.name} ${m.version}`} labelClassName="contents" className="gap-1" disabled={busy || pinned || isDefault} title={pinned ? `Used by ${usedBy!.join(', ')}: move them to another version first` : isDefault ? `${copy.name} ${m.version} is the default: make another version the default first` : `Remove ${copy.name} ${m.version}`} onClick={() => onAction({ kind: REMOVE_KIND[lang], version: m.version } as FeatureAction)}><Icon name="trash-2" size="xs" />Remove</Button>
                             {advisory ? <span {...attr('advisory', m.version)} className="basis-full text-xs text-[var(--danger)]">{advisory}</span> : null}
                         </li>
                     );

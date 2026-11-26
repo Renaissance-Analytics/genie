@@ -948,7 +948,8 @@ function AgentViewBody({
                 </form>
             ) : null}
 
-            <div className="flex min-h-0 flex-1">
+            {/* A container: the Active plan column yields when the view itself is narrow (Tynn #1062). */}
+            <div className="@container flex min-h-0 flex-1">
                 {index && indexCollapsed ? (
                     <nav data-index-column="collapsed" className="flex min-h-0 w-[52px] shrink-0 flex-col items-center gap-0.5 overflow-y-auto border-r border-[var(--border-1)] px-1 py-3">
                         <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-index-toggle="expand" aria-label="Expand the turns column" title="Expand" onClick={toggleIndex} className="mb-1.5 rounded-md p-1 text-[var(--fg-4)] hover:bg-[var(--bg-1)] hover:text-[var(--fg-2)]">
@@ -1174,15 +1175,15 @@ function AgentViewBody({
                                 ) : null}
 
                                 {sections.length > 0 ? (
-                                    <div data-settings-tabs="" className="flex h-8 shrink-0 items-center gap-1 border-b border-[var(--border-1)] px-5">
+                                    <div data-settings-tabs="" className="flex min-h-8 shrink-0 items-center gap-1 border-b border-[var(--border-1)] px-5 py-1">
                                         <Tabs activeTab={shown ?? ''} onTabChange={(id) => setOwnSettingsSection(id as SettingsSection)} variant="pills">
-                                            <Tabs.List className="gap-1 bg-transparent p-0 dark:bg-transparent">
+                                            <Tabs.List className="flex-wrap gap-1 bg-transparent p-0 dark:bg-transparent">
                                                 {sections.map((s) => (
                                                     <Tabs.Tab
                                                         key={s.id}
                                                         value={s.id}
                                                         data-settings-tab={s.id}
-                                                        className={`rounded-md px-2 py-0.5 text-[12px] shadow-none ${s.id === shown ? 'bg-[var(--bg-3)] font-medium text-[var(--fg-1)] dark:bg-[var(--bg-3)] dark:text-[var(--fg-1)]' : 'font-normal text-[var(--fg-3)] hover:bg-[var(--bg-2)] dark:text-[var(--fg-3)]'}`}
+                                                        className={`whitespace-nowrap rounded-md px-2 py-0.5 text-[12px] shadow-none ${s.id === shown ? 'bg-[var(--bg-3)] font-medium text-[var(--fg-1)] dark:bg-[var(--bg-3)] dark:text-[var(--fg-1)]' : 'font-normal text-[var(--fg-3)] hover:bg-[var(--bg-2)] dark:text-[var(--fg-3)]'}`}
                                                     >
                                                         {s.label}
                                                     </Tabs.Tab>
@@ -1641,8 +1642,12 @@ function AgentViewBody({
                  * always there for an agent that reports plans. Before any plan it says so; an agent seen only through its
                  * terminal reports none, so it has no column. Resizable, and each step can be put into the chat (genie#1280).
                  */}
+                {/* Tynn #1062: at the owner's 1050 px window with the chat open the view had 322 px, and this column took
+                    260 of them, leaving the agent's own settings about 60. Below 520 px of the view's width it yields. */}
                 {agent.fidelity !== 'observed' && planOpen ? (
-                    <PlanColumn name={agent.name} plan={plan} steps={steps} storage={planStorage} onCollapse={onPlanCollapse} onDiscuss={onDiscussStep} />
+                    <div data-plan-fold="" className="hidden min-h-0 @min-[520px]:flex">
+                        <PlanColumn name={agent.name} plan={plan} steps={steps} storage={planStorage} onCollapse={onPlanCollapse} onDiscuss={onDiscussStep} />
+                    </div>
                 ) : null}
             </div>
             </div>
