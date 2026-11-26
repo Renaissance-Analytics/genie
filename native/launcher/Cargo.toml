@@ -26,7 +26,7 @@ path = "src/lib.rs"
 # The setup window (direction C, "Wish Orb"; src/ui.rs) in the platform webview: WebView2 on Windows, WebKitGTK on Linux
 # (webkit2gtk-4.1). On by default, so the release build has it with no feature named.
 default = ["ui"]
-ui = ["dep:wry", "dep:tao"]
+ui = ["dep:wry", "dep:tao", "dep:gtk"]
 # Lets cargo test name a throwaway public key in GENIE_LAUNCHER_TEST_PUBLIC_KEY. A release build never has it
 # (scripts/build-win-launcher.mjs builds without features, and tests/source_guard.rs holds that).
 test-keys = []
@@ -45,6 +45,8 @@ tao = { version = "0.38", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+# GTK, which the setup window's webview already links (WebKitGTK): show_uri opens the download page (src/ui.rs).
+gtk = { version = "0.19", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
@@ -58,6 +60,8 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_LibraryLoader",
     "Win32_System_Pipes",
     "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 # The tests' builds carry no debug info: with WebKitGTK and GTK under the setup window, a debug build filled the Linux test

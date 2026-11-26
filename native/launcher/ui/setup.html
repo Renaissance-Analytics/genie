@@ -94,6 +94,7 @@ html,body{height:100%;overflow:hidden;user-select:none}
       <div class="foot">
         <div class="fail-actions" id="fail-actions" hidden>
           <button class="btn primary" id="retry">Try again</button>
+          <button class="btn primary" id="get-installer">Get the installer</button>
           <button class="btn" id="fail-close">Close</button>
         </div>
         <a class="link center" id="show-details">Show details</a><div class="details" id="details"></div>
@@ -176,6 +177,7 @@ html,body{height:100%;overflow:hidden;user-select:none}
     $('show-details').textContent = open ? 'Hide details' : 'Show details';
   });
   $('retry').addEventListener('click', function () { send({ kind: 'retry' }); });
+  $('get-installer').addEventListener('click', function () { send({ kind: 'get-installer' }); });
   $('fail-close').addEventListener('click', function () { send({ kind: 'close' }); });
 
   // A step's words come from the launcher with its state (src/ui.rs step_label); the failed words too (failedLabels).
@@ -252,8 +254,9 @@ html,body{height:100%;overflow:hidden;user-select:none}
       $('why').textContent = f.words;
       $('details').textContent = f.detail;
       $('retry').hidden = !f.retry;
+      $('get-installer').hidden = !f.get;
       $('fail-actions').hidden = false;
-      (f.retry ? $('retry') : $('fail-close')).focus();
+      (f.retry ? $('retry') : f.get ? $('get-installer') : $('fail-close')).focus();
     },
     // Back to the choice, for Try again.
     reset: function () {

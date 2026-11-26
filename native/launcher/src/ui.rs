@@ -95,8 +95,31 @@ impl Steps {
     }
 }
 
+/// Where a person gets Genie's installer: the releases of the repository every installed Genie trusts.
+pub const DOWNLOAD_URL: &str = "https://github.com/Renaissance-Analytics/genie/releases/latest";
+
+/// Opens the download page in the person's browser, through the OS's own opener (ShellExecuteW; GTK's show_uri): no
+/// shell, no PATH search, a fixed https address.
+fn open_download_page(window: &tao::window::Window) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let _ = window;
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+        let (op, url) = (wide("open"), wide(DOWNLOAD_URL));
+        let r = unsafe { ShellExecuteW(std::ptr::null_mut(), op.as_ptr(), url.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL) };
+        if (r as isize) <= 32 { Err(format!("the download page could not be opened (error {})", r as isize)) } else { Ok(()) }
+    }
+    #[cfg(unix)]
+    {
+        use tao::platform::unix::WindowExtUnix;
+        gtk::show_uri_on_window(Some(window.gtk_window()), DOWNLOAD_URL, 0).map_err(|e| format!("the download page could not be opened: {e}"))
+    }
+}
+
 /// The failure in words a person acts on, with the launcher's own words kept for Show details. `retry` is false when
-/// trying again cannot help (an installer for another channel, or one not signed by Genie).
+/// trying again cannot help; `get` offers the right installer (another channel, not Genie's, damaged).
 pub fn failure_view(why: &str) -> Value {
     let channel = why.find("(channel ").and_then(|at| {
         let rest = &why[at + "(channel ".len()..];
@@ -104,12 +127,13 @@ pub fn failure_view(why: &str) -> Value {
         let wants = rest.split("this install reads ").nth(1)?.split(')').next()?.trim().to_string();
         Some((got, wants))
     });
-    let (title, words, retry) = if let Some((got, wants)) = channel {
+    let is_channel = channel.is_some();
+    let (title, words, retry): (&str, String, bool) = if let Some((got, wants)) = channel {
         ("This is the wrong installer", format!("This installer is for a different Genie channel ({got}). Download the {wants} installer."), false)
     } else if why.contains("signature is not Genie's") {
         ("This installer isn’t Genie’s", "This installer isn’t signed by Genie, so nothing was installed. Download Genie again from its own page.".to_string(), false)
     } else if why.contains("do not match its signed manifest") {
-        ("This installer is damaged", "A file in this installer isn’t the one Genie signed, so nothing was installed. Download the installer again.".to_string(), true)
+        ("This installer is damaged", "A file in this installer isn’t the one Genie signed, so nothing was installed. Download the installer again.".to_string(), false)
     } else if why.contains("is not newer than") {
         ("Genie is already installed", "This version of Genie is already on this computer.".to_string(), false)
     } else if why.contains("needs a newer launcher") {
@@ -119,7 +143,8 @@ pub fn failure_view(why: &str) -> Value {
     } else {
         ("Genie could not be set up", "Something stopped the install. Try again.".to_string(), true)
     };
-    json!({"title": title, "words": words, "detail": why, "retry": retry})
+    let get = is_channel || why.contains("signature is not Genie's") || why.contains("do not match its signed manifest");
+    json!({"title": title, "words": words, "detail": why, "retry": retry, "get": get})
 }
 
 /// A step's words in each state: waiting (`todo`), running (`now`), `done`, and `failed` (the failure screen's).
@@ -284,6 +309,10 @@ pub fn run_setup(roots: &Roots, options: InstallOptions, keys: Vec<VerifyingKey>
                         println!("setup: installing ({})", profile.as_str());
                         install(proxy.clone(), roots.clone(), options.clone(), keys.clone(), profile);
                     }
+                    Some("get-installer") => match open_download_page(&window) {
+                        Ok(()) => println!("setup: opened the download page {DOWNLOAD_URL}"),
+                        Err(why) => println!("setup: {why}"),
+                    },
                     Some("retry") if !installing && installed.is_none() => {
                         println!("setup: choose (again)");
                         eval(&proxy, "reset", &Value::Null);
