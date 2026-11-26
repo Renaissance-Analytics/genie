@@ -72,10 +72,11 @@ if (mode === 'fail') {
     if (!seen.step) fail('no step is marked failed');
     // The damaged-package failure (src/ui.rs failure_view): its title, and plain words that say what to do.
     if (!/damaged/.test(seen.title) || !/Download the installer again/.test(seen.words)) fail(`not the damaged-package failure: ${seen.title} / ${seen.words}`);
-    if (!seen.actionsShown || !seen.actions.includes('Try again') || !seen.actions.includes('Close')) fail(`no way forward: ${JSON.stringify(seen.actions)}`);
+    // A damaged installer: trying it again cannot help, so Get the installer and Close (never Try again).
+    if (!seen.actionsShown || JSON.stringify(seen.actions) !== JSON.stringify(['Get the installer', 'Close'])) fail(`not Get the installer and Close: ${JSON.stringify(seen.actions)}`);
     if (!/do not match its signed manifest/.test(seen.detail)) fail('the launcher\'s own words are not under Show details');
     await js(`document.getElementById('fail-close').click()`);
-    console.log('### setup-cdp=PASS the failure screen: the failed step marked, plain words, Try again and Close, the launcher\'s words under Show details');
+    console.log('### setup-cdp=PASS the failure screen: the failed step marked, plain words, Get the installer and Close, the launcher\'s words under Show details');
     ws.close();
     process.exit(0);
 }
