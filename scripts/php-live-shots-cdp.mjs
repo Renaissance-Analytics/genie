@@ -12,6 +12,11 @@
  *   node scripts/php-live-shots-cdp.mjs      (Windows test VM: GENIE_TEST_MACHINE=1)
  *
  * PNGs go to ci-out/php-live-shots/<os>-<w>x<h>-<before|after|deck>.png, with what each shows measured beside it.
+ *
+ * `--card`: A FRESH MACHINE (beta.66 on a fresh Windows VM could install NO PHP from the card: 8.5.12, 8.4.27, 8.3.36 and
+ * 8.2.35 were all archived builds with no published checksum). No PHP on disk; the PHP card's Install, then the panel's
+ * Install for every other supported line, each a real windows.php.net download checked against its published sha256 —
+ * photographed after each, to ci-out/php-live-shots/<os>-card-<n>-<version>.png.
  */
 import { mainWindow } from './cdp-main-window.mjs';
 import { closeWhatsNew, seedWhatsNewSeen } from './cdp-whats-new.mjs';
@@ -40,10 +45,22 @@ const home = join(root, 'home');
 mkdirSync(join(home, 'AppData', 'Roaming'), { recursive: true });
 mkdirSync(join(home, 'AppData', 'Local'), { recursive: true });
 seedWhatsNewSeen(join(home, '.genie'));
-// A managed PHP 8.4.27 as Genie lists one: its directory with a php-cgi in it (listing runs nothing from it).
-const old = join(home, '.genie', 'genie2-toolchain', 'php-versions', '8.4.27');
-mkdirSync(old, { recursive: true });
-writeFileSync(join(old, OS === 'windows' ? 'php-cgi.exe' : 'php-cgi'), '');
+const CARD = process.argv.includes('--card');
+if (!CARD) {
+    // A managed PHP 8.4.27 as Genie lists one: its directory with a php-cgi in it (listing runs nothing from it).
+    const old = join(home, '.genie', 'genie2-toolchain', 'php-versions', '8.4.27');
+    mkdirSync(old, { recursive: true });
+    writeFileSync(join(old, OS === 'windows' ? 'php-cgi.exe' : 'php-cgi'), '');
+    // A workspace with an agent, so the Dashboard is the Deck (an empty machine shows its first steps instead).
+    const ws = join(root, 'shop');
+    mkdirSync(ws, { recursive: true });
+    writeFileSync(join(ws, 'project.json'), JSON.stringify({ name: 'shop', repos: [] }));
+    const runtime = join(home, '.genie', 'runtime');
+    mkdirSync(runtime, { recursive: true });
+    writeFileSync(join(runtime, 'workspaces.json'), JSON.stringify([{ id: 'shop', path: ws }]));
+    const at = new Date().toISOString();
+    writeFileSync(join(runtime, 'agents.json'), JSON.stringify([{ id: `agent_${'c3d4e5f6'.repeat(4)}`, workspaceId: 'shop', provider: 'claude', name: 'atlas', instructions: null, threadId: null, createdAt: at, lastUsedAt: null, mode: 'manual', accessScope: 'none' }]));
+}
 const log = join(root, 'electron.log');
 const env = {
     ...process.env, HOME: home, USERPROFILE: home,
@@ -189,6 +206,50 @@ async function shootAt(cdp, label, sizes) {
 }
 
 const SIZES = [[1600, 900], [1280, 800]];
+
+/**
+ * A FRESH MACHINE, FROM THE CARD (`--card`): the PHP card's Install, then the panel's Install for each line still not
+ * installed (its select offers the newest not-installed first), until every line php.net supports is installed. Each
+ * is judged by the panel listing it, and photographed. Returns the photographs taken.
+ */
+let cardWant = 1;
+async function cardRun(cdp) {
+    let taken = 0;
+    await cdp.evaluate(`window.location.hash = '#genie://settings/toolchain'; true`);
+    if (!(await waitFor(cdp, `Boolean(document.querySelector('[data-surface="toolchain"] [data-tool-card="php"]'))`, 180_000, 1000))) throw new Error('the Toolchain never drew its PHP card');
+    const primary = `[data-tool-card="php"] [data-card-primary="install"]`;
+    if (!(await waitFor(cdp, `Boolean(document.querySelector('${primary}'))`, 45_000, 1000))) throw new Error('the PHP card offers no Install');
+    const first = await cdp.evaluate(`document.querySelector('${primary}').getAttribute('data-version')`);
+    note(`the card offers: ${await cdp.evaluate(`document.querySelector('${primary}').innerText`)} (${first})`);
+    await shot(cdp, `${OS}-card-0-fresh.png`);
+    taken++;
+    const asked = [];
+    let next = first;
+    for (let n = 1; next && n <= 8; n++) {
+        asked.push(next);
+        if (n === 1) await click(cdp, primary);
+        else await click(cdp, `${PANEL} [data-php-install=${JSON.stringify(next)}]`);
+        note(`installing PHP ${next} (${n === 1 ? 'the card' : 'the panel'})`);
+        const ok = await waitFor(cdp, `(() => { if (!document.querySelector('${PANEL}')) document.querySelector('[data-select-tool="php"]')?.click(); return Boolean(document.querySelector('${PANEL} [data-php-version=${JSON.stringify(next)}]')); })()`, 8 * 60_000, 3000);
+        const refusal = await cdp.evaluate(`(document.querySelector('${PANEL}')?.innerText.match(/[^\\n]*(could not|will not|refus|no published checksum)[^\\n]*/i) ?? [null])[0]`);
+        note(ok ? `PHP ${next} installed` : `PHP ${next} NOT installed${refusal ? `: ${refusal}` : ''}`);
+        if (!ok) problems.push(`PHP ${next} did not install from ${n === 1 ? 'the card' : 'the panel'}${refusal ? `: ${refusal}` : ''}`);
+        await openPhpPanel(cdp);
+        await sleep(800);
+        note(`MEASURE card-${n} ${await cdp.evaluate(MEASURE)}`);
+        await shot(cdp, `${OS}-card-${n}-${next}.png`);
+        taken++;
+        if (!ok) break;
+        const offered = await cdp.evaluate(`document.querySelector('${PANEL} [data-php-install]')?.getAttribute('data-php-install') ?? null`);
+        next = offered && !asked.includes(offered) ? offered : null;
+    }
+    const lines = new Set(asked.map((v) => v.split('.').slice(0, 2).join('.')));
+    note(`installed from the card and the panel: ${asked.join(', ')} — lines ${[...lines].join(', ')}`);
+    if (lines.size < 4) problems.push(`only ${lines.size} PHP lines were installed (${asked.join(', ')}); php.net supports at least 8.2–8.5`);
+    cardWant = taken;
+    return taken;
+}
+
 let app = launch();
 let cdp = null;
 let shots = 0;
@@ -200,6 +261,9 @@ try {
         await sleep(500);
     }
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 900, deviceScaleFactor: 1, mobile: false });
+    if (CARD) {
+        shots += await cardRun(cdp);
+    } else {
     await openPhpPanel(cdp);
     // BEFORE: php.net's live data reached the panel (a patch above 8.4.27 on its button), and nothing installed yet.
     const offered = await waitFor(cdp, `Boolean(document.querySelector('${PANEL} [data-patch-update="php:8.4.27"]'))`, 45_000, 1000);
@@ -229,6 +293,7 @@ try {
     if (!deck) problems.push('the Deck does not show the PHP security update');
     await shot(cdp, `${OS}-1280x800-deck.png`);
     shots++;
+    }
 } catch (error) {
     problems.push(`the run did not finish: ${error instanceof Error ? error.message : String(error)}`);
     try { if (cdp) await shot(cdp, `${OS}-error.png`); } catch { /* gone */ }
@@ -243,6 +308,6 @@ try {
     if (problems.length > 0) console.log(logText.slice(-2000));
     try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 }); } catch { /* the runner cleans up */ }
 }
-const want = SIZES.length * 2 + 1;
+const want = CARD ? cardWant : SIZES.length * 2 + 1;
 console.log(`### php-live-shots ${shots === want && problems.length === 0 ? 'DONE' : 'INCOMPLETE'} ${shots} photographs${problems.length ? `; ${problems.join('; ')}` : ''}`);
 process.exit(shots === want && problems.length === 0 ? 0 : 1);
