@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { ToolStatus } from '../src/core/toolchain.js';
 import { ToolchainSurface } from '../src/renderer/components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
+import { toolchainProblems } from '../src/renderer/toolchain-view.js';
 
 /**
  * Tynn #1066, from the fresh-Windows shots (the coordinator's review, 2026-11-26):
@@ -44,5 +45,19 @@ describe('with a tool’s panel open, the problems are still named', () => {
         expect(aside).toContain('data-toolchain-problems="2"');
         expect(aside).toContain('data-problem="claude-code"');
         expect(aside).toContain('data-problem="codex"');
+    });
+});
+
+
+describe('a CLI that is not installed is offered Install, not Repair (the fresh-Windows shots)', () => {
+    it('not installed → "Install"; installed and broken → "Repair"', () => {
+        const tc: Tc = { ...VM, tools: [t('claude-code', null, 'broken', { problem: 'there is no `claude` program on this machine’s PATH' }), t('codex', '0.71.0', 'broken', { problem: 'it exits at start' })] };
+        const problems = toolchainProblems(tc);
+        const claude = problems.find((p) => p.key === 'claude-code')!;
+        const codex = problems.find((p) => p.key === 'codex')!;
+        expect(claude.label).toBe('Install');
+        expect(claude.title).toBe("Claude Code isn't installed");
+        expect(codex.label).toBe('Repair');
+        expect(codex.title).toBe("Codex can't run");
     });
 });

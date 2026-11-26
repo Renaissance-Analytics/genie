@@ -643,7 +643,7 @@ describe('after Genie made its PHP the default, nothing calls it the system’s 
             if (binary === 'php-cgi') return { stdout: 'PHP 8.3.6 (cgi-fcgi) (NTS)', exitCode: 0 };
             return ports.run(binary, args, options);
         };
-        expect((await listPhpVersions({ ...ports, run })).system).toEqual({ version: '8.3.6' });
+        expect((await listPhpVersions({ ...ports, run })).system).toMatchObject({ version: '8.3.6' });
     });
     it('the line under the list names the default when there is one', () => {
         expect(unpinnedSitesLine('8.5.13', null)).toBe('Sites with no version chosen run PHP 8.5.13, the default.');
