@@ -29,7 +29,9 @@ import type { ToolchainActivity } from '../core/toolchain-risk.js';
 
 /** Real native planners moved from the window. Stores and service graphs are supplied by genie-host. */
 export function nativeFeatureToolchain(deps: { home: string; providerHealth: ProviderHealthBook;
-    activity(): Promise<ToolchainActivity>; busy(step: string | null): void; download(url: string): Promise<Response> }): NonNullable<FeaturePorts['toolchain']> {
+    activity(): Promise<ToolchainActivity>; busy(step: string | null): void; download(url: string): Promise<Response>;
+    /** Tynn #1067: genie-host's drain of a provider's running agents around its CLI's update. Absent = such an update is refused. */
+    cliDrain?: NonNullable<FeaturePorts['toolchain']>['cliDrain'] }): NonNullable<FeaturePorts['toolchain']> {
     const { providerHealth } = deps;
     // Tynn #970: Docker on Linux is a HEALTH beside its version, read as the user Genie runs as.
     const linuxUser = () => userInfo().username;
@@ -214,6 +216,7 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
             // THE UPDATE GUARD's input, read at the moment of the click: running sessions with their provider, Genie-run
             // processes with their command, running service engines by name.
             activity: () => deps.activity(),
+            ...(deps.cliDrain ? { cliDrain: deps.cliDrain } : {}),
             // Tynn #973: `elevate` is the host's, bound to the client that clicked (genie-host's effectsFor).
             install: (tool, consent, elevate) => installTool(tool, consent, { ...toolchainOps(), ...(elevate ? { elevate } : {}) }),
             // Tynn #970: Docker's Start, one elevated batch for the client that clicked, judged by `docker info` after.

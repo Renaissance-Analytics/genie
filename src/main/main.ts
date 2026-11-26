@@ -82,6 +82,7 @@ import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './ag
 import { hostBuild } from './engine-launch.js';
 import { materializeHostRuntime } from './host-runtime.js';
 import { HostRestart, HostWait } from './host-wait-window.js';
+import { readStartupProgress } from './startup-updates-file.js';
 import { scheduleScratchSweep } from './scratch-area.js';
 import { callRefusal, ownProtocolClient } from './own-protocol-client.js';
 import { ActivityFeeds } from './activity-feeds.js';
@@ -1289,7 +1290,7 @@ async function boot(): Promise<void> {
             open: () => {
                 const win = new BrowserWindow({
                     ...genieWindowIcon(here),
-                    width: 460, height: 190, resizable: false, minimizable: false, maximizable: false, fullscreenable: false, title: 'Genie', backgroundColor: '#111111', autoHideMenuBar: true,
+                    width: 460, height: 210, resizable: false, minimizable: false, maximizable: false, fullscreenable: false, title: 'Genie', backgroundColor: '#111111', autoHideMenuBar: true,
                     webPreferences: { preload: join(here, 'host-wait-preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false },
                 });
                 guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
@@ -1301,6 +1302,9 @@ async function boot(): Promise<void> {
         }, {
             openLog: () => shell.openPath(join(genieRoot(), 'logs', 'genie-host.log')).then((failed) => failed || null),
             restart: () => hostRestart.request(),
+        }, {
+            // The start's due updates (Tynn #1067): what genie-host is updating before it serves, from its runtime folder.
+            startup: () => readStartupProgress(runtimeDir(genieRoot()), Date.now()),
         });
         ipcMain.handle('host-wait:current', () => hostWait.current());
         ipcMain.handle('host-wait:act', (_event, action: unknown) => (action === 'open-log' || action === 'restart' ? hostWait.act(action) : undefined));
