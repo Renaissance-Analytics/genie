@@ -410,8 +410,9 @@ export function toolchainActivity(tc: ToolchainSection): ActivityItem[] {
  * on the PATH sites get), else the system's, else nothing. A fresh Windows VM read "cannot start … there is no system
  * PHP" under four installed PHPs.
  */
-export function unpinnedSitesLine(current: string | null, system: string | null): string {
+export function unpinnedSitesLine(current: string | null, system: string | null, listed = false): string {
     if (current !== null) return `Sites with no version chosen run PHP ${current}, the default.`;
     if (system !== null) return `Sites with no version chosen run PHP ${system}, the system's.`;
+    if (listed) return 'Sites with no version chosen cannot start until one of these is the default: choose it above.';
     return 'Sites with no version chosen cannot start until PHP is installed: there is no system PHP.';
 }

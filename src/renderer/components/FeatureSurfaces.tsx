@@ -1776,7 +1776,7 @@ function LanguagePanel({ lang, view, current, busy, check, onAction, refusals }:
             </ul>
             {lang === 'php' ? (
                 <p {...attr('system', '')} className="text-xs text-[var(--fg-3)]">
-                    {unpinnedSitesLine(current, view.system?.version ?? null)}
+                    {unpinnedSitesLine(current, view.system?.version ?? null, view.managed.length > 0)}
                 </p>
             ) : (
                 <p {...attr('system', '')} className="text-xs text-[var(--fg-3)]">{view.system ? `The ${copy.binary} on your PATH is ${view.system.version}.` : `No ${copy.binary} on your PATH.`}</p>

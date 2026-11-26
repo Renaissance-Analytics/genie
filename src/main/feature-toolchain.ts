@@ -87,7 +87,13 @@ async function phpDefaultWhenNone(next: FeatureState, tc: ToolchainPort, version
 
 /** Re-probe every tool (the snapshot shows the MEASURED state, never a command's word) and how each missing one would install. */
 export async function rescanToolchain(next: FeatureState, tc: ToolchainPort, pins: readonly SitePin[] = []): Promise<void> {
-    if (tc.php) next.toolchainPhp = await tc.php.list(pins);
+    if (tc.php) {
+        next.toolchainPhp = await tc.php.list(pins);
+        // Genie's PHPs on disk and no default (a seeded machine, an older Genie's installs): the newest is the default —
+        // the first-install rule (Tynn #1066), so a listed PHP is never "not installed" to the sites.
+        const newest = next.toolchainPhp.managed[0]?.version;
+        if (newest) await phpDefaultWhenNone(next, tc, newest);
+    }
     if (tc.node) next.toolchainNode = await tc.node.list();
     if (tc.go) next.toolchainGo = await tc.go.list();
     if (tc.python) next.toolchainPython = await tc.python.list();
