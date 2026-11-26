@@ -50,7 +50,7 @@ fn install_puts_the_launcher_in_its_place_links_it_and_writes_the_desktop_entry_
     let v: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
     assert_eq!(v["tracks"]["launcher"]["current"], "2026.11.26-1");
 
-    let out = run(genie_in(&r, &key).env("HOME", &home).arg("uninstall"));
+    let out = run(genie_in(&r, &key).env("HOME", &home).env_remove("XDG_DATA_HOME").arg("uninstall"));
     assert!(out.status.success(), "{}", text(&out));
     assert!(!r.code.exists(), "the programs folder is gone");
     assert!(std::fs::symlink_metadata(&link).is_err(), "the link is gone");
@@ -68,7 +68,7 @@ fn with_no_launcher_package_no_entry_is_written() {
     let from = base.join("from");
     packages(&from, &key, "2026.11.26-1");
     std::fs::remove_file(from.join(format!("launcher-2026.11.26-1-{}-{}.manifest.json", genie_launcher::manifest::this_platform(), genie_launcher::manifest::this_arch()))).unwrap();
-    let out = run(genie_in(&r, &key).env("HOME", &home).args(["install", "--from"]).arg(&from));
+    let out = run(genie_in(&r, &key).env("HOME", &home).env_remove("XDG_DATA_HOME").args(["install", "--from"]).arg(&from));
     assert!(out.status.success(), "{}", text(&out));
     assert!(!home.join(".local").exists(), "nothing written outside the code root: {:?}", std::fs::read_dir(&home).unwrap().collect::<Vec<_>>());
 }

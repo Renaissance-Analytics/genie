@@ -159,6 +159,7 @@ fn verify_tree_gives_every_tree_cases_verdict() {
             channel: "stable".into(),
             platform: "linux".into(),
             arch: "x64".into(),
+            with_client: Some("2026.11.25-1".into()),
             min_launcher: None,
             files,
             notes: String::new(),

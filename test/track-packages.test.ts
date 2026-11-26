@@ -270,19 +270,40 @@ describe('the installer: the launcher at Genie.exe, and the packages it installs
         expect(c.publish).toBeNull();
     });
 
-    it('asks client + local host (the default) or client only, and installs from its own packages; /S /PROFILE=client is the automated form', () => {
+    it('does the bare install: the launcher and its packages, Genie opened after; the silent form installs them itself', () => {
         const nsh = readFileSync('build/launcher-installer.nsh', 'utf8');
-        expect(nsh).toMatch(/This computer runs Genie's host/);
-        expect(nsh).toMatch(/Client only/);
+        // NSIS hosts no webview: no page of its own. The choice is the launcher's window (native/launcher/ui/setup.html).
+        expect(nsh).not.toMatch(/nsDialogs|licensePage|Page custom/);
         expect(nsh).toMatch(/\/PROFILE=/);
-        expect(nsh).toContain('"$INSTDIR\\Genie.exe" install --profile $GenieProfile --from "$INSTDIR\\packages" --yes');
-        // The NSIS folder holds the launcher alone once the packages are in the code root.
-        expect(nsh).toContain('RMDir /r "$INSTDIR\\packages"');
+        // /S (and electron-updater's silent run): the launcher installs from the packages beside it, and refuses in words.
+        expect(nsh).toMatch(/\$\{if\} \$\{Silent\}[\s\S]*"\$INSTDIR\\Genie\.exe" install --profile \$GenieProfile --from "\$INSTDIR\\packages" --yes[\s\S]*RMDir \/r "\$INSTDIR\\packages"/);
         // Genie (doctor mode) beside Genie, both the launcher.
         expect(nsh).toContain('(doctor mode).lnk" "$appExe" "--doctor"');
         // An upgrade runs the old uninstaller over the folder: only a real uninstall stops Genie and removes the code root.
         expect(nsh).toMatch(/\$\{ifNot\} \$\{isUpdated\}[\s\S]*Genie\.exe" uninstall --yes/);
-        // The choice is skipped on an update (electron-updater runs it silent), as a license page would be.
-        expect(nsh).toMatch(/!macro licensePage/);
     });
+});
+
+describe('the setup window: the owner\'s direction C, "Wish Orb", in the launcher (Tynn #1058 L3)', () => {
+    const html = readFileSync('native/launcher/ui/setup.html', 'utf8');
+
+    it('carries the mockup\'s three install screens and its own CSS, bundled: nothing is fetched', () => {
+        for (const id of ['s-choose', 's-install', 's-ready']) expect(html).toContain(`id="${id}"`);
+        expect(html).toContain('/*GENIE_CSS*/');
+        expect(readFileSync('native/launcher/src/ui.rs', 'utf8')).toMatch(/include_str!\("\.\.\/ui\/base\.css"\)[\s\S]*include_str!\("\.\.\/ui\/theme-c\.css"\)/);
+        expect(readFileSync('native/launcher/ui/theme-c.css', 'utf8')).toMatch(/C: Wish Orb/);
+        expect(html).not.toMatch(/(src|href)="https?:/);
+    });
+
+    it('asks the owner\'s choice: Genie + this computer as a host (recommended, chosen) or Genie only', () => {
+        expect(html).toMatch(/class="opt on" data-profile="both"[\s\S]*Genie \+ this computer as a host[\s\S]*Recommended/);
+        expect(html).toMatch(/data-profile="client"[\s\S]*Genie only/);
+        expect(html).toContain('Installs for you only. No administrator rights needed.');
+        expect(html).toMatch(/send\(\{ kind: 'install', profile: profile \}\)/);
+    });
+
+    it('honours reduce motion (the mockup\'s own rule, in the bundled CSS)', () => {
+        expect(readFileSync('native/launcher/ui/base.css', 'utf8')).toContain('@media (prefers-reduced-motion: reduce)');
+    });
+});
 });
