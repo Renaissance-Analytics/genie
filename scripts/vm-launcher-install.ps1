@@ -85,17 +85,17 @@ if (Test-Path $Data) {
 }
 
 # --- 1. the installer, then the launcher's setup window (direction C) -------------------------------------------------
-# The window is WebView2: its debugger on 9333 for this row, through the user's environment, which the installer's
+# The window is WebView2: its debugger on 9471 for this row, through the user's environment, which the installer's
 # run-after-finish (a shell start, not a child of this script) reads. Taken away again in Cleanup.
-[Environment]::SetEnvironmentVariable('WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS', '--remote-debugging-port=9333', 'User')
-$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9333'
+[Environment]::SetEnvironmentVariable('WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS', '--remote-debugging-port=9471', 'User')
+$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9471'
 $proc = Start-Process -FilePath $installer.FullName -PassThru
 $done = $proc.WaitForExit(240000)
 if (-not $done) { Shot 'installer-stuck.png'; Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue; Fail 'the installer did not finish within 4 minutes (see installer-stuck.png)' }
 Write-Output "the installer exited $($proc.ExitCode)"
 if ($proc.ExitCode -ne 0) { Fail "the installer failed (exit $($proc.ExitCode))" }
 if (-not (Test-Path (Join-Path $Prog 'packages'))) { Fail 'the bare install left no packages beside the launcher for its first run' }
-node scripts/launcher-setup-cdp.mjs 9333 $Out both
+node scripts/launcher-setup-cdp.mjs 9471 $Out both
 if ($LASTEXITCODE -ne 0) {
     Shot 'setup-window-screen.png'
     foreach ($f in @('logs\genie-launcher.log', 'logs\genie-host.log')) { $p = Join-Path $Data $f; if (Test-Path $p) { Write-Output "--- $f"; Get-Content $p -Tail 30 } }
@@ -184,15 +184,15 @@ node scripts/ci/tamper-package.mjs $Pkg (Join-Path $Repo 'release\tracks\trees')
 if ($LASTEXITCODE -ne 0) { Fail 'the tampered package set could not be made' }
 $fCode = Join-Path $env:LOCALAPPDATA 'GenieFailRow'
 $fHome = Join-Path $env:LOCALAPPDATA 'GenieFailRowHome'
-$env:GENIE_CODE_ROOT = $fCode; $env:GENIE_HOME = $fHome; $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9334'
+$env:GENIE_CODE_ROOT = $fCode; $env:GENIE_HOME = $fHome; $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9472'
 try {
     $fp = Start-Process -FilePath (Join-Path $Prog 'Genie.exe') -ArgumentList @('setup', '--from', $Tampered) -PassThru
-    node scripts/launcher-setup-cdp.mjs 9334 $Out both fail
+    node scripts/launcher-setup-cdp.mjs 9472 $Out both fail
     $failShown = ($LASTEXITCODE -eq 0)
     [void]$fp.WaitForExit(30000)
 } finally {
     Remove-Item Env:GENIE_CODE_ROOT, Env:GENIE_HOME -ErrorAction SilentlyContinue
-    $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9333'
+    $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9471'
 }
 if (-not $failShown) { Fail 'the failure screen for a tampered package was not as it must be (above)' }
 $landed = @(Get-ChildItem -Directory (Join-Path $fCode 'client'), (Join-Path $fCode 'browser'), (Join-Path $fCode 'host') -ErrorAction SilentlyContinue)
