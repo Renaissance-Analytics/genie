@@ -44,7 +44,7 @@ fn a_failure_says_what_to_do_in_plain_words_and_keeps_the_launchers_own_for_deta
 #[test]
 fn the_failure_screen_marks_the_failed_step_turns_the_bar_red_and_offers_a_way_forward() {
     let html = setup_html();
-    assert!(html.contains("Couldn’t confirm this package"), "the failed step says it failed");
+    assert_eq!(genie_launcher::ui::failed_labels()["check"], "Couldn’t confirm this package", "the failed step says it failed");
     assert!(html.contains("<use href=\"#i-x\"/>"), "with a red cross");
     assert!(html.contains(".bar.bad .fill{background:var(--bad)}"), "the bar turns red where it stopped");
     assert!(html.contains("id=\"retry\">Try again") && html.contains("id=\"fail-close\">Close"), "Try again and Close");
@@ -54,4 +54,27 @@ fn the_failure_screen_marks_the_failed_step_turns_the_bar_red_and_offers_a_way_f
 fn hidden_parts_stay_hidden_whatever_their_display_rule() {
     // The failure actions are `hidden` until a failure, inside `.fail-actions{display:flex}`: the hidden rule must win.
     assert!(setup_html().contains("[hidden]{display:none!important}"));
+}
+
+#[test]
+fn a_steps_words_follow_its_state() {
+    use genie_launcher::ui::step_label;
+    // Waiting, running, done: never "Installed" on a row that is still at 2 %.
+    assert_eq!(step_label("client", "todo"), "Install Genie");
+    assert_eq!(step_label("client", "now"), "Installing Genie…");
+    assert_eq!(step_label("client", "done"), "Installed Genie");
+    assert_eq!(step_label("check", "now"), "Checking that everything is from Genie…");
+    assert_eq!(step_label("check", "done"), "Checked that everything is from Genie");
+    assert_eq!(step_label("host", "now"), "Installing the host…");
+    assert_eq!(step_label("start", "now"), "Starting the host…");
+    assert_eq!(step_label("start", "done"), "Host started");
+    for id in ["check", "client", "host", "start"] {
+        let words: Vec<&str> = ["todo", "now", "done", "failed"].iter().map(|s| step_label(id, s)).collect();
+        assert!(words.iter().all(|w| !w.is_empty()), "{id}: {words:?}");
+        let mut unique = words.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), 4, "{id}: each state has its own words: {words:?}");
+        assert!(step_label(id, "now").ends_with('…'), "{id}: a running step says it is running");
+    }
 }
