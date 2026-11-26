@@ -82,7 +82,12 @@ describe('the client, built by electron-builder', () => {
         for (const keep of ['dist/**', 'package.json']) expect(c.files).toContain(keep);
         expect(c.asarUnpack).toEqual(base.asarUnpack);
         expect(c.electronFuses).toEqual(base.electronFuses);
-        expect(c.win.files).toEqual((base.win as any).files);
+        // A platform's own `files` take the place of the top-level list for the app's files (electron-builder 26.15.3,
+        // measured: the Windows build's builder-debug.yml had only `**/*` and win.files' exclusions, so the repository went
+        // into the client's asar, item 1126-191543-b3aa95). Each platform list therefore carries the top-level patterns
+        // first, then its own.
+        expect(c.win.files).toEqual([...c.files, ...((base.win as any).files as string[])]);
+        expect(c.win.files.slice(0, 2)).toEqual(['dist/**', 'package.json']);
         expect(c.appId).toBe(base.appId);
         // The launcher is its own program now (Genie.exe / genie): the client carries no genie-launch.exe.
         expect(JSON.stringify(c.extraResources)).not.toContain('genie-launch.exe');
