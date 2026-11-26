@@ -76,6 +76,8 @@ describe('the client, built by electron-builder', () => {
         expect(c.executableName).toBe('genie-client');
         expect(c.files).toContain('!dist/main/host.js');
         expect(c.files).toContain('!dist/main/host.js.map');
+        // No third-party sourcemaps: nothing loads them at runtime.
+        expect(c.files).toContain('!**/node_modules/**/*.map');
         // Everything else of electron-builder.yml is kept (the asar, its unpack rules, the per-OS file rules, the fuse).
         for (const keep of ['dist/**', 'package.json']) expect(c.files).toContain(keep);
         expect(c.asarUnpack).toEqual(base.asarUnpack);
