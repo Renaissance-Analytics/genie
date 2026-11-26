@@ -69,8 +69,8 @@ describe('the pill', () => {
         expect(c.getAttribute('aria-haspopup')).toBe('dialog');
         expect(c.getAttribute('aria-expanded')).toBe('false');
         expect(c.querySelector('[data-provider-logo="claude"]')).not.toBeNull();
-        expect(c.textContent).toBe('40% left5h'); // ONE meaning, said (Tynn #1070): the share LEFT
-        expect(pill('codex').textContent).toBe('12% left7d');
+        expect(c.textContent).toBe('60% used5h'); // ONE meaning, said, the provider's own (Tynn #1070): the share USED
+        expect(pill('codex').textContent).toBe('88% used7d');
         expect(pill('codex').getAttribute('data-level')).toBe('warning');
         // A react-fancy Button, which carries the pointer itself (react-fancy 5.71.3+).
         expect(c.hasAttribute('data-react-fancy-button')).toBe(true);
@@ -130,7 +130,7 @@ describe('inside the popover', () => {
         expect(popover('claude')!.textContent).not.toMatch(/Claude/);
     });
 
-    it('one row per window: a bar of the share left, the percentage, the relative reset and the exact time smaller', () => {
+    it('one row per window: a bar of the share used, the percentage, the relative reset and the exact time smaller', () => {
         render({ claude });
         click(pill('claude'));
         const rows = [...popover('claude')!.querySelectorAll('[data-rate-limit-window]')].map((r) => r.getAttribute('data-rate-limit-window'));
@@ -138,16 +138,16 @@ describe('inside the popover', () => {
 
         const five = row('claude', '5h')!;
         const bar = five.querySelector('[role="progressbar"]')!;
-        expect(bar.getAttribute('aria-valuenow')).toBe('40');
-        expect((bar.querySelector('[data-rate-limit-fill]') as HTMLElement).style.width).toBe('40%');
-        expect(five.querySelector('[data-rate-limit-pct]')!.textContent).toBe('40% left');
+        expect(bar.getAttribute('aria-valuenow')).toBe('60');
+        expect((bar.querySelector('[data-rate-limit-fill]') as HTMLElement).style.width).toBe('60%');
+        expect(five.querySelector('[data-rate-limit-pct]')!.textContent).toBe('60% used');
         expect(five.querySelector('[data-rate-limit-reset]')!.textContent).toBe('resets in 2h 14m');
         const exact = five.querySelector('[data-rate-limit-at]')!;
         expect(exact.textContent).toBe(shortDateTime(NOW + 134 * MIN));
         expect(exact.className).toMatch(/text-\[11px\]|text-\[10px\]/);
 
         const seven = row('claude', '7d')!;
-        expect(seven.querySelector('[data-rate-limit-pct]')!.textContent).toBe('65% left');
+        expect(seven.querySelector('[data-rate-limit-pct]')!.textContent).toBe('35% used');
         expect(seven.querySelector('[data-rate-limit-reset]')!.textContent).toBe('resets in 3d 12h');
     });
 
@@ -221,7 +221,7 @@ describe('a window the provider did not report', () => {
         // Positive control: the reported window in the same popover has its bar and number.
         const seven = row('codex', '7d')!;
         expect(seven.querySelector('[role="progressbar"]')).not.toBeNull();
-        expect(seven.querySelector('[data-rate-limit-pct]')!.textContent).toBe('47% left');
+        expect(seven.querySelector('[data-rate-limit-pct]')!.textContent).toBe('53% used');
     });
 });
 
@@ -259,13 +259,13 @@ describe('a window past its reset reads Refreshed, never its last figure (Tynn #
         expect(five.textContent).not.toMatch(/5%|resets/);
         // Positive control: the window that has not reset still draws its bar and figure.
         const seven = row('claude', '7d')!;
-        expect(seven.querySelector('[role="progressbar"]')!.getAttribute('aria-valuenow')).toBe('40');
-        expect(seven.querySelector('[data-rate-limit-pct]')!.textContent).toBe('40% left');
+        expect(seven.querySelector('[role="progressbar"]')!.getAttribute('aria-valuenow')).toBe('60');
+        expect(seven.querySelector('[data-rate-limit-pct]')!.textContent).toBe('60% used');
     });
 
     it('the pill: shows the tightest window that has NOT reset, not the stale 5%', () => {
         render({ claude: mixed() });
-        expect(pill('claude').textContent).toBe('40% left7d');
+        expect(pill('claude').textContent).toBe('60% used7d');
         expect(pill('claude').getAttribute('data-level')).toBe('ok');
     });
 

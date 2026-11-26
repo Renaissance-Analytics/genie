@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AccountRecord } from '../src/core/accounts.js';
 import { accountsView, type AccountsSnapshot, type KnownAccountRecord } from '../src/core/accounts-view.js';
 import { HeadroomFeed, type AccountHeadroom } from '../src/core/headroom-board.js';
-import { leftWords, limitRows, type Headroom, type WindowReading } from '../src/core/headroom.js';
+import { limitRows, usedWords, type Headroom, type WindowReading } from '../src/core/headroom.js';
 import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity.js';
 import type { ProcessInfo, ProcessTree } from '../src/core/process-tree.js';
 import { ReadingAttribution } from '../src/core/reading-attribution.js';
@@ -226,12 +226,12 @@ describe('the switch offer\'s numbers are the bars\', and its words read', () =>
         expect(service.offers()[0]).toMatchObject({ leftPct: 2, over: false });
     });
 
-    it('the words: "N% left in the 5-hour window", "spent this week"; a target with its own window; one never read is said so', () => {
+    it('the words, the provider's own: "N% used in the 5-hour window", "spent this week"; a target with its own window; one never read is said so', () => {
         const offer = (window: string, leftPct: number, over: boolean): SwitchOffer => ({ id: 'o', provider: 'claude', accountId: A.id, label: 'Account 1', window, leftPct, over, resetsAtMs: NOW + HOUR, targets: [] });
-        expect(offerWords(offer('5h', 0, false))).toBe('Account 1: 0% left in the 5-hour window.');
+        expect(offerWords(offer('5h', 0, false))).toBe('Account 1: 100% used in the 5-hour window.');
         expect(offerWords(offer('7d', 0, true))).toBe('Account 1: spent this week.');
-        expect(offerWords(offer('7d fable', 4, false))).toBe('Account 1: 4% left in the 7d fable window.');
-        expect(targetWords({ accountId: B.id, label: 'Account 2', room: 'reported', leftPct: 95, resetsAtMs: NOW + HOUR, window: '7d' })).toBe('Account 2 (95% left this week)');
+        expect(offerWords(offer('7d fable', 4, false))).toBe('Account 1: 96% used in the 7d fable window.');
+        expect(targetWords({ accountId: B.id, label: 'Account 2', room: 'reported', leftPct: 95, resetsAtMs: NOW + HOUR, window: '7d' })).toBe('Account 2 (5% used this week)');
         expect(targetWords({ accountId: C.id, label: 'Account 3', room: 'unknown', leftPct: null, resetsAtMs: null, window: null })).toBe('Account 3 (room not known yet)');
     });
 });
@@ -257,39 +257,40 @@ describe('the Accounts popover draws each account\'s own windows', () => {
         expect(windows(C.id)).toEqual([]);
         expect(pop.querySelector(`[data-account="${C.id}"] [data-account-usage-unknown]`)!.textContent).toContain('unknown');
         const callout = pop.querySelector('[data-switch-offer]')!.textContent!;
-        expect(callout).toContain('Account 1: 0% left in the 5-hour window.');
+        expect(callout).toContain('Account 1: 100% used in the 5-hour window.');
         expect(callout).not.toMatch(/window window|of its/);
-        expect(callout).toContain('Account 2 (50% left in the 7d fable window)');
+        expect(callout).toContain('Account 2 (50% used in the 7d fable window)');
     });
 });
 
-describe('ONE meaning of a figure, said on screen: the share LEFT (Tynn #1070 review)', () => {
+describe('ONE meaning of a figure, said on screen, the provider's own: the share USED (Tynn #1070 review; Claude's page says "95% used")', () => {
     const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
     let el: HTMLDivElement;
     let root: Root;
     beforeEach(() => { g.IS_REACT_ACT_ENVIRONMENT = true; el = document.createElement('div'); document.body.appendChild(el); root = createRoot(el); });
     afterEach(() => { act(() => root.unmount()); el.remove(); document.body.innerHTML = ''; });
 
-    it('the words: "N% left", "over" when spent', () => {
-        expect(leftWords({ leftPct: 64, over: false })).toBe('64% left');
-        expect(leftWords({ leftPct: 0, over: true })).toBe('over');
+    it('the words: "N% used", "over" when spent past the allowance', () => {
+        expect(usedWords({ leftPct: 64, over: false })).toBe('36% used');
+        expect(usedWords({ leftPct: 0, over: false })).toBe('100% used');
+        expect(usedWords({ leftPct: 0, over: true })).toBe('over');
     });
 
-    it('every bar in the popover says "% left" beside a fill of that share; the chip says it too', () => {
+    it('every bar in the popover says "% used" beside a fill of that share; the chip says it too', () => {
         const readings = [reading(A.id, [live('5h', 0), live('7d', 64)]), reading(B.id, [live('7d', 95), live('7d fable', 50)])];
         const snapshot: AccountsSnapshot = { providers: accountsView([A, B, C].map(known), readings, { claude: A.id }), offers: [] };
         act(() => root.render(<RateLimitPills limits={{}} accounts={snapshot} now={NOW} />));
         const chip = el.querySelector('[data-account-chip="claude"]')!;
-        expect(chip.textContent).toContain('0% left');
+        expect(chip.textContent).toContain('100% used');
         act(() => { chip.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
         const pop = document.querySelector('[data-account-popover="claude"]')!;
         const said = (id: string, w: string) => pop.querySelector(`[data-account="${id}"] [data-account-window="${w}"]`)!;
-        expect(said(A.id, '7d').textContent).toContain('64% left');
-        expect(said(A.id, '5h').textContent).toContain('0% left');
-        expect(said(B.id, '7d').textContent).toContain('95% left');
-        expect(said(B.id, '7d fable').textContent).toContain('50% left');
-        // The fill is the share left: 64 of 100.
-        expect(said(A.id, '7d').querySelector('[role="progressbar"]')!.getAttribute('aria-valuenow')).toBe('64');
+        expect(said(A.id, '7d').textContent).toContain('36% used');
+        expect(said(A.id, '5h').textContent).toContain('100% used');
+        expect(said(B.id, '7d').textContent).toContain('5% used');
+        expect(said(B.id, '7d fable').textContent).toContain('50% used');
+        // The fill is the share used: 36 of 100.
+        expect(said(A.id, '7d').querySelector('[role="progressbar"]')!.getAttribute('aria-valuenow')).toBe('36');
     });
 
     it('the headline is the TIGHTEST window: 95 % used on 7d (5 % left) and 50 % on the model cap headlines 7d', () => {
@@ -297,7 +298,7 @@ describe('ONE meaning of a figure, said on screen: the share LEFT (Tynn #1070 re
         const snapshot: AccountsSnapshot = { providers: accountsView([B].map(known), readings, { claude: B.id }), offers: [] };
         act(() => root.render(<RateLimitPills limits={{}} accounts={snapshot} now={NOW} />));
         const chip = el.querySelector('[data-account-chip="claude"]')!;
-        expect(chip.textContent).toBe('Account 25% left7d');
+        expect(chip.textContent).toBe('Account 295% used7d');
         // And the offer's suggestion names it: B's room is its 7d at 5 % left, too near to suggest at all.
         expect(switchTargets({ provider: 'claude', accountId: A.id, window: '5h', leftPct: 0 }, readings, [A, B])).toEqual([]);
     });
