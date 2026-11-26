@@ -18,10 +18,10 @@ function files(dir: string): string[] {
 describe('the launcher, asynchronously', () => {
     it('no caller of genie-launch.exe starts it synchronously, and engine-launch has no synchronous child start at all', () => {
         const callers = files('src').filter((f) => /winLauncherPath\(/.test(codeOf(f)) && !f.endsWith('win-launcher.ts'));
-        // CONTROL: the scan finds the two callers.
-        expect(callers.map((f) => f.replace(/\\/g, '/')).sort()).toEqual(['src/main/engine-launch.ts', 'src/main/git-ports.ts']);
+        // CONTROL: the scan finds the three callers (the host start moved to legacy-host-start.ts, Tynn #1058 L4).
+        expect(callers.map((f) => f.replace(/\\/g, '/')).sort()).toEqual(['src/main/engine-launch.ts', 'src/main/git-ports.ts', 'src/main/legacy-host-start.ts']);
         for (const f of callers) expect(codeOf(f), f).not.toMatch(/(execFileSync|spawnSync|execSync)\(\s*(launcher|winLauncherPath\(\))/);
-        expect(codeOf('src/main/engine-launch.ts')).not.toMatch(/\b(execFileSync|spawnSync|execSync)\b/);
+        for (const f of ['src/main/engine-launch.ts', 'src/main/legacy-host-start.ts']) expect(codeOf(f), f).not.toMatch(/\b(execFileSync|spawnSync|execSync)\b/);
     });
 });
 

@@ -25,7 +25,9 @@ import { describe, expect, it } from 'vitest';
 // P2.1), which is what takes process creation out of the window entirely.
 // `spawn-host.ts` is the spawn host itself: since Tynn #532 it creates genie-host's git there.
 // `linux-elevation.ts` runs in genie-host only (Tynn #973): the sudo of an elevated step the person allowed; main never imports it.
-const SPAWN_HOST = new Set(['src/main/spawn-exec.ts', 'src/main/spawn-host-client.ts', 'src/main/engine-launch.ts', 'src/main/spawn-relay.ts', 'src/main/spawn-host.ts', 'src/main/linux-elevation.ts']);
+// `legacy-host-start.ts` is engine-launch.ts's own host start, moved there by Tynn #1058 L4 (the single-app install's, until
+// the bridge, L9, deletes it): the same one detached spawn of genie-host, through genie-launch.exe on Windows.
+const SPAWN_HOST = new Set(['src/main/spawn-exec.ts', 'src/main/spawn-host-client.ts', 'src/main/engine-launch.ts', 'src/main/legacy-host-start.ts', 'src/main/spawn-relay.ts', 'src/main/spawn-host.ts', 'src/main/linux-elevation.ts']);
 
 /** Still spawning on main, by name. Remove a line when its module moves; never add one. */
 const KNOWN: Readonly<Record<string, string>> = {
