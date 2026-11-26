@@ -138,12 +138,12 @@ fn the_shape_refuses_what_the_schema_refuses() {
     assert!(parse_manifest(&good).is_ok());
     let bad: Vec<(&str, Vec<u8>)> = vec![
         ("an unknown field", edit(&good, |v| v["extra"] = Value::Bool(true))),
-        ("format 2", edit(&good, |v| v["format"] = 2.into())),
+        ("format 1 (never published)", edit(&good, |v| v["format"] = 1.into())),
         ("a missing field", edit(&good, |v| { v.as_object_mut().unwrap().remove("notes"); })),
         ("a +meta build", edit(&good, |v| v["build"] = "2026.11.25-1+ci.7".into())),
         ("a schema that is not the build's", edit(&good, |v| v["schema"] = "2026.11.24".into())),
         ("a date that is not a date", edit(&good, |v| { v["build"] = "2026.02.30-1".into(); v["schema"] = "2026.02.30".into(); })),
-        ("an unknown track", edit(&good, |v| v["track"] = "browser".into())),
+        ("an unknown track (a GApp joins in a later format)", edit(&good, |v| v["track"] = "gapp".into())),
         ("an unknown channel", edit(&good, |v| v["channel"] = "beta".into())),
         ("no files", edit(&good, |v| v["files"] = Value::Array(vec![]))),
         ("files out of order", edit(&good, |v| v["files"].as_array_mut().unwrap().reverse())),

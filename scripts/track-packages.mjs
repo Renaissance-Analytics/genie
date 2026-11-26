@@ -76,7 +76,9 @@ export function launcherInstallerConfig(base, { version }) {
             artifactName: 'Genie-${version}-launcher-setup.${ext}',
             ...(base.win?.azureSignOptions ? { azureSignOptions: clone(base.win.azureSignOptions) } : {}),
         },
-        nsis: { ...clone(base.nsis ?? {}), include: 'build/launcher-installer.nsh' },
+        // packElevateHelper off: nothing of Genie elevates, and electron-builder would put elevate.exe in the NSIS folder,
+        // which holds the launcher alone.
+        nsis: { ...clone(base.nsis ?? {}), include: 'build/launcher-installer.nsh', packElevateHelper: false },
         publish: null,
     };
 }

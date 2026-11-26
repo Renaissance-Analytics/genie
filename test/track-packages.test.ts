@@ -263,6 +263,7 @@ describe('the installer: the launcher at Genie.exe, and the packages it installs
         expect(c.nsis.perMachine).toBe(false);
         expect(c.nsis.deleteAppDataOnUninstall).toBe(false);
         expect(c.nsis.include).toBe('build/launcher-installer.nsh');
+        expect(c.nsis.packElevateHelper).toBe(false);
         expect(c.extraMetadata.version).toBe('2026.11.26-1');
         expect(c.win.artifactName).toBe('Genie-${version}-launcher-setup.${ext}');
         expect(c.win.target).toEqual(['nsis']);

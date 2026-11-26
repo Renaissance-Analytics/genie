@@ -60,6 +60,11 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Threading",
 ] }
 
+# The tests' builds carry no debug info: with WebKitGTK and GTK under the setup window, a debug build filled the Linux test
+# VM's disk (item 1126-092435-16a913, "Disk quota exceeded"). A panic still names its file and line.
+[profile.dev]
+debug = false
+
 [profile.release]
 opt-level = "s"
 lto = true
