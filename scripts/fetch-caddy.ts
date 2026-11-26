@@ -43,7 +43,11 @@ if (sum !== d.sha512) {
 const archive = join(outDir, `caddy.${d.archive}`);
 writeFileSync(archive, bytes);
 if (d.archive === 'zip') {
-    execFileSync('powershell', ['-NoProfile', '-Command', `Expand-Archive -Force -LiteralPath '${archive}' -DestinationPath '${outDir}'`]);
+    // Windows' own bsdtar reads zip, by its full path: never PATH (Git's GNU tar cannot read zip). Not PowerShell's
+    // Expand-Archive: launched from a pwsh 7 step, Windows PowerShell inherits pwsh's PSModulePath and loads pwsh 7's
+    // Archive module, which fails ("Cannot find an overload for ExtractToDirectory"), release run 45729527045.
+    const systemTar = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe');
+    execFileSync(systemTar, ['-xf', archive, '-C', outDir, d.binaryInArchive]);
 } else {
     execFileSync('tar', ['-xzf', archive, '-C', outDir, d.binaryInArchive]);
     chmodSync(outBin, 0o755);
