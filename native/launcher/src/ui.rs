@@ -86,6 +86,33 @@ impl Steps {
     }
 }
 
+/// The failure in words a person acts on, with the launcher's own words kept for Show details. `retry` is false when
+/// trying again cannot help (an installer for another channel, or one not signed by Genie).
+pub fn failure_view(why: &str) -> Value {
+    let channel = why.find("(channel ").and_then(|at| {
+        let rest = &why[at + "(channel ".len()..];
+        let got = rest.split(',').next()?.trim().to_string();
+        let wants = rest.split("this install reads ").nth(1)?.split(')').next()?.trim().to_string();
+        Some((got, wants))
+    });
+    let (title, words, retry) = if let Some((got, wants)) = channel {
+        ("This is the wrong installer", format!("This installer is for a different Genie channel ({got}). Download the {wants} installer."), false)
+    } else if why.contains("signature is not Genie's") {
+        ("This installer isn’t Genie’s", "This installer isn’t signed by Genie, so nothing was installed. Download Genie again from its own page.".to_string(), false)
+    } else if why.contains("do not match its signed manifest") {
+        ("This installer is damaged", "A file in this installer isn’t the one Genie signed, so nothing was installed. Download the installer again.".to_string(), true)
+    } else if why.contains("is not newer than") {
+        ("Genie is already installed", "This version of Genie is already on this computer.".to_string(), false)
+    } else if why.contains("needs a newer launcher") {
+        ("This installer needs a newer Genie", "Update Genie first, then run this installer again.".to_string(), false)
+    } else if why.contains("host did not start") || why.contains("host exited before") {
+        ("Genie’s host didn’t start", "Genie is installed, but its host didn’t start. Try again; if it keeps happening, the host’s log is under Show details.".to_string(), true)
+    } else {
+        ("Genie could not be set up", "Something stopped the install. Try again.".to_string(), true)
+    };
+    json!({"title": title, "words": words, "detail": why, "retry": retry})
+}
+
 fn eval(proxy: &EventLoopProxy<UserEvent>, call: &str, arg: &Value) {
     let _ = proxy.send_event(UserEvent::Eval(format!("window.genieSetup && window.genieSetup.{call}({arg})")));
 }
@@ -200,7 +227,7 @@ pub fn run_setup(roots: &Roots, options: InstallOptions, keys: Vec<VerifyingKey>
                     }
                     Err(why) => {
                         println!("setup: failed: {why}");
-                        eval(&proxy, "failed", &Value::String(why))
+                        eval(&proxy, "failed", &failure_view(&why))
                     }
                 }
             }
@@ -217,6 +244,10 @@ pub fn run_setup(roots: &Roots, options: InstallOptions, keys: Vec<VerifyingKey>
                         installing = true;
                         println!("setup: installing ({})", profile.as_str());
                         install(proxy.clone(), roots.clone(), options.clone(), keys.clone(), profile);
+                    }
+                    Some("retry") if !installing && installed.is_none() => {
+                        println!("setup: choose (again)");
+                        eval(&proxy, "reset", &Value::Null);
                     }
                     Some("open") => {
                         if let Some(p) = installed {

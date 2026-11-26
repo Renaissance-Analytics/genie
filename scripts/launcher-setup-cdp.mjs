@@ -8,13 +8,15 @@
  *   2. installing: the page while the ring and the bar move -> launcher-setup-installing.png
  *   3. ready -> launcher-setup-ready.png; then Open Genie pressed
  *
- *   node scripts/launcher-setup-cdp.mjs <port> <out dir> [both|client]
+ *   node scripts/launcher-setup-cdp.mjs <port> <out dir> [both|client] [fail]
+ *     fail: the packages are tampered (scripts/ci/tamper-package.mjs): Install is pressed, the failure screen is
+ *     photographed (launcher-setup-failed.png) and checked (the failed step, plain words, Try again and Close), then Close
  * Prints `### setup-cdp=PASS|FAIL <why>`; exits 1 on a failure, with the page's own error words when it shows one.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-const [port, out, profile = 'both'] = process.argv.slice(2);
+const [port, out, profile = 'both', mode = 'ok'] = process.argv.slice(2);
 if (!port || !out) { console.error('usage: launcher-setup-cdp.mjs <port> <out dir> [both|client]'); process.exit(2); }
 mkdirSync(out, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -56,6 +58,26 @@ if (profile === 'client') await js(`document.querySelector('[data-profile="clien
 const chosen = await state();
 if (chosen.profile !== profile) fail(`the choice is ${chosen.profile}, not ${profile}`);
 await js(`document.getElementById('install').click()`);
+
+if (mode === 'fail') {
+    let s = null;
+    for (let i = 0; i < 480 && !(s = await state())?.error; i++) await sleep(250);
+    if (!s?.error) fail(`no failure shown within 2 minutes for a tampered package (last: ${JSON.stringify(s)})`);
+    await sleep(1200);
+    await shot('launcher-setup-failed.png');
+    const seen = await js(`({ step: document.querySelector('#steps li.failed')?.textContent, words: document.getElementById('why').textContent,
+        actions: [...document.querySelectorAll('#fail-actions .btn')].filter((b) => !b.hidden).map((b) => b.textContent),
+        actionsShown: !document.getElementById('fail-actions').hidden, detail: document.getElementById('details').textContent })`);
+    console.log(`the failure screen: ${JSON.stringify(seen)}`);
+    if (!seen.step) fail('no step is marked failed');
+    if (!/damaged/.test(seen.words)) fail(`the plain words are not the damaged-package words: ${seen.words}`);
+    if (!seen.actionsShown || !seen.actions.includes('Try again') || !seen.actions.includes('Close')) fail(`no way forward: ${JSON.stringify(seen.actions)}`);
+    if (!/do not match its signed manifest/.test(seen.detail)) fail('the launcher\'s own words are not under Show details');
+    await js(`document.getElementById('fail-close').click()`);
+    console.log('### setup-cdp=PASS the failure screen: the failed step marked, plain words, Try again and Close, the launcher\'s words under Show details');
+    ws.close();
+    process.exit(0);
+}
 
 let shotInstalling = false;
 let last = null;

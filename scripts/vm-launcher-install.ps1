@@ -177,6 +177,26 @@ $co = Get-Content -Raw (Join-Path $coCode 'state.json') | ConvertFrom-Json
 if ($co.profile -ne 'client' -or $co.tracks.host) { Fail 'the client-only state is not client, or points at a host' }
 Remove-Item -Recurse -Force $coCode, $coHome -ErrorAction SilentlyContinue
 
+# --- 4b. a tampered package: the failure screen, in words, with a way forward ------------------------------------------
+node scripts/ci/tamper-package.mjs $Pkg (Join-Path $Repo 'release\tracks\trees') (Join-Path $Out 'tampered-packages')
+if ($LASTEXITCODE -ne 0) { Fail 'the tampered package set could not be made' }
+$fCode = Join-Path $env:LOCALAPPDATA 'GenieFailRow'
+$fHome = Join-Path $env:LOCALAPPDATA 'GenieFailRowHome'
+$env:GENIE_CODE_ROOT = $fCode; $env:GENIE_HOME = $fHome; $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9334'
+try {
+    $fp = Start-Process -FilePath (Join-Path $Prog 'Genie.exe') -ArgumentList @('setup', '--from', (Join-Path $Out 'tampered-packages')) -PassThru
+    node scripts/launcher-setup-cdp.mjs 9334 $Out both fail
+    $failShown = ($LASTEXITCODE -eq 0)
+    [void]$fp.WaitForExit(30000)
+} finally {
+    Remove-Item Env:GENIE_CODE_ROOT, Env:GENIE_HOME -ErrorAction SilentlyContinue
+    $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9333'
+}
+if (-not $failShown) { Fail 'the failure screen for a tampered package was not as it must be (above)' }
+$landed = @(Get-ChildItem -Directory (Join-Path $fCode 'client'), (Join-Path $fCode 'browser'), (Join-Path $fCode 'host') -ErrorAction SilentlyContinue)
+if ($landed.Count -gt 0) { Fail "a refused install left builds: $(($landed | ForEach-Object { $_.FullName }) -join ', ')" }
+Remove-Item -Recurse -Force $fCode, $fHome -ErrorAction SilentlyContinue
+
 # --- 5. the uninstaller ------------------------------------------------------------------------------------------------
 Get-Process genie-client -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 $un = Start-Process -FilePath (Join-Path $Prog 'Uninstall Genie.exe') -ArgumentList '/S' -PassThru

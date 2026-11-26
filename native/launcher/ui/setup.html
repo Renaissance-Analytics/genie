@@ -13,7 +13,13 @@ html,body{height:100%;overflow:hidden;user-select:none}
 .tb{-webkit-app-region:drag}
 .tb-ctl i{cursor:pointer;-webkit-app-region:no-drag}
 .btn[disabled]{opacity:.6;cursor:default}
-.why{color:var(--bad);white-space:pre-wrap;max-height:120px;overflow:auto;font-size:12.5px}
+.why{color:var(--ink);font-size:13.5px;margin:12px 4px 0;text-align:center}
+.steps li.failed{color:var(--ink)}
+.failed .st{background:var(--bad);border-color:transparent;color:#2a0710}
+.bar.bad .fill{background:var(--bad)}
+.bar.bad .fill::after{animation:none}
+.fail-actions{display:flex;gap:10px}
+.fail-actions .btn{flex:1}
 .details{display:none;max-height:150px;overflow:auto;font-size:11.5px;white-space:pre-wrap;color:var(--muted);margin-top:8px}
 .details.open{display:block}
 </style>
@@ -33,6 +39,7 @@ html,body{height:100%;overflow:hidden;user-select:none}
       <path fill="url(#lampfill)" d="M24 35.6h15l3.6 5H20.4z"/>
     </symbol>
     <symbol id="i-check" viewBox="0 0 20 20"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M5 10.5l3.2 3.2L15 6.8"/></symbol>
+    <symbol id="i-x" viewBox="0 0 20 20"><path fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" d="M6 6l8 8M14 6l-8 8"/></symbol>
   </defs>
 </svg>
 
@@ -82,7 +89,13 @@ html,body{height:100%;overflow:hidden;user-select:none}
       <ul class="steps" id="steps"></ul>
       <p class="why" id="why" hidden></p>
 
-      <div class="foot"><a class="link center" id="show-details">Show details</a><div class="details" id="details"></div></div>
+      <div class="foot">
+        <div class="fail-actions" id="fail-actions" hidden>
+          <button class="btn primary" id="retry">Try again</button>
+          <button class="btn" id="fail-close">Close</button>
+        </div>
+        <a class="link center" id="show-details">Show details</a><div class="details" id="details"></div>
+      </div>
     </div>
   </div>
 </section>
@@ -156,7 +169,21 @@ html,body{height:100%;overflow:hidden;user-select:none}
     send({ kind: 'install', profile: profile });
   });
   $('open').addEventListener('click', function () { $('open').disabled = true; send({ kind: 'open' }); });
-  $('show-details').addEventListener('click', function () { $('details').classList.toggle('open'); });
+  $('show-details').addEventListener('click', function () {
+    var open = $('details').classList.toggle('open');
+    $('show-details').textContent = open ? 'Hide details' : 'Show details';
+  });
+  $('retry').addEventListener('click', function () { send({ kind: 'retry' }); });
+  $('fail-close').addEventListener('click', function () { send({ kind: 'close' }); });
+
+  // What a step says when it is the one that failed.
+  var FAILED = {
+    'Checked that everything is from Genie': 'Couldn’t confirm this package',
+    'Installed Genie': 'Couldn’t install Genie',
+    'Installing the host': 'Couldn’t install the host',
+    'Starting the host': 'The host didn’t start',
+  };
+  var lastSteps = [];
 
   function li(step) {
     var el = document.createElement('li');
@@ -184,6 +211,7 @@ html,body{height:100%;overflow:hidden;user-select:none}
       $('install-hero').style.setProperty('--p', String(p.percent));
       $('install-bar').style.setProperty('--p', p.percent + '%');
       if (p.sub) $('install-sub').textContent = p.sub;
+      lastSteps = p.steps;
       var ul = $('steps');
       ul.textContent = '';
       p.steps.forEach(function (s) { ul.appendChild(li(s)); });
@@ -196,14 +224,54 @@ html,body{height:100%;overflow:hidden;user-select:none}
       show('s-ready');
       $('open').focus();
     },
-    failed: function (why) {
-      state.error = why;
+    // {title, words, detail, retry}: the plain words first, the launcher's own under Show details. The step that was
+    // running when it failed is marked failed; the ones that never ran stay dim.
+    failed: function (f) {
+      if (state.screen !== 's-install') show('s-install');
+      state.error = f.detail;
       $('install-hero').classList.add('bad');
       $('install-hero').style.setProperty('--p', '100');
-      $('install-title').textContent = 'Genie could not be set up';
-      $('install-sub').textContent = 'Nothing was changed in Genie’s programs folder.';
+      $('install-title').textContent = f.title;
+      $('install-sub').textContent = 'Nothing was changed on this computer.';
+      var steps = lastSteps.length ? lastSteps : [{ label: 'Checked that everything is from Genie', state: 'now' }];
+      var failedAt = steps.findIndex(function (s) { return s.state === 'now'; });
+      if (failedAt < 0) failedAt = steps.findIndex(function (s) { return s.state !== 'done'; });
+      var ul = $('steps');
+      ul.textContent = '';
+      steps.forEach(function (s, i) {
+        if (i === failedAt) {
+          var el = document.createElement('li');
+          el.className = 'failed';
+          el.innerHTML = '<span class="st"><svg><use href="#i-x"/></svg></span>';
+          el.appendChild(document.createTextNode(FAILED[s.label] || s.label));
+          ul.appendChild(el);
+        } else {
+          ul.appendChild(li({ label: s.label, state: s.state === 'done' ? 'done' : 'todo' }));
+        }
+      });
+      var bar = $('install-bar');
+      if (state.percent < 5) bar.hidden = true; else bar.classList.add('bad');
       $('why').hidden = false;
-      $('why').textContent = why;
+      $('why').textContent = f.words;
+      $('details').textContent = f.detail;
+      $('retry').hidden = !f.retry;
+      $('fail-actions').hidden = false;
+      (f.retry ? $('retry') : $('fail-close')).focus();
+    },
+    // Back to the choice, for Try again.
+    reset: function () {
+      state.error = null; state.percent = 0; lastSteps = [];
+      $('install-hero').classList.remove('bad');
+      $('install-hero').style.setProperty('--p', '0');
+      $('install-title').textContent = 'Setting up Genie…';
+      $('install-sub').textContent = 'Checking that everything is from Genie.';
+      $('install-bar').hidden = false; $('install-bar').classList.remove('bad'); $('install-bar').style.setProperty('--p', '0%');
+      $('steps').textContent = ''; $('why').hidden = true; $('details').textContent = ''; $('details').classList.remove('open');
+      $('show-details').textContent = 'Show details';
+      $('fail-actions').hidden = true;
+      $('install').disabled = false;
+      show('s-choose');
+      $('install').focus();
     },
   };
   send({ kind: 'loaded' });

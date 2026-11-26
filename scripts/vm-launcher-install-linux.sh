@@ -150,23 +150,24 @@ as_person "$C" "$C/.local/bin/genie" status --json | tee "$OUT/status-client.jso
 node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.exit(s.tracks.host?1:0)' "$OUT/status-client.json" || fail 'the client-only state points at a host'
 echo
 
-# --- 4. a flipped byte installs nothing -------------------------------------------------------------------------------
+# --- 4. a tampered package: the setup window says so in words, with a way forward, and installs nothing ----------------
 T="$(fresh_home tampered)"
-echo "--- 4. one flipped byte in the host's package"
-mkdir -p "$OUT/tampered-packages"; cp "$PKG"/* "$OUT/tampered-packages/"
-# The host's tree again with one byte of its entry flipped, packed as the release packs it, beside the ORIGINAL signed
-# manifest: the archive is not the one the signature covers.
-rm -rf "$OUT/tampered-tree"; cp -r "$ROOT/release/tracks/trees/host" "$OUT/tampered-tree"
-node -e 'const f=require("fs");const p=process.argv[1];const b=f.readFileSync(p);b[10]^=1;f.writeFileSync(p,b)' "$OUT/tampered-tree/app/dist/main/host.js"
-node --input-type=module -e "import { packTrack } from '$ROOT/scripts/pack-track.mjs'; await packTrack({ track: 'host', build: '$BUILD', channel: 'stable', platform: 'linux', arch: 'x64', withClient: '$BUILD', minLauncher: null, notes: 'Genie $BUILD', from: '$OUT/tampered-tree', out: '$OUT/tampered-out' });" || fail 'the tampered host could not be packed'
-cp "$OUT"/tampered-out/host-*.tar.zst "$OUT/tampered-packages/"
-cmp -s "$OUT"/tampered-out/host-*.manifest.json "$OUT"/tampered-packages/host-*.manifest.json && fail 'CONTROL: the flipped byte did not change the host package'
-if as_person "$T" "$T/Downloads/genie" install --profile both --from "$OUT/tampered-packages" --yes >"$OUT/install-tampered.log" 2>&1; then
-    cat "$OUT/install-tampered.log"; fail 'a package with a flipped byte installed'
-fi
-cat "$OUT/install-tampered.log"
-grep -q 'do not match its signed manifest' "$OUT/install-tampered.log" || fail 'the refusal does not say why in words'
-left="$(find "$T/.local/share/genie" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | grep -v '/launcher/' || true)"
+echo "--- 4. one changed byte in the browser's package, through the setup window"
+node "$ROOT/scripts/ci/tamper-package.mjs" "$PKG" "$ROOT/release/tracks/trees" "$OUT/tampered-packages" || fail 'the tampered package set could not be made'
+SETUP_LOG="$OUT/setup-tampered.log"
+as_person "$T" setsid "$T/Downloads/genie" setup --from "$OUT/tampered-packages" >"$SETUP_LOG" 2>&1 </dev/null &
+TAMPER_PID=$!
+pids_started+=("$TAMPER_PID")
+wait_for 'setup: choose' 60 || { cat "$SETUP_LOG"; fail 'the setup window did not open for the tampered packages'; }
+sleep 2
+press_return
+wait_for 'setup: failed' 120 || { cat "$SETUP_LOG"; fail 'the tampered package did not fail'; }
+sleep 2.5
+grim "$OUT/launcher-setup-failed-linux.png" && echo "SCREENSHOT $OUT/launcher-setup-failed-linux.png"
+cat "$SETUP_LOG"
+grep -q 'do not match its signed manifest' "$SETUP_LOG" || fail 'the refusal does not say why in the launcher'"'"'s words'
+kill "$TAMPER_PID" 2>/dev/null || true
+left="$(find "$T/.local/share/genie" -mindepth 2 -maxdepth 2 -type d 2>/dev/null || true)"
 [ -z "$left" ] || fail "a refused install left builds: $left"
 
 # --- 5. uninstall ------------------------------------------------------------------------------------------------------
