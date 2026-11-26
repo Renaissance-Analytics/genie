@@ -94,7 +94,7 @@ describe('what is listed says so beside its number', () => {
     });
 
     it('the Toolchain surface shows the advisory on the version row and on the PATH line', () => {
-        const render = (toolchain: FeatureData['toolchain']) => renderToStaticMarkup(<ToolchainSurface data={{ ...EMPTY_FEATURES, toolchain }} onAction={() => {}} onNavigate={() => {}} />);
+        const render = (toolchain: FeatureData['toolchain']) => renderToStaticMarkup(<ToolchainSurface data={{ ...EMPTY_FEATURES, toolchain }} onAction={() => {}} onNavigate={() => {}} selected="php" />);
         const html = render({
             tools: [], checkedAt: 1,
             php: {

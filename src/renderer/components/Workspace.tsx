@@ -742,6 +742,12 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
                         </div>
                     ) : (
                         <ul className="mt-1 divide-y divide-[var(--border-1)]">
+                            {/* First, where a person looks (Tynn #1062: the owner could not find the Fancy Dev Kit switch). */}
+                            {ops.mcp ? (
+                                <li data-ws-mcp="" className="py-2">
+                                    <McpServerSwitches workspace rows={ops.mcp.rows} agentName={name} onSet={ops.mcp.onSet} />
+                                </li>
+                            ) : null}
                             {ops.color ? (
                                 <li data-ws-color="" className="flex items-center gap-3 py-1.5">
                                     <div className="min-w-0 flex-1">
@@ -751,11 +757,6 @@ export function Workspace({ trustStep, onTrust, onUntrust, workspace, terminals,
                                     <div data-setting-control="" className="flex shrink-0 items-center justify-end gap-2">
                                         <WorkspaceColorPicker current={ops.color.current} onSet={ops.color.onSet} />
                                     </div>
-                                </li>
-                            ) : null}
-                            {ops.mcp ? (
-                                <li data-ws-mcp="" className="py-2">
-                                    <McpServerSwitches workspace rows={ops.mcp.rows} agentName={name} onSet={ops.mcp.onSet} />
                                 </li>
                             ) : null}
                             {ops.defaultAgent ? (

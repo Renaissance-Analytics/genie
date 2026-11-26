@@ -94,7 +94,7 @@ describe('#714 — each row shows its own state', () => {
 
     it('a language section carries its own state too (php is checked with the rest)', () => {
         const php = { managed: [{ version: '8.4.24', dir: 'C:/x', usedBy: [] }], system: null, available: [] };
-        const html = render(mk({ php, tools: [...tools, t('php', '8.4.24', 'unknown')], checkRun: { running: true, rows: { php: { state: 'checking' } } } }));
+        const html = renderToStaticMarkup(<ToolchainSurface data={{ ...EMPTY_FEATURES, toolchain: mk({ php, tools: [...tools, t("php", "8.4.24", "unknown")], checkRun: { running: true, rows: { php: { state: "checking" } } } }) }} onAction={() => {}} onNavigate={() => {}} selected="php" />);
         expect(html).toMatch(/data-php-versions="1"[^>]*>[^]*?data-check-state="checking"/);
     });
 });

@@ -81,7 +81,8 @@ describe('defaults through the feature IPC', () => {
     });
 });
 
-const render = (toolchain: FeatureData['toolchain']) => renderToStaticMarkup(<ToolchainSurface data={{ ...EMPTY_FEATURES, toolchain }} onAction={() => {}} onNavigate={() => {}} />);
+// Its panel, chosen as a person chooses it (Tynn #1062: the panel opens only when a tool is chosen).
+const render = (toolchain: FeatureData['toolchain']) => renderToStaticMarkup(<ToolchainSurface data={{ ...EMPTY_FEATURES, toolchain }} onAction={() => {}} onNavigate={() => {}} selected="go" />);
 
 describe('Toolchain → Go versions shows the default', () => {
     it('the default version is marked (and its Remove disabled with the reason); the others offer Make default; the system’s is offered', () => {

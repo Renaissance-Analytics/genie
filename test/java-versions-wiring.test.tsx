@@ -86,7 +86,8 @@ describe('Java versions through the feature IPC', () => {
     });
 });
 
-const render = (toolchain: FeatureData['toolchain']) => renderToStaticMarkup(<ToolchainSurface data={{ ...EMPTY_FEATURES, toolchain }} onAction={() => {}} onNavigate={() => {}} />);
+// Its panel, chosen as a person chooses it (Tynn #1062: the panel opens only when a tool is chosen).
+const render = (toolchain: FeatureData['toolchain']) => renderToStaticMarkup(<ToolchainSurface data={{ ...EMPTY_FEATURES, toolchain }} onAction={() => {}} onNavigate={() => {}} selected="java" />);
 const base = { tools: [], checkedAt: 1 };
 
 describe('Toolchain → Java versions', () => {
