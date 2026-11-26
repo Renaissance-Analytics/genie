@@ -78,14 +78,15 @@ describe('running them', () => {
     it('each task in order, its steps said, a failure not stopping the next; progress ends cleared; begin and done logged', async () => {
         const order: string[] = [];
         const r = rig([
-            { label: 'Updating Claude Code 2.1.0 → 2.2.0', run: async (say) => { order.push('claude'); say('Running Claude Code’s installer'); return 'Claude Code 2.1.0 → 2.2.0'; } },
+            { label: 'Updating Claude Code 2.1.0 → 2.2.0', run: async (say) => { order.push('claude'); say('Updating Claude Code'); say('Running Claude Code’s installer'); return 'Claude Code 2.1.0 → 2.2.0'; } },
             { label: 'Updating Codex 0.40.0 → 0.41.0', run: async () => { order.push('codex'); throw new Error('installer exited 1'); } },
             { label: 'Applying PHP security updates', run: async () => { order.push('php'); return 'PHP updated: 8.4.14'; } },
         ]);
         const report = await runStartupUpdates(r.ports, 60_000);
         expect(order).toEqual(['claude', 'codex', 'php']);
         expect(report).toMatchObject({ timedOut: null, ran: [{ label: 'Updating Claude Code 2.1.0 → 2.2.0', words: 'Claude Code 2.1.0 → 2.2.0' }, { label: 'Applying PHP security updates' }], failed: [{ label: 'Updating Codex 0.40.0 → 0.41.0', reason: 'installer exited 1' }] });
-        expect(r.progress.map((p) => p?.step ?? null)).toEqual(['Checking for tool updates', 'Updating Claude Code 2.1.0 → 2.2.0', 'Updating Claude Code 2.1.0 → 2.2.0: Running Claude Code’s installer', 'Updating Codex 0.40.0 → 0.41.0', 'Applying PHP security updates', null]);
+        // A step that repeats the task's words (`Updating Claude Code`, the wait window measured on both VMs) is not said twice.
+        expect(r.progress.map((p) => p?.step ?? null)).toEqual(['Checking for tool updates', 'Updating Claude Code 2.1.0 → 2.2.0', 'Updating Claude Code 2.1.0 → 2.2.0', 'Updating Claude Code 2.1.0 → 2.2.0: Running Claude Code’s installer', 'Updating Codex 0.40.0 → 0.41.0', 'Applying PHP security updates', null]);
         expect(r.progress[0]).toMatchObject({ startedAt: 1_000, limitMs: 60_000 });
         expect(r.logs[0]).toBe('startup updates: begin limit=60s');
         expect(r.logs).toContain('startup update failed: Updating Codex 0.40.0 → 0.41.0: installer exited 1');

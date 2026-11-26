@@ -144,7 +144,8 @@ export function runStartupUpdates(ports: StartupUpdatePorts, limitMs: number = S
                 task = t.label;
                 say(t.label);
                 try {
-                    const words = await t.run((step) => say(`${t.label}: ${step}`));
+                    // A step that only repeats the task's own words (`Updating Claude Code`) adds nothing to it.
+                    const words = await t.run((step) => say(t.label.startsWith(step) ? t.label : `${t.label}: ${step}`));
                     ran.push({ label: t.label, words });
                     log(closed ? `startup updates: after the limit: ${t.label}: ${words}` : `startup update: ${t.label}: ${words}`);
                 } catch (error) {
