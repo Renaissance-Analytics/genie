@@ -42,8 +42,8 @@ describe('the host starts the Genie browser', () => {
 describe('genie-host is wired to it', () => {
     it('its BrowserService starts the browser through hostBrowserStart, on the launcher\'s wire in its own runtime folder', () => {
         const src = readFileSync(join('src', 'main', 'genie-host.ts'), 'utf8');
-        const service = src.slice(src.indexOf('const browserService = new BrowserService('), src.indexOf('const browserService = new BrowserService(') + 900);
-        expect(service).toMatch(/hostBrowserStart\(/);
+        expect(src).toMatch(/const startBrowserNow = hostBrowserStart\(/);
+        expect(src).toContain('startBrowser: (launch) => { void startBrowserNow(launch); } });');
         expect(src).toMatch(/launcherWire\(/);
     });
 });
