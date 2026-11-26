@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { ToolStatus } from '../src/core/toolchain.js';
 import { ToolchainSurface } from '../src/renderer/components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
-import { installNote } from '../src/renderer/toolchain-view.js';
+import { installNote, plainRefusal } from '../src/renderer/toolchain-view.js';
 
 /**
  * Tynn #1062 — THE TOOLCHAIN, USABLE (the owner's beta.66 screenshot, Windows, a ~1050 px window with the chat open:
@@ -89,7 +89,8 @@ describe('#1062 — the panel says where a version comes from in words, never a 
     it('no "means everywhere" jargon: the heading says what the choice does', () => {
         const words = text(panel(render(OWNER, 'php')));
         expect(words).not.toMatch(/means everywhere/);
-        expect(words).toMatch(/Which version php runs/);
+        // One casing, the section-heading style: the language's name, not its command.
+        expect(words).toMatch(/Which version PHP runs/);
     });
     it('a pinned version is "Used by 2 sites", its Remove a button that names the version', () => {
         const p = panel(render(OWNER, 'php'));
@@ -165,5 +166,39 @@ describe('#1062 — the tallies are one compact line', () => {
         expect(tallies).not.toMatch(/text-xl|<br/);
         expect(text(tallies)).toMatch(/\d+ ready/);
         expect(text(tallies)).toMatch(/\d+ need you/);
+    });
+});
+
+const STALE = "windows.php.net's current PHP 8.5 build is 8.5.13, not 8.5.12; an archived build has no published checksum, so Genie will not install PHP 8.5.12 unverified. Nothing was downloaded";
+
+describe('#1062 — a refusal in plain words, its detail behind "Details", its way out a button', () => {
+    it('a version no longer offered: says so, and names the one to install instead', () => {
+        expect(plainRefusal(STALE)).toEqual({ text: "PHP 8.5.12 isn't available any more.", install: '8.5.13', details: STALE });
+    });
+    it('a version that is not installed: says so', () => {
+        const reason = 'PHP 8.5.12 is not a version Genie manages here; install it in Toolchain first';
+        expect(plainRefusal(reason)).toEqual({ text: "PHP 8.5.12 isn't installed.", details: reason });
+    });
+    it('a short reason is said as it is, with no Details; a long one is cut at its first clause', () => {
+        expect(plainRefusal('PHP 8.4.26 is pinned by shop.gen')).toEqual({ text: 'PHP 8.4.26 is pinned by shop.gen' });
+        const long = 'installing php with pacman would also upgrade icu 77.1-1 to 78.1-1, which other packages need; nothing was changed and you can retry once it is updated';
+        expect(plainRefusal(long)).toEqual({ text: 'installing php with pacman would also upgrade icu 77.1-1 to 78.1-1, which other packages need.', details: long });
+    });
+    it('the panel: the plain line, an Install button for the offered version, the engine words only under Details', () => {
+        const html = render({ ...OWNER, refusals: [{ tool: 'php', version: '8.5.12', reason: STALE }] }, 'php');
+        const p = panel(html);
+        expect(p).toMatch(/data-php-refusal="8\.5\.12"/);
+        expect(text(p)).toMatch(/PHP 8\.5\.12 isn't available any more\./);
+        expect(p).toMatch(/<button[^>]*data-refusal-install="8\.5\.13"[^>]*>[^]*?Install 8\.5\.13</);
+        expect(p).toMatch(/<details[^>]*>[^]*?Details[^]*?archived build has no published checksum/);
+    });
+});
+
+describe('#1062 — the problems collapse to one row on a narrow page', () => {
+    it('a summary row ("2 need you") with a button that shows them; the rows and their Repair stay in the page', () => {
+        const html = render({ ...OWNER, tools: [...OWNER.tools, t('claude-code', '2.1.0', 'broken', { problem: 'npm skipped its setup step' }), t('codex', '0.71.0', 'broken', { problem: 'no codex program' })] });
+        expect(html).toMatch(/data-problems-summary="2"[^>]*>[^]*?2 need you/);
+        expect(html).toMatch(/<button[^>]*data-problems-toggle=""[^>]*aria-expanded="false"/);
+        expect((html.match(/data-problem-action=/g) ?? []).length).toBe(2);
     });
 });
