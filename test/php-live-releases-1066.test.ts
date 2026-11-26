@@ -599,3 +599,25 @@ describe('the card offers the newest PHP this machine can run (a fresh Windows V
         expect(await listWith(null)).toEqual(['8.6.0', '8.5.13', '8.4.28', '8.3.37', '8.2.36']);
     });
 });
+
+describe('a build whose banner does not name its thread safety (8.3.37 on a fresh Windows VM)', () => {
+    const portsWith = (zts: string) => {
+        const { ports } = winInstallPorts(sha(ZIP));
+        const run: PhpVersionsPorts['run'] = async (binary, args, options) => {
+            if (binary.endsWith('php-cgi.exe')) return { stdout: 'PHP 8.4.28 (cgi-fcgi) (built: Nov 19 2026)', exitCode: 0 };
+            if (binary.endsWith('php.exe') && args.includes('-r')) return { stdout: zts, exitCode: 0 };
+            return ports.run(binary, args, options);
+        };
+        return { ...ports, run };
+    };
+    it('is asked: PHP_ZTS says NTS, and it installs', async () => {
+        await liveCatalog();
+        expect(await installPhpVersion('8.4.28', true, portsWith('NTS'))).toMatchObject({ kind: 'installed', version: '8.4.28' });
+    });
+    it('control: PHP_ZTS says ZTS — refused, and the words carry what the banner said', async () => {
+        await liveCatalog();
+        const r = await installPhpVersion('8.4.28', true, portsWith('ZTS'));
+        expect(r.kind).toBe('not-installed');
+        expect(r.kind === 'not-installed' && r.reason).toMatch(/thread-safe/);
+    });
+});
