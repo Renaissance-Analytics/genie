@@ -1758,8 +1758,8 @@ function LanguagePanel({ lang, view, current, busy, check, onAction, refusals }:
                         </li>
                     );
                 })}
-                {/* No system PHP, no row to choose (Tynn #1066: "System · none on this machine" looked selectable). */}
-                {view.system ? (
+                {/* No system PHP, no row to choose (Tynn #1066: "System · none on this machine" looked selectable). PHP only: the other languages keep Use system's, which clears Genie's default. */}
+                {view.system || lang !== 'php' ? (
                 <li {...attr('system-row', '')} className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--border-1)] bg-[var(--bg-2)] px-2.5 py-2 text-sm">
                     {current === null ? (
                         <span role="radio" aria-checked="true" data-system-default={lang} title="The default" className="grid size-4 shrink-0 place-items-center rounded-full border-2 border-[var(--primary)]"><span className="size-1.5 rounded-full bg-[var(--primary)]" /></span>
