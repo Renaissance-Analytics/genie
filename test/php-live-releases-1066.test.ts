@@ -466,3 +466,38 @@ describe('a PHP list Genie changed by itself reaches every caller’s Toolchain'
         expect(withSharedToolchainPhp({ toolchainPhp: stale }, null).toolchainPhp).toBe(stale);
     });
 });
+
+describe('a build needs the Visual C++ runtime its toolset links (8.6 is vs18: VCRUNTIME140 14.50 or newer)', () => {
+    // Measured on a fresh Windows VM (2026-11-26): php-8.6.0-nts-Win32-vs18-x64 unpacked, then php-cgi said "VCRUNTIME140.dll
+    // 14.44 is not compatible with this PHP build linked with 14.51". The runtime is brought up to the build's toolset
+    // BEFORE anything is downloaded, or the install stops saying which runtime it needs.
+    const vsPorts = (vs: 'vs17' | 'vs18', version: string, vc: (min?: string) => { ok: true } | { ok: false; reason: string }) => {
+        const asked: Array<string | undefined> = [];
+        let downloads = 0;
+        const { ports } = winInstallPorts(sha(ZIP));
+        const bodies = { ...NEW_DAY, [PHP_NET_SUPPORTED_JSON]: supportedBody(['8.2', '8.3', '8.4', '8.5', '8.6']), [phpNetLineJson('8.6')]: phpNetLineJsonBody([{ version: '8.6.0', security: false }]),
+            [PHP_WINDOWS_RELEASES_JSON]: windowsJson({ [version.split('.').slice(0, 2).join('.')]: { version, vs, sha: sha(ZIP) } }) };
+        const p: PhpVersionsPorts = { ...ports, fetchText: fakeNet(bodies).fetchText, fetchBytes: async () => { downloads += 1; return { ok: true, body: ZIP }; },
+            ensureVcRuntime: async (min?: string) => { asked.push(min); return vc(min); } };
+        return { p, asked, downloads: () => downloads, bodies };
+    };
+
+    it('vs18 (8.6.0): the runtime is asked to be at least 14.50; when it cannot be, nothing is downloaded and the words say so', async () => {
+        const t = vsPorts('vs18', '8.6.0', (min) => (min === undefined ? { ok: true } : { ok: false, reason: 'this machine has 14.44' }));
+        await new PhpReleaseFeed({ platform: 'win32', fetchText: fakeNet(t.bodies).fetchText, now: () => 1 }).refresh();
+        const r = await installPhpVersion('8.6.0', true, t.p);
+        expect(t.asked).toContain('14.50');
+        expect(r.kind).toBe('not-installed');
+        expect(r.kind === 'not-installed' && r.reason).toMatch(/14\.50/);
+        expect(r.kind === 'not-installed' && r.reason).toMatch(/this machine has 14\.44/);
+        expect(t.downloads()).toBe(0);
+    });
+
+    it('control: vs17 (8.4.28) asks for 14.30, and with it there the install goes on', async () => {
+        const t = vsPorts('vs17', '8.4.28', () => ({ ok: true }));
+        await new PhpReleaseFeed({ platform: 'win32', fetchText: fakeNet(t.bodies).fetchText, now: () => 1 }).refresh();
+        const r = await installPhpVersion('8.4.28', true, t.p);
+        expect(t.asked).toContain('14.30');
+        expect(r).toMatchObject({ kind: 'installed', version: '8.4.28' });
+    });
+});
