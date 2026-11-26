@@ -5,7 +5,7 @@ import { PluginsPage } from './PluginsPage.js';
 import { MarketplacePane } from './MarketplacePane.js';
 import type { MarketplaceApi } from '../../core/marketplace.js';
 import { SOUND_FILE_EXTENSIONS } from '../../core/custom-sound.js';
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { McpServerPanel } from './McpServerPanel.js';
 import { Avatar, Badge, Button, Icon, Input, Kbd, Modal, Progress, Select, Sidebar, Skeleton, Switch, Table, Tabs, Textarea, Tooltip, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
 import { BINDING_SETTING, DEFAULT_HOTKEYS, bindingProblem, bindingsFrom, type BindingName, type HotkeyBindings } from '../../core/hotkeys.js';
@@ -2148,13 +2148,20 @@ export const SETTINGS_MENU_FOLDS_BELOW = 900;
 /**
  * WHETHER AN ELEMENT IS NARROWER THAN `limit`, measured as it is drawn (a ResizeObserver): the room a page really has,
  * which the window's width does not say once the chat and the app's sidebar share it. `false` until measured.
+ *
+ * Measured BEFORE the first paint (a layout effect): measured after it, the Settings menu was drawn full and then folded,
+ * moving its items under a pointer already on its way (gate 1126-053109-868144: linux sound-picker clicked Notifications
+ * and the menu jumped). It is never seen in the wrong shape.
  */
 export function useWidthBelow<T extends HTMLElement>(limit: number): [React.RefObject<T | null>, boolean] {
     const ref = useRef<T | null>(null);
     const [below, setBelow] = useState(false);
-    useEffect(() => {
+    useLayoutEffect(() => {
         const el = ref.current;
-        if (!el || typeof ResizeObserver === 'undefined') return undefined;
+        if (!el) return undefined;
+        const now = el.getBoundingClientRect().width;
+        if (now > 0) setBelow(now < limit);
+        if (typeof ResizeObserver === 'undefined') return undefined;
         const observer = new ResizeObserver((entries) => {
             const width = entries[0]?.contentRect.width;
             if (typeof width === 'number' && width > 0) setBelow(width < limit);
