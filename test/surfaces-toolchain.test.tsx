@@ -28,7 +28,9 @@ describe('Toolchain', () => {
         const html = render({ ...base, installs: { php: { label: 'winget install --id PHP.PHP.8.4 -e --silent', elevated: false }, rustc: { refused: 'rustc is installed with rustup (rustup.rs)' } } });
         expect(html).toMatch(/data-tool-card="php"[^>]*data-card-state="missing"/);
         expect(html).toMatch(/data-tool-card="rust"[^>]*data-card-state="missing"/);
-        expect(html).toMatch(/data-install-note="php"[^>]*>no password</);
+        // Genie's own build asks for nothing, and says nothing about it (Tynn #1062).
+        expect(html).not.toContain('data-install-note="php"');
+        expect(html).not.toContain('no password');
         expect(html).toMatch(/title="winget install --id PHP\.PHP\.8\.4 -e --silent"/);
         expect(html).not.toMatch(/>[^<]*winget install/);
         expect(html).toContain('data-install-refused="rustc"');

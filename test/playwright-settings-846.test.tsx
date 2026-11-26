@@ -11,7 +11,8 @@ import { PLAYWRIGHT_STABLE } from '../src/core/playwright-managed.js';
  */
 const view = (sets: Array<{ version: string; browsers: string[]; ready: boolean }>, latest: string | null = '1.66.0') =>
     ({ tools: [], checkedAt: 1, playwright: { browsersPath: '/data/genie2-toolchain/playwright/browsers', totalBytes: 0, sets, stable: PLAYWRIGHT_STABLE, latest, optional: ['firefox', 'webkit'] } }) as unknown as FeatureData['toolchain'];
-const render = (toolchain: FeatureData['toolchain']) => renderToStaticMarkup(<ToolchainSurface data={{ ...EMPTY_FEATURES, toolchain }} onAction={() => {}} onNavigate={() => {}} />);
+// Its panel, chosen as a person chooses it (Tynn #1062: the panel opens only when a tool is chosen).
+const render = (toolchain: FeatureData['toolchain']) => renderToStaticMarkup(<ToolchainSurface data={{ ...EMPTY_FEATURES, toolchain }} onAction={() => {}} onNavigate={() => {}} selected="playwright" />);
 
 describe('#846 — the Playwright section', () => {
     it('names the stable version, and marks the installed set that is it', () => {

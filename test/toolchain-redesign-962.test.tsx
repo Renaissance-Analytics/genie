@@ -4,14 +4,15 @@ import type { ToolStatus } from '../src/core/toolchain.js';
 import { ToolchainSurface } from '../src/renderer/components/FeatureSurfaces.js';
 import { ToolLogo } from '../src/renderer/components/ToolLogo.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from '../src/renderer/features.js';
-import { cardOfAction, defaultSelection, formatElapsed, installNote, nextFix, toolchainActivity, toolchainCards, toolchainProblems, toolchainTally } from '../src/renderer/toolchain-view.js';
+import { cardOfAction, formatElapsed, installNote, nextFix, toolchainActivity, toolchainCards, toolchainProblems, toolchainTally } from '../src/renderer/toolchain-view.js';
 
 /**
  * Tynn #962 — THE TOOLCHAIN VIEW AS THE OWNER APPROVED IT (ArtBoard 958-toolchain-redesign, 2026-11-20; mockup
  * .ai/sandbox/958-toolchain-mockup.html): a problems strip with one button per problem, logo cards grouped by type with ONE
  * primary action each, progress on the card itself with the rest of the page still usable, a side panel per tool (the
  * default as a radio, the system copy, the sites pinned, Install another version), an activity feed, and no raw shell
- * command anywhere — only "asks once" or "no password". UI only: every button sends an action that already exists.
+ * command anywhere — an install that asks for the password shows a lock (Tynn #1062). UI only: every button sends an action
+ * that already exists.
  */
 type Tc = NonNullable<FeatureData['toolchain']>;
 const t = (tool: string, installed: string | null, tone: ToolStatus['tone'], extra: Partial<ToolStatus> = {}): ToolStatus => ({ tool, installed, latest: null, tone, source: null, ...extra });
@@ -65,7 +66,7 @@ describe('#962 — the problems strip: one row and ONE button per problem', () =
         expect(html).toContain('data-toolchain-problems="3"');
         expect((html.match(/data-problem-action=/g) ?? [])).toHaveLength(3);
         expect(html).not.toMatch(/>[^<]*pacman -S docker/);
-        expect(html).toMatch(/data-problem="docker"[^]*?asks once/);
+        expect(html).toMatch(/data-problem="docker"[^]*?data-problem-note="docker"[^>]*title="Asks for your password"/);
     });
 
     it('a broken CLI is a problem with Repair; a needs-install finding with Install', () => {
@@ -138,17 +139,18 @@ describe('#962 — logo cards grouped by type, ONE primary action each', () => {
         expect(php).not.toMatch(/8\.5\.2/);
     });
 
-    it('a missing language offers its newest install, saying "no password"; a missing tool says whether it asks', () => {
+    it('a missing language offers its newest install, saying nothing about passwords; a missing tool that asks shows a lock (Tynn #1062)', () => {
         const html = render(SCENE);
         const java = card(html, 'java');
         expect(java).toMatch(/data-card-primary="install"[^>]*data-version="25\.0\.1\+8"/);
         expect(java).toContain('Install 25 LTS');
-        expect(java).toContain('no password');
+        expect(java).not.toContain('no password');
         const docker = card(html, 'docker');
         expect(docker).toContain('data-card-state="missing"');
-        expect(docker).toMatch(/data-install-note="docker"[^>]*>asks once</);
+        expect(docker).toMatch(/data-install-note="docker"[^>]*title="Asks for your password"/);
+        expect(docker).not.toContain('asks once');
         expect(installNote({ label: 'x', elevated: true })).toBe('asks once');
-        expect(installNote({ label: 'x', elevated: false })).toBe('no password');
+        expect(installNote({ label: 'x', elevated: false })).toBeNull();
         expect(installNote({ refused: 'no' })).toBeNull();
     });
 
@@ -187,30 +189,28 @@ describe('#962 — progress on the card, the rest of the page still usable', () 
 });
 
 describe('#962 — the side panel per tool', () => {
-    it('opens on the first problem’s tool; with none, on the first tool Genie keeps versions of', () => {
-        expect(defaultSelection(toolchainCards(SCENE), toolchainProblems(SCENE))).toBe('php');
-        const quiet: Tc = { tools: [t('git', '2.52.0', 'up-to-date')], checkedAt: 1, node: SCENE.node! };
-        expect(defaultSelection(toolchainCards(quiet), toolchainProblems(quiet))).toBe('node');
-        expect(render(SCENE)).toContain('data-toolchain-panel="php"');
+    it('opens when a tool is chosen, and only then (Tynn #1062: one that opened by itself took the cards’ room)', () => {
+        expect(render(SCENE)).not.toContain('data-toolchain-panel=');
+        expect(render(SCENE, 'php')).toContain('data-toolchain-panel="php"');
     });
 
     it('the default as a radio per version, the system copy, the sites pinned, and Install another version', () => {
-        const html = render(SCENE);
+        const html = render(SCENE, 'php');
         const panel = html.slice(html.indexOf('data-toolchain-panel="php"'));
         expect(panel).toMatch(/data-is-default="php:8\.4\.11"[^>]*role="radio"[^>]*aria-checked="true"|role="radio"[^>]*aria-checked="true"[^>]*data-is-default="php:8\.4\.11"/);
         expect(panel).toMatch(/data-make-default="php:8\.3\.26"[^>]*role="radio"|role="radio"[^>]*data-make-default="php:8\.3\.26"/);
         expect(panel).toMatch(/data-use-system="php"[^>]*role="radio"|role="radio"[^>]*data-use-system="php"/);
         expect(panel).toContain('8.4.14');
-        expect(panel).toMatch(/title="pinned by a\.gen, b\.gen, c\.gen"[^>]*>3 sites</);
-        expect(panel).toMatch(/title="pinned by tynn\.gen"[^>]*>tynn\.gen</);
+        expect(panel).toMatch(/title="a\.gen, b\.gen, c\.gen"[^>]*>Used by 3 sites</);
+        expect(panel).toMatch(/title="tynn\.gen"[^>]*>Used by tynn\.gen</);
         expect(panel).toMatch(/<option value="8\.4\.27"[^>]*>8\.4\.27<\/option>/);
         expect(panel).toMatch(/<option value="8\.5\.2"[^>]*>8\.5\.2<\/option>/);
         expect(panel).toMatch(/data-php-install="8\.4\.27"/);
-        expect(panel).toContain('no password');
+        expect(panel).not.toContain('no password');
     });
 
     it('a patch per installed version, on its row in the panel', () => {
-        const panel = render(SCENE).split('data-toolchain-panel="php"')[1]!;
+        const panel = render(SCENE, 'php').split('data-toolchain-panel="php"')[1]!;
         expect(panel).toMatch(/data-patch-update="php:8\.4\.11"[^>]*data-version="8\.4\.27"/);
         expect(panel).not.toContain('data-patch-update="php:8.3.26"');
     });

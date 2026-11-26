@@ -408,7 +408,8 @@ try {
             track(`${tool}-install-progress`, 'BLOCKED', 'pacman', 'not reached');
             continue;
         }
-        const r = await elevated(tool, () => press(tool, '^Install$'), async () => { if (!pkgVersion(pkg)) return null; const c = await card(tool); return c && c.tone !== 'not-installed' && shows(c) ? c : null; }, pkg);
+        // The system package's Install: "Install" on a tool's card, "Install system PHP" on a language's (Tynn #1062).
+        const r = await elevated(tool, () => press(tool, '^Install( system \\S+)?$'), async () => { if (!pkgVersion(pkg)) return null; const c = await card(tool); return c && c.tone !== 'not-installed' && shows(c) ? c : null; }, pkg);
         const prompted = elevationVerdict(`${tool}-elevation`, r, pkg);
         const after = await card(tool);
         const have = pkgVersion(pkg);

@@ -13,6 +13,6 @@ const row = readFileSync(join(__dirname, '..', 'scripts', 'toolchain-real-cdp.mj
 describe('the row waits for the version the card shows', () => {
     it('an install is done only when the card shows a VERSION, never its "not here"', () => {
         expect(row).toMatch(/const shows = \(c\) => Boolean\(c\?\.version && \/\\d\/\.test\(c\.version\)\);/);
-        expect(row).toMatch(/press\(tool, '\^Install\$'\), async \(\) => \{ if \(!pkgVersion\(pkg\)\) return null; const c = await card\(tool\); return c && c\.tone !== 'not-installed' && shows\(c\) \? c : null; \}/);
+        expect(row).toMatch(/press\(tool, '\^Install\( system \\\\S\+\)\?\$'\), async \(\) => \{ if \(!pkgVersion\(pkg\)\) return null; const c = await card\(tool\); return c && c\.tone !== 'not-installed' && shows\(c\) \? c : null; \}/);
     });
 });

@@ -20,7 +20,8 @@ const removeIn = (html: string, version: string) => {
  * or, on macOS/Linux, why there is none. The site form offers a PHP version select, and a pin is validated with the form.
  */
 
-const render = (toolchain: FeatureData['toolchain']) => renderToStaticMarkup(<ToolchainSurface data={{ ...EMPTY_FEATURES, toolchain }} onAction={() => {}} onNavigate={() => {}} />);
+// Its panel, chosen as a person chooses it (Tynn #1062: the panel opens only when a tool is chosen).
+const render = (toolchain: FeatureData['toolchain']) => renderToStaticMarkup(<ToolchainSurface data={{ ...EMPTY_FEATURES, toolchain }} onAction={() => {}} onNavigate={() => {}} selected="php" />);
 const base = { tools: [], checkedAt: 1 };
 
 describe('Toolchain → PHP versions', () => {
@@ -38,17 +39,17 @@ describe('Toolchain → PHP versions', () => {
         });
         expect(html).toContain('data-php-versions="2"');
         expect(html).toMatch(/data-php-version="8\.4\.26" data-php-used="1"/);
-        expect(html).toMatch(/pinned by shop\.gen/);
+        expect(html).toMatch(/Used by shop\.gen/);
         // The pinned version's Remove: a real (fancy) button, disabled, saying why on hover.
         const pinned = removeIn(html, '8.4.26');
         expect(pinned).toMatchObject({ tag: 'button', fancy: true, text: 'Remove' });
         expect(pinned!.open).toMatch(/\sdisabled=""/);
-        expect(pinned!.open).toMatch(/\stitle="Pinned by shop\.gen[^"]*"/);
+        expect(pinned!.open).toMatch(/\stitle="Used by shop\.gen[^"]*"/);
         // Control: the unpinned version's Remove is live.
         const unpinned = removeIn(html, '8.3.35');
         expect(unpinned).toMatchObject({ tag: 'button', fancy: true, text: 'Remove' });
         expect(unpinned!.open).not.toMatch(/\sdisabled=""/);
-        expect(html).toMatch(/Unpinned php sites run PHP 8\.4\.13 from your PATH/);
+        expect(html).toMatch(/Sites with no version chosen run PHP 8\.4\.13, the system(?:&#x27;|')s\./);
         expect(html).toContain('data-php-install="8.5.11"');
         expect(html).not.toContain('data-php-install="8.4.26"');
     });

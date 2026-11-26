@@ -42,6 +42,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const problems = [];
 const note = (line) => console.log(`  ${line}`);
 
+// The page's full bridge as window.genieTest (preload.ts: --genie-page-probe), as the other *-cdp rows have it.
+process.env.GENIE_PAGE_PROBE ??= '1';
 const root = mkdtempSync(join(tmpdir(), 'toolchain-shots-'));
 const home = join(root, 'home');
 mkdirSync(join(home, 'AppData', 'Roaming'), { recursive: true });
@@ -63,6 +65,7 @@ const electron = createRequire(import.meta.url)('electron');
 function launch() {
     const out = openSync(log, 'a');
     const args = ['.', `--remote-debugging-port=${PORT}`, ...(process.platform === 'linux' ? ['--no-sandbox'] : [])];
+    if (process.platform === 'linux' && ['wayland', 'x11'].includes(process.env.XDG_SESSION_TYPE ?? '')) args.push(`--ozone-platform=${process.env.XDG_SESSION_TYPE}`);
     return spawn(electron, args, { env, stdio: ['ignore', out, out], detached: process.platform !== 'win32', windowsHide: false });
 }
 function hostPid() {
@@ -208,13 +211,23 @@ try {
 
     // THE OWNER'S STATE: a Genie-managed language, its default; on Windows, Genie's defaults in every terminal.
     const card = `[data-tool-card=${JSON.stringify(INSTALL)}]`;
-    if (await cdp.evaluate(`document.querySelector('${card}')?.getAttribute('data-card-state') === 'missing' || Boolean(document.querySelector('${card} [data-card-primary="install"]'))`)) {
-        if (await click(cdp, `${card} [data-card-primary="install"]`)) {
-            note(`installing ${INSTALL} through its card`);
-            const done = await waitFor(cdp, `(() => { const c = document.querySelector('${card}'); return c && !c.querySelector('[data-card-progress]') && !c.querySelector('[data-card-primary="install"]') && c.getAttribute('data-card-state') !== 'missing'; })()`, 600_000, 2000);
-            note(done ? `${INSTALL} installed: ${await cdp.evaluate(`document.querySelector('${card}')?.innerText.replace(/\\s+/g, ' ')`)}` : `${INSTALL} did not finish installing in 10 min`);
-            if (!done) problems.push(`${INSTALL} install did not finish`);
-        }
+    // Through the action the card's button sends (the photographs need the state, not a test of the click; the 2026-11-26
+    // BEFORE run's click left PHP uninstalled with nothing said). The outcome and any refusal are printed.
+    const version = await cdp.evaluate(`document.querySelector('${card} [data-card-primary="install"]')?.getAttribute('data-version') ?? null`);
+    const kind = { php: 'toolchain.installPhp', node: 'toolchain.installNode', python: 'toolchain.installPython', go: 'toolchain.installGo' }[INSTALL];
+    if (version && kind) {
+        note(`installing ${INSTALL} ${version}`);
+        const outcome = await cdp.evaluate(`(window.genieTest ?? window.genie).features.act(${JSON.stringify({ kind, version, consent: true })}).then((r) => JSON.stringify(r ?? null)).catch((e) => 'threw: ' + String(e))`);
+        note(`install answered: ${String(outcome).slice(0, 300)}`);
+        const done = await waitFor(cdp, `(() => { const c = document.querySelector('${card}'); return Boolean(c && !c.querySelector('[data-card-progress]') && c.getAttribute('data-card-state') !== 'missing' && !c.querySelector('[data-card-primary="install"]')); })()`, 420_000, 2000);
+        const refusals = await cdp.evaluate(`(window.genieTest ?? window.genie).features.snapshot().then((d) => JSON.stringify({ refusals: d?.toolchain?.refusals ?? [], result: d?.toolchain?.result ?? null, defaults: d?.toolchain?.defaults ?? null }))`);
+        note(`${INSTALL} ${done ? 'installed' : 'NOT installed in 7 min'}: ${String(refusals).slice(0, 400)}`);
+        if (!done) problems.push(`${INSTALL} install did not finish`);
+        // Made the default, as the owner's PHP was.
+        const lang = INSTALL;
+        await cdp.evaluate(`(window.genieTest ?? window.genie).features.act(${JSON.stringify({ kind: 'toolchain.setDefault', lang, version })}).then(() => true).catch(() => false)`);
+    } else {
+        note(`no install offered on the ${INSTALL} card: ${await cdp.evaluate(`document.querySelector('${card}')?.innerText.replace(/\\s+/g, ' ') ?? 'no card'`)}`);
     }
     if (OS === 'windows' && (await cdp.evaluate(`Boolean(document.querySelector('[data-machine-path-apply]'))`))) {
         if (await click(cdp, '[data-machine-path-apply]')) {
