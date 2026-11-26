@@ -287,7 +287,11 @@ try {
     // THE DECK: what the person is told.
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
     await cdp.evaluate(`window.location.hash = '#genie://dashboard'; true`);
-    await waitFor(cdp, `/PHP [0-9.]+ installed: a security release/.test(document.body.innerText)`, 60_000, 1000);
+    // The Genie row (items that belong to no agent) and its badge, opened to show the item.
+    if (await waitFor(cdp, `Boolean(document.querySelector('[data-waiting-genie] [data-waiting-badge]'))`, 60_000, 1000)) {
+        if (!(await cdp.evaluate(`Boolean(document.querySelector('[data-waiting-items="genie:"]'))`))) await click(cdp, '[data-waiting-genie] [data-waiting-badge]');
+    } else note('no Genie row on the Dashboard');
+    await waitFor(cdp, `/PHP [0-9.]+ installed: a security release/.test(document.body.innerText)`, 15_000, 1000);
     const deck = await cdp.evaluate(`(document.body.innerText.match(/PHP [0-9.]+ installed: a security release[^\\n]*\\n?[^\\n]*/) ?? [null])[0]`);
     note(`Deck text: ${deck}`);
     if (!deck) problems.push('the Deck does not show the PHP security update');

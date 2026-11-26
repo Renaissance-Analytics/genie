@@ -2090,6 +2090,8 @@ async function main(): Promise<void> {
         asker: askerLiveFrom({ known: () => true, engine: () => host, takeOvers: () => takeOverHost }),
     });
     phoneRegistry.setDeckSource(featureDeckItems);
+    // A PHP security patch Genie installed by itself (Tynn #1066) is on the Deck at once, not at the next estate change.
+    phpPatchNotices.onChange(() => phoneRegistry.touch());
     // What this host can measure itself: mail agents have not collected, the OS agent working, and GitHub blocking (its own
     // GitHub account, Tynn #959). Flows in flight are the window's to say (Tynn #551 notes it); with no window they read none.
     phoneRegistry.setSignals(() => ({
