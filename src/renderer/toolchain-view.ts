@@ -195,7 +195,10 @@ export function installNote(preview: InstallPreview | undefined): 'asks once' | 
  * short line; the version to install instead when the refusal names one; the full sentence as `details`, behind a
  * "Details" disclosure. A reason short enough to read is said as it is.
  */
-export function plainRefusal(reason: string): { text: string; install?: string; details?: string } {
+export function plainRefusal(reason: string): { text: string; install?: string; details?: string; vcRuntime?: true } {
+    // Tynn #1066: a build that needs a newer Visual C++ runtime (8.6, vs18) — one line, and its own button.
+    const runtime = /^(PHP [\d.]+) needs a newer Microsoft Visual C\+\+ runtime/.exec(reason);
+    if (runtime) return { text: `${runtime[1]} needs a newer Microsoft Visual C++ runtime.`, vcRuntime: true, details: reason };
     const stale = /current (\w[\w.]*) [\d.]+ build is ([\d.]+), not ([\d.]+)/i.exec(reason);
     if (stale) return { text: `${stale[1]} ${stale[3]} isn't available any more.`, install: stale[2]!, details: reason };
     const missing = /^(\w[\w.]*) ([\d.]+) is not a version Genie manages here/i.exec(reason);

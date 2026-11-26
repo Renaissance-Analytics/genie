@@ -344,7 +344,8 @@ export async function installPhpVersion(asked: string, consent: boolean, ports: 
         if (vcMin !== null && ports.ensureVcRuntime) {
             say(`PHP ${version}: making sure the Microsoft Visual C++ runtime is ${vcMin} or newer`);
             const vc = await ports.ensureVcRuntime(vcMin);
-            if (!vc.ok) return { kind: 'not-installed', reason: `PHP ${version} (${file}) needs the Microsoft Visual C++ runtime ${vcMin} or newer, and it could not be brought up to it: ${vc.reason}. Nothing was downloaded` };
+            // The first words are the plain line the Toolchain shows (toolchain-view plainRefusal), with its button.
+            if (!vc.ok) return { kind: 'not-installed', reason: `PHP ${version.split('.').slice(0, 2).join('.')} needs a newer Microsoft Visual C++ runtime (${vcMin} or newer for ${file}; ${vc.reason}). Nothing was downloaded` };
         }
 
         say(`PHP ${version}: downloading ${file} from windows.php.net`);

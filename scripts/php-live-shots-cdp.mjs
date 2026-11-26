@@ -243,6 +243,19 @@ async function cardRun(cdp) {
         note(`MEASURE card-${n} ${await cdp.evaluate(MEASURE)}`);
         await shot(cdp, `${OS}-card-${n}-${next}.png`);
         taken++;
+        // The refusal's own button (Tynn #1066): "Install it (asks for administrator)" runs Microsoft's signed
+        // redistributable, then that PHP. Clicked, and what came of it photographed.
+        if (runtimeBound && (await cdp.evaluate(`Boolean(document.querySelector('${PANEL} [data-refusal-vcruntime]'))`))) {
+            note(`the refusal shows: ${await cdp.evaluate(`document.querySelector('${PANEL} [data-refusal-vcruntime]').parentElement.innerText.split('\\n')[0]`)}`);
+            await click(cdp, `${PANEL} [data-refusal-vcruntime]`);
+            const done = await waitFor(cdp, `(() => { const p = document.querySelector('${PANEL}'); if (!p) return false; return Boolean(p.querySelector('[data-php-version=${JSON.stringify(next)}]')) || (!p.querySelector('[data-refusal-vcruntime]') ? false : !document.querySelector('[data-toolchain-busy]') && /restart|declined|exited/i.test(p.innerText)); })()`, 10 * 60_000, 3000);
+            const result = await cdp.evaluate(`Boolean(document.querySelector('${PANEL} [data-php-version=${JSON.stringify(next)}]')) ? 'installed' : (document.querySelector('${PANEL}')?.innerText.match(/[^\\n]*(restart|declined|exited)[^\\n]*/i) ?? ['no answer'])[0]`);
+            note(`after "Install it (asks for administrator)": PHP ${next} ${result}${done ? '' : ' (no answer within 10 min)'}`);
+            await openPhpPanel(cdp);
+            await sleep(800);
+            await shot(cdp, `${OS}-card-${n}-${next}-after-runtime.png`);
+            taken++;
+        }
         if (!ok) break;
         const offered = await cdp.evaluate(`document.querySelector('${PANEL} [data-php-install]')?.getAttribute('data-php-install') ?? null`);
         next = offered && !asked.includes(offered) ? offered : null;

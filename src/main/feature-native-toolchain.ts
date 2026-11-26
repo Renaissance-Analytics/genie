@@ -24,6 +24,8 @@ import { userHome } from './paths.js';
 import { join } from 'node:path';
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { PhpReleaseFeed } from './php-release-feed.js';
+import { catalogLine, currentPhpCatalog } from '../core/php-releases.js';
+import { VC_RUNTIME_FOR_TOOLSET } from '../core/php-versions.js';
 import { dllVersion, ensureVcRuntimeAtLeast } from './vc-runtime.js';
 import { applyDuePhpUpdates, PhpPatchNotices, type PhpPatchSite } from './php-patch-keeper.js';
 import type { FeaturePorts } from './feature-ipc.js';
@@ -89,6 +91,17 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
             write: (text) => { mkdirSync(toolchainDataDir(), { recursive: true }); writeFileSync(phpReleasesFile(), text, 'utf8'); },
         },
     });
+    // THE VISUAL C++ RUNTIME (Tynn #1066): Microsoft's signed redistributable, never winget. A PHP install only fetches and
+    // checks it; the refusal's own button runs it, elevated (php.installVcRuntime below).
+    const vcRuntimePorts = () => ({
+        // Ten minutes, not the build's thirty: an installer waiting on a permission nobody gives must end.
+        run: ((binary, args, options) => execFileRunner(binary, args, { timeoutMs: 10 * 60_000, ...(options?.env ? { env: options.env } : {}) })) as CommandRunner,
+        systemRoot: process.env.SystemRoot ?? 'C:/Windows',
+        progress: (step: string) => deps.busy(step),
+        tempDir: toolchainDataDir(),
+        download: httpFetch.bytes,
+        writeFile: (path: string, bytes: Uint8Array) => { mkdirSync(toolchainDataDir(), { recursive: true }); writeFileSync(path, bytes); },
+    });
     const phpVersionsPorts = (): PhpVersionsPorts => ({
         ...phpVersionsBase(),
         run: longRunner,
@@ -100,13 +113,7 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
             const r = await installTool('vcredist', true, toolchainOps());
             if (r.kind !== 'installed' && r.kind !== 'already-installed') return { ok: false, reason: r.reason };
             // Tynn #1066: present is not enough — the build's toolset needs at least `min` (vs18: 14.50).
-            return min ? ensureVcRuntimeAtLeast(min, {
-                // Ten minutes, not the build's thirty: an installer waiting on a permission nobody gives must end.
-                run: (binary, args, options) => execFileRunner(binary, args, { timeoutMs: 10 * 60_000, ...(options?.env ? { env: options.env } : {}) }), systemRoot: process.env.SystemRoot ?? 'C:\\Windows', progress: (step) => deps.busy(step),
-                // No winget (Windows Server): Microsoft's redistributable, run only with a valid Microsoft signature.
-                tempDir: toolchainDataDir(), download: httpFetch.bytes,
-                writeFile: (path, bytes) => { mkdirSync(toolchainDataDir(), { recursive: true }); writeFileSync(path, bytes); },
-            }) : { ok: true };
+            return min ? ensureVcRuntimeAtLeast(min, vcRuntimePorts(), { install: false }) : { ok: true };
         },
         progress: (step) => deps.busy(step),
         // Tynn #1066: the card offers the newest PHP this machine's Visual C++ runtime can run.
@@ -278,6 +285,13 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
                 },
                 install: async (version, consent) => { await phpFeed.refresh(); return installPhpVersion(version, consent, phpVersionsPorts()); },
                 remove: (version, pins) => removePhpVersion(version, pins, phpVersionsBase()),
+                // Tynn #1066: the runtime a version's build needs, installed by the person's click (asks for administrator).
+                installVcRuntime: async (version) => {
+                    const toolset = catalogLine(currentPhpCatalog(), version.split('.').slice(0, 2).join('.'))?.toolset;
+                    const min = toolset ? VC_RUNTIME_FOR_TOOLSET[toolset] : undefined;
+                    if (!min) return { ok: false, reason: `Genie does not know which Visual C++ runtime PHP ${version} needs` };
+                    try { return await ensureVcRuntimeAtLeast(min, vcRuntimePorts(), { install: true }); } finally { deps.busy(null); }
+                },
                 // Tynn #1066: the security patches due in each installed line, installed, the default and sites moved, told.
                 applyDue: async (progress) => {
                     const catalogBefore = phpFeed.catalog();

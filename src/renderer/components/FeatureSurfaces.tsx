@@ -1422,13 +1422,16 @@ export function ProblemsStrip({ problems, busy, onAction, onOpen }: { problems: 
  * A REFUSAL, SAID IN PLAIN WORDS (Tynn #1062): a short line (toolchain-view plainRefusal), the version to install instead
  * as a button when there is one, and the engine's own sentence only under "Details".
  */
-function RefusalLine({ reason, attrs, className = '', busy = false, onInstall }: { reason: string; attrs: Record<string, string>; className?: string; busy?: boolean; onInstall?: ((version: string) => void) | undefined }) {
+function RefusalLine({ reason, attrs, className = '', busy = false, onInstall, onVcRuntime }: { reason: string; attrs: Record<string, string>; className?: string; busy?: boolean; onInstall?: ((version: string) => void) | undefined; onVcRuntime?: (() => void) | undefined }) {
     const r = plainRefusal(reason);
     return (
         <div {...attrs} className={`flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--danger)] ${className}`}>
             {r.text}
             {r.install && onInstall ? (
                 <Button size="xs" type="button" color="blue" data-refusal-install={r.install} disabled={busy} onClick={() => onInstall(r.install!)}>{`Install ${r.install}`}</Button>
+            ) : null}
+            {r.vcRuntime && onVcRuntime ? (
+                <Button size="xs" type="button" color="blue" data-refusal-vcruntime="" disabled={busy} onClick={onVcRuntime}>Install it (asks for administrator)</Button>
             ) : null}
             {r.details ? (
                 <details className="w-full text-[var(--fg-3)]">
@@ -1715,7 +1718,7 @@ function LanguagePanel({ lang, view, current, busy, check, onAction, refusals }:
                 {check ? <CheckStateMark tool={lang} check={check} /> : null}
             </h4>
             {refusals.map((r) => (
-                <RefusalLine key={r.version} reason={r.reason} attrs={attr('refusal', r.version ?? '')} busy={busy} onInstall={(version) => onAction({ kind: INSTALL_KIND[lang], version, consent: true } as FeatureAction)} />
+                <RefusalLine key={r.version} reason={r.reason} attrs={attr('refusal', r.version ?? '')} busy={busy} onInstall={(version) => onAction({ kind: INSTALL_KIND[lang], version, consent: true } as FeatureAction)} {...(lang === 'php' && r.version ? { onVcRuntime: () => onAction({ kind: 'toolchain.installVcRuntime', version: r.version! }) } : {})} />
             ))}
             <ul role="radiogroup" aria-label={`${copy.name}: the default`} className="flex flex-col gap-1.5">
                 {view.managed.map((m) => {

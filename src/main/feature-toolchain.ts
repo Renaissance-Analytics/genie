@@ -72,6 +72,18 @@ export function toolchainStateFrom(section: ToolchainSection | null): Partial<Fe
 
 type ToolchainPort = NonNullable<FeaturePorts['toolchain']>;
 
+/**
+ * THE FIRST PHP ON A MACHINE WITH NONE IS THE DEFAULT (Tynn #1066). A fresh Windows VM: four PHPs installed, and the
+ * panel still chose "System · none on this machine" and said sites could not start. When there is no default and no
+ * system PHP, the version just installed becomes what `php` means; a person's own PHP on PATH is never taken over.
+ */
+async function phpDefaultWhenNone(next: FeatureState, tc: ToolchainPort, version: string): Promise<void> {
+    if (!tc.defaults || next.toolchainPhp?.system !== null) return;
+    if ((tc.defaults.list()['php'] ?? null) !== null) return;
+    const set = tc.defaults.set('php', version);
+    if (set.kind !== 'refused') next.toolchainDefaults = tc.defaults.list();
+}
+
 /** Re-probe every tool (the snapshot shows the MEASURED state, never a command's word) and how each missing one would install. */
 export async function rescanToolchain(next: FeatureState, tc: ToolchainPort, pins: readonly SitePin[] = []): Promise<void> {
     if (tc.php) next.toolchainPhp = await tc.php.list(pins);
@@ -569,6 +581,28 @@ export async function applyToolchainCoreFeatureAction(services: ToolchainFeature
                 : outcome.kind === 'already-installed' ? `PHP ${outcome.version} was already installed; nothing was downloaded.`
                 : `PHP ${action.version} was not installed: ${outcome.reason}.`;
             next.toolchainPhp = await tc.php.list(sitePins(services));
+            if (outcome.kind === 'installed') await phpDefaultWhenNone(next, tc, outcome.version);
+            break;
+        }
+        case 'toolchain.installVcRuntime': {
+            // Tynn #1066: the refusal's button — the runtime PHP `version` needs (Microsoft's signed redistributable, asks
+            // for administrator), then that PHP, so one click ends with it installed.
+            clearRefusal(next, 'php', action.version);
+            const tc = ports.toolchain;
+            if (!tc?.php?.installVcRuntime) {
+                refuse(next, 'php', 'Genie cannot install the Microsoft Visual C++ runtime here', action.version);
+                break;
+            }
+            const vc = await tc.php.installVcRuntime(action.version);
+            if (!vc.ok) {
+                refuse(next, 'php', `PHP ${action.version.split('.').slice(0, 2).join('.')} needs a newer Microsoft Visual C++ runtime (${vc.reason})`, action.version);
+                break;
+            }
+            const outcome = await tc.php.install(action.version, true);
+            if (outcome.kind === 'refused' || outcome.kind === 'not-installed') refuse(next, 'php', outcome.reason, action.version);
+            else next.toolchainResult = `The Microsoft Visual C++ runtime is up to date, and PHP ${outcome.version} is installed.`;
+            next.toolchainPhp = await tc.php.list(sitePins(services));
+            if (outcome.kind === 'installed') await phpDefaultWhenNone(next, tc, outcome.version);
             break;
         }
         case 'toolchain.removePhp': {
