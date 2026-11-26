@@ -18,6 +18,7 @@ import {
 import { PHP_RECIPES, PHP_WINDOWS_RELEASES_JSON, pickPinned } from '../src/core/php-versions.js';
 import { installableVersions, patchWithinLine } from '../src/core/toolchain-update.js';
 import { applyDuePhpUpdates, PhpPatchNotices, type PhpPatchPorts, type PhpPatchSite } from '../src/main/php-patch-keeper.js';
+import { plainRefusal } from '../src/renderer/toolchain-view.js';
 import { withSharedToolchainPhp } from '../src/main/features-host.js';
 import { PhpReleaseFeed } from '../src/main/php-release-feed.js';
 import { ensureVcRuntimeAtLeast } from '../src/main/vc-runtime.js';
@@ -619,5 +620,16 @@ describe('a build whose banner does not name its thread safety (8.3.37 on a fres
         const r = await installPhpVersion('8.4.28', true, portsWith('ZTS'));
         expect(r.kind).toBe('not-installed');
         expect(r.kind === 'not-installed' && r.reason).toMatch(/thread-safe/);
+    });
+});
+
+
+describe('the runtime refusal in plain words (the owner read raw engine text on 8.6.0)', () => {
+    it('one line, the button, the engine words under Details', () => {
+        const reason = "PHP 8.6 needs a newer Microsoft Visual C++ runtime (14.50 or newer for php-8.6.0-nts-Win32-vs18-x64.zip; this machine's vcruntime140.dll is 14.44.35211.0). Nothing was downloaded";
+        const r = plainRefusal(reason);
+        expect(r.text).toBe('PHP 8.6 needs a newer Microsoft Visual C++ runtime.');
+        expect(r.vcRuntime).toBe(true);
+        expect(r.details).toBe(reason);
     });
 });
