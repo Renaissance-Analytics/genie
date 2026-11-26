@@ -46,8 +46,8 @@ const npm = (args) => execFileSync(WIN ? 'npm.cmd' : 'npm', args, { encoding: 'u
 const lines = (text) => text.split(/\r?\n/);
 const at = (text, pattern) => lines(text).findIndex((l) => pattern.test(l));
 
-/** Claude Code's card in view and selected, so the picture shows its row and its progress, not another tool's panel. */
-const focusClaude = (cdp) => cdp.evaluate(`(() => { const li = document.querySelector('li[data-tool="claude-code"]'); if (!li) return false; li.scrollIntoView({ block: 'center' }); (li.querySelector('button, [role="button"]') ?? li).click(); return true; })()`).catch(() => false);
+/** Claude Code's card in view, so the picture shows its card and its progress. Never clicked: a card's first button can be Update. */
+const focusClaude = (cdp) => cdp.evaluate(`(() => { const li = document.querySelector('li[data-tool="claude-code"]'); if (!li) return false; li.scrollIntoView({ block: 'center' }); return true; })()`).catch(() => false);
 
 async function shoot(cdp, name, size = { width: 1280, height: 800 }) {
     try {
