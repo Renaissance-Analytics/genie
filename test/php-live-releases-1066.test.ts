@@ -18,7 +18,7 @@ import {
 import { PHP_RECIPES, PHP_WINDOWS_RELEASES_JSON, pickPinned } from '../src/core/php-versions.js';
 import { installableVersions, patchWithinLine } from '../src/core/toolchain-update.js';
 import { applyDuePhpUpdates, PhpPatchNotices, type PhpPatchPorts, type PhpPatchSite } from '../src/main/php-patch-keeper.js';
-import { plainRefusal } from '../src/renderer/toolchain-view.js';
+import { plainRefusal, unpinnedSitesLine } from '../src/renderer/toolchain-view.js';
 import { withSharedToolchainPhp } from '../src/main/features-host.js';
 import { PhpReleaseFeed } from '../src/main/php-release-feed.js';
 import { VC_REDIST_URL, ensureVcRuntimeAtLeast } from '../src/main/vc-runtime.js';
@@ -620,5 +620,34 @@ describe('the runtime refusal in plain words (the owner read raw engine text on 
         expect(r.text).toBe('PHP 8.6 needs a newer Microsoft Visual C++ runtime.');
         expect(r.vcRuntime).toBe(true);
         expect(r.details).toBe(reason);
+    });
+});
+
+describe('after Genie made its PHP the default, nothing calls it the system’s (a fresh Windows VM: "8.5.13 · System")', () => {
+    it('the php-cgi on PATH that is Genie’s own (current/php) is not listed as the system PHP', async () => {
+        await liveCatalog();
+        const { ports } = winInstallPorts(sha(ZIP), ['8.4.28']);
+        const own = join('/data', 'genie2-toolchain', 'current', 'php', 'php-cgi.exe');
+        const run: PhpVersionsPorts['run'] = async (binary, args, options) => {
+            if (binary === 'where' || binary === 'which') return { stdout: `${own}\r\n`, exitCode: 0 };
+            if (binary === 'php-cgi') return { stdout: 'PHP 8.4.28 (cgi-fcgi) (NTS)', exitCode: 0 };
+            return ports.run(binary, args, options);
+        };
+        expect((await listPhpVersions({ ...ports, run })).system).toBeNull();
+    });
+    it('control: a php-cgi of the person’s own (elsewhere on PATH) is the system PHP', async () => {
+        await liveCatalog();
+        const { ports } = winInstallPorts(sha(ZIP), ['8.4.28']);
+        const run: PhpVersionsPorts['run'] = async (binary, args, options) => {
+            if (binary === 'where' || binary === 'which') return { stdout: 'C:/php/php-cgi.exe\r\n', exitCode: 0 };
+            if (binary === 'php-cgi') return { stdout: 'PHP 8.3.6 (cgi-fcgi) (NTS)', exitCode: 0 };
+            return ports.run(binary, args, options);
+        };
+        expect((await listPhpVersions({ ...ports, run })).system).toEqual({ version: '8.3.6' });
+    });
+    it('the line under the list names the default when there is one', () => {
+        expect(unpinnedSitesLine('8.5.13', null)).toBe('Sites with no version chosen run PHP 8.5.13, the default.');
+        expect(unpinnedSitesLine(null, '8.3.6')).toBe("Sites with no version chosen run PHP 8.3.6, the system's.");
+        expect(unpinnedSitesLine(null, null)).toBe('Sites with no version chosen cannot start until PHP is installed: there is no system PHP.');
     });
 });
