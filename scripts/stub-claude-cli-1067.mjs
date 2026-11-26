@@ -76,14 +76,23 @@ const MODELS = [{ value: 'default', displayName: 'Default (recommended)', descri
 const send = (frame) => process.stdout.write(`${JSON.stringify(frame)}\n`);
 const stream = (e) => send({ type: 'stream_event', session_id: SESSION, parent_tool_use_id: null, event: e });
 let turns = 0;
-function turn() {
+let chain = Promise.resolve();
+// The first turn of the stub's whole state lasts 12 s (a word a second), so a drain has a turn to wait for; the rest end at once.
+const firstTurnEver = !existsSync(join(state, 'had-a-turn'));
+async function turn() {
     const n = ++turns;
     const id = `msg_cli_${n}`;
     event(`turn ${n}`);
     send({ type: 'system', subtype: 'init', session_id: SESSION, claude_code_version: version(), model: 'claude-opus-5-5', tools: [], mcp_servers: [], cwd: process.cwd() });
     stream({ type: 'message_start', message: { id, usage: { input_tokens: 10, output_tokens: 1 } } });
     stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
-    stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: `turn ${n} done` } });
+    const words = n === 1 && firstTurnEver ? 12 : 1;
+    writeFileSync(join(state, 'had-a-turn'), '1');
+    for (let i = 0; i < words; i++) {
+        stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: `${i === 0 ? '' : ' '}working${i}` } });
+        if (words > 1) await new Promise((r) => setTimeout(r, 1000));
+    }
+    event(`turn ${n} ended`);
     stream({ type: 'content_block_stop', index: 0 });
     stream({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 3 } });
     stream({ type: 'message_stop' });
@@ -96,7 +105,7 @@ function handle(frame) {
         const response = frame.request?.subtype === 'initialize' ? { models: MODELS, claude_code_version: version() } : {};
         return send({ type: 'control_response', response: { subtype: 'success', request_id: id, response } });
     }
-    if (frame?.type === 'user') return turn();
+    if (frame?.type === 'user') { chain = chain.then(turn).catch(() => {}); return; }
 }
 let buffer = '';
 process.stdin.setEncoding('utf8');
@@ -111,4 +120,4 @@ process.stdin.on('data', (chunk) => {
         try { handle(JSON.parse(line)); } catch { /* not a frame */ }
     }
 });
-process.stdin.on('end', () => process.exit(0));
+process.stdin.on('end', () => { void chain.then(() => process.exit(0)); });

@@ -65,6 +65,8 @@ export interface StartupTaskPorts {
     readonly update: (provider: string, progress: (step: string | null) => void) => Promise<RepairOutcome | { readonly kind: 'refused'; readonly reason: string }>;
     /** PHP's live patch source (php-live): applies the security patches due within each installed line. Absent = not in this build. */
     readonly php?: (progress: (step: string | null) => void) => Promise<{ readonly updated: readonly string[]; readonly failed: readonly { readonly version: string; readonly reason: string }[] }>;
+    /** Why a CLI is not updated (current, not installed, no newest version, could not be checked), one line each. */
+    readonly log?: (line: string) => void;
 }
 
 /** The start's tasks: one per CLI whose update is due (checked side by side), then PHP's patches when the hook is there. */
@@ -72,8 +74,12 @@ export async function startupTasks(ports: StartupTaskPorts): Promise<StartupUpda
     const due = await Promise.all(ports.providers.map(async (p) => {
         try {
             const [health, latest] = await Promise.all([ports.check(p.provider), ports.latest(p.npmPackage)]);
-            return cliUpdateDue(health, latest) ? { ...p, from: cliVersion(health!.version)!, to: cliVersion(latest)! } : null;
-        } catch {
+            if (cliUpdateDue(health, latest)) return { ...p, from: cliVersion(health!.version)!, to: cliVersion(latest)! };
+            const installed = health?.installed ? cliVersion(health.version) : null;
+            ports.log?.(`startup updates: ${!health?.installed ? `${p.label} is not installed` : installed === null ? `${p.label}'s version could not be read` : latest === null ? `${p.label} ${installed}: no newest version could be read` : `${p.label} ${installed} is current (latest ${cliVersion(latest) ?? latest})`}`);
+            return null;
+        } catch (error) {
+            ports.log?.(`startup updates: ${p.label} could not be checked: ${error instanceof Error ? error.message : String(error)}`);
             return null;
         }
     }));
