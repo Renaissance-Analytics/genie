@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { KeyringService } from '../src/main/keyring-service.js';
 import { LinuxKeyring, type KeyringPorts } from '../src/main/linux-keyring.js';
 import { until } from './helpers/until.js';
+import type { ElevatedBatch, Elevate } from '../src/core/elevation.js';
 
 /**
  * THE KEYRING CARD READS THE HOST (P3.4 cut c). The secrets are in the host's keychain, so whether they can be kept is the host's to say. The window's Chromium store
@@ -25,7 +26,7 @@ async function hostKeyring(start: Facts) {
     const ports: KeyringPorts = {
         platform: 'linux',
         facts: async () => state.facts,
-        plan: async () => ({ pm: 'pacman', packages: ['gnome-keyring', 'libsecret'], run: ['pkexec', 'pacman', '-S', 'gnome-keyring'], manual: 'sudo pacman -S gnome-keyring' }) as never,
+        plan: async () => ({ pm: 'pacman', packages: ['gnome-keyring', 'libsecret'], run: ['pacman', '-S', 'gnome-keyring'], manual: 'sudo pacman -S gnome-keyring' }) as never,
         exec: async (argv: readonly string[]) => { state.execs.push([...argv]); state.facts = HEALTHY; return { code: 0, stdout: '', stderr: '' }; },
         relaunch: () => { state.relaunches += 1; },
     } as never;
@@ -40,7 +41,8 @@ async function linked(service: KeyringService) {
     const replica = {
         view: () => service.dump().view,
         canKeepSecrets: () => service.dump().canKeepSecrets,
-        fix: async () => { await service.call('fix', []); },
+        // The host's elevation for the window that pressed it (Tynn #973) rides on the call.
+        fix: async (elevate?: Elevate) => { await service.call('fix', [elevate]); },
         onChange: (listener: () => void) => service.onEvent(() => listener()),
     };
     return { service, replica };
@@ -85,8 +87,11 @@ describe('the host says what it found, and its button runs there', () => {
         const { keyring, state } = await hostKeyring({ installed: false, owned: false, activatable: false, backend: 'basic_text', available: false });
         const { replica } = await linked(new KeyringService(keyring));
         expect(replica.view()).toMatchObject({ state: 'not-installed' });
-        await replica.fix();
-        expect(state.execs[0]?.[0]).toBe('pkexec');
+        // Tynn #973: the install is ONE elevated batch through the pressing window's elevation, never pkexec.
+        const batches: ElevatedBatch[] = [];
+        await replica.fix(async (batch) => { batches.push(batch); state.facts = HEALTHY; return { kind: 'ran', exitCode: 0, output: '', failedStep: null }; });
+        expect(batches).toEqual([{ title: 'Install the keyring', items: ['gnome-keyring', 'libsecret'], steps: [{ command: 'pacman', args: ['-S', 'gnome-keyring'] }] }]);
+        expect(state.execs.some((argv) => argv[0] === 'pkexec' || argv[0] === 'sudo')).toBe(false);
     });
 
     it('still opening: no card yet, and nothing claims secrets cannot be kept', async () => {

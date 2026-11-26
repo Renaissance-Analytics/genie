@@ -21,7 +21,7 @@ import { ApprovalCard, ApprovalMarker } from './ApprovalCard.js';
 import type { Fidelity } from '../../core/dashboard-view.js';
 import { CHAT_LIVE_LINES, chatWindowStart } from '../../core/chat-window.js';
 import { personLine } from '../../core/person-text.js';
-import { chatFollowKey, mailSubject, waitingStepLabel, type ChatContext, type ChatMessage, type ChatWaitingOn } from '../../core/chat-view.js';
+import { chatFollowKey, mailSubject, overloadRetryWords, waitingStepLabel, type ChatContext, type ChatMessage, type ChatWaitingOn } from '../../core/chat-view.js';
 import { toolIcon } from '../../core/stream-view.js';
 import { ago } from '../../core/inbox-threads.js';
 import { useNow } from '../use-now.js';
@@ -739,7 +739,7 @@ function ChatFlyoutBody({
                 While a turn runs that can be stopped, `Stop this turn` sits at its end: with the turn, not under Send. */}
             {thread?.context || onStopTurn || onResumeLimit || onProviderLogin || onAccountRetry || onDesignLogin ? (
                 <div data-chat-context={thread?.context?.tone ?? 'ok'} {...(thread?.context?.title ? { title: thread.context.title } : {})} className={`flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-1.5 text-[12px] ${CONTEXT_TONE[thread?.context?.tone ?? 'ok']}`}>
-                    <ChatPlanLine text={thread?.context?.text ?? 'Working'} plan={thread?.context?.planView} />
+                    {thread?.context?.retryAt !== undefined ? <RetryCountdown at={thread.context.retryAt} /> : <ChatPlanLine text={thread?.context?.text ?? 'Working'} plan={thread?.context?.planView} />}
                     {onStopTurn ? <TurnStop onStop={onStopTurn} agentName={thread?.name} className="ml-auto" /> : null}
                     {onProviderLogin ? (
                         <Button size="xs" labelClassName="contents"
@@ -1267,4 +1267,14 @@ export function ChatCarriedRow({ m }: { m: ChatThreadMessage }) {
             <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap border-l-2 border-[var(--border-1)] pl-2.5 font-mono text-[11px] [overflow-wrap:anywhere]">{m.carried}</pre>
         </details>
     );
+}
+
+/** `Provider busy, retrying in N s` (Tynn #1060), counted down each second until the retry goes. */
+function RetryCountdown({ at }: { at: number }) {
+    const [now, setNow] = useState(() => Date.now());
+    useEffect(() => {
+        const timer = setInterval(() => setNow(Date.now()), 1000);
+        return () => clearInterval(timer);
+    }, [at]);
+    return <span data-chat-retry={at} className="truncate">{overloadRetryWords(at, now)}</span>;
 }

@@ -18,6 +18,8 @@ import type { ToolStatus } from '../core/toolchain.js';
 import type { RepairReport } from '../core/toolchain-repair.js';
 import type { ToolchainActivity } from '../core/toolchain-risk.js';
 import type { InstallOutcome } from './toolchain-ops.js';
+import type { DockerStartOutcome } from './docker-engine.js';
+import type { Elevate } from '../core/elevation.js';
 import type { GoInstallOutcome, GoRemoveOutcome, GoVersionsView } from './go-versions.js';
 import type { PythonInstallOutcome, PythonRemoveOutcome, PythonVersionsView } from './python-versions.js';
 import type { DotnetInstallOutcome, DotnetRemoveOutcome, DotnetVersionsView } from './dotnet-versions.js';
@@ -103,7 +105,8 @@ export interface FeaturePorts {
      * Linux with no keyring (main/linux-keyring.ts, the owner 2026-11-01): the card's view (null = fine, or not Linux) and
      * its one button. Absent = no card (doctor mode, tests that do not wire it).
      */
-    readonly keyring?: { view(): import('./linux-keyring.js').KeyringView | null; fix(): Promise<void>; press?(): Promise<void>; cancel?(): void | Promise<void>; notice?(): string | null };
+    /** `elevate` (Tynn #973): the host's elevation for the window that pressed it; an install asks that window for the password. */
+    readonly keyring?: { view(): import('./linux-keyring.js').KeyringView | null; fix(elevate?: Elevate): Promise<void>; press?(elevate?: Elevate): Promise<void>; cancel?(): void | Promise<void>; notice?(): string | null };
     /** The background processes the person keeps (§6.6): written down, restored on launch. */
     readonly processes?: import('./processes-host.js').ProcessBookApi;
     /** Scheduled tasks' clock (genie#1204): the person's Run now. Absent = none (doctor mode). */
@@ -136,14 +139,20 @@ export interface FeaturePorts {
         /** Tynn #714: push the run as it moves (each row's state); `null` when it is over. */
         checking?(run: NonNullable<ToolchainSection['checkRun']> | null): void;
         /** `version`: the version the button named (genie#1306); `progress`: the row's step while it runs. */
-        update(tool: string, version?: string, progress?: (step: string | null) => void): Promise<RepairOutcome | { kind: 'refused'; reason: string }>;
+        /** `elevate` (Tynn #973): the host's elevation for the client that clicked; absent = an elevated plan is refused. */
+        update(tool: string, version?: string, progress?: (step: string | null) => void, elevate?: Elevate): Promise<RepairOutcome | { kind: 'refused'; reason: string }>;
         /** Push the row's in-progress state (genie#1306): the update and its step, `null` when it is over. */
         updating?(row: { readonly tool: string; readonly version?: string; readonly step: string } | null): void;
         now(): number;
         /** What is running right now — the update guard's input. An update is refused while this is not wired. */
         activity?(): Promise<ToolchainActivity>;
+        /**
+         * Tynn #970: Docker on Linux, Start: enable and start it, and add the account to the docker group, as ONE elevated
+         * batch; judged by `docker info` afterwards. Absent = not wired. `elevate`: the host's, for the client that clicked.
+         */
+        startDocker?(elevate?: Elevate): Promise<DockerStartOutcome>;
         /** T1: install one missing tool. The consent is the person's; the installer checks it too. */
-        install?(tool: string, consent: boolean): Promise<InstallOutcome>;
+        install?(tool: string, consent: boolean, elevate?: Elevate): Promise<InstallOutcome>;
         /** How a missing tool would be installed here, shown before anything runs. */
         preview?(tool: string): Promise<InstallPreview>;
         /** T2: Check and repair. */

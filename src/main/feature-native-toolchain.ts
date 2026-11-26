@@ -2,6 +2,7 @@ import { adoptWindowEnv } from './session-engine-server.js';
 import { runCliRepair, runCliUpdate } from './cli-repair.js';
 import { execFileRunner, probeToolLive, probeToolsLive, execFileText } from './toolchain-runner.js';
 import { latestIndex, runUpdate, type CommandRunner, type LanguageUpdatePorts } from './toolchain-prober.js';
+import { pacmanDbPath, pacmanSync, withPacmanLatest } from './pacman.js';
 import { planInstall, withProviderHealth, type PackageManager, type Platform } from '../core/toolchain.js';
 import { applyPlaywrightEnv, checkAndRepair, detectPackageManager, ensurePhpCaBundle, installTool, nodeToolchainFs, phpCaBundleNow, phpWorkerEnv, preferGenieNode, processEnv, refreshPersistedPath, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
 import { listDefaults, nodeLinkFs, restoreDefaultsEnv, setDefault } from './toolchain-defaults.js';
@@ -16,7 +17,9 @@ import { installPlaywrightBrowsers, listPlaywrightBrowsers, nodePlaywrightFs, ty
 import { installJavaVersion, javaVersionsRoot, listJavaVersions, managedJava, removeJavaVersion, type JavaVersionsPorts } from './java-versions.js';
 import { installNodeVersion, listNodeVersions, managedNode, nodeVersionsRoot, removeNodeVersion, type NodeVersionsPorts } from './node-versions.js';
 import { httpFetchOver, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, phpVersionsRoot, refreshAllManagedInis, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCaPort, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
-import { availableParallelism } from 'node:os';
+import { availableParallelism, userInfo } from 'node:os';
+import { dockerAccount, probeDockerHealth, startDocker, withDockerHealth } from './docker-engine.js';
+import type { ToolStatus } from '../core/toolchain.js';
 import { userHome } from './paths.js';
 import { join } from 'node:path';
 import { statSync } from 'node:fs';
@@ -28,11 +31,18 @@ import type { ToolchainActivity } from '../core/toolchain-risk.js';
 export function nativeFeatureToolchain(deps: { home: string; providerHealth: ProviderHealthBook;
     activity(): Promise<ToolchainActivity>; busy(step: string | null): void; download(url: string): Promise<Response> }): NonNullable<FeaturePorts['toolchain']> {
     const { providerHealth } = deps;
+    // Tynn #970: Docker on Linux is a HEALTH beside its version, read as the user Genie runs as.
+    const linuxUser = () => userInfo().username;
+    const withDocker = async (statuses: ToolStatus[]): Promise<ToolStatus[]> => process.platform === 'linux' && statuses.some((s) => s.tool === 'docker' && s.installed !== null)
+        ? withDockerHealth(statuses, await probeDockerHealth(execFileRunner, linuxUser()))
+        : statuses;
     const toolchainDataDir = () => join(deps.home, 'genie2-toolchain');
     const httpFetch = httpFetchOver(url => deps.download(url));
-    const latestFor = latestIndex({ run: execFileRunner, fetchJson: async url => (await deps.download(url)).json(), platform: process.platform as Platform });
     let detectedPackageManager: Promise<PackageManager | null> | null = null;
     const packageManager = () => (detectedPackageManager ??= detectPackageManager(process.platform as Platform, execFileRunner));
+    // Arch's sync databases, Genie's own copy (Tynn #968): one for the cards' "latest" and the installs' check.
+    const pacman = pacmanSync({ run: (binary, args, options) => execFileRunner(binary, args, { timeoutMs: 120_000, ...(options?.env ? { env: options.env } : {}) }), dbPath: pacmanDbPath(toolchainDataDir()) });
+    const latestFor = withPacmanLatest(latestIndex({ run: execFileRunner, fetchJson: async url => (await deps.download(url)).json(), platform: process.platform as Platform }), { packageManager, sync: pacman });
     const longRunner: CommandRunner = (binary, args, options) => execFileRunner(binary, args, { timeoutMs: 30 * 60_000, ...(options?.env ? { env: options.env } : {}) });
     const phpCaPorts = () => ({ platform: process.platform as Platform, fs: nodeToolchainFs(), dataDir: toolchainDataDir(), run: ((binary, args) => execFileRunner(binary, args, { timeoutMs: 120_000 })) as CommandRunner });
     const phpCa: PhpCaPort = { current: () => phpCaBundleNow(phpCaPorts()), ensure: () => ensurePhpCaBundle(phpCaPorts()) };
@@ -45,10 +55,13 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
         dataDir: toolchainDataDir(),
         systemRoot: process.env.SystemRoot ?? 'C:\\Windows',
         packageManager,
+        pacman,
         progress: (step) => deps.busy(step),
         now: Date.now,
         // Genie's own Node, newest first (main/node-versions.ts): Check and repair makes it the node and npm Genie runs.
         genieNode: () => managedNode({ platform: process.platform as NodeVersionsPorts['platform'], root: nodeVersionsRoot(toolchainDataDir()), fs: nodePhpVersionsFs() })[0] ?? null,
+        // Tynn #970: the account Docker's install adds to the docker group.
+        dockerAccount: () => dockerAccount(execFileRunner, linuxUser()),
     });
     const phpVersionsPorts = (): PhpVersionsPorts => ({
         ...phpVersionsBase(),
@@ -186,24 +199,29 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
             repairCli: (provider, progress) => runCliRepair(provider, cliPorts(progress)),
             // Not signed in on the Toolchain: the provider's own login, as the Agent view's Log in opens it (Tynn #698).
             // An agent CLI the health check finds cannot run reads Broken, with why (Tynn #698).
-            probe: async () => withProviderHealth(await probeToolsLive(latestFor), await providerHealth.refreshAll()),
+            probe: async () => withDocker(withProviderHealth(await probeToolsLive(latestFor), await providerHealth.refreshAll())),
             // Tynn #714: one tool, for the one-at-a-time "Check for updates".
             probeTool: async (name) => {
                 const status = await probeToolLive(name, latestFor);
                 if (status === null) throw new Error('Genie does not manage this tool');
-                return withProviderHealth([status], await providerHealth.refreshAll())[0]!;
+                return (await withDocker(withProviderHealth([status], await providerHealth.refreshAll())))[0]!;
             },
-            update: async (tool, version, progress) => AGENT_CLI_PROVIDER[tool] !== undefined
+            update: async (tool, version, progress, elevate) => AGENT_CLI_PROVIDER[tool] !== undefined
                 ? runCliUpdate(AGENT_CLI_PROVIDER[tool]!, cliPorts((step) => { busyLine(step); if (step) progress?.(step); }))
-                : runUpdate(tool, { platform: process.platform as Platform, packageManager: await packageManager() }, longRunner, version ?? null, languageUpdates(progress)),
+                : runUpdate(tool, { platform: process.platform as Platform, packageManager: await packageManager(), pacman }, longRunner, version ?? null, languageUpdates(progress), elevate),
             // The row's in-progress state, pushed: which update, and its step (genie#1306).
             now: Date.now,
             // THE UPDATE GUARD's input, read at the moment of the click: running sessions with their provider, Genie-run
             // processes with their command, running service engines by name.
             activity: () => deps.activity(),
-            install: (tool, consent) => installTool(tool, consent, toolchainOps()),
+            // Tynn #973: `elevate` is the host's, bound to the client that clicked (genie-host's effectsFor).
+            install: (tool, consent, elevate) => installTool(tool, consent, { ...toolchainOps(), ...(elevate ? { elevate } : {}) }),
+            // Tynn #970: Docker's Start, one elevated batch for the client that clicked, judged by `docker info` after.
+            startDocker: (elevate) => startDocker({ platform: process.platform as Platform, run: execFileRunner, user: linuxUser(), elevate }),
             preview: async (tool) => {
-                const plan = planInstall({ tool, platform: process.platform as Platform, packageManager: await packageManager() });
+                // Docker on Linux (Tynn #970): the preview names the group step the install would run, for this account.
+                const account = tool === 'docker' && process.platform === 'linux' ? await dockerAccount(execFileRunner, linuxUser()) : undefined;
+                const plan = planInstall({ tool, platform: process.platform as Platform, packageManager: await packageManager(), ...(account ? { account } : {}) });
                 return 'refused' in plan ? { refused: plan.refused } : { label: plan.label, elevated: plan.elevated };
             },
             // Repaired in the host environment: every future agent and site reads

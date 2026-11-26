@@ -15,6 +15,7 @@ import { connectRemote } from '../src/renderer/remote-bridge.js';
 import { composeTracker } from './support/compose-tracker.js';
 import { resourceDoor } from './support/local-resource-door.js';
 import { StagingPermissionsClient } from '../src/main/staging-permissions.js';
+import { LOADS_PROBE, loadsOf } from './support/windows-powershell-loads.js';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { vi.restoreAllMocks(); for (const cleanup of cleanups.splice(0)) await cleanup(); });
@@ -199,11 +200,23 @@ describe('7B owned staging at real host composition startup', () => {
         for (const name of paths) if ((await stat(join(f.root, String(name)))).isFile()) file = join(f.root, String(name));
         expect(file).not.toBe('');
         const targets = [f.root, file, broad].map(path => `[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${Buffer.from(path, 'utf16le').toString('base64')}'))`);
-        const script = `$ErrorActionPreference='Stop';$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;$out=@();foreach($p in @(${targets.join(',')})){$a=Get-Acl -LiteralPath $p;$rules=@($a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]));$out+=@{protected=$a.AreAccessRulesProtected;owner=$a.GetOwner([Security.Principal.SecurityIdentifier]).Value;rules=@($rules|%{@{sid=$_.IdentityReference.Value;allow=($_.AccessControlType -eq 'Allow');full=($_.FileSystemRights -eq 'FullControl')}})}};@{sid=$sid;targets=$out}|ConvertTo-Json -Depth 6 -Compress`;
+        /*
+         * The ACL read the way the product reads it (private-credentials.ts): .NET only, one line per target. Get-Acl and
+         * ConvertTo-Json made this child import two modules and load System.Web.Extensions, whose first read on a new VM
+         * ran past this check's 15 s in two gates (Tynn #989; test/support/windows-powershell-loads.ts).
+         */
+        const script = `$ErrorActionPreference='Stop';[Console]::Out.WriteLine('SID '+[Security.Principal.WindowsIdentity]::GetCurrent().User.Value);foreach($p in @(${targets.join(',')})){if([IO.Directory]::Exists($p)){$a=[IO.Directory]::GetAccessControl($p)}else{$a=[IO.File]::GetAccessControl($p)};$rules=@($a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]));[Console]::Out.WriteLine('TARGET '+$a.AreAccessRulesProtected+' '+$a.GetOwner([Security.Principal.SecurityIdentifier]).Value+' '+(@($rules|ForEach-Object{$_.IdentityReference.Value+':'+($_.AccessControlType -eq 'Allow')+':'+($_.FileSystemRights -eq 'FullControl')}) -join ','))}${LOADS_PROBE}`;
         const env = { ...process.env }; for (const key of Object.keys(env)) if (key.toUpperCase() === 'PSMODULEPATH') delete env[key];
-        const { stdout } = await promisify(execFile)(join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env, windowsHide: true, timeout: 15_000 });
-        const acl = JSON.parse(stdout); expect(acl.targets[0].protected).toBe(true);
+        const { stdout, stderr } = await promisify(execFile)(join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env, windowsHide: true, timeout: 15_000 });
+        // Nothing a new VM reads cold for the first time (Tynn #989): no module import, no ConvertTo-Json serializer.
+        expect(loadsOf(stderr), 'what the check had to load').toEqual([]);
+        const lines = stdout.split(/\r?\n/), sid = lines.find(line => line.startsWith('SID '))?.slice(4);
+        const acl = { sid, targets: lines.filter(line => line.startsWith('TARGET ')).map(line => {
+            const [, guarded, owner, rules = ''] = line.split(' ');
+            return { protected: guarded === 'True', owner, rules: rules.split(',').filter(Boolean).map(rule => { const [ruleSid, allow, full] = rule.split(':'); return { sid: ruleSid, allow: allow === 'True', full: full === 'True' }; }) };
+        }) };
+        expect(acl.sid).toMatch(/^S-1-/); expect(acl.targets).toHaveLength(3); expect(acl.targets[0]!.protected).toBe(true);
         for (const [index, target] of acl.targets.slice(0, 2).entries()) { expect(target.owner, index === 0 ? 'staging root owner' : 'stage file owner').toBe(acl.sid); expect(target.rules).toEqual([{ sid: acl.sid, allow: true, full: true }]); }
-        expect(acl.targets[2].rules.some((r: { sid: string }) => r.sid !== acl.sid)).toBe(true);
+        expect(acl.targets[2]!.rules.some(r => r.sid !== acl.sid)).toBe(true);
     });
 });

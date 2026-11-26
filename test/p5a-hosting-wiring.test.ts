@@ -18,7 +18,9 @@ describe('P5a: the entry points are wired to the host’s hosting', () => {
     it('genie-host composes the hosting under its own supervisor, elevates through a window only, and serves it over the protocol', () => {
         expect(host).toMatch(/hosting = await composeHosting\(\{[\s\S]{0,600}?supervisor: processSupervisor,/);
         expect(host).toMatch(/elevate: \(steps\) => hostingElevation\.run\(steps\),/);
-        expect(host).toMatch(/new WindowElevation\(\{\s*connected: \(\) => engineRef\?\.localWindowConnected\(\) \?\? false,\s*ask: \(steps\) => \(engineRef \? engineRef\.elevate\(steps\)/);
+        // Tynn #973: on Linux the elevation is genie-host's own, asked in this machine's window (Genie's password prompt,
+        // sudo -S -k); elsewhere it is still the window's OS prompt.
+        expect(host).toMatch(/new WindowElevation\(\{\s*connected: \(\) => \(process\.platform === 'linux' \? promptHost\?\.localPromptConnection\(\) != null : engineRef\?\.localWindowConnected\(\) \?\? false\),\s*ask: \(steps\) => \(process\.platform === 'linux' \? linuxHostingElevate\(steps\) : engineRef \? engineRef\.elevate\(steps\)/);
         // Its Hosting and Services tabs (features.snapshot/act) are genie-host's HostFeatures over this same stack.
         expect(host).toMatch(/\.\.\.\(hostingStack \? \{ hosting: \{ api: hostingStack, supervisor: processSupervisor, processes: hostBook,/);
         // Its front door (frontdoor.watch) is read from this same stack.

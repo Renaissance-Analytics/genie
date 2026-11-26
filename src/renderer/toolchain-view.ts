@@ -16,6 +16,7 @@
 
 import type { ToolStatus } from '../core/toolchain.js';
 import { PREREQUISITES } from '../core/toolchain.js';
+import { DOCKER_DAEMON_WORDS } from '../core/docker-engine.js';
 import { patchWithinLine } from '../core/toolchain-update.js';
 import type { FeatureAction, InstallPreview, ToolchainSection } from './features.js';
 
@@ -65,6 +66,11 @@ export interface ToolCard {
     readonly primary?: { readonly kind: 'patch'; readonly from: string; readonly version: string } | { readonly kind: 'install'; readonly version: string; readonly label: string } | undefined;
     /** Why a language cannot be installed here (macOS/Linux for some), said on its card instead of a button. */
     readonly refused?: string | undefined;
+    /**
+     * A side-by-side language Genie manages NO version of: its scan row's name, because the card is then the system
+     * copy's (or none): its system-package install (pacman, Tynn #968), its refusal, its `data-tool`.
+     */
+    readonly systemTool?: string | undefined;
 }
 
 type View = { readonly managed: ReadonlyArray<{ readonly version: string; readonly advisory?: string; readonly usedBy?: readonly string[] }>; readonly system: { readonly version: string; readonly advisory?: string } | null; readonly available: ReadonlyArray<{ readonly version: string; readonly installed: boolean; readonly line?: number }>; readonly installRefused?: string };
@@ -79,7 +85,7 @@ export function patchFor(lang: LangKey, version: string, view: View): string | n
 }
 
 const stateOfTool = (t: ToolStatus): CardState =>
-    t.tone === 'broken' || t.tone === 'security-update' || t.signedOut === true ? 'problem'
+    t.tone === 'broken' || t.tone === 'security-update' || t.signedOut === true || t.daemon !== undefined ? 'problem'
     : t.tone === 'not-installed' ? 'missing'
     : t.tone === 'update-available' ? 'update'
     : t.tone === 'up-to-date' ? 'ok'
@@ -88,7 +94,7 @@ const stateOfTool = (t: ToolStatus): CardState =>
 /** Java's lines are named by number ("25 LTS"); every other language by its version. */
 const installLabel = (lang: LangKey, a: { readonly version: string; readonly line?: number }): string => (lang === 'java' && a.line !== undefined ? `Install ${a.line} LTS` : `Install ${a.version}`);
 
-function langCard(tc: ToolchainSection, lang: LangKey, view: View, tool: ToolStatus | null): Omit<ToolCard, 'group'> {
+function langCard(tc: ToolchainSection, lang: LangKey, view: View, tool: ToolStatus | null, row: ToolStatus | null = tool): Omit<ToolCard, 'group'> {
     const current = tc.defaults?.[lang] ?? null;
     const chips = view.managed.length > 0
         ? view.managed.map((m) => ({ version: m.version, isDefault: m.version === current }))
@@ -122,6 +128,7 @@ function langCard(tc: ToolchainSection, lang: LangKey, view: View, tool: ToolSta
         state,
         ...(primary ? { primary } : {}),
         ...(sideBySide && view.managed.length === 0 && view.installRefused ? { refused: view.installRefused } : {}),
+        ...(sideBySide && view.managed.length === 0 && row !== null ? { systemTool: row.tool } : {}),
     };
 }
 
@@ -137,7 +144,7 @@ export function toolchainCards(tc: ToolchainSection): Array<{ group: CardGroupId
         const lang = (LANGS as readonly string[]).includes(key) ? (key as LangKey) : null;
         const view = lang ? langView(tc, lang) : undefined;
         if (lang && view) {
-            cards.push(langCard(tc, lang, view, (SIDE_BY_SIDE_LANGS as readonly string[]).includes(lang) ? null : t));
+            cards.push(langCard(tc, lang, view, (SIDE_BY_SIDE_LANGS as readonly string[]).includes(lang) ? null : t, t));
         } else {
             cards.push({ key, title: toolTitle(key), tool: t, lang: null, version: t.installed, chips: [], state: stateOfTool(t) });
         }
@@ -241,6 +248,13 @@ export function toolchainProblems(tc: ToolchainSection, servicesWaiting = 0): To
         const why = `Databases, Redis and mail for your sites run on it.${servicesWaiting > 0 ? ` ${plural(servicesWaiting, 'service is', 'services are')} waiting.` : ''}`;
         out.push({ key: 'docker', card: 'docker', title: "Docker isn't installed", why, label: 'Install Docker', note: installNote(plan) ?? undefined, action: { kind: 'toolchain.install', tool: 'docker', consent: true } });
     }
+    // Tynn #970: Docker installed and not usable: off (Start), or a group this login does not have yet (a new login).
+    const daemon = docker?.tool?.installed !== null ? docker?.tool?.daemon : undefined;
+    if (daemon === 'not-running' || daemon === 'no-access') {
+        out.push({ key: 'docker', card: 'docker', title: daemon === 'not-running' ? "Docker isn't running" : 'Docker needs your account in its group', why: `${DOCKER_DAEMON_WORDS[daemon].why}${servicesWaiting > 0 ? ` ${plural(servicesWaiting, 'service is', 'services are')} waiting.` : ''}`, label: 'Start Docker', note: 'asks once', action: { kind: 'toolchain.startDocker' } });
+    } else if (daemon === 'needs-login') {
+        out.push({ key: 'docker', card: 'docker', title: 'Docker needs a new login', why: DOCKER_DAEMON_WORDS['needs-login'].why, label: 'Docker', action: null });
+    }
     // Last: a signed-out agent CLI runs; it only waits for a login.
     for (const c of cards.values()) {
         if (c.tool?.signedOut && c.tool.tone !== 'broken') out.push({ key: c.key, card: c.key, title: `${c.title} is signed out`, why: 'Its agents start once you log in.', label: 'Log in', action: { kind: 'toolchain.login', tool: c.tool.tool } });
@@ -287,6 +301,8 @@ export function cardOfAction(action: FeatureAction): string | null {
             return cardKeyOfTool(action.tool);
         case 'toolchain.installPlaywright':
             return 'playwright';
+        case 'toolchain.startDocker':
+            return 'docker';
         case 'toolchain.setDefault':
             return action.lang;
         default: {
@@ -297,6 +313,29 @@ export function cardOfAction(action: FeatureAction): string | null {
 }
 
 /** 134 000 ms → "2:14"; an hour and more → "1:02:05". */
+/** The card main's ONE busy line is drawn on: the one the person clicked. `started` = its work has been seen busy. */
+export interface InFlight {
+    readonly card: string;
+    readonly at: number;
+    readonly started: boolean;
+}
+
+/** How long a click whose work never showed busy (a refusal, nothing to run) keeps its card marked. */
+const NEVER_STARTED_MS = 60_000;
+
+/**
+ * THE IN-FLIGHT MARK, after a snapshot (Tynn #968; toolchain row 1125-195556-df6ca9). It ends only once the work it marks
+ * has ended: busy (or an update, or a pending click) seen, then gone. A snapshot with nothing busy that arrives BEFORE the
+ * work starts (the previous install's rescan) keeps it: clearing on that left composer's busy line with no card.
+ */
+export function nextInFlight(current: InFlight | null, tc: { readonly busy?: string | undefined; readonly updating?: unknown }, now: number, pending: boolean): InFlight | null {
+    if (current === null) return null;
+    const active = tc.busy !== undefined || tc.updating !== undefined || pending;
+    if (active) return current.started ? current : { ...current, started: true };
+    if (current.started) return null;
+    return now - current.at > NEVER_STARTED_MS ? null : current;
+}
+
 export function formatElapsed(ms: number): string {
     const s = Math.max(0, Math.floor(ms / 1000));
     const pad = (n: number) => String(n).padStart(2, '0');

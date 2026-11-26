@@ -2,6 +2,7 @@ import { AgentDetailCache, chatSubscriptionId } from './agent-detail.js';
 import { CommandWindow } from './components/CommandWindow.js';
 import { FlowEditorWindow } from './components/FlowEditorWindow.js';
 import { WhatsNewWindow } from './components/WhatsNewWindow.js';
+import { ElevationPrompt } from './components/ElevationPrompt.js';
 import { ConnectDialog } from './components/ConnectMenu.js';
 import { OPEN_SHARE_LINK_ACTION, connectPaletteActions, mergeWorkstationRead, type ConnectProgress } from '../core/connect-machine.js';
 import { WHATS_NEW_ROUTE } from '../core/whats-new.js';
@@ -472,7 +473,7 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
                     setRelayConnect({ kind: 'working', step: 'host' });
                     const transport = channelTransport(net, opened.channel);
                     // A drone older than this Pilot needs is said as such, never as its protocol words (Tynn #651).
-                    const next = connectRemote(transport, { kind: 'relay', label: label || 'another screen' }, label || 'another screen', { ...(companionTicket.current ? { companion: companionTicket.current } : { drive: true }), ...(net.openBrowser ? { browse: (address: string | undefined, hosts: readonly string[]) => net.openBrowser!(opened.channel, address ?? null, hosts, browserView()) } : {}), minBuild: DRONE_MIN_BUILD });
+                    const next = connectRemote(transport, { kind: 'relay', label: label || 'another screen' }, label || 'another screen', { ...(companionTicket.current ? { companion: companionTicket.current } : { drive: true }), ...(net.openBrowser ? { browse: (address: string | undefined, hosts: readonly string[]) => net.openBrowser!(opened.channel, address ?? null, hosts, browserView()) } : {}), minBuild: DRONE_MIN_BUILD, elevationPrompt: true });
                     setClient(next);
                     setState(next.state());
                     return next.ready.then((r) => {
@@ -506,7 +507,7 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
                 if (!opened.ok) { setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: opened.reason })); return false; }
                 const transport = channelTransport(net, opened.channel);
                 const ticket = companionTicket.current;
-                const next = connectRemote(transport, auth, label || 'another screen', ticket ? { companion: ticket } : { drive: true });
+                const next = connectRemote(transport, auth, label || 'another screen', { ...(ticket ? { companion: ticket } : { drive: true }), elevationPrompt: true });
                 // Dropped after it was up: the host's words, when it has some.
                 transport.onClose(() => { const why = transport.closedBecause(); if (why) setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: why })); });
                 setClient(next);
@@ -2447,6 +2448,8 @@ function DesktopApp({ bridge }: AppProps) {
                 else if (item.category === 'prompt') { const prompt = savedPrompts.find((p) => p.id === item.id); if (prompt) sendSavedPrompt(prompt); }
             }}
         />
+        {/* The host's password prompt for an elevated step clicked here (Tynn #973): over every page and modal. */}
+        <ElevationPrompt elevation={resolvedBridge?.elevation} />
         {/* What's New, once per version (Tynn #762): closing records the version as seen. */}
         {features.whatsNew && windowScope.kind === 'workstation' ? (
             <WhatsNewWindow
