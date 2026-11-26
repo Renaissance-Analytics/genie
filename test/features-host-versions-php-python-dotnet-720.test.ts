@@ -34,7 +34,8 @@ describe('host PHP, Python and .NET versions use their real managers without a w
                 expect(f.fs.readText?.(join(f.roots.php, f.versions.php, 'php.ini'))).toBe(phpIniContents(join(f.roots.php, f.versions.php), 'win32'));
                 expect(f.versionCommands).toContainEqual({ binary: f.binary('php'), args: ['-c', join(f.roots.php, f.versions.php, 'php.ini'), '-v'] });
                 expect(f.versionCommands).toContainEqual({ binary: join(f.roots.php, f.versions.php, 'php.exe'), args: ['-c', join(f.roots.php, f.versions.php, 'php.ini'), '-m'] });
-                expect(f.vcCalls()).toBe(1);
+                // Twice (Tynn #1066): present before anything is fetched, then at least the build's toolset once releases.json names it.
+                expect(f.vcCalls()).toBe(2);
             } else if (lang === 'python') {
                 expect(f.versionCommands).toContainEqual({ binary: f.binary('python'), args: f.pipArgs() });
                 expect(f.versionCommands).toContainEqual({ binary: f.binary('python'), args: PYTHON_PROOF_ARGS });
