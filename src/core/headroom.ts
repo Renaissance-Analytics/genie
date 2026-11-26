@@ -165,6 +165,15 @@ function providerWord(provider: string): string {
     return providerLogin(provider)?.name ?? provider;
 }
 
+/**
+ * A window's figure in words, ONE meaning everywhere (Tynn #1070 review: a bare "95%" read as used beside a "0%" that was
+ * left): the share LEFT, said so, `64% left`; a window spent past its allowance is `over`. Every bar beside it fills to that
+ * share.
+ */
+export function leftWords(w: { readonly leftPct: number; readonly over: boolean }): string {
+    return w.over ? 'over' : `${w.leftPct}% left`;
+}
+
 /** `7d` → `this week`; `5h` → `in the 5-hour window`; anything else → `in the 7d opus window`. */
 export function windowWords(window: string): string {
     if (window === '7d' || window === '1w') return 'this week';

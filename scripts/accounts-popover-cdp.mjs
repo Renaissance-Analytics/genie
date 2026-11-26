@@ -355,8 +355,11 @@ async function phase1070(active, tag) {
         const main = await windowsIn(c, MAIN), weekly = await windowsIn(c, WEEKLY), never = await windowsIn(c, NEVER);
         check(JSON.stringify(main) === JSON.stringify(['5h', '7d']), `${tag} 4. Main shows ITS windows: 5h and 7d`, JSON.stringify(main));
         check(JSON.stringify(weekly) === JSON.stringify(['7d', '7d fable']), `${tag} 5. Weekly shows its week and its per-model weekly cap, and NO 5h bar`, JSON.stringify(weekly));
-        const pct = JSON.parse(await c.evaluate(`JSON.stringify(Object.fromEntries([...document.querySelectorAll(${JSON.stringify(`${POP} [data-account] [data-account-window]`)})].map((w) => [w.closest('[data-account]').getAttribute('data-account') + ' ' + w.getAttribute('data-account-window'), ((w.textContent || '').match(/\\d+%|over/) || [''])[0]])))`));
-        check(pct[`${MAIN} 5h`] === '0%' && pct[`${MAIN} 7d`] === '64%' && pct[`${WEEKLY} 7d`] === '95%' && pct[`${WEEKLY} 7d fable`] === '50%', `${tag} 6. different accounts, different figures`, JSON.stringify(pct));
+        const pct = JSON.parse(await c.evaluate(`JSON.stringify(Object.fromEntries([...document.querySelectorAll(${JSON.stringify(`${POP} [data-account] [data-account-window]`)})].map((w) => [w.closest('[data-account]').getAttribute('data-account') + ' ' + w.getAttribute('data-account-window'), ((w.textContent || '').match(/\\d+% left|over/) || [''])[0]])))`));
+        // ONE meaning, said on screen (Tynn #1070 review): every figure is the share LEFT, and says so.
+        check(pct[`${MAIN} 5h`] === '0% left' && pct[`${MAIN} 7d`] === '64% left' && pct[`${WEEKLY} 7d`] === '95% left' && pct[`${WEEKLY} 7d fable`] === '50% left', `${tag} 6. different accounts, different figures, each said as the share left`, JSON.stringify(pct));
+        const pill = await c.evaluate(`document.querySelector(${JSON.stringify(CHIP)})?.textContent ?? ''`);
+        check(active === MAIN ? pill.includes('0% left') && pill.includes('5h') : pill.includes('50% left') && pill.includes('7d fable'), `${tag} 6b. the chip headlines the account's TIGHTEST window, as the share left`, pill);
         const unknown = await c.evaluate(`document.querySelector(${JSON.stringify(`${POP} [data-account="${NEVER}"] [data-account-usage-unknown]`)})?.textContent ?? null`);
         check(never.length === 0 && /unknown/.test(String(unknown)), `${tag} 7. the account never read says unknown, with no bars`, `${JSON.stringify(never)} ${unknown}`);
         const callout = await c.evaluate(`document.querySelector(${JSON.stringify(`${POP} [data-switch-offer]`)})?.textContent ?? null`);

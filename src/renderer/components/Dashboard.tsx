@@ -6,7 +6,7 @@ import { ActivityLight, Button, Dropdown, Icon, Popover } from '@particle-academ
 import { PlanHover } from './PlanHover.js';
 import { Fragment, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from 'react';
 import { useNow } from '../use-now.js';
-import { allRefreshed, limitLevel, limitRows, readLimitWindow, resetsIn, tightestWindow, windowWords, type Headroom, type LimitLevel } from '../../core/headroom.js';
+import { allRefreshed, leftWords, limitLevel, limitRows, readLimitWindow, resetsIn, tightestWindow, windowWords, type Headroom, type LimitLevel } from '../../core/headroom.js';
 import { shortDateTime } from '../../core/clock-words.js';
 import type { MailSignal } from '../../core/mail-signals.js';
 import { MailSignalLayer } from './MailSignalLayer.js';
@@ -967,7 +967,7 @@ function RateLimitPill({ provider, limit, now }: { provider: string; limit: Head
                     className={`gap-1 hover:bg-[var(--bg-2)] ${open ? 'bg-[var(--bg-2)]' : ''}`}
                 >
                     <ProviderLogo provider={provider} size="xs" className="text-[var(--fg-3)]" />
-                    <span className={`tabular-nums ${LEVEL_TEXT[level]}`}>{refreshed ? 'Refreshed' : tight.over ? 'over' : `${tight.leftPct}%`}</span>
+                    <span className={`tabular-nums ${LEVEL_TEXT[level]}`}>{refreshed ? 'Refreshed' : leftWords(tight)}</span>
                     <span className="text-[11px] text-[var(--fg-4)]">{tight.window}</span>
                 </Button>
             </Popover.Trigger>
@@ -1009,7 +1009,7 @@ export function RateLimitDetail({ provider, limit, now }: { provider: string; li
                         <span role="progressbar" aria-label={`${w.window} left`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={w.leftPct} className="block h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--bg-3)]">
                             <span data-rate-limit-fill="" className={`block h-full rounded-full ${LEVEL_FILL[limitLevel(w)]}`} style={{ width: `${w.leftPct}%` }} />
                         </span>
-                        <span data-rate-limit-pct="" className={`w-9 shrink-0 text-right tabular-nums ${LEVEL_TEXT[limitLevel(w)]}`}>{w.over ? 'over' : `${w.leftPct}%`}</span>
+                        <span data-rate-limit-pct="" className={`w-16 shrink-0 text-right tabular-nums ${LEVEL_TEXT[limitLevel(w)]}`}>{leftWords(w)}</span>
                     </div>
                     <div className="flex flex-col pl-14">
                         <span data-rate-limit-reset="" className="text-[var(--fg-2)]">{resetsIn(w.resetsAtMs, now)}</span>

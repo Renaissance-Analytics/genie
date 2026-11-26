@@ -2,7 +2,7 @@ import { Avatar, Badge, Button, Callout, Icon, Input, Popover, Progress } from '
 import { useState } from 'react';
 import { activeAccountOf, chooseWords, type AccountView, type AccountWindowRow, type ProviderAccountsView } from '../../core/accounts-view.js';
 import { shortDateTime } from '../../core/clock-words.js';
-import { limitLevel, resetsIn, windowWords, type LimitLevel, type WindowReading } from '../../core/headroom.js';
+import { leftWords, limitLevel, resetsIn, windowWords, type LimitLevel, type WindowReading } from '../../core/headroom.js';
 import { offerWords, targetWords, type SwitchOffer } from '../../core/switch-offer.js';
 import { rankSwitchNext } from '../../core/switch-next.js';
 import { DesignAuthRow } from './DesignAuthRow.js';
@@ -106,7 +106,7 @@ export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, desig
                 >
                     <ProviderLogo provider={provider} size="xs" className="text-[var(--fg-3)]" />
                     <span data-account-chip-label="" className="max-w-[10rem] truncate text-[var(--fg-2)]">{active.label}</span>
-                    {tight ? <span className={`tabular-nums ${LEVEL_TEXT[level]}`}>{tight.over ? 'over' : `${tight.leftPct}%`}</span> : null}
+                    {tight ? <span className={`tabular-nums ${LEVEL_TEXT[level]}`}>{leftWords(tight)}</span> : null}
                     {tight ? <span className="text-[11px] text-[var(--fg-4)]">{tight.window}</span> : null}
                     {offer ? <Icon name="arrow-right-left" size="xs" className="text-[var(--warning)]" /> : null}
                 </Button>
@@ -292,7 +292,7 @@ function CompactWindow({ w, now }: { w: AccountWindowRow; now: number }) {
             <div className="flex items-center gap-2">
                 <span className="w-10 shrink-0 text-[var(--fg-2)]">{w.window}</span>
                 <Progress value={w.leftPct} max={100} size="sm" color={LEVEL_COLOR[level]} aria-label={`${w.window} left`} className="flex-1" />
-                <span className={`w-8 shrink-0 text-right tabular-nums ${LEVEL_TEXT[level]}`}>{w.over ? 'over' : `${w.leftPct}%`}</span>
+                <span className={`w-14 shrink-0 text-right tabular-nums ${LEVEL_TEXT[level]}`}>{leftWords(w)}</span>
             </div>
             {/* The reset is half of the switch-next rule, so it is read in full, not cut short. */}
             <span data-account-reset-in="" className="pl-12 text-[var(--fg-4)]" title={shortDateTime(w.resetsAtMs)}>{resetsIn(w.resetsAtMs, now)}</span>
@@ -324,7 +324,7 @@ function WindowRow({ w, now }: { w: AccountWindowRow; now: number }) {
             <div className="flex items-center gap-2">
                 <span className="w-12 shrink-0 text-[var(--fg-2)]">{w.window}</span>
                 <Progress value={w.leftPct} max={100} size="sm" color={LEVEL_COLOR[level]} aria-label={`${w.window} left`} className="flex-1" />
-                <span className={`w-9 shrink-0 text-right tabular-nums ${LEVEL_TEXT[level]}`}>{w.over ? 'over' : `${w.leftPct}%`}</span>
+                <span className={`w-16 shrink-0 text-right tabular-nums ${LEVEL_TEXT[level]}`}>{leftWords(w)}</span>
             </div>
             <div className="flex gap-2 pl-14 text-[11px]">
                 <span className="text-[var(--fg-2)]">{resetsIn(w.resetsAtMs, now)}</span>
