@@ -2,8 +2,8 @@ import { isAbsolute } from 'node:path';
 import { parseTrackBuild } from './protocol-version.js';
 
 /**
- * A CLIENT THE LAUNCHER STARTED (Tynn #1058 L3). The launcher (native/launcher) starts genie-client and genie-browser from
- * their own track folders and tells each two things:
+ * A CLIENT THE LAUNCHER STARTED (Tynn #1058 L3). The launcher (native/launcher) starts genie-client from its track folder
+ * (the Genie browser too: the client build the browser's manifest names, with --genie-browser) and tells it two things:
  *
  *  - GENIE_LAUNCHER_EXE: the launcher's own program, whose `detach`, `job` and `pipe-owner-only` modes were genie-launch.exe's
  *    (win-launcher.ts finds them there first);

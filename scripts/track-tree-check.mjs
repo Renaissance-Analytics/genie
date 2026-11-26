@@ -18,7 +18,7 @@ if (!trees || !['client', 'browser', 'host', 'launcher'].includes(track)) {
 }
 const at = rest.indexOf('--asar-files');
 const asarFiles = at >= 0 ? JSON.parse(readFileSync(rest[at + 1], 'utf8')) : [];
-if ((track === 'client' || track === 'browser') && asarFiles.length === 0) {
+if (track === 'client' && asarFiles.length === 0) {
     console.error(`track-tree-check: the ${track}'s app.asar listing is needed (--asar-files): without it, host.js in the archive cannot be seen`);
     process.exit(2);
 }

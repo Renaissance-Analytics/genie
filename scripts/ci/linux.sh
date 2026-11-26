@@ -702,7 +702,7 @@ row_launcher-unit() {
     echo "LAUNCHER SIZE linux $(stat -c %s native/launcher/target/release/genie) bytes"
 }
 # THE PACKAGES PER TRACK (Tynn #1058 L3): the client (electron-builder's unpacked app named genie-client, no host bundle),
-# the browser (that app as genie-browser, its own track), the host (P6-1's copy laid out at build time) and the launcher,
+# the browser (browser.json, its own track, run on that client build: no second copy of the app), the host (P6-1's copy laid out at build time) and the launcher,
 # each packed with its manifest (scripts/build-track-packages.mjs), signed with a THROWAWAY key made here and deleted with
 # the VM (scripts/ci/throwaway-manifest-key.mjs), and the launcher built trusting that key. Never the release key.
 row_package-tracks() {
@@ -714,7 +714,8 @@ row_package-tracks() {
     pub="$(node scripts/ci/throwaway-manifest-key.mjs "$SETUP")" || return 1
     echo "--- track build $build; the launcher trusts the run's throwaway key $pub"
     ( cd native/launcher && GENIE_TRACK_BUILD="$build" GENIE_MANIFEST_PUBLIC_KEYS="$pub" cargo build $locked --release --bin genie --target-dir target-l3 ) || return 1
-    node scripts/build-track-packages.mjs packages --build "$build" --channel dev --launcher native/launcher/target-l3/release/genie || return 1
+    # Stable: what a person's install reads (the setup window refused a dev build: item 1126-102126-14ccd0).
+    node scripts/build-track-packages.mjs packages --build "$build" --channel stable --launcher native/launcher/target-l3/release/genie || return 1
     GENIE_MANIFEST_SIGNING_KEY="$(cat "$SETUP/THROWAWAY-manifest-signing-key.pem")" GENIE_MANIFEST_PUBLIC_KEY="$pub" node scripts/sign-manifest.mjs release/tracks/packages/*.manifest.json || return 1
     echo "$build" >release/tracks/build.txt
     ls -l release/tracks/packages

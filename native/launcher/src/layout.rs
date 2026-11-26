@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 pub enum Track {
     Client,
     Host,
-    /// The Genie browser: the client's app under its own name, on its own track (the owner, 2026-11-26).
+    /// The Genie browser, on its own track (the owner, 2026-11-26): browser.json, run on the client build it names.
     Browser,
     Launcher,
 }
@@ -46,10 +46,6 @@ pub const HOST_ENTRY: &str = "app/dist/main/host.js";
 pub fn client_executable_name() -> &'static str {
     if cfg!(windows) { "genie-client.exe" } else { "genie-client" }
 }
-/// The browser's program inside a browser build (scripts/track-packages.mjs `programName`).
-pub fn browser_executable_name() -> &'static str {
-    if cfg!(windows) { "genie-browser.exe" } else { "genie-browser" }
-}
 /// The launcher's own program (on Windows the NSIS folder's Genie.exe; on Linux `<code root>/launcher/<build>/genie`).
 pub fn launcher_executable_name() -> &'static str {
     if cfg!(windows) { "Genie.exe" } else { "genie" }
@@ -59,7 +55,8 @@ pub fn executable_name(track: Track) -> &'static str {
     match track {
         Track::Client => client_executable_name(),
         Track::Host => host_executable_name(),
-        Track::Browser => browser_executable_name(),
+        // The browser runs the client build its manifest names (components::Component::runs): its folder holds no program.
+        Track::Browser => "browser.json",
         Track::Launcher => launcher_executable_name(),
     }
 }
@@ -135,8 +132,11 @@ impl Roots {
     pub fn logs_dir(&self) -> PathBuf {
         self.data.join("logs")
     }
-    /// The program of a `track` build, in its own folder.
+    /// The program of a `track` build, in its own folder. `None` for the browser, which has none of its own.
     pub fn program(&self, track: Track, build: &str) -> Option<Program> {
+        if track == Track::Browser {
+            return None;
+        }
         let folder = self.build_dir(track, build)?;
         Some(Program { path: folder.join(executable_name(track)), folder })
     }

@@ -4,8 +4,10 @@
  *
  *   client    electron-builder's unpacked app, its program named genie-client, with no host bundle (no dist/main/host.js),
  *             no copy of the launcher and no Caddy (the host's)
- *   browser   the same app, its program named genie-browser: the Genie browser on its own track (the owner, 2026-11-26:
- *             each part updates on its own; the launcher starts it with --genie-browser)
+ *   browser   browser.json alone: the Genie browser on its own track (the owner, 2026-11-26: each part updates on its own),
+ *             with no second copy of the app. Its manifest names the client build it runs on, and the launcher starts that
+ *             installed client with --genie-browser (the coordinator, 2026-11-26). It becomes a full package of its own
+ *             only once its code differs from the client's.
  *   host      P6-1's copy, laid out at build time instead of at each start (src/main/host-runtime.ts): genie-host (Electron's
  *             binary, run as Node), its runtime files, the bundle under app/ (dist, package.json, node_modules with the
  *             unpacked natives over the packed ones), the bundled Caddy under resources/runtime, and no app.asar
@@ -14,7 +16,7 @@
  * The names are the launcher's (native/launcher/src/layout.rs); the host's runtime files are host-runtime.ts's
  * `runtimeFiles` (test/track-packages.test.ts holds both). scripts/build-track-packages.mjs runs these on a real build.
  */
-import { chmod, copyFile, mkdir, readdir, rm, stat } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { leftovers } from './packed-tree-check.mjs';
 
@@ -26,7 +28,6 @@ export function programName(track, platform) {
     const win = platform === 'win32';
     switch (track) {
         case 'client': return win ? 'genie-client.exe' : 'genie-client';
-        case 'browser': return win ? 'genie-browser.exe' : 'genie-browser';
         case 'host': return win ? 'genie-host.exe' : 'genie-host';
         case 'launcher': return win ? 'Genie.exe' : 'genie';
         default: throw new Error(`no such track: ${track}`);
@@ -104,9 +105,20 @@ async function copyInto(from, to) {
     if (mode & 0o111) await chmod(to, 0o755);
 }
 
-/** The client's or the browser's package: the unpacked app, its program renamed, nothing of the host or the launcher. */
+/** What the browser's package holds: what is browser-only. Its manifest names the client build it runs on. */
+export const BROWSER_JSON = { runs: 'client', args: ['--genie-browser'] };
+
+/** The browser's package: browser.json alone (no second copy of the app). */
+export async function layoutBrowser({ out }) {
+    await rm(out, { recursive: true, force: true });
+    await mkdir(out, { recursive: true });
+    await writeFile(join(out, 'browser.json'), `${JSON.stringify(BROWSER_JSON)}\n`);
+    return { files: 1 };
+}
+
+/** The client's package: the unpacked app, its program as built, nothing of the host or the launcher. */
 export async function layoutWindowApp({ from, out, track, platform }) {
-    if (track !== 'client' && track !== 'browser') throw new Error(`not a window app: ${track}`);
+    if (track !== 'client') throw new Error(`not the client: ${track}`);
     const built = programName('client', platform);
     const all = await files(from);
     if (!all.includes(built)) throw new Error(`${built} is not in ${from}: the client build names its program genie-client`);
@@ -165,7 +177,8 @@ export async function layoutHost({ unpackedApp, asarDir, dist, runtimeDir, out, 
 /** What a package of `track` must hold on `platform`-`arch`. */
 function requiredOf(track, platform, arch) {
     const own = `${platform}-${arch}`;
-    if (track === 'client' || track === 'browser') return [programName(track, platform), 'resources/app.asar'];
+    if (track === 'client') return [programName(track, platform), 'resources/app.asar'];
+    if (track === 'browser') return ['browser.json'];
     if (track === 'launcher') return [programName('launcher', platform)];
     const base = [programName('host', platform), ...hostRuntimeFiles(platform), HOST_ENTRY, 'app/package.json', `resources/runtime/${platform === 'win32' ? 'caddy.exe' : 'caddy'}`];
     if (platform !== 'win32') return [...base, 'app/node_modules/node-pty/lib/index.js'];
@@ -194,7 +207,11 @@ export function trackTreeProblems({ track, platform, arch = 'x64', files: list, 
         for (const f of list) if (f === 'app.asar' || f.endsWith('/app.asar')) problems.push({ file: f, why: 'an app.asar: the host runs from files, never from the client\'s archive' });
         problems.push(...hostLeftovers(list, platform, arch));
     }
-    if (track === 'client' || track === 'browser') {
+    if (track === 'browser') {
+        // No second copy of the app: anything but browser.json is the client's, and the browser runs the client's build.
+        for (const f of list) if (f !== 'browser.json') problems.push({ file: f, why: 'the client\'s: the browser runs the installed client build' });
+    }
+    if (track === 'client') {
         for (const f of asarFiles.map((a) => a.replace(/\\/g, '/'))) {
             if (f === '/dist/main/host.js' || f === 'dist/main/host.js') problems.push({ file: `resources/app.asar:${f}`, why: 'the host bundle: the client package holds none' });
         }

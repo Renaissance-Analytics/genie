@@ -36,7 +36,7 @@ pub struct Manifest {
     pub channel: String,
     pub platform: String,
     pub arch: String,
-    /// A host's client build (required of a host, refused for any other track).
+    /// The client build a host ships with or a browser runs on (required of both, refused for the client and the launcher).
     pub with_client: Option<String>,
     pub min_launcher: Option<String>,
     pub files: Vec<ManifestFile>,
@@ -177,11 +177,12 @@ pub fn parse_manifest(bytes: &[u8]) -> Result<Manifest, Refusal> {
     if !TRACKS.contains(&track) {
         return Err(shape(format!("track '{track}'")));
     }
-    let with_client = match (track, o.get("withClient")) {
-        ("host", Some(Value::String(c))) if is_manifest_build(c) => Some(c.clone()),
-        ("host", _) => return Err(shape("a host names the client build it ships with (withClient)")),
-        (_, None) => None,
-        (other, Some(_)) => return Err(shape(format!("only a host names withClient, and this is the {other}"))),
+    let names_client = track == "host" || track == "browser";
+    let with_client = match (names_client, o.get("withClient")) {
+        (true, Some(Value::String(c))) if is_manifest_build(c) => Some(c.clone()),
+        (true, _) => return Err(shape(format!("a {track} names its client build (withClient)"))),
+        (false, None) => None,
+        (false, Some(_)) => return Err(shape(format!("only a host or a browser names withClient, and this is the {track}"))),
     };
     let build = string_field(o, "build")?;
     if !is_manifest_build(build) {

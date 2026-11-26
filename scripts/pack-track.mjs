@@ -17,7 +17,8 @@
  *        --from <folder> --out <folder> [--with-client <build>] [--min-launcher <build>] [--notes <text> | --notes-file <file>]
  *        [--next-key <base64>]
  *
- * --with-client is required of a host (the client build it ships with) and refused for any other track.
+ * --with-client is required of a host (the client build it ships with) and a browser (the one it runs on), and refused for
+ * the client and the launcher.
  */
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
@@ -70,8 +71,9 @@ export function checkManifest(m) {
     if (!CHANNELS.includes(m.channel)) bad(`the channel ${JSON.stringify(m.channel)}`);
     if (!PLATFORMS.includes(m.platform)) bad(`the platform ${JSON.stringify(m.platform)}`);
     if (!ARCHES.includes(m.arch)) bad(`the architecture ${JSON.stringify(m.arch)}`);
-    if (m.track === 'host' && !(typeof m.withClient === 'string' && schemaOfBuild(m.withClient))) bad(`a host names the client build it ships with (withClient), and it is ${JSON.stringify(m.withClient)}`);
-    if (m.track !== 'host' && m.withClient !== undefined) bad(`only a host names withClient, and this is the ${m.track}`);
+    const namesClient = m.track === 'host' || m.track === 'browser';
+    if (namesClient && !(typeof m.withClient === 'string' && schemaOfBuild(m.withClient))) bad(`a ${m.track} names its client build (withClient), and it is ${JSON.stringify(m.withClient)}`);
+    if (!namesClient && m.withClient !== undefined) bad(`only a host or a browser names withClient, and this is the ${m.track}`);
     if (m.minLauncher !== null && !schemaOfBuild(m.minLauncher)) bad(`minLauncher ${JSON.stringify(m.minLauncher)}`);
     if (typeof m.notes !== 'string' || m.notes.length > 65536) bad('the notes');
     if (m.nextKey !== undefined && (typeof m.nextKey !== 'string' || !KEY.test(m.nextKey))) bad('nextKey is not a 32-byte key');

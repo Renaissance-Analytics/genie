@@ -14,7 +14,7 @@ import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readArchive } from './pack-track.mjs';
-import { hostClient, verifyManifest, type PackageTrack } from '../src/core/track-manifest.js';
+import { clientOf, verifyManifest, type PackageTrack } from '../src/core/track-manifest.js';
 
 const [dir, keyFile] = process.argv.slice(2);
 if (!dir || !keyFile) { console.error('usage: track-manifest-check.mts <packages dir> <public key file>'); process.exit(2); }
@@ -52,8 +52,8 @@ for (const stem of stems) {
         listed.delete(e.path);
     }
     say(bad === 0 && listed.size === 0, `${stem}: ${entries.length} files, each its manifest's (${bad} wrong, ${listed.size} missing)`);
-    if (track === 'host') say(typeof v.manifest.withClient === 'string', `${stem}: names the client it ships with (${v.manifest.withClient})`);
-    else say(hostClient(v.manifest) === null && v.manifest.withClient === undefined, `${stem}: names no client`);
+    if (track === 'host' || track === 'browser') say(clientOf(v.manifest) !== null, `${stem}: names the client it ${track === 'host' ? 'ships with' : 'runs on'} (${v.manifest.withClient})`);
+    else say(clientOf(v.manifest) === null && v.manifest.withClient === undefined, `${stem}: names no client`);
 
     // The controls: a gauge that refuses nothing proves nothing.
     const flipped = Buffer.from(bytes);
@@ -69,10 +69,12 @@ for (const stem of stems) {
         say(sha(data) !== f.sha256, `${stem}: CONTROL one flipped byte in ${first.path} is caught by its SHA-256`);
     }
 }
-const host = stems.find((s) => s.startsWith('host-'));
-if (host) {
-    const hm = JSON.parse(readFileSync(join(dir, `${host}.manifest.json`), 'utf8')) as { withClient?: string };
-    say(hm.withClient === builds.get('client'), `the host ships with the client packed beside it (${hm.withClient} = ${builds.get('client')})`);
+for (const t of ['host', 'browser']) {
+    const stem = stems.find((s) => s.startsWith(`${t}-`));
+    if (!stem) continue;
+    const m = JSON.parse(readFileSync(join(dir, `${stem}.manifest.json`), 'utf8')) as { withClient?: string; files?: Array<{ path: string }> };
+    say(m.withClient === builds.get('client'), `the ${t} names the client packed beside it (${m.withClient} = ${builds.get('client')})`);
+    if (t === 'browser') say(JSON.stringify(m.files?.map((f) => f.path)) === '["browser.json"]', 'the browser carries no second copy of the app (browser.json alone)');
 }
 console.log(`### track-manifest=${failed === 0 ? 'PASS' : 'FAIL'} (${failed} failed)`);
 process.exit(failed === 0 ? 0 : 1);

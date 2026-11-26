@@ -199,6 +199,7 @@ html,body{height:100%;overflow:hidden;user-select:none}
     failed: function (why) {
       state.error = why;
       $('install-hero').classList.add('bad');
+      $('install-hero').style.setProperty('--p', '100');
       $('install-title').textContent = 'Genie could not be set up';
       $('install-sub').textContent = 'Nothing was changed in Genie’s programs folder.';
       $('why').hidden = false;

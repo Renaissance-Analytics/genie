@@ -136,6 +136,15 @@ fn install(proxy: EventLoopProxy<UserEvent>, roots: Roots, mut options: InstallO
 
 /// Shows the setup window until the person opens Genie or closes it. `options.from` holds the packages.
 pub fn run_setup(roots: &Roots, options: InstallOptions, keys: Vec<VerifyingKey>) -> Result<SetupOutcome, String> {
+    // WEBKITGTK WITHOUT A GPU DRAWS NOTHING (measured, item 1126-102126-14ccd0: the setup window took keys and installed,
+    // and showed nothing; EGL could not start). Its DMA-BUF renderer and accelerated compositing are off for this small,
+    // static window, unless the person set them: it is drawn on the CPU on every machine.
+    #[cfg(unix)]
+    for (k, v) in [("WEBKIT_DISABLE_DMABUF_RENDERER", "1"), ("WEBKIT_DISABLE_COMPOSITING_MODE", "1")] {
+        if std::env::var_os(k).is_none() {
+            std::env::set_var(k, v);
+        }
+    }
     let mut event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let window = WindowBuilder::new()
         .with_title("Set up Genie")

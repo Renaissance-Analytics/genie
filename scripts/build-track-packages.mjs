@@ -22,7 +22,7 @@ import { copyFile, mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/p
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { packTrack } from './pack-track.mjs';
-import { clientBuilderConfig, launcherInstallerConfig, layoutHost, layoutWindowApp, programName, treeOf, trackTreeProblems } from './track-packages.mjs';
+import { clientBuilderConfig, launcherInstallerConfig, layoutBrowser, layoutHost, layoutWindowApp, programName, treeOf, trackTreeProblems } from './track-packages.mjs';
 
 const require = createRequire(import.meta.url);
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -53,6 +53,31 @@ function baseConfig() {
 }
 
 async function exists(p) { return stat(p).then(() => true, () => false); }
+
+/** The biggest files of a tree, and of its app.asar by top folder: what a package's size is made of, said at each build. */
+async function biggest(name, root) {
+    const sizes = [];
+    for (const f of await treeOf(root)) sizes.push([f, (await stat(join(root, f))).size]);
+    sizes.sort((x, y) => y[1] - x[1]);
+    const total = sizes.reduce((n, [, s]) => n + s, 0);
+    console.log(`[tracks] ${name}: ${(total / 1048576).toFixed(1)} MiB in ${sizes.length} files; the biggest:`);
+    for (const [f, s] of sizes.slice(0, 15)) console.log(`[tracks]   ${(s / 1048576).toFixed(1).padStart(7)} MiB  ${f}`);
+    const asarPath = join(root, 'resources', 'app.asar');
+    if (!(await exists(asarPath))) return;
+    const asar = require('@electron/asar');
+    const by = new Map();
+    for (const f of asar.listPackage(asarPath, { isPack: false })) {
+        const p = f.replace(/\\/g, '/');
+        const st = asar.statFile(asarPath, p.slice(1), false);
+        if (!st || typeof st.size !== 'number' || st.files) continue;
+        const parts = p.split('/').filter(Boolean);
+        const key = parts[0] === 'node_modules' ? `node_modules/${parts[1]?.startsWith('@') ? `${parts[1]}/${parts[2]}` : parts[1]}` : parts.slice(0, 2).join('/');
+        by.set(key, (by.get(key) ?? 0) + st.size + (st.unpacked ? 0 : 0));
+    }
+    const rows = [...by].sort((x, y) => y[1] - x[1]).slice(0, 15);
+    console.log(`[tracks] ${name}'s app.asar by folder (unpacked sizes):`);
+    for (const [k, s] of rows) console.log(`[tracks]   ${(s / 1048576).toFixed(1).padStart(7)} MiB  ${k}`);
+}
 
 /**
  * The configuration as a file of its own, passed by path: an object passed to electron-builder is merged over
@@ -104,13 +129,15 @@ async function packages(a) {
     if (asarFiles.includes('/dist/main/host.js')) throw new Error('the client\'s app.asar holds dist/main/host.js: the host bundle must not be in the client');
 
     const made = {};
-    for (const track of ['client', 'browser']) {
-        made[track] = join(trees, track);
-        const r = await layoutWindowApp({ from: unpackedApp, out: made[track], track, platform });
-        console.log(`[tracks] ${track}: ${r.files} files`);
-    }
+    made.client = join(trees, 'client');
+    console.log(`[tracks] client: ${(await layoutWindowApp({ from: unpackedApp, out: made.client, track: 'client', platform })).files} files`);
+    await biggest('client', made.client);
+    // The browser: no second copy of the app (browser.json; its manifest names the client it runs on).
+    made.browser = join(trees, 'browser');
+    await layoutBrowser({ out: made.browser });
     made.host = join(trees, 'host');
     const h = await layoutHost({ unpackedApp, asarDir, dist: join(ROOT, 'dist'), runtimeDir: join(unpackedApp, 'resources', 'runtime'), out: made.host, platform, arch });
+    await biggest('host', made.host);
     console.log(`[tracks] host: ${h.files} files; ${h.leftOut.length} left out by Tynn #437's rule${h.leftOut.length ? ` (${h.leftOut.slice(0, 8).map((l) => l.file).join(', ')}${h.leftOut.length > 8 ? ', ...' : ''})` : ''}`);
     // What the trees were made from is not kept: a test VM's disk holds the trees and the packages, not three copies.
     await rm(asarDir, { recursive: true, force: true });
@@ -122,7 +149,7 @@ async function packages(a) {
     // What each package holds is checked before it is packed: a tree with a problem is never packed.
     let bad = 0;
     for (const track of ['client', 'browser', 'host', 'launcher']) {
-        const problems = trackTreeProblems({ track, platform, arch, files: await treeOf(made[track]), asarFiles: track === 'client' || track === 'browser' ? asarFiles : [] });
+        const problems = trackTreeProblems({ track, platform, arch, files: await treeOf(made[track]), asarFiles: track === 'client' ? asarFiles : [] });
         for (const p of problems) console.log(`### ${track} ${p.why === 'missing' ? 'MISSING  ' : 'NOT HERE '} ${p.file}${p.why === 'missing' ? '' : `  (${p.why})`}`);
         bad += problems.length;
     }
@@ -131,7 +158,7 @@ async function packages(a) {
     await mkdir(out, { recursive: true });
     const meta = { build: a.build, channel: a.channel, platform, arch, minLauncher: null, notes: `Genie ${a.build}` };
     for (const track of ['client', 'browser', 'host', 'launcher']) {
-        const r = await packTrack({ ...meta, track, from: made[track], out, ...(track === 'host' ? { withClient: a.build } : {}) });
+        const r = await packTrack({ ...meta, track, from: made[track], out, ...(track === 'host' || track === 'browser' ? { withClient: a.build } : {}) });
         console.log(`[tracks] packed ${r.archive} (${r.value.files.length} files, ${(await stat(r.archive)).size} bytes)`);
     }
     await writeFile(join(out, 'asar-files.json'), JSON.stringify(asarFiles));

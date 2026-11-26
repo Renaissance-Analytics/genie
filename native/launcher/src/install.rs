@@ -214,22 +214,26 @@ fn commit(s: &Staged) -> std::io::Result<()> {
     write_file(&s.target.join(COMPLETE), s.manifest.build.as_bytes())
 }
 
-/// A host's `withClient` is the client checked beside it, or else the client already current. Before anything unpacks.
+/// A host's or a browser's `withClient` is the client checked beside it, or else the client already current. Before
+/// anything unpacks: a host ships with its client, and a browser runs on it.
 fn host_ships_with_its_client(checked: &[Checked], st: &state::State) -> Result<(), String> {
-    let Some(host) = checked.iter().find(|s| s.track == Track::Host) else { return Ok(()) };
-    let Some(wanted) = host.manifest.with_client.as_deref() else {
-        return Err(format!("The host {} names no client build. Nothing was installed.", host.manifest.build));
-    };
     let client = checked
         .iter()
         .find(|s| s.track == Track::Client)
         .map(|s| s.manifest.build.clone())
         .or_else(|| st.track(Track::Client.as_str()).and_then(|t| t.current.clone()));
-    match client {
-        Some(c) if c == wanted => Ok(()),
-        Some(c) => Err(format!("The host {} ships with client {wanted}, and the client here is {c}: a host is installed only with its own client. Nothing was installed.", host.manifest.build)),
-        None => Err(format!("The host {} ships with client {wanted}, and there is no client here. Nothing was installed.", host.manifest.build)),
+    for c in checked.iter().filter(|c| c.track == Track::Host || c.track == Track::Browser) {
+        let (name, verb) = if c.track == Track::Host { ("host", "ships with") } else { ("browser", "runs on") };
+        let Some(wanted) = c.manifest.with_client.as_deref() else {
+            return Err(format!("The {name} {} names no client build. Nothing was installed.", c.manifest.build));
+        };
+        match &client {
+            Some(have) if have == wanted => {}
+            Some(have) => return Err(format!("The {name} {} {verb} client {wanted}, and the client here is {have}: it is installed only with that client. Nothing was installed.", c.manifest.build)),
+            None => return Err(format!("The {name} {} {verb} client {wanted}, and there is no client here. Nothing was installed.", c.manifest.build)),
+        }
     }
+    Ok(())
 }
 
 pub fn install_from(roots: &Roots, options: &InstallOptions, keys: &[VerifyingKey]) -> Result<Vec<Installed>, String> {

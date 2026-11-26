@@ -481,7 +481,7 @@ function Row-logon { Need-Build; Need-TestMachine; Run 'vm-logon' { powershell -
 # A host update drains and swaps (Tynn #1036 P6-2): last, as it replaces the install, the home and the build once more.
 function Row-host-update { Need-Install; Need-Electron; Need-TestMachine; Run 'vm-windows-update' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-windows-update.ps1 } }
 # THE PACKAGES PER TRACK (Tynn #1058 L3): the client (electron-builder's unpacked app named genie-client, no host bundle),
-# the browser (that app as genie-browser, its own track), the host (P6-1's copy laid out at build time) and the launcher,
+# the browser (browser.json, its own track, run on that client build: no second copy of the app), the host (P6-1's copy laid out at build time) and the launcher,
 # each packed with its manifest (scripts/build-track-packages.mjs), signed with a THROWAWAY key made here and deleted with
 # the VM (scripts/ci/throwaway-manifest-key.mjs), the launcher built trusting that key, then the launcher's installer
 # (NSIS, electron-builder --prepackaged: Genie.exe and packages\). Unsigned (Authenticode) as the package row is. Never the release key.
@@ -502,7 +502,7 @@ function Row-package-tracks {
         Remove-Item Env:GENIE_TRACK_BUILD, Env:GENIE_MANIFEST_PUBLIC_KEYS -ErrorAction SilentlyContinue
     }
     $launcher = Join-Path $Repo 'native\launcher\target-l3\release\genie.exe'
-    Run 'build-track-packages packages' { node scripts/build-track-packages.mjs packages --build $build --channel dev --launcher $launcher }
+    Run 'build-track-packages packages' { node scripts/build-track-packages.mjs packages --build $build --channel stable --launcher $launcher }
     $manifests = @(Get-ChildItem release\tracks\packages\*.manifest.json | ForEach-Object { $_.FullName })
     $env:GENIE_MANIFEST_SIGNING_KEY = Get-Content -Raw (Join-Path $Setup 'THROWAWAY-manifest-signing-key.pem'); $env:GENIE_MANIFEST_PUBLIC_KEY = $pub
     try { Run 'sign-manifest (throwaway key)' { node scripts/sign-manifest.mjs @manifests } }

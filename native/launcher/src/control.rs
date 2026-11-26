@@ -96,8 +96,17 @@ pub fn start_component(roots: &Roots, c: &Component, extra: Vec<String>) -> Resu
     let st = state::read(&roots.state_file())?;
     let name = c.track.as_str();
     let build = st.track(name).and_then(|t| t.current.clone()).ok_or_else(|| format!("No {name} is installed on this computer."))?;
-    verify_build(roots, c.track, &build, &keys::trusted_keys(roots), HashScope::Executables)?;
-    let program = roots.program(c.track, &build).ok_or_else(|| format!("the {name}'s build is not a track build"))?;
+    let keys = keys::trusted_keys(roots);
+    let manifest = verify_build(roots, c.track, &build, &keys, HashScope::Executables)?;
+    let program = match c.runs {
+        None => roots.program(c.track, &build).ok_or_else(|| format!("the {name}'s build is not a track build"))?,
+        // It runs another track's program at the build its own manifest names (the browser on the client).
+        Some(on) => {
+            let at = manifest.with_client.clone().ok_or_else(|| format!("the {name} {build} names no {} build to run on", on.as_str()))?;
+            verify_build(roots, on, &at, &keys, HashScope::Executables).map_err(|why| format!("the {name} runs on {} {at}, which is not here to run: {why}", on.as_str()))?;
+            roots.program(on, &at).ok_or_else(|| format!("{} {at} is not a track build", on.as_str()))?
+        }
+    };
     let mut args: Vec<String> = c.args.iter().map(|a| a.to_string()).collect();
     args.extend(extra);
     let mut env = vec![

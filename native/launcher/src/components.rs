@@ -29,12 +29,15 @@ pub struct Component {
     pub restarts_host: bool,
     /// The track whose build its package names and is applied with (a host ships with its client).
     pub ships_with: Option<Track>,
+    /// The track whose program it runs, at the build its manifest names (the browser runs the client's with
+    /// --genie-browser, so its package carries no second copy of the app). `None`: its own track's program.
+    pub runs: Option<Track>,
 }
 
 pub const COMPONENTS: [Component; 3] = [
-    Component { id: "host", track: Track::Host, kind: Kind::Service, args: &[], restarts_host: true, ships_with: Some(Track::Client) },
-    Component { id: "client", track: Track::Client, kind: Kind::Window, args: &[], restarts_host: false, ships_with: None },
-    Component { id: "browser", track: Track::Browser, kind: Kind::Window, args: &["--genie-browser"], restarts_host: false, ships_with: None },
+    Component { id: "host", track: Track::Host, kind: Kind::Service, args: &[], restarts_host: true, ships_with: Some(Track::Client), runs: None },
+    Component { id: "client", track: Track::Client, kind: Kind::Window, args: &[], restarts_host: false, ships_with: None, runs: None },
+    Component { id: "browser", track: Track::Browser, kind: Kind::Window, args: &["--genie-browser"], restarts_host: false, ships_with: None, runs: Some(Track::Client) },
 ];
 
 pub fn component(id: &str) -> Option<&'static Component> {

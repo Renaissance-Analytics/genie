@@ -158,7 +158,7 @@ mkdir -p "$OUT/tampered-packages"; cp "$PKG"/* "$OUT/tampered-packages/"
 # manifest: the archive is not the one the signature covers.
 rm -rf "$OUT/tampered-tree"; cp -r "$ROOT/release/tracks/trees/host" "$OUT/tampered-tree"
 node -e 'const f=require("fs");const p=process.argv[1];const b=f.readFileSync(p);b[10]^=1;f.writeFileSync(p,b)' "$OUT/tampered-tree/app/dist/main/host.js"
-node --input-type=module -e "import { packTrack } from '$ROOT/scripts/pack-track.mjs'; await packTrack({ track: 'host', build: '$BUILD', channel: 'dev', platform: 'linux', arch: 'x64', withClient: '$BUILD', minLauncher: null, notes: 'Genie $BUILD', from: '$OUT/tampered-tree', out: '$OUT/tampered-out' });" || fail 'the tampered host could not be packed'
+node --input-type=module -e "import { packTrack } from '$ROOT/scripts/pack-track.mjs'; await packTrack({ track: 'host', build: '$BUILD', channel: 'stable', platform: 'linux', arch: 'x64', withClient: '$BUILD', minLauncher: null, notes: 'Genie $BUILD', from: '$OUT/tampered-tree', out: '$OUT/tampered-out' });" || fail 'the tampered host could not be packed'
 cp "$OUT"/tampered-out/host-*.tar.zst "$OUT/tampered-packages/"
 cmp -s "$OUT"/tampered-out/host-*.manifest.json "$OUT"/tampered-packages/host-*.manifest.json && fail 'CONTROL: the flipped byte did not change the host package'
 if as_person "$T" "$T/Downloads/genie" install --profile both --from "$OUT/tampered-packages" --yes >"$OUT/install-tampered.log" 2>&1; then
