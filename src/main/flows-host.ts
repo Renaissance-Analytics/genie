@@ -122,6 +122,8 @@ export class FlowsReplica {
 
     get(id: string): FlowRecord | null { return this.#dump.flows.find((f) => f.id === id) ?? null; }
     list(workspaceId?: string): FlowRecord[] { return this.#dump.flows.filter((f) => workspaceId === undefined || f.workspaceId === workspaceId); }
+    /** A flow's workspace (Tynn #1057: the workspace a run's sound is cued on); `null` = not a flow here. */
+    workspaceOf(flowId: string): string | null { return this.#dump.flows.find((f) => f.id === flowId)?.workspaceId ?? null; }
     inFlightCount(): number { return this.#dump.inFlight; }
     /** A flow's schedules, read from its document as the store reads them. */
     schedules(id: string): ReturnType<FlowStore['schedules']> { const flow = this.get(id); return flow ? schedulesIn(flow.document) : []; }

@@ -57,7 +57,7 @@ $Rows = @(
     'unit-build', 'unit',
     'build', 'seed', 'no-pty', 'smoke', 'layout', 'app-stopped',
     'local-door-break', 'local-door', 'host-late-ready', 'files-watch', 'chat-drafts', 'gapp-open', 'artboard', 'ui-lag', 'plan-popover',
-    'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash', 'quit-keeps-host', 'rebuilt-machine', 'cli-drain',
+    'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'sound-cues', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash', 'quit-keeps-host', 'rebuilt-machine', 'cli-drain',
     'package', 'sign-plan', 'packed-tree', 'update-metadata', 'package-fuse', 'packaged-launcher',
     'logon',
     'launcher-unit',
@@ -410,6 +410,8 @@ function Row-trust-step { Need-Build; Need-TestMachine; Run 'trust-step-cdp' { n
 function Row-accounts-popover { Need-Build; Need-TestMachine; Run 'accounts-popover-cdp' { node scripts/accounts-popover-cdp.mjs } }
 function Row-claude-accounts { Need-Build; Need-TestMachine; Run 'claude-accounts-cdp' { node scripts/claude-accounts-cdp.mjs } }
 function Row-sound-picker { Need-Build; Need-TestMachine; Run 'sound-picker-cdp' { node scripts/sound-picker-cdp.mjs } }
+# EVERY SOUND HAS A SIGHT (Tynn #1057): the sidebar's rows, the Dashboard's activity and a workspace dashboard's, photographed.
+function Row-sound-cues { Need-Build; Need-TestMachine; Run 'sound-cues-cdp' { node scripts/sound-cues-cdp.mjs } }
 # The whole question window maximized and restored, screenshots of both (Tynn #1019): the window's maximize is Windows' own here.
 function Row-question-maximize { Need-Build; Need-TestMachine; Run 'question-maximize-cdp' { node scripts/question-maximize-cdp.mjs } }
 # Esc unsends a message still in the send buffer, files and all, in the real chat with a real key press (Tynn #1029).
@@ -566,6 +568,7 @@ function Ceiling([string]$name) {
         'plan-popover' { return 480 }
         'claude-accounts' { return 300 }
         'sound-picker' { return 300 }
+        'sound-cues' { return 300 }
         'question-maximize' { return 300 }
         'esc-unsend' { return 300 }
         'files-watch' { return 240 }
