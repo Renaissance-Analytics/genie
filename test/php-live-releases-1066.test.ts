@@ -18,6 +18,7 @@ import {
 import { PHP_RECIPES, PHP_WINDOWS_RELEASES_JSON, pickPinned } from '../src/core/php-versions.js';
 import { installableVersions, patchWithinLine } from '../src/core/toolchain-update.js';
 import { applyDuePhpUpdates, PhpPatchNotices, type PhpPatchPorts, type PhpPatchSite } from '../src/main/php-patch-keeper.js';
+import { withSharedToolchainPhp } from '../src/main/features-host.js';
 import { PhpReleaseFeed } from '../src/main/php-release-feed.js';
 import { installPhpVersion, listPhpVersions, type Fetched, type PhpVersionsFs, type PhpVersionsPorts } from '../src/main/php-versions.js';
 
@@ -421,5 +422,21 @@ describe('keeping every installed PHP on the newest patch of its line', () => {
         expect(r.updated).toEqual(['8.4.28']);
         expect(k.restarted).toEqual([]);
         expect(k.def()).toBe('8.4.28');
+    });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// What the person sees after a background install: every caller's Toolchain, not only the one that last scanned.
+
+
+describe('a PHP list Genie changed by itself reaches every caller’s Toolchain', () => {
+    const fresh = { managed: [{ version: '8.4.28', dir: '/t/8.4.28', usedBy: [] }], system: null, available: [{ version: '8.4.28', installed: true }] };
+    const stale = { managed: [{ version: '8.4.27', dir: '/t/8.4.27', usedBy: [] }], system: null, available: [{ version: '8.4.27', installed: true }] };
+    it('the host’s newest PHP list replaces a caller’s older one', () => {
+        expect(withSharedToolchainPhp({ toolchainPhp: stale }, fresh).toolchainPhp).toBe(fresh);
+        expect(withSharedToolchainPhp({ toolchainPhp: null }, fresh).toolchainPhp).toBe(fresh);
+    });
+    it('control: with none from the host, the caller’s own list stays', () => {
+        expect(withSharedToolchainPhp({ toolchainPhp: stale }, null).toolchainPhp).toBe(stale);
     });
 });
