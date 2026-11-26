@@ -112,6 +112,9 @@ async function packages(a) {
     made.host = join(trees, 'host');
     const h = await layoutHost({ unpackedApp, asarDir, dist: join(ROOT, 'dist'), runtimeDir: join(unpackedApp, 'resources', 'runtime'), out: made.host, platform, arch });
     console.log(`[tracks] host: ${h.files} files; ${h.leftOut.length} left out by Tynn #437's rule${h.leftOut.length ? ` (${h.leftOut.slice(0, 8).map((l) => l.file).join(', ')}${h.leftOut.length > 8 ? ', ...' : ''})` : ''}`);
+    // What the trees were made from is not kept: a test VM's disk holds the trees and the packages, not three copies.
+    await rm(asarDir, { recursive: true, force: true });
+    await rm(join(ROOT, 'release', 'tracks', 'client-app'), { recursive: true, force: true });
     made.launcher = join(trees, 'launcher');
     await mkdir(made.launcher, { recursive: true });
     await copyFile(resolve(a.launcher), join(made.launcher, programName('launcher', platform)));
