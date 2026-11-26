@@ -49,3 +49,9 @@ fn the_failure_screen_marks_the_failed_step_turns_the_bar_red_and_offers_a_way_f
     assert!(html.contains(".bar.bad .fill{background:var(--bad)}"), "the bar turns red where it stopped");
     assert!(html.contains("id=\"retry\">Try again") && html.contains("id=\"fail-close\">Close"), "Try again and Close");
 }
+
+#[test]
+fn hidden_parts_stay_hidden_whatever_their_display_rule() {
+    // The failure actions are `hidden` until a failure, inside `.fail-actions{display:flex}`: the hidden rule must win.
+    assert!(setup_html().contains("[hidden]{display:none!important}"));
+}
