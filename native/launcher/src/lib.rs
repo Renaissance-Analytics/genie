@@ -10,6 +10,7 @@
 //! - `spawn`: the ONLY place a program is started, and only a `layout::Program` (a path inside the code root).
 //! - `components`: the registry of what the launcher starts (the host, the client, the browser; GApps later).
 //! - `local`, `control`, `host`: the owner-only control wire, and starting and stopping the host.
+//! - `ui`: the setup window (direction C) in the platform webview, from assets bundled in `ui/`.
 //! - `win`: genie-launch.exe's three modes (`detach`, `job`, `pipe-owner-only`), folded in (Windows).
 
 pub mod archive;
@@ -30,6 +31,8 @@ pub mod secure;
 pub mod spawn;
 pub mod state;
 pub mod version;
+#[cfg(feature = "ui")]
+pub mod ui;
 #[cfg(windows)]
 pub mod win;
 

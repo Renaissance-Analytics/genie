@@ -23,6 +23,10 @@ name = "genie_launcher"
 path = "src/lib.rs"
 
 [features]
+# The setup window (direction C, "Wish Orb"; src/ui.rs) in the platform webview: WebView2 on Windows, WebKitGTK on Linux
+# (webkit2gtk-4.1). On by default, so the release build has it with no feature named.
+default = ["ui"]
+ui = ["dep:wry", "dep:tao"]
 # Lets cargo test name a throwaway public key in GENIE_LAUNCHER_TEST_PUBLIC_KEY. A release build never has it
 # (scripts/build-win-launcher.mjs builds without features, and tests/source_guard.rs holds that).
 test-keys = []
@@ -36,6 +40,8 @@ base64 = "0.22"
 getrandom = "0.2"
 miniz_oxide = "0.8"
 ruzstd = "0.8"
+wry = { version = "0.58", optional = true }
+tao = { version = "0.38", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Set up Genie</title>
+<!-- THE LAUNCHER'S SETUP WINDOW (Tynn #1058 L3): the owner's direction C, "Wish Orb" (sandbox/launcher-design/direction-c.html,
+     screens 1a choose, 1b installing, 1c ready). base.css and theme-c.css are the mockup's own, bundled in the launcher and put
+     in place of the marker below by src/ui.rs. The launcher drives the page through window.genieSetup; the page answers
+     through window.ipc.postMessage (wry). Nothing here is fetched: the page has no network. -->
+<style>/*GENIE_CSS*/
+html,body{height:100%;overflow:hidden;user-select:none}
+.tb{-webkit-app-region:drag}
+.tb-ctl i{cursor:pointer;-webkit-app-region:no-drag}
+.btn[disabled]{opacity:.6;cursor:default}
+.why{color:var(--bad);white-space:pre-wrap;max-height:120px;overflow:auto;font-size:12.5px}
+.details{display:none;max-height:150px;overflow:auto;font-size:11.5px;white-space:pre-wrap;color:var(--muted);margin-top:8px}
+.details.open{display:block}
+</style>
+</head>
+<body class="only">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="lampfill" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="var(--lamp-a)"/>
+      <stop offset="1" stop-color="var(--lamp-b)"/>
+    </linearGradient>
+    <symbol id="lamp" viewBox="0 0 72 44">
+      <path fill="url(#lampfill)" d="M12 27c0-5.5 7.6-8.6 19.5-8.6S51 21.5 51 27c0 0 5.8-.6 10.2-6 2.1-2.5 4.6-3.6 7.3-2.6-3.5 1.3-5.6 5.4-8.7 9.6-3.3 4.4-8 6.8-13.4 7.4H24.5C17 35.4 12 32 12 27z"/>
+      <path fill="none" stroke="url(#lampfill)" stroke-width="2.6" stroke-linecap="round" d="M12.4 25.5c-6.4.4-9.2-5.8-5.2-8.4 2.3-1.5 4.9-.4 6 1.8"/>
+      <path fill="url(#lampfill)" d="M21.5 19c2.2-4.4 6.2-5.8 10-5.8s7.8 1.4 10 5.8z"/>
+      <circle fill="url(#lampfill)" cx="31.5" cy="10.6" r="2.4"/>
+      <path fill="url(#lampfill)" d="M24 35.6h15l3.6 5H20.4z"/>
+    </symbol>
+    <symbol id="i-check" viewBox="0 0 20 20"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M5 10.5l3.2 3.2L15 6.8"/></symbol>
+  </defs>
+</svg>
+
+<main class="board">
+
+<section class="screen on" id="s-choose">
+  <div class="win">
+    <div class="tb"><svg class="tb-lamp"><use href="#lamp"/></svg><span>Set up Genie</span><div class="tb-ctl"><i data-act="minimize">–</i><i data-act="close">×</i></div></div>
+    <div class="body">
+      <div class="hero" style="--p:0"><div class="glow"></div><div class="smoke"><i></i><i></i><i></i></div><div class="dust" data-n="14"></div><svg class="lamp"><use href="#lamp"/></svg></div>
+      <h1 class="center">Let’s set up Genie</h1>
+      <p class="muted center">Choose how this computer joins in. You can change it later.</p>
+
+      <label class="opt on" data-profile="both">
+        <span class="radio"></span>
+        <span class="grow">
+          <span class="row-title">Genie + this computer as a host <span class="pill soft">Recommended</span></span>
+          <span class="muted small">Your agents run here, and you can reach them from your other devices.</span>
+        </span>
+      </label>
+      <label class="opt" data-profile="client">
+        <span class="radio"></span>
+        <span class="grow">
+          <span class="row-title">Genie only</span>
+          <span class="muted small">Lighter. Connect to a host you already have; nothing runs in the background.</span>
+        </span>
+      </label>
+
+      <div class="foot">
+        <button class="btn primary wide" id="install" autofocus>Install</button>
+        <p class="muted tiny center">Installs for you only. No administrator rights needed.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="screen" id="s-install">
+  <div class="win">
+    <div class="tb"><svg class="tb-lamp"><use href="#lamp"/></svg><span>Set up Genie</span><div class="tb-ctl"><i data-act="minimize">–</i><i data-act="close">×</i></div></div>
+    <div class="body">
+      <div class="hero working" id="install-hero" style="--p:0"><div class="glow"></div><div class="smoke"><i></i><i></i><i></i><i></i></div><div class="dust" data-n="18"></div><svg class="lamp"><use href="#lamp"/></svg></div>
+      <h1 class="center" id="install-title">Setting up Genie…</h1>
+      <p class="muted center" id="install-sub">Checking that everything is from Genie.</p>
+
+      <div class="bar" id="install-bar" style="--p:0%"><div class="fill"></div></div>
+
+      <ul class="steps" id="steps"></ul>
+      <p class="why" id="why" hidden></p>
+
+      <div class="foot"><a class="link center" id="show-details">Show details</a><div class="details" id="details"></div></div>
+    </div>
+  </div>
+</section>
+
+<section class="screen" id="s-ready">
+  <div class="win">
+    <div class="tb"><svg class="tb-lamp"><use href="#lamp"/></svg><span>Set up Genie</span><div class="tb-ctl"><i data-act="minimize">–</i><i data-act="close">×</i></div></div>
+    <div class="body">
+      <div class="hero ready" style="--p:100">
+        <div class="glow"></div>
+        <div class="poof"><b></b><b></b><b></b><b></b><b></b><b></b><b></b><b></b></div>
+        <div class="dust" data-n="22"></div>
+        <svg class="lamp"><use href="#lamp"/></svg>
+        <span class="done-badge"><svg><use href="#i-check"/></svg></span>
+      </div>
+      <h1 class="center big">Genie is ready</h1>
+      <p class="muted center" id="ready-sub">Your host is running on this computer. It keeps your agents going, even with Genie closed.</p>
+
+      <div class="bar done" style="--p:100%"><div class="fill"></div></div>
+
+      <div class="foot">
+        <button class="btn primary wide" id="open">Open Genie</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<script>
+(function () {
+  // Deterministic stardust, as the mockup lays it out.
+  var seed = 7;
+  function rnd() { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; }
+  document.querySelectorAll('.dust').forEach(function (d) {
+    var n = +d.getAttribute('data-n') || 12;
+    for (var i = 0; i < n; i++) {
+      var s = document.createElement('span');
+      s.style.left = (8 + rnd() * 84).toFixed(1) + '%';
+      s.style.top = (rnd() * 90).toFixed(1) + '%';
+      s.style.setProperty('--d', (rnd() * 2.4).toFixed(2) + 's');
+      s.style.setProperty('--s', (0.5 + rnd() * 1.1).toFixed(2));
+      d.appendChild(s);
+    }
+  });
+
+  function send(msg) { if (window.ipc) window.ipc.postMessage(JSON.stringify(msg)); }
+  function $(id) { return document.getElementById(id); }
+  var profile = 'both';
+  var state = { screen: 's-choose', profile: profile, percent: 0, error: null };
+
+  function show(id) {
+    document.querySelectorAll('.screen').forEach(function (s) { s.classList.toggle('on', s.id === id); });
+    state.screen = id;
+  }
+  document.querySelectorAll('.opt').forEach(function (o) {
+    o.addEventListener('click', function () {
+      document.querySelectorAll('.opt').forEach(function (x) { x.classList.toggle('on', x === o); });
+      profile = o.getAttribute('data-profile');
+      state.profile = profile;
+    });
+  });
+  document.querySelectorAll('[data-act]').forEach(function (b) {
+    b.addEventListener('click', function () { send({ kind: b.getAttribute('data-act') }); });
+  });
+  document.querySelectorAll('.tb').forEach(function (t) {
+    t.addEventListener('mousedown', function (e) { if (!e.target.closest('[data-act]') && e.button === 0) send({ kind: 'drag' }); });
+  });
+  $('install').addEventListener('click', function () {
+    $('install').disabled = true;
+    send({ kind: 'install', profile: profile });
+  });
+  $('open').addEventListener('click', function () { $('open').disabled = true; send({ kind: 'open' }); });
+  $('show-details').addEventListener('click', function () { $('details').classList.toggle('open'); });
+
+  function li(step) {
+    var el = document.createElement('li');
+    if (step.state === 'done' || step.state === 'now') el.className = step.state;
+    var st = document.createElement('span');
+    st.className = 'st';
+    if (step.state === 'done') st.innerHTML = '<svg><use href="#i-check"/></svg>';
+    el.appendChild(st);
+    el.appendChild(document.createTextNode(step.label));
+    if (step.state === 'now' && typeof step.percent === 'number') {
+      var pc = document.createElement('span');
+      pc.className = 'muted small right';
+      pc.textContent = step.percent + '%';
+      el.appendChild(pc);
+    }
+    return el;
+  }
+
+  window.genieSetup = {
+    state: function () { return JSON.parse(JSON.stringify(state)); },
+    // {percent, sub, steps: [{label, state: done|now|todo, percent?}], detail?}
+    progress: function (p) {
+      if (state.screen !== 's-install') show('s-install');
+      state.percent = p.percent;
+      $('install-hero').style.setProperty('--p', String(p.percent));
+      $('install-bar').style.setProperty('--p', p.percent + '%');
+      if (p.sub) $('install-sub').textContent = p.sub;
+      var ul = $('steps');
+      ul.textContent = '';
+      p.steps.forEach(function (s) { ul.appendChild(li(s)); });
+      if (p.detail) { $('details').textContent += p.detail + '\n'; }
+    },
+    ready: function (r) {
+      $('ready-sub').textContent = r.profile === 'client'
+        ? 'Genie is installed. Pick a host when it opens, or add one.'
+        : 'Your host is running on this computer. It keeps your agents going, even with Genie closed.';
+      show('s-ready');
+      $('open').focus();
+    },
+    failed: function (why) {
+      state.error = why;
+      $('install-hero').classList.add('bad');
+      $('install-title').textContent = 'Genie could not be set up';
+      $('install-sub').textContent = 'Nothing was changed in Genie’s programs folder.';
+      $('why').hidden = false;
+      $('why').textContent = why;
+    },
+  };
+  send({ kind: 'loaded' });
+})();
+</script>
+</body>
+</html>

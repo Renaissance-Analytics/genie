@@ -128,7 +128,26 @@ fn files_refusal(why: impl Into<String>) -> String {
     Refusal::Files(why.into()).to_string()
 }
 
-fn stage(roots: &Roots, options: &InstallOptions, keys: &[VerifyingKey], current: &state::State, track: Track) -> Result<Staged, String> {
+/// One track's package found in the `--from` folder with its manifest checked (signature, shape, the package asked for,
+/// newer, minLauncher), not yet unpacked.
+struct Checked {
+    track: Track,
+    manifest: Manifest,
+    manifest_bytes: Vec<u8>,
+    sig: Vec<u8>,
+    archive: PathBuf,
+    partial: PathBuf,
+    target: PathBuf,
+}
+
+/// What an install has done so far, for the setup window (`ui`): every manifest checked, then each file unpacked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Progress {
+    Checked { files: usize },
+    File { track: Track, done: usize, of: usize },
+}
+
+fn check_package(roots: &Roots, options: &InstallOptions, keys: &[VerifyingKey], current: &state::State, track: Track) -> Result<Checked, String> {
     let (build, stem) = find_package(&options.from, track)?;
     let manifest_bytes = std::fs::read(options.from.join(format!("{stem}.manifest.json"))).map_err(|e| format!("{stem}.manifest.json: {e}"))?;
     let sig = std::fs::read(options.from.join(format!("{stem}.manifest.json.sig"))).map_err(|e| format!("{stem}.manifest.json.sig: {e}"))?;
@@ -147,13 +166,20 @@ fn stage(roots: &Roots, options: &InstallOptions, keys: &[VerifyingKey], current
     let archive = [".zip", ".tar.zst"].iter().map(|ext| options.from.join(format!("{stem}{ext}"))).find(|p| p.is_file()).ok_or_else(|| format!("{stem}: no .zip or .tar.zst beside its manifest"))?;
     let target = roots.build_dir(track, &build).ok_or("not a track build")?;
     let partial = roots.track_dir(track).join(format!("{build}{PARTIAL_SUFFIX}"));
+    Ok(Checked { track, manifest, manifest_bytes, sig, archive, partial, target })
+}
+
+/// Unpacks a checked package into its partial folder, each file checked (listed, size, sha256) as it lands.
+fn unpack(c: Checked, progress: &mut dyn FnMut(Progress)) -> Result<Staged, String> {
+    let partial = c.partial.clone();
     if partial.exists() {
         std::fs::remove_dir_all(&partial).map_err(|e| format!("{} could not be cleared: {e}", partial.display()))?;
     }
     std::fs::create_dir_all(&partial).map_err(|e| format!("{} could not be made: {e}", partial.display()))?;
-    let listed: BTreeMap<String, &crate::manifest::ManifestFile> = manifest.files.iter().map(|f| (name_key(&f.path), f)).collect();
+    let listed: BTreeMap<String, &crate::manifest::ManifestFile> = c.manifest.files.iter().map(|f| (name_key(&f.path), f)).collect();
+    let of = listed.len();
     let mut seen = std::collections::BTreeSet::new();
-    let unpacked = for_each_file(&archive, &mut |name, data| {
+    let unpacked = for_each_file(&c.archive, &mut |name, data| {
         let key = name_key(name);
         let f = listed.get(&key).ok_or_else(|| files_refusal(format!("{name} is in the package but not in its manifest")))?;
         if !seen.insert(key) {
@@ -162,7 +188,9 @@ fn stage(roots: &Roots, options: &InstallOptions, keys: &[VerifyingKey], current
         if data.len() as u64 != f.size || sha256_hex(data) != f.sha256 {
             return Err(files_refusal(format!("{name} is not the file its manifest names")));
         }
-        write_file(&partial.join(&f.path), data).map_err(|e| format!("{name} could not be written: {e}"))
+        write_file(&partial.join(&f.path), data).map_err(|e| format!("{name} could not be written: {e}"))?;
+        progress(Progress::File { track: c.track, done: seen.len(), of });
+        Ok(())
     });
     let unpacked = unpacked.and_then(|_| match listed.iter().find(|(k, _)| !seen.contains(*k)) {
         Some((_, f)) => Err(files_refusal(format!("{} is missing from the package", f.path))),
@@ -172,7 +200,7 @@ fn stage(roots: &Roots, options: &InstallOptions, keys: &[VerifyingKey], current
         let _ = std::fs::remove_dir_all(&partial);
         return Err(why);
     }
-    Ok(Staged { track, manifest, manifest_bytes, sig, partial, target })
+    Ok(Staged { track: c.track, manifest: c.manifest, manifest_bytes: c.manifest_bytes, sig: c.sig, partial: c.partial, target: c.target })
 }
 
 fn commit(s: &Staged) -> std::io::Result<()> {
@@ -186,13 +214,13 @@ fn commit(s: &Staged) -> std::io::Result<()> {
     write_file(&s.target.join(COMPLETE), s.manifest.build.as_bytes())
 }
 
-/// A host's `withClient` is the client staged beside it, or else the client already current.
-fn host_ships_with_its_client(staged: &[Staged], st: &state::State) -> Result<(), String> {
-    let Some(host) = staged.iter().find(|s| s.track == Track::Host) else { return Ok(()) };
+/// A host's `withClient` is the client checked beside it, or else the client already current. Before anything unpacks.
+fn host_ships_with_its_client(checked: &[Checked], st: &state::State) -> Result<(), String> {
+    let Some(host) = checked.iter().find(|s| s.track == Track::Host) else { return Ok(()) };
     let Some(wanted) = host.manifest.with_client.as_deref() else {
         return Err(format!("The host {} names no client build. Nothing was installed.", host.manifest.build));
     };
-    let client = staged
+    let client = checked
         .iter()
         .find(|s| s.track == Track::Client)
         .map(|s| s.manifest.build.clone())
@@ -205,15 +233,26 @@ fn host_ships_with_its_client(staged: &[Staged], st: &state::State) -> Result<()
 }
 
 pub fn install_from(roots: &Roots, options: &InstallOptions, keys: &[VerifyingKey]) -> Result<Vec<Installed>, String> {
+    install_from_with(roots, options, keys, &mut |_| {})
+}
+
+/// `install_from`, saying how far it is: every manifest is checked first, then each package unpacks.
+pub fn install_from_with(roots: &Roots, options: &InstallOptions, keys: &[VerifyingKey], progress: &mut dyn FnMut(Progress)) -> Result<Vec<Installed>, String> {
     sweep(roots);
     let mut st = state::read(&roots.state_file())?;
-    let mut staged: Vec<Staged> = Vec::new();
     let mut tracks: Vec<Track> = options.profile.tracks().to_vec();
     if cfg!(unix) && find_package(&options.from, Track::Launcher).is_ok() {
         tracks.push(Track::Launcher);
     }
+    let mut checked: Vec<Checked> = Vec::new();
     for track in &tracks {
-        match stage(roots, options, keys, &st, *track) {
+        checked.push(check_package(roots, options, keys, &st, *track)?);
+    }
+    host_ships_with_its_client(&checked, &st)?;
+    progress(Progress::Checked { files: checked.iter().map(|c| c.manifest.files.len()).sum() });
+    let mut staged: Vec<Staged> = Vec::new();
+    for c in checked {
+        match unpack(c, progress) {
             Ok(s) => staged.push(s),
             Err(why) => {
                 for s in &staged {
@@ -222,12 +261,6 @@ pub fn install_from(roots: &Roots, options: &InstallOptions, keys: &[VerifyingKe
                 return Err(why);
             }
         }
-    }
-    if let Err(why) = host_ships_with_its_client(&staged, &st) {
-        for s in &staged {
-            let _ = std::fs::remove_dir_all(&s.partial);
-        }
-        return Err(why);
     }
     let mut done = Vec::new();
     for s in &staged {

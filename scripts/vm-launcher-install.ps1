@@ -2,13 +2,14 @@
 THE LAUNCHER INSTALLS GENIE, ON WINDOWS (Tynn #1058 L3; the row launcher-install, scripts/ci/windows.ps1). In a test VM
 only, In-Session as the standard user genie, never on a person's desktop. As a person on a fresh machine does it:
 
-  1. the installer (release\tracks\installer\Genie-<build>-launcher-setup.exe) is run and shows its one page: this computer
-     runs Genie's host (the default) or client only. A SCREENSHOT of that page; then Install is pressed (Enter).
-  2. it puts the launcher at %LOCALAPPDATA%\Programs\Genie\Genie.exe (the path every shortcut already uses) and nothing
-     else there; the launcher installs the client, the browser and the host into %LOCALAPPDATA%\Genie, each verified
-     against its signed manifest; Genie and Genie (doctor mode) in the Start menu are the launcher.
-  3. the installer opens Genie: the launcher starts the host from its own folder, then the client window, which ADOPTS
-     that host; the host's supervisor is ready in the host's folder. A SCREENSHOT of Genie running.
+  1. the installer (release\tracks\installer\Genie-<build>-launcher-setup.exe) does the bare install (the launcher and
+     its packages) and opens Genie: the launcher's setup window (direction C, WebView2) shows choose, installing and
+     ready, each photographed through its debugger (scripts/launcher-setup-cdp.mjs); Install, then Open Genie, pressed.
+  2. the launcher is %LOCALAPPDATA%\Programs\Genie\Genie.exe (the path every shortcut already uses), alone there once its
+     packages are installed into %LOCALAPPDATA%\Genie, each verified against its signed manifest; Genie and Genie (doctor
+     mode) in the Start menu are the launcher.
+  3. Genie opens: the launcher started the host from its own folder, then the client window, which ADOPTS that host; the
+     host's supervisor is ready in the host's folder. A SCREENSHOT of Genie running.
   4. the client-only profile into a code root of its own: the client and the browser, no host.
   5. the uninstaller stops the host gracefully and removes the launcher and the programs; ~\.genie stays.
 
@@ -35,6 +36,8 @@ function Fail([string]$why) {
 }
 
 function Cleanup {
+    [Environment]::SetEnvironmentVariable('WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS', $null, 'User')
+    Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue
     $roots = @()
     if ($script:HostPid) { $roots += @('--root', "$($script:HostPid)") }
     foreach ($p in @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and ($_.Path.StartsWith($Code, [StringComparison]::OrdinalIgnoreCase) -or $_.Path.StartsWith($Prog, [StringComparison]::OrdinalIgnoreCase)) })) {
@@ -81,29 +84,24 @@ if (Test-Path $Data) {
     Rename-Item $Data $Aside -ErrorAction Stop
 }
 
-# --- 1. the installer's one page ---------------------------------------------------------------------------------------
+# --- 1. the installer, then the launcher's setup window (direction C) -------------------------------------------------
+# The window is WebView2: its debugger on 9333 for this row, through the user's environment, which the installer's
+# run-after-finish (a shell start, not a child of this script) reads. Taken away again in Cleanup.
+[Environment]::SetEnvironmentVariable('WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS', '--remote-debugging-port=9333', 'User')
+$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9333'
 $proc = Start-Process -FilePath $installer.FullName -PassThru
-$window = $null
-for ($i = 0; $i -lt 60 -and -not $window; $i++) {
-    Start-Sleep -Seconds 1
-    $p = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
-    if ($p -and $p.MainWindowHandle -ne [IntPtr]::Zero) { $window = $p }
-}
-if (-not $window) { Fail 'the installer showed no window within 60 s' }
-Write-Output "the installer's window: '$($window.MainWindowTitle)'"
-Start-Sleep -Seconds 3
-$shell = New-Object -ComObject WScript.Shell
-[void]$shell.AppActivate($proc.Id)
-Start-Sleep -Milliseconds 800
-Shot 'installer-choice.png'
-# The default (this computer runs Genie's host), and Install: the page's default button.
-[void]$shell.AppActivate($proc.Id)
-Start-Sleep -Milliseconds 500
-$shell.SendKeys('{ENTER}')
 $done = $proc.WaitForExit(240000)
 if (-not $done) { Shot 'installer-stuck.png'; Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue; Fail 'the installer did not finish within 4 minutes (see installer-stuck.png)' }
 Write-Output "the installer exited $($proc.ExitCode)"
 if ($proc.ExitCode -ne 0) { Fail "the installer failed (exit $($proc.ExitCode))" }
+if (-not (Test-Path (Join-Path $Prog 'packages'))) { Fail 'the bare install left no packages beside the launcher for its first run' }
+node scripts/launcher-setup-cdp.mjs 9333 $Out both
+if ($LASTEXITCODE -ne 0) {
+    Shot 'setup-window-screen.png'
+    foreach ($f in @('logs\genie-launcher.log', 'logs\genie-host.log')) { $p = Join-Path $Data $f; if (Test-Path $p) { Write-Output "--- $f"; Get-Content $p -Tail 30 } }
+    Fail 'the setup window was not driven through choose, installing and ready (above)'
+}
+for ($i = 0; $i -lt 30 -and (Test-Path (Join-Path $Prog 'packages')); $i++) { Start-Sleep -Seconds 1 }
 
 # --- 2. what it put where ----------------------------------------------------------------------------------------------
 $nsis = @(Get-ChildItem -Recurse -File $Prog | ForEach-Object { $_.FullName.Substring($Prog.Length + 1) })

@@ -675,8 +675,24 @@ need_rust() {
     command -v cc >/dev/null 2>&1 || { rust_ready='no C linker (cc) on this machine for cargo'; block "$rust_ready"; return 1; }
     rust_ready=ok
 }
+# THE LAUNCHER'S WINDOW (Tynn #1058 L3: the setup window, direction C) is WebKitGTK: wry links webkit2gtk-4.1 and GTK 3.
+# Installed with pacman when its development files are not here (Arch ships headers in the package itself).
+webkit_ready=''
+need_webkit() {
+    [ "$webkit_ready" = ok ] && return 0
+    [ -n "$webkit_ready" ] && { blocked="$webkit_ready"; return 1; }
+    webkit_ready='webkit2gtk-4.1 could not be installed (see ci-out/setup/pacman-webkit.log)'
+    need_cmd pkg-config pkgconf || { webkit_ready="$blocked"; return 1; }
+    if ! pkg-config --exists webkit2gtk-4.1 gtk+-3.0; then
+        echo "--- webkit2gtk-4.1 is missing: installing it with pacman"
+        sudo -n pacman -Sy --needed --noconfirm webkit2gtk-4.1 gtk3 >"$SETUP/pacman-webkit.log" 2>&1 || { tail -20 "$SETUP/pacman-webkit.log"; block "$webkit_ready"; return 1; }
+        pkg-config --exists webkit2gtk-4.1 gtk+-3.0 || { block "$webkit_ready"; return 1; }
+    fi
+    echo "--- webkit2gtk-4.1 $(pkg-config --modversion webkit2gtk-4.1), gtk+-3.0 $(pkg-config --modversion gtk+-3.0)"
+    webkit_ready=ok
+}
 row_launcher-unit() {
-    need_rust || return 1
+    need_rust && need_webkit || return 1
     echo "--- $(cargo --version), $(rustc --version), linker $(command -v cc)"
     local locked=''
     [ -f native/launcher/Cargo.lock ] && locked=--locked
@@ -690,7 +706,7 @@ row_launcher-unit() {
 # each packed with its manifest (scripts/build-track-packages.mjs), signed with a THROWAWAY key made here and deleted with
 # the VM (scripts/ci/throwaway-manifest-key.mjs), and the launcher built trusting that key. Never the release key.
 row_package-tracks() {
-    need_build && need_rust || return 1
+    need_build && need_rust && need_webkit || return 1
     npx tsx scripts/fetch-caddy.ts || return 1
     local build pub locked=''
     [ -f native/launcher/Cargo.lock ] && locked=--locked

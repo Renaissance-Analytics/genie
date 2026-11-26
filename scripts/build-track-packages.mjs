@@ -18,7 +18,7 @@
  * The dist/ of `npm run build` and build/runtime's Caddy (scripts/fetch-caddy.ts) must be there first.
  */
 import { createRequire } from 'node:module';
-import { copyFile, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { packTrack } from './pack-track.mjs';
@@ -72,7 +72,19 @@ async function buildClient({ signed }) {
     if (!signed && platform === 'win32') config.win = { ...config.win, signExecutable: false };
     const target = (platform === 'win32' ? Platform.WINDOWS : Platform.LINUX).createTarget('dir', Arch[arch]);
     console.log(`[tracks] electron-builder: the client as an unpacked app named genie-client (${signed ? 'signed' : 'unsigned'})`);
-    await build({ projectDir: ROOT, config: await configFile('client', config), targets: target, publish: 'never' });
+    // THE HOST BUNDLE IS NOT THERE WHILE THE CLIENT IS PACKED. The `files` exclusion alone left dist/main/host.js in the
+    // client's app.asar (measured on Windows, item 1126-083352-8b4ff0), so the file is moved aside for the build and put
+    // back after; the asar listing below is still checked, and the host package takes host.js from dist/.
+    const aside = [];
+    for (const f of ['host.js', 'host.js.map']) {
+        const at = join(ROOT, 'dist', 'main', f);
+        if (await exists(at)) { await rename(at, `${at}.l3-aside`); aside.push(at); }
+    }
+    try {
+        await build({ projectDir: ROOT, config: await configFile('client', config), targets: target, publish: 'never' });
+    } finally {
+        for (const at of aside) await rename(`${at}.l3-aside`, at);
+    }
     const out = join(ROOT, 'release', 'tracks', 'client-app', platform === 'win32' ? 'win-unpacked' : 'linux-unpacked');
     if (!(await exists(join(out, programName('client', platform))))) throw new Error(`electron-builder made no ${programName('client', platform)} in ${out}`);
     return out;

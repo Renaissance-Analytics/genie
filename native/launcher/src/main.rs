@@ -4,6 +4,11 @@
 //!                                 running, ask it for a window and exit; else run the launcher (one per user), start
 //!                                 the host (profile both) and open a client window
 //!   genie serve | --logon | --hidden   run the launcher alone: its control wire, until it is ended (L5 adds logon)
+//!   genie setup --from <folder> [--channel stable|dev]
+//!                                 the setup window (direction C): choose, install with its progress, ready, Open Genie.
+//!                                 `genie` alone does the same on a machine with nothing installed and packages\ beside
+//!                                 the launcher (the NSIS installer's bare install). Without a webview: the default
+//!                                 profile, installed bare, said on the console
 //!   genie --doctor                Genie's doctor mode: the client's --doctor, nothing else started
 //!   genie uninstall [--yes]       stop the host gracefully and remove the programs folder (the data root is kept)
 //!   genie install --from <folder> [--profile both|client] [--channel stable|dev] [--yes]
@@ -45,6 +50,26 @@ fn main() -> ExitCode {
             Err(why) => fail(&why),
         },
         Some("uninstall") => cmd_uninstall(&roots),
+        Some("setup") => {
+            let mut from: Option<PathBuf> = None;
+            let mut channel = "stable".to_string();
+            let rest = &text[1..];
+            let mut i = 0;
+            while i < rest.len() {
+                match (rest[i].as_str(), rest.get(i + 1)) {
+                    ("--from", Some(v)) => from = Some(PathBuf::from(v)),
+                    ("--channel", Some(v)) if v == "stable" || v == "dev" => channel = v.clone(),
+                    (other, _) => return fail(&format!("setup: unknown option '{other}'")),
+                }
+                i += 2;
+            }
+            let Some(from) = from else { return fail("setup needs --from <folder>") };
+            match cmd_setup(&roots, from, channel, false).and_then(|_| hand_over_to_installed(&roots)) {
+                Ok(true) => ExitCode::SUCCESS,
+                Ok(false) => cmd_open(roots),
+                Err(why) => fail(&why),
+            }
+        }
         Some("serve") | Some("--logon") | Some("--hidden") => {
             if let Err(why) = private_code_root(&roots) {
                 return fail(&why);
@@ -95,7 +120,66 @@ fn main() -> ExitCode {
 /// Open Genie. A launcher already running is asked for a window; otherwise this one becomes the launcher, starts the host
 /// when this computer has one (profile both), then opens a client window. A host that cannot start is said in the client
 /// log's words and the window still opens (it shows the host as stopped: L4).
+/// The packages the NSIS installer left beside the launcher for its first run.
+fn packages_beside_me() -> Option<PathBuf> {
+    let dir = std::env::current_exe().ok()?.parent()?.join("packages");
+    dir.is_dir().then_some(dir)
+}
+
+/// The setup window (`ui`), or without one the default profile installed bare. On Linux the program running it is the
+/// downloaded launcher, so once installed it hands over to the installed one (its own track's folder) and exits.
+fn cmd_setup(roots: &Roots, from: PathBuf, channel: String, beside: bool) -> Result<(), String> {
+    std::fs::create_dir_all(&roots.code).map_err(|e| format!("the programs folder {} could not be made: {e}", roots.code.display()))?;
+    secure::check_private(&roots.code)?;
+    let keys = keys::trusted_keys(roots);
+    let options = install::InstallOptions { from: from.clone(), profile: install::Profile::Both, channel, launcher_build: LAUNCHER_BUILD.to_string() };
+    #[cfg(feature = "ui")]
+    let shown: Result<bool, String> = genie_launcher::ui::run_setup(roots, options.clone(), keys.clone()).map(|o| matches!(o, genie_launcher::ui::SetupOutcome::Opened(_)));
+    #[cfg(not(feature = "ui"))]
+    let shown: Result<bool, String> = Err("this launcher was built without its window".to_string());
+    match shown {
+        Ok(true) => {}
+        Ok(false) => return Err("Genie was not set up: the setup window was closed before Genie was installed.".to_string()),
+        Err(why) => {
+            eprintln!("genie: {why}; installing Genie with this computer as a host, without the window");
+            for d in install::install_from(roots, &options, &keys)? {
+                println!("installed {} {}", d.track.as_str(), d.build);
+            }
+        }
+    }
+    if beside {
+        let _ = std::fs::remove_dir_all(&from);
+    }
+    Ok(())
+}
+
+/// On Linux the setup ran in the downloaded launcher: the installed one (in its own track's folder) takes over and opens
+/// Genie, and this one exits. `true` when it handed over.
+fn hand_over_to_installed(roots: &Roots) -> Result<bool, String> {
+    if !cfg!(unix) {
+        return Ok(false);
+    }
+    let me = std::env::current_exe().map_err(|e| e.to_string())?;
+    if me.starts_with(&roots.code) {
+        return Ok(false);
+    }
+    let st = genie_launcher::state::read(&roots.state_file())?;
+    let Some(build) = st.track("launcher").and_then(|t| t.current.clone()) else { return Ok(false) };
+    let program = roots.program(genie_launcher::layout::Track::Launcher, &build).ok_or("not a track build")?;
+    genie_launcher::spawn::start_window(&program, &[], &[], &roots.logs_dir().join("genie-launcher.log"))?;
+    Ok(true)
+}
+
 fn cmd_open(roots: Roots) -> ExitCode {
+    let installed = genie_launcher::state::read(&roots.state_file()).ok().and_then(|s| s.track("client").and_then(|t| t.current.clone())).is_some();
+    if !installed {
+        let Some(from) = packages_beside_me() else {
+            return fail("Genie is not installed on this computer: run its installer, or `genie setup --from <packages>`.");
+        };
+        if let Err(why) = cmd_setup(&roots, from, "stable".to_string(), true) {
+            return fail(&why);
+        }
+    }
     match control::call_running(&roots, "launcher.openWindow", serde_json::json!([])) {
         Ok(Some(_)) => return ExitCode::SUCCESS,
         Ok(None) => {}
