@@ -18,6 +18,8 @@ html,body{height:100%;overflow:hidden;user-select:none}
 .failed .st{background:var(--bad);border-color:transparent;color:#2a0710}
 .bar.bad .fill{background:var(--bad)}
 .bar.bad .fill::after{animation:none}
+/* [hidden] must win over a display rule (the Linux run, item 1126-110558-adb0a2, showed Try again during an install). */
+[hidden]{display:none!important}
 .fail-actions{display:flex;gap:10px}
 .fail-actions .btn{flex:1}
 .details{display:none;max-height:150px;overflow:auto;font-size:11.5px;white-space:pre-wrap;color:var(--muted);margin-top:8px}
