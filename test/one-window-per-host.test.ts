@@ -48,7 +48,10 @@ describe('a second launch', () => {
 describe('main.ts is wired to it', () => {
     it('the second launch opens a host\'s window through openRemoteWindow (one per host, keyed by its address), and so does a first launch with --host', () => {
         const main = readFileSync(join('src', 'main', 'main.ts'), 'utf8');
-        const second = main.slice(main.indexOf("app.on('second-instance'"), main.indexOf("app.on('second-instance'") + 400);
+        // The handler, to its own closing `});` (a fixed length broke on a comment line).
+        const at = main.indexOf("app.on('second-instance'");
+        expect(at).toBeGreaterThan(-1);
+        const second = main.slice(at, main.indexOf('\n});', at));
         expect(second).toMatch(/openHost: \(address\) => \{?\s*openRemoteWindow\(address/);
         expect(main).toMatch(/hostAsked\(process\.argv\)/);
     });
