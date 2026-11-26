@@ -205,10 +205,14 @@ fn cmd_open(roots: Roots) -> ExitCode {
     }
 }
 
-/// The NSIS uninstaller's (and Linux's) way out: the host stopped gracefully, then the programs folder removed. The data
-/// root (`~/.genie`) is kept, as it always was (`deleteAppDataOnUninstall: false`).
+/// The NSIS uninstaller's (and Linux's) way out: the host stopped gracefully, then the running launcher ended (on Windows
+/// it serves from the Genie.exe the uninstaller removes next), then the programs folder removed. The data root
+/// (`~/.genie`) is kept, as it always was (`deleteAppDataOnUninstall: false`).
 fn cmd_uninstall(roots: &Roots) -> ExitCode {
     if let Err(why) = host::stop_host(roots) {
+        return fail(&why);
+    }
+    if let Err(why) = end_running_launcher(roots) {
         return fail(&why);
     }
     #[cfg(unix)]
@@ -220,6 +224,29 @@ fn cmd_uninstall(roots: &Roots) -> ExitCode {
     }
     println!("uninstalled: {}", roots.code.display());
     ExitCode::SUCCESS
+}
+
+/// The launcher running for this user, ended (it holds no state: the host is stopped first). Only the pid launcher.json
+/// names, never this process.
+fn end_running_launcher(roots: &Roots) -> Result<(), String> {
+    use genie_launcher::spawn::{end, pid_alive, wait_gone};
+    let Some(pid) = std::fs::read_to_string(roots.runtime_dir().join("launcher.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v["pid"].as_u64())
+        .map(|p| p as u32)
+    else {
+        return Ok(());
+    };
+    if pid == std::process::id() || !pid_alive(pid) {
+        return Ok(());
+    }
+    end(pid);
+    if wait_gone(pid, std::time::Duration::from_secs(10)) {
+        Ok(())
+    } else {
+        Err(format!("Genie's launcher (pid {pid}) did not end, so its programs could not be removed."))
+    }
 }
 
 fn private_code_root(roots: &Roots) -> Result<(), String> {

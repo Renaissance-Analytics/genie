@@ -112,7 +112,18 @@ pub fn pid_alive(pid: u32) -> bool {
         return false;
     }
     let r = unsafe { libc::kill(pid as i32, 0) };
-    r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    let exists = r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+    // A zombie has ended (it is waiting to be reaped by its parent): not alive. Its state is the field after the
+    // parenthesised name in /proc/<pid>/stat.
+    exists && !is_zombie(pid)
+}
+
+#[cfg(unix)]
+fn is_zombie(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|s| s.rfind(')').map(|at| s[at + 1..].trim_start().starts_with('Z')))
+        .unwrap_or(false)
 }
 
 #[cfg(windows)]
