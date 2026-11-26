@@ -165,13 +165,18 @@ function providerWord(provider: string): string {
     return providerLogin(provider)?.name ?? provider;
 }
 
+/** The share of a window USED (Tynn #1070 review): what the provider's own usage page says ("This week 95% used"). */
+export function usedPct(w: { readonly leftPct: number }): number {
+    return 100 - w.leftPct;
+}
+
 /**
- * A window's figure in words, ONE meaning everywhere (Tynn #1070 review: a bare "95%" read as used beside a "0%" that was
- * left): the share LEFT, said so, `64% left`; a window spent past its allowance is `over`. Every bar beside it fills to that
- * share.
+ * A window's figure in words, ONE meaning everywhere and the provider's own (Tynn #1070 review: a bare "95%" read one way
+ * beside a "0%" read the other, and Claude's page says "95% used"): the share USED, said so, `95% used`; a window spent past
+ * its allowance is `over`. Every bar beside it fills by that share, and turns warning, then danger, as it fills.
  */
-export function leftWords(w: { readonly leftPct: number; readonly over: boolean }): string {
-    return w.over ? 'over' : `${w.leftPct}% left`;
+export function usedWords(w: { readonly leftPct: number; readonly over: boolean }): string {
+    return w.over ? 'over' : `${usedPct(w)}% used`;
 }
 
 /** `7d` → `this week`; `5h` → `in the 5-hour window`; anything else → `in the 7d opus window`. */
@@ -184,7 +189,7 @@ export function windowWords(window: string): string {
 /** The sidebar's dot (genie#1268). */
 export interface RateLimitAlert {
     readonly level: 'warning' | 'danger';
-    /** For a screen reader and the hover: each low window, e.g. `Claude: 8% left this week`. */
+    /** For a screen reader and the hover: each low window, e.g. `Claude: 92% used this week` (the share used, Tynn #1070). */
     readonly label: string;
 }
 
@@ -205,7 +210,7 @@ export function rateLimitAlert(limits: Readonly<Record<string, Headroom>>, nowMs
             if (nowMs !== undefined && readLimitWindow(w, nowMs).refreshed) continue;
             if (!w.over && w.leftPct > LIMIT_WARNING_LEFT_PCT) continue;
             if (w.over || w.leftPct <= LIMIT_DANGER_LEFT_PCT) danger = true;
-            low.push(`${providerWord(provider)}: ${w.over ? `over the limit ${windowWords(w.window)}` : `${w.leftPct}% left ${windowWords(w.window)}`}`);
+            low.push(`${providerWord(provider)}: ${w.over ? `over the limit ${windowWords(w.window)}` : `${usedPct(w)}% used ${windowWords(w.window)}`}`);
         }
     }
     return low.length === 0 ? null : { level: danger ? 'danger' : 'warning', label: low.join('; ') };

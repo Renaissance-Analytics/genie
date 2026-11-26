@@ -1,5 +1,5 @@
 import type { AccountHeadroom } from './headroom-board.js';
-import { windowWords, type WindowReading } from './headroom.js';
+import { usedPct, windowWords, type WindowReading } from './headroom.js';
 
 /**
  * SWITCH OFFERS (Tynn #481, Accounts S8). The owner: when a limit is near, "a one-click switch offer, never automatic", and
@@ -99,16 +99,16 @@ export function switchTargets(
     return [...withRoom.sort((a, b) => room(b) - room(a) || a.label.localeCompare(b.label)), ...unknown];
 }
 
-/** The offer in words: `Account 1: 8% left in the 5-hour window.`, `Account 1: spent this week.` (Tynn #1070). */
+/** The offer in words, the share USED as the bars say it: `Account 1: 92% used in the 5-hour window.`, `Account 1: spent this week.` (Tynn #1070). */
 export function offerWords(offer: Pick<SwitchOffer, 'label' | 'window' | 'leftPct' | 'over'>): string {
-    return `${offer.label}: ${offer.over ? 'spent' : `${offer.leftPct}% left`} ${windowWords(offer.window)}.`;
+    return `${offer.label}: ${offer.over ? 'spent' : `${usedPct(offer)}% used`} ${windowWords(offer.window)}.`;
 }
 
-/** A suggestion in words, with the window that would stop it first: `Account 2 (95% left this week)`. */
+/** A suggestion in words, with the window that would stop it first: `Account 2 (5% used this week)`. */
 export function targetWords(t: SwitchTarget): string {
     if (t.room === 'unknown') return `${t.label} (room not known yet)`;
     if (t.room === 'reset') return `${t.label} (its limits have reset)`;
-    return `${t.label} (${t.leftPct}% left${t.window ? ` ${windowWords(t.window)}` : ''})`;
+    return `${t.label} (${usedPct({ leftPct: t.leftPct ?? 0 })}% used${t.window ? ` ${windowWords(t.window)}` : ''})`;
 }
 
 /** What has been offered: for each `account|window`, the reset time of the window it was offered in. Plain JSON. */

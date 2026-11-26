@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { chooseWords, type AccountView, type AccountsSnapshot, type AccountWindowRow } from '../../core/accounts-view.js';
 import { forgetRefusal, SWITCH_OFFER_WINDOW_CHOICES, type AccountsAction, type AccountsActResult } from '../../core/account-settings.js';
 import { shortDateTime } from '../../core/clock-words.js';
-import { leftWords } from '../../core/headroom.js';
+import { usedWords } from '../../core/headroom.js';
 import { parseSwitchOfferWindows } from '../../core/switch-offer.js';
 import { ProviderLogo } from './ProviderLogo.js';
 import { DesignAuthRow } from './DesignAuthRow.js';
@@ -58,7 +58,7 @@ export function AccountsSettings({ snapshot, offerWindows, onSetOfferWindows, on
 function usageWords(w: AccountWindowRow, now: number): string {
     if ('unknown' in w) return 'unknown';
     if (w.refreshed || w.resetsAtMs <= now) return 'Refreshed';
-    return `${leftWords(w)} · ${shortDateTime(w.resetsAtMs)}`;
+    return `${usedWords(w)} · ${shortDateTime(w.resetsAtMs)}`;
 }
 
 function AccountRow({ account, now, onSwitch, onAct }: { account: AccountView; now: number; onSwitch: AccountsSettingsProps['onSwitch']; onAct: AccountsSettingsProps['onAct'] }) {
