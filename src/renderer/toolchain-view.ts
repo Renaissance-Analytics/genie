@@ -391,3 +391,14 @@ export function toolchainActivity(tc: ToolchainSection): ActivityItem[] {
     (tc.findings ?? []).forEach((_, index) => out.push({ kind: 'finding', index }));
     return out;
 }
+
+/**
+ * WHAT A SITE WITH NO PHP VERSION CHOSEN RUNS (Tynn #1066): Genie's default when there is one (its `current/php` is first
+ * on the PATH sites get), else the system's, else nothing. A fresh Windows VM read "cannot start … there is no system
+ * PHP" under four installed PHPs.
+ */
+export function unpinnedSitesLine(current: string | null, system: string | null): string {
+    if (current !== null) return `Sites with no version chosen run PHP ${current}, the default.`;
+    if (system !== null) return `Sites with no version chosen run PHP ${system}, the system's.`;
+    return 'Sites with no version chosen cannot start until PHP is installed: there is no system PHP.';
+}

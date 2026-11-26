@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { phpAdvisoryText } from '../core/php-advisories.js';
 import { catalogLine, catalogVersions, currentPhpCatalog } from '../core/php-releases.js';
 import {
@@ -260,13 +260,28 @@ function withAdvisory(version: string): { advisory?: string } {
     return advisory === null ? {} : { advisory };
 }
 
+/** Whether the php-cgi on PATH (`where` / `which`: the first one) lives under `dir`. Unreadable = no. */
+async function resolvesUnder(ports: Pick<PhpVersionsPorts, 'platform' | 'run'>, dir: string): Promise<boolean> {
+    try {
+        const r = await ports.run(ports.platform === 'win32' ? 'where' : 'which', ['php-cgi']);
+        const first = r.stdout.split(/\r?\n/).map((l) => l.trim()).find(Boolean);
+        if (!first) return false;
+        const norm = (p: string) => p.split('\\').join('/').replace(/[/]+$/, '').toLowerCase();
+        return norm(first).startsWith(`${norm(dir)}/`);
+    } catch {
+        return false;
+    }
+}
+
 /** What the Toolchain surface lists: Genie's own versions (with the sites on each), the PATH PHP, and what can be added. */
 export async function listPhpVersions(ports: PhpVersionsPorts, pins: readonly SitePin[] = []): Promise<PhpVersionsView> {
     const managed = managedPhp(ports);
     let system: PhpVersionsView['system'] = null;
     try {
         const banner = parsePhpBanner((await ports.run('php-cgi', ['-v'])).stdout);
-        if (banner) system = { version: banner.version, ...withAdvisory(banner.version) };
+        // GENIE'S OWN IS NOT THE SYSTEM'S (Tynn #1066): once Genie's PHP is the default, `current/php` is first on PATH and
+        // its php-cgi answers here. A php-cgi that resolves under Genie's toolchain is not listed as the system PHP.
+        if (banner && !(await resolvesUnder(ports, dirname(ports.root)))) system = { version: banner.version, ...withAdvisory(banner.version) };
     } catch {
         // no php-cgi on PATH: an unpinned php site cannot start either, and Toolchain's php row says how to install one
     }

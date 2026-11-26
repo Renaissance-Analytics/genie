@@ -17,7 +17,7 @@ import { mobilePageUrl } from '../../core/mobile.js';
 import { PairGuide } from './PairGuide.js';
 import { toneLabel, type ToolStatus } from '../../core/toolchain.js';
 import { DOCKER_DAEMON_WORDS } from '../../core/docker-engine.js';
-import { INSTALL_KIND, REMOVE_KIND, cardKeyOfTool, cardOfAction, formatElapsed, installNote, langView, plainRefusal, nextFix, nextInFlight, patchFor, toolchainActivity, toolchainCards, toolchainProblems, toolchainTally, type InFlight, type LangKey, type ToolCard, type ToolchainProblem } from '../toolchain-view.js';
+import { INSTALL_KIND, REMOVE_KIND, cardKeyOfTool, cardOfAction, formatElapsed, installNote, langView, plainRefusal, unpinnedSitesLine, nextFix, nextInFlight, patchFor, toolchainActivity, toolchainCards, toolchainProblems, toolchainTally, type InFlight, type LangKey, type ToolCard, type ToolchainProblem } from '../toolchain-view.js';
 import { ToolLogo } from './ToolLogo.js';
 import { NAV_GROUPS, NEW_PROJECT_DEFAULTS, sectionOf, type SectionId } from '../../core/settings-nav.js';
 import { SETTINGS, searchSettings, type SettingDef } from '../../core/settings.js';
@@ -1760,7 +1760,7 @@ function LanguagePanel({ lang, view, current, busy, check, onAction, refusals }:
             </ul>
             {lang === 'php' ? (
                 <p {...attr('system', '')} className="text-xs text-[var(--fg-3)]">
-                    {view.system ? `Sites with no version chosen run PHP ${view.system.version}, the system's.` : "Sites with no version chosen cannot start until PHP is installed: there is no system PHP."}
+                    {unpinnedSitesLine(current, view.system?.version ?? null)}
                 </p>
             ) : (
                 <p {...attr('system', '')} className="text-xs text-[var(--fg-3)]">{view.system ? `The ${copy.binary} on your PATH is ${view.system.version}.` : `No ${copy.binary} on your PATH.`}</p>
