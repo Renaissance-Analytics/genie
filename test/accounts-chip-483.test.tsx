@@ -21,7 +21,7 @@ import { control } from './helpers/control-markup.js';
 /**
  * ACCOUNTS S10 (Tynn #483): THE HEADER CHIP AND ITS POPOVER, on the same-home model (Tynn #751/#753). The chip names the
  * account signed in on the host (the one every agent of the provider uses). Its popover lists every known account: name, plan
- * (or "unknown"), a bar per window (5 h and weekly always; "unknown" when not reported), local reset times, and one click to
+ * (or "unknown"), a bar per window it reported (Tynn #1070: only those; an account never read says unknown), local reset times, and one click to
  * switch. A standing switch offer (S8) shows in the popover and on the agent rows of that provider. Fixtures name no person.
  */
 const source = (path: string) => readFileSync(join(__dirname, '..', path), 'utf8').replace(/\r\n/g, '\n');
@@ -54,10 +54,14 @@ describe('S10: the accounts a window is shown (pure)', () => {
         const bare = accountsView(KNOWN, [], { claude: A }).find((p) => p.provider === 'claude')!;
         expect(bare.accounts.find((a) => a.id === B)!.plan).toBeNull();
     });
-    it('every account has a 5 h and a weekly row: one not reported is unknown, one past its reset is Refreshed, others follow', () => {
+    it('an account has exactly the windows its reading reported (Tynn #1070): one past its reset is Refreshed, none made up', () => {
         const view = accountsView(KNOWN, [reading(A, [{ refreshed: true, window: '5h' }, live('7d opus', 40, NOW + 9 * HOUR)])], { claude: A });
-        const a = view.find((p) => p.provider === 'claude')!.accounts.find((x) => x.id === A)!;
-        expect(a.windows).toEqual([{ refreshed: true, window: '5h' }, { unknown: true, window: '7d' }, live('7d opus', 40, NOW + 9 * HOUR)]);
+        const claude = view.find((p) => p.provider === 'claude')!;
+        const a = claude.accounts.find((x) => x.id === A)!;
+        expect(a.windows).toEqual([{ refreshed: true, window: '5h' }, live('7d opus', 40, NOW + 9 * HOUR)]);
+        expect(a.read).toBe(true);
+        // B was never read: unknown, with no rows.
+        expect(claude.accounts.find((x) => x.id === B)).toMatchObject({ read: false, windows: [] });
     });
     it('CONTROL: a provider nobody has used here (no email, no reading) is left out', () => {
         expect(accountsView(KNOWN, [], { claude: A, codex: X }).map((p) => p.provider)).not.toContain('codex');
@@ -66,7 +70,7 @@ describe('S10: the accounts a window is shown (pure)', () => {
 
 const OFFER: SwitchOffer = {
     id: 'switch-offer:a:5h:1', provider: 'claude', accountId: A, label: 'Work Max', window: '5h', leftPct: 8, over: false, resetsAtMs: NOW + HOUR,
-    targets: [{ accountId: B, label: 'ada@example.invalid', room: 'unknown', leftPct: null, resetsAtMs: null }],
+    targets: [{ accountId: B, label: 'ada@example.invalid', room: 'unknown', leftPct: null, resetsAtMs: null window: null }],
 };
 const SNAPSHOT = (offers: SwitchOffer[] = []): AccountsSnapshot => ({
     providers: accountsView(KNOWN, [reading(A, [live('5h', 8, NOW + HOUR), live('7d', 60, NOW + 50 * HOUR)])], { claude: A }), offers,
@@ -100,7 +104,8 @@ describe('S10: the chip and its popover', () => {
         expect(sections[1]!.querySelector('[data-account-plan]')).toBeNull();
         expect(sections[0]!.querySelectorAll('[data-account-window]')).toHaveLength(2);
         expect(sections[0]!.querySelector('[data-account-window="5h"] [role="progressbar"]')).not.toBeNull();
-        expect(sections[1]!.querySelector('[data-account-window="5h"]')!.textContent).toContain('unknown');
+        expect(sections[1]!.querySelector('[data-account-window]')).toBeNull();
+        expect(sections[1]!.querySelector('[data-account-usage-unknown]')!.textContent).toContain('unknown');
     });
     it('reset times are shown in the local zone', () => {
         render(SNAPSHOT());

@@ -108,6 +108,8 @@ function AccountRow({ account, now, onSwitch, onAct }: { account: AccountView; n
                 </span>
             </div>
             <div className="flex flex-wrap gap-3 pl-7 text-xs text-[var(--fg-3)]">
+                {/* Tynn #1070: an account never read says so; one read lists the windows IT has, and only those. */}
+                {account.read === false ? <span data-account-usage-unknown="">Usage unknown: not read yet</span> : null}
                 {account.windows.map((w) => <span key={w.window} data-account-usage={w.window}><span className="text-[var(--fg-2)]">{w.window}</span> {usageWords(w, now)}</span>)}
             </div>
             {said ? <p role="alert" data-account-refused="" className="pl-7 text-xs text-[var(--warning)]">{said}</p> : null}

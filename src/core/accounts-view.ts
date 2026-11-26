@@ -1,5 +1,5 @@
 import type { AccountHeadroom } from './headroom-board.js';
-import { STANDARD_WINDOWS, type Headroom, type WindowReading } from './headroom.js';
+import type { Headroom, WindowReading } from './headroom.js';
 import type { SwitchOffer } from './switch-offer.js';
 import type { DesignAuthView } from './design-auth.js';
 import type { ClaudeAccountLive } from './claude-accounts.js';
@@ -8,8 +8,9 @@ import type { ClaudeAccountLive } from './claude-accounts.js';
  * THE ACCOUNTS A WINDOW IS SHOWN (Tynn #483, Accounts S10). One active account per provider is signed in on the host and every
  * agent of the provider uses it (Tynn #751/#753); Genie keeps each known account's last readings so the person can juggle
  * limits. Per provider: every known account, the active one first; its plan (the identity's, else the reading's, else
- * unknown: never a guess); and its windows, 5 h and weekly always (a window not reported is unknown; one past its reset reads
- * Refreshed), then any other window it reported. A provider nobody has used here (no account with an email or a reading) is
+ * unknown: never a guess); and its windows, EXACTLY the ones ITS OWN readings reported, in the provider's order (Tynn #1070:
+ * accounts are not one shape; one has no 5 h window, another a per-model weekly cap), one past its reset reading Refreshed. An
+ * account never read has no windows and `read: false`: its usage is unknown, never another account's. A provider nobody has used here (no account with an email or a reading) is
  * left out, so a provider the person never signed in to draws no chip. An account with no email, no reading and not signed
  * in (the book's placeholder after it was forgotten, Tynn #484) is not listed either: it is no account yet, only the place
  * the next sign-in takes, and would read as a blank row.
@@ -24,6 +25,9 @@ export interface AccountView {
     readonly email: string | null;
     readonly plan: string | null;
     readonly active: boolean;
+    /** Tynn #1070: whether any reading of THIS account is known. `false`: its usage is unknown (and `windows` is empty). */
+    readonly read: boolean;
+    /** The windows this account's own readings reported, and only those (Tynn #1070). */
     readonly windows: readonly AccountWindowRow[];
     /** Tynn #1011: a Claude account with a configuration directory of its own (switched with one click, no terminal). */
     readonly ownDirectory?: boolean;
@@ -65,13 +69,9 @@ export function accountsView(known: readonly KnownAccountRecord[], readings: rea
         if (!mine.some(listed)) continue;
         const accounts = mine.filter((a) => listed(a) || active[provider] === a.id).map((a): AccountView => {
             const r = readingOf(a.id);
-            const reported = r?.windows ?? [];
-            const windows: AccountWindowRow[] = [
-                ...STANDARD_WINDOWS.map((w): AccountWindowRow => reported.find((x) => x.window === w) ?? { unknown: true, window: w }),
-                ...reported.filter((x) => !STANDARD_WINDOWS.includes(x.window)),
-            ];
+            const windows: AccountWindowRow[] = [...(r?.windows ?? [])];
             const own = a.configDir !== undefined ? { ownDirectory: true as const, ...(a.method ? { method: a.method } : {}) } : {};
-            return { id: a.id, provider, label: a.label, email: a.identity.email, plan: a.identity.plan ?? r?.room.plan ?? null, active: active[provider] === a.id, windows, ...own, ...(live[a.id] ? { live: live[a.id]! } : {}) };
+            return { id: a.id, provider, label: a.label, email: a.identity.email, plan: a.identity.plan ?? r?.room.plan ?? null, active: active[provider] === a.id, read: r !== undefined, windows, ...own, ...(live[a.id] ? { live: live[a.id]! } : {}) };
         });
         out.push({ provider, accounts: [...accounts.filter((a) => a.active), ...accounts.filter((a) => !a.active)] });
     }

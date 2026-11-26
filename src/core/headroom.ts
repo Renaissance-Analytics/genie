@@ -228,14 +228,14 @@ export interface UnknownWindow {
     readonly unknown: true;
 }
 
-/** The windows every provider has: listed even when unreported, so a missing one is said, not silently absent. */
-export const STANDARD_WINDOWS: readonly string[] = ['5h', '7d'];
-
-/** The popover's rows: 5h and 7d always (unknown when not reported), then every other reported window in order. */
+/**
+ * The popover's rows: the windows the reading reported, in the provider's order, and no others (Tynn #1070). Accounts are not
+ * one shape: one has no 5 h window at all, another a per-model weekly cap; a 5 h row made up for one that has none read as a
+ * limit it does not have. A reading with no window list (an older shape) shows its binding window.
+ */
 export function limitRows(h: Headroom): ReadonlyArray<LimitWindow | UnknownWindow> {
-    const byName = new Map(h.windows.map((w) => [w.window, w] as const));
-    const standard = STANDARD_WINDOWS.map((name): LimitWindow | UnknownWindow => byName.get(name) ?? { window: name, unknown: true });
-    return [...standard, ...h.windows.filter((w) => !STANDARD_WINDOWS.includes(w.window))];
+    if (h.windows.length > 0) return h.windows;
+    return [{ window: h.window, usedPct: 100 - h.leftPct, leftPct: h.leftPct, resetsAtMs: h.resetsAtMs, over: h.over }];
 }
 
 /** `resets in 14m`, `resets in 2h 14m`, `resets in 3d 12h`; under a minute `resets in <1m`; past it `resets now`. */

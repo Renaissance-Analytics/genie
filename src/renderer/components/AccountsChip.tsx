@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { activeAccountOf, chooseWords, type AccountView, type AccountWindowRow, type ProviderAccountsView } from '../../core/accounts-view.js';
 import { shortDateTime } from '../../core/clock-words.js';
 import { limitLevel, resetsIn, windowWords, type LimitLevel, type WindowReading } from '../../core/headroom.js';
-import type { SwitchOffer, SwitchTarget } from '../../core/switch-offer.js';
+import { offerWords, targetWords, type SwitchOffer } from '../../core/switch-offer.js';
 import { rankSwitchNext } from '../../core/switch-next.js';
 import { DesignAuthRow } from './DesignAuthRow.js';
 import type { AccountsAction, AccountsActResult } from '../../core/account-settings.js';
@@ -52,12 +52,6 @@ function tightest(account: AccountView): LiveWindow | null {
     const live = account.windows.filter((w): w is LiveWindow => !('unknown' in w) && w.refreshed === false);
     if (live.length === 0) return null;
     return live.reduce((a, b) => ((b.over ? -1 : b.leftPct) < (a.over ? -1 : a.leftPct) ? b : a));
-}
-
-function targetWords(t: SwitchTarget): string {
-    if (t.room === 'unknown') return `${t.label} (not used yet)`;
-    if (t.room === 'reset') return `${t.label} (window reset)`;
-    return `${t.label} (${t.leftPct}% left)`;
 }
 
 export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, design, onDesignSignIn, onAccountsAct, signIns }: AccountsChipProps) {
@@ -129,7 +123,7 @@ export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, desig
                     </div>
                     {offer ? (
                         <Callout color="amber" icon={<Icon name="arrow-right-left" size="sm" />} data-switch-offer={offer.id}>
-                            <p>{offer.label}: {offer.over ? 'spent' : `${offer.leftPct}% left`} of its {windowWords(offer.window)} window.</p>
+                            <p>{offerWords(offer)}</p>
                             {offer.targets.length > 0
                                 ? <p className="text-[var(--fg-3)]">Room: {offer.targets.map(targetWords).join(', ')}</p>
                                 : <p className="text-[var(--fg-3)]">No other {name} account has room.</p>}
@@ -202,6 +196,7 @@ function ActiveAccount({ account, now, onSignIn }: { account: AccountView; now: 
             </div>
             {onSignIn ? <Button type="button" size="sm" icon="log-in" data-action="account-sign-in" className="self-start" onClick={onSignIn}>Sign in</Button> : null}
             <div className="flex flex-col gap-2.5 border-t border-[var(--border-1)] pt-3">
+                {account.read === false ? <UsageUnknown /> : null}
                 {account.windows.map((w) => <WindowRow key={w.window} w={w} now={now} />)}
             </div>
         </section>
@@ -218,6 +213,7 @@ function OtherAccount({ account, rank, now, action }: { account: AccountView; ra
                 <PlanChip plan={account.plan} />
             </div>
             {account.live ? <div className="flex flex-wrap gap-1"><LiveBadge live={account.live} /><BillingChip live={account.live} /></div> : null}
+            {account.read === false ? <UsageUnknown /> : null}
             {account.windows.map((w) => <CompactWindow key={w.window} w={w} now={now} />)}
             {action.kind === 'switch'
                 ? <Button type="button" size="xs" icon="arrow-right-left" data-action="account-switch" aria-label={`Switch to ${account.label}`} className="self-end" onClick={action.run}>Switch</Button>
@@ -271,6 +267,16 @@ function LiveBadge({ live }: { live: ClaudeAccountLive }) {
 function BillingChip({ live }: { live: ClaudeAccountLive }) {
     const words = live.billing === 'subscription' ? 'Subscription' : live.billing === 'apiUsage' ? 'API usage' : null;
     return words ? <Badge size="sm" variant="soft" color="zinc" data-account-billing="">{words}</Badge> : null;
+}
+
+/** Tynn #1070: an account with no reading of its own yet. Its usage is unknown; no other account's figures stand in for it. */
+function UsageUnknown() {
+    return (
+        <div data-account-usage-unknown="" className="flex items-center gap-2 text-[11px] text-[var(--fg-3)]">
+            <Icon name="circle-help" size="xs" />
+            <span>Usage unknown: not read yet</span>
+        </div>
+    );
 }
 
 function CompactWindow({ w, now }: { w: AccountWindowRow; now: number }) {

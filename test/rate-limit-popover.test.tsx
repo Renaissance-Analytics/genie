@@ -214,15 +214,10 @@ describe('the colour, by the sidebar dot’s rule', () => {
 });
 
 describe('a window the provider did not report', () => {
-    it('is unknown, said plainly with one icon — no bar, no number, no reset', () => {
+    it('is not listed (Tynn #1070): an account with no 5 h window has no 5 h row, never a made-up one', () => {
         render({ codex: codexWeekOnly });
         click(pill('codex'));
-        const five = row('codex', '5h')!;
-        expect(five.getAttribute('data-level')).toBe('unknown');
-        expect(five.textContent).toBe('5hunknown');
-        expect(five.querySelectorAll('[data-react-fancy-icon]').length).toBe(1);
-        expect(five.querySelectorAll('[data-provider-logo]').length).toBe(0);
-        expect(five.querySelector('[role="progressbar"]')).toBeNull();
+        expect(row('codex', '5h')).toBeNull();
         // Positive control: the reported window in the same popover has its bar and number.
         const seven = row('codex', '7d')!;
         expect(seven.querySelector('[role="progressbar"]')).not.toBeNull();

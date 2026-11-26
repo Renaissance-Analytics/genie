@@ -509,7 +509,7 @@ function Ceiling([string]$name) {
         'unit' { return 1800 }
         { $_ -in 'spawn-host', 'app-stopped' } { return 120 }
         { $_ -in 'no-pty', 'smoke', 'layout', 'local-door-break', 'local-door', 'gapp-open', 'trust-step' } { return 360 }
-        'accounts-popover' { return 300 }
+        'accounts-popover' { return 540 }
         'plan-popover' { return 480 }
         'claude-accounts' { return 300 }
         'sound-picker' { return 300 }

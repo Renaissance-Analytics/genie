@@ -1638,7 +1638,9 @@ export class SessionHost {
 
     /** Cheap, for every state change: a Claude run on another account than the active one, not already moving. */
     #awaitsMove(entry: Running): boolean {
-        if (entry.provider !== 'claude' || entry.account === undefined || entry.session.quiet !== true) return false;
+        // Quiet, or HELD ON THE LIMIT with nothing working (`limitIdle`, Tynn #1070): a run the old account refused after the
+        // switch has nothing to cut, so it moves to the new account instead of waiting out the old one's reset.
+        if (entry.provider !== 'claude' || entry.account === undefined || (entry.session.quiet !== true && !entry.session.limitIdle)) return false;
         const active = this.#activeAccount?.(entry.provider);
         if (active === null || active === undefined || claudeLaunchConfigDir(active) === (entry.launchedConfigDir ?? null)) return false;
         // Told it cannot move to this account: not asked again on every change (a switch, `accountChanged`, asks again).

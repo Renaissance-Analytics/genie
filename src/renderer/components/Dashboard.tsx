@@ -14,7 +14,7 @@ import { ProviderLogo, providerName } from './ProviderLogo.js';
 import { AccountsChip } from './AccountsChip.js';
 import type { AccountsSnapshot } from '../../core/accounts-view.js';
 import type { AccountsAction, AccountsActResult } from '../../core/account-settings.js';
-import type { SwitchOffer } from '../../core/switch-offer.js';
+import { offerWords, type SwitchOffer } from '../../core/switch-offer.js';
 import { WORKSPACE_PULSE } from './Sidebar.js';
 import { WorkspaceSwatch } from '../workspace-colors.js';
 import { agentStatusStyle } from '../agent-status-color.js';
@@ -335,8 +335,8 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
                 <ProviderLogo provider={row.provider} />
                 {switchOffer ? (
                     <Button type="button" size="xs" variant="ghost" icon="arrow-right-left" data-switch-offer-row={switchOffer.offer.id}
-                        aria-label={`${switchOffer.offer.label} is near its ${windowWords(switchOffer.offer.window)} limit: switch account`}
-                        title={`${switchOffer.offer.label}: ${switchOffer.offer.over ? 'spent' : `${switchOffer.offer.leftPct}% left`} ${windowWords(switchOffer.offer.window)}. Switch account`}
+                        aria-label={`${offerWords(switchOffer.offer)} Switch account`}
+                        title={`${offerWords(switchOffer.offer)} Switch account`}
                         className="shrink-0 px-1 text-[var(--warning)]"
                         onClick={(event) => { event.stopPropagation(); switchOffer.onSwitch(row.provider, switchOffer.offer.targets[0]?.label); }} />
                 ) : null}

@@ -914,11 +914,6 @@ export class AgentSession {
     }
 
     /**
-     * QUIET: a restart now would cut nothing. Promptable, not on a limit, and past the Cooling wait, because
-     * Claude can still open a turn of its own for a prompt it took mid-turn just after the last one ended (`#queued`).
-     * For a restart Genie chooses by itself; the person's own Restart does not ask.
-     */
-    /**
      * HELD ON THE LIMIT WITH NOTHING WORKING (the owner, 2026-11-26: switched off a spent account and the agent never moved).
      * The provider refuses this account until its reset, so a turn the limit cut has nothing left to do and what waits is held
      * for the next run: a move to another account cuts nothing. Not quiet (`quiet` is false while held), yet movable.
@@ -928,6 +923,11 @@ export class AgentSession {
         return !this.#inTurn || this.#cutByLimit || this.#limitThisTurn;
     }
 
+    /**
+     * QUIET: a restart now would cut nothing. Promptable, not on a limit, and past the Cooling wait, because
+     * Claude can still open a turn of its own for a prompt it took mid-turn just after the last one ended (`#queued`).
+     * For a restart Genie chooses by itself; the person's own Restart does not ask.
+     */
     get quiet(): boolean {
         // What waits in `#afterTurn` here is held for the next run, and a run that ends leaves it owed.
         return this.promptable && !this.#held && this.#coolingCancel === null;
@@ -2976,8 +2976,10 @@ export class AgentSession {
             if (readings.length > 0) {
                 const notice = update['notice'];
                 const said = typeof notice === 'object' && notice !== null ? (notice as Record<string, unknown>)['message'] : null;
-                this.#options.onRateLimit?.(readings, typeof said === 'string' ? said : null);
+                // Marked BEFORE the host is told (Tynn #1070): the hold it may put on this agent asks at once whether the agent
+                // can move off a refused account (`limitIdle`), and the answer depends on this turn having met the limit.
                 if (this.#inTurn && readings.some((r) => r.status !== 'allowed')) this.#limitThisTurn = true;
+                this.#options.onRateLimit?.(readings, typeof said === 'string' ? said : null);
             }
         }
 

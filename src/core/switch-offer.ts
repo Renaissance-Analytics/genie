@@ -1,5 +1,5 @@
 import type { AccountHeadroom } from './headroom-board.js';
-import type { WindowReading } from './headroom.js';
+import { windowWords, type WindowReading } from './headroom.js';
 
 /**
  * SWITCH OFFERS (Tynn #481, Accounts S8). The owner: when a limit is near, "a one-click switch offer, never automatic", and
@@ -50,9 +50,11 @@ export interface SwitchTarget {
     readonly accountId: string;
     readonly label: string;
     readonly room: TargetRoom;
-    /** Only for `reported`. */
+    /** Only for `reported`: the share left in its TIGHTEST window, the one that would stop it first (Tynn #1070). */
     readonly leftPct: number | null;
     readonly resetsAtMs: number | null;
+    /** Only for `reported`: that window (`7d`, `7d fable`), which need not be the offer's: accounts are not one shape. */
+    readonly window: string | null;
 }
 
 export interface SwitchOffer {
@@ -69,10 +71,12 @@ export interface SwitchOffer {
 }
 
 /**
- * WHO TO SUGGEST (decision 3): the provider's other known accounts whose SAME window has more room than the near one, and is
- * not near itself, best first; a window reset since its last reading counts as full. Then (the coordinator, 2026-11-16) the
- * accounts with no reading of that window, marked room unknown, in the book's order: a second account that has never been
- * active is exactly the one the person would switch to. One near or spent is never suggested.
+ * WHO TO SUGGEST (decision 3, made per account by Tynn #1070): the provider's other known accounts judged by THEIR OWN windows,
+ * whatever they are. An account has the room of its tightest live window, the one that would stop it first: one with no 5 h
+ * window is not limited by a 5 h window, and one whose per-model weekly cap is spent is near however free its week is. Those
+ * with more room than the near window and not near themselves, best first; one whose every window has reset since its last
+ * reading counts as full. Then (the coordinator, 2026-11-16) the accounts never read, marked room unknown, in the book's
+ * order: a second account that has never been active is exactly the one the person would switch to.
  */
 export function switchTargets(
     from: { provider: string; accountId: string; window: string; leftPct: number },
@@ -83,14 +87,28 @@ export function switchTargets(
     const unknown: SwitchTarget[] = [];
     for (const account of known) {
         if (account.provider !== from.provider || account.id === from.accountId) continue;
-        const r = readings.find((x) => x.provider === from.provider && x.accountId === account.id)?.windows.find((w) => w.window === from.window);
-        if (!r) { unknown.push({ accountId: account.id, label: account.label, room: 'unknown', leftPct: null, resetsAtMs: null }); continue; }
-        if (r.refreshed) { withRoom.push({ accountId: account.id, label: account.label, room: 'reset', leftPct: null, resetsAtMs: null }); continue; }
-        if (nearLimit(r) || r.leftPct <= from.leftPct) continue;
-        withRoom.push({ accountId: account.id, label: account.label, room: 'reported', leftPct: r.leftPct, resetsAtMs: r.resetsAtMs });
+        const windows = readings.find((x) => x.provider === from.provider && x.accountId === account.id)?.windows ?? [];
+        if (windows.length === 0) { unknown.push({ accountId: account.id, label: account.label, room: 'unknown', leftPct: null, resetsAtMs: null, window: null }); continue; }
+        const live = windows.filter((w): w is Extract<WindowReading, { refreshed: false }> => !w.refreshed);
+        if (live.length === 0) { withRoom.push({ accountId: account.id, label: account.label, room: 'reset', leftPct: null, resetsAtMs: null, window: null }); continue; }
+        const tight = live.reduce((a, b) => ((b.over ? -1 : b.leftPct) < (a.over ? -1 : a.leftPct) ? b : a));
+        if (nearLimit(tight) || tight.leftPct <= from.leftPct) continue;
+        withRoom.push({ accountId: account.id, label: account.label, room: 'reported', leftPct: tight.leftPct, resetsAtMs: tight.resetsAtMs, window: tight.window });
     }
     const room = (t: SwitchTarget): number => t.leftPct ?? 101;
     return [...withRoom.sort((a, b) => room(b) - room(a) || a.label.localeCompare(b.label)), ...unknown];
+}
+
+/** The offer in words: `Account 1: 8% left in the 5-hour window.`, `Account 1: spent this week.` (Tynn #1070). */
+export function offerWords(offer: Pick<SwitchOffer, 'label' | 'window' | 'leftPct' | 'over'>): string {
+    return `${offer.label}: ${offer.over ? 'spent' : `${offer.leftPct}% left`} ${windowWords(offer.window)}.`;
+}
+
+/** A suggestion in words, with the window that would stop it first: `Account 2 (95% left this week)`. */
+export function targetWords(t: SwitchTarget): string {
+    if (t.room === 'unknown') return `${t.label} (room not known yet)`;
+    if (t.room === 'reset') return `${t.label} (its limits have reset)`;
+    return `${t.label} (${t.leftPct}% left${t.window ? ` ${windowWords(t.window)}` : ''})`;
 }
 
 /** What has been offered: for each `account|window`, the reset time of the window it was offered in. Plain JSON. */
@@ -230,8 +248,18 @@ export class SwitchOfferService {
         this.#persist();
         const readings = this.#o.readings();
         const known = this.#o.known();
+        // THE OFFER SAYS WHAT THE BAR SAYS (Tynn #1070): its account's figure for that window is read again at each list, not
+        // kept from when it was made. A window read Refreshed since has its room back: the offer goes.
+        const current = (p: SwitchOffer): SwitchOffer | null => {
+            const w = readings.find((r) => r.provider === p.provider && r.accountId === p.accountId)?.windows.find((x) => x.window === p.window);
+            if (!w) return p;
+            if (w.refreshed) return null;
+            if (Math.abs(w.resetsAtMs - p.resetsAtMs) >= SAME_WINDOW_MS) return p;
+            return { ...p, leftPct: w.leftPct, over: w.over };
+        };
         return this.#pending
             .filter((p) => active[p.provider] === p.accountId && offerWatches(choice, p.window))
+            .map(current).filter((p): p is SwitchOffer => p !== null)
             .map((p) => ({ ...p, targets: switchTargets(p, readings, known) }));
     }
 

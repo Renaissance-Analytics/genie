@@ -58,7 +58,7 @@ const windowOf = (account: AccountView, window: string) => account.windows.find(
 const figures = (value: unknown): number[] => JSON.stringify(value).match(/"leftPct":(\d+)/g)?.map((m) => Number(m.split(':')[1])) ?? [];
 
 describe('after a sign-in switches the active account, the Dashboard shows the NEW account, never the old one', () => {
-    it('the owner’s case: A has 5h at 8%; a sign-in to B; B reports only 7d at 96% while Genie reads who is signed in → 5h unknown, 7d 96%, never 8%', () => {
+    it('the owner’s case: A has 5h at 8%; a sign-in to B; B reports only 7d at 96% while Genie reads who is signed in → no 5h row, 7d 96%, never 8%', () => {
         const host = new Host();
         host.reading(A_5H_8());
         host.signedIn();
@@ -69,7 +69,7 @@ describe('after a sign-in switches the active account, the Dashboard shows the N
         host.readEnd();
         const shown = host.activeAccount();
         expect(shown.id).toBe(B);
-        expect(windowOf(shown, '5h')).toEqual({ unknown: true, window: '5h' });
+        expect(windowOf(shown, '5h')).toBeUndefined(); // B has no 5 h reading: no 5 h row at all (Tynn #1070)
         expect(windowOf(shown, '7d')).toMatchObject({ refreshed: false, leftPct: 96 });
         expect(figures(host.header())).not.toContain(8);
         expect(rateLimitAlert(host.header(), host.now)).toBeNull();
@@ -84,7 +84,7 @@ describe('after a sign-in switches the active account, the Dashboard shows the N
         expect(host.readEnd()).toBe(true);
         const shown = host.activeAccount();
         expect(shown.id).toBe(B);
-        expect(shown.windows.every((w) => 'unknown' in w)).toBe(true);
+        expect(shown).toMatchObject({ read: false, windows: [] }); // usage unknown, no rows made up (Tynn #1070)
         expect(host.header()['claude']).toBeUndefined();
         expect(rateLimitAlert(host.header(), host.now)).toBeNull();
     });
@@ -98,7 +98,7 @@ describe('after a sign-in switches the active account, the Dashboard shows the N
         host.now = T0 + 2 * MIN;
         host.reading(B_7D_96());
         const shown = host.activeAccount();
-        expect(windowOf(shown, '5h')).toEqual({ unknown: true, window: '5h' });
+        expect(windowOf(shown, '5h')).toBeUndefined(); // B has no 5 h reading: no 5 h row at all (Tynn #1070)
         expect(windowOf(shown, '7d')).toMatchObject({ refreshed: false, leftPct: 96 });
         expect(figures(host.header())).not.toContain(8);
     });
@@ -111,7 +111,7 @@ describe('after a sign-in switches the active account, the Dashboard shows the N
         expect(board.accounts(T0 + 2)[0]!.room.windows.map((w) => w.window)).toEqual(['7d']);
     });
 
-    it('CONTROL: B’s reading arriving AFTER the identity read is B’s: 5h unknown, 7d 96%', () => {
+    it('CONTROL: B’s reading arriving AFTER the identity read is B’s: no 5h row, 7d 96%', () => {
         const host = new Host();
         host.reading(A_5H_8());
         host.signedIn();
@@ -121,7 +121,7 @@ describe('after a sign-in switches the active account, the Dashboard shows the N
         host.now = T0 + 2 * MIN;
         host.reading(B_7D_96());
         const shown = host.activeAccount();
-        expect(windowOf(shown, '5h')).toEqual({ unknown: true, window: '5h' });
+        expect(windowOf(shown, '5h')).toBeUndefined(); // B has no 5 h reading: no 5 h row at all (Tynn #1070)
         expect(windowOf(shown, '7d')).toMatchObject({ refreshed: false, leftPct: 96 });
         expect(figures(host.header())).not.toContain(8);
     });

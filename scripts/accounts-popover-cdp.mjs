@@ -91,7 +91,8 @@ const board = [
 ];
 mkdirSync(join(home, '.genie', 'runtime'), { recursive: true });
 writeFileSync(join(home, '.genie', 'runtime', 'accounts.json'), JSON.stringify(book, null, 2));
-writeFileSync(join(home, '.genie', 'headroom-board.json'), JSON.stringify(board));
+// The board as the host saves it since Tynn #1070 (a bare list is from before and is not brought back).
+writeFileSync(join(home, '.genie', 'headroom-board.json'), JSON.stringify({ format: 2, readings: board }));
 
 function launch() {
     const out = openSync(log, 'a');
@@ -287,8 +288,93 @@ try {
         const hostLog = join(home, '.genie', 'logs', 'genie-host.log');
         if (existsSync(hostLog)) console.log(`  genie-host.log (accounts):\n    ${readFileSync(hostLog, 'utf8').split(/\r?\n/).filter((l) => /account|identity|headroom/i.test(l)).slice(-20).join('\n    ')}`);
     }
-    try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 }); } catch { /* the runner cleans up */ }
 }
+
+/*
+ * EVERY ACCOUNT'S OWN WINDOWS (Tynn #1070; the owner: "ALL FUCKING ACCOUNTS ARE SHARING THE SAME FUCKING 5 HR RATE counter").
+ * The home seeded again, then the app started again, twice: Main active (5 h spent, its week at 64 %, a switch offer standing),
+ * then Weekly active (an account with NO 5 h window, its week at 95 % and a per-model weekly cap at half). A third account was
+ * never read. Each phase draws the popover and Settings → Providers and takes their pictures for the owner's review.
+ */
+const MAIN = hex('1'), WEEKLY = hex('2'), NEVER = hex('3');
+const book1070 = (active) => ({
+    version: 1,
+    active: { claude: active },
+    accounts: [
+        account(MAIN, 'Main', 'main@example.invalid', 'max 20x'),
+        account(WEEKLY, 'Weekly', 'weekly@example.invalid', 'max 5x'),
+        account(NEVER, 'Never read', 'never@example.invalid', 'pro'),
+        account('account_legacy_codex', 'Account 1', null, null, true, 'codex'),
+    ],
+});
+const main5h = win('5h', 0, 72 * 60_000);
+const board1070 = { format: 2, readings: [
+    reading(MAIN, [main5h, win('7d', 64, 116 * HOUR)]),
+    reading(WEEKLY, [win('7d', 95, 140 * HOUR), win('7d fable', 50, 140 * HOUR)]),
+] };
+// A standing offer made when Main had 4 % left: it must say the bar's figure now (0 %), not the one it was made with.
+const offer1070 = { offered: { [`${MAIN}|5h`]: main5h.resetsAtMs }, pending: [{ id: `switch-offer:${MAIN}:5h:${main5h.resetsAtMs}`, provider: 'claude', accountId: MAIN, label: 'Main', window: '5h', leftPct: 4, over: false, resetsAtMs: main5h.resetsAtMs }] };
+function seed1070(active) {
+    writeFileSync(join(home, '.genie', 'runtime', 'accounts.json'), JSON.stringify(book1070(active), null, 2));
+    writeFileSync(join(home, '.genie', 'headroom-board.json'), JSON.stringify(board1070));
+    writeFileSync(join(home, '.genie', 'switch-offers.json'), JSON.stringify(offer1070));
+}
+async function shoot(c, name) {
+    try {
+        const shot = await c.send('Page.captureScreenshot', { format: 'png' });
+        if (shot.result?.data) { mkdirSync('ci-out', { recursive: true }); writeFileSync(join('ci-out', name), Buffer.from(shot.result.data, 'base64')); console.log(`  screenshot: ci-out/${name}`); }
+    } catch (error) { console.log(`  screenshot ${name}: none (${String(error)})`); }
+}
+const windowsIn = async (c, id) => JSON.parse(await c.evaluate(`JSON.stringify([...document.querySelectorAll(${JSON.stringify(`${POP} [data-account="${id}"] [data-account-window]`)})].map((w) => w.getAttribute('data-account-window')))`));
+const escape = async (c) => { for (const type of ['keyDown', 'keyUp']) await c.send('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }); };
+async function phase1070(active, tag) {
+    console.log(`\n#1070 — ${tag}\n`);
+    seed1070(active);
+    const app2 = launch();
+    let c = null;
+    try {
+        c = await Cdp.connect();
+        check(await waitFor(c, `Boolean(document.querySelector(${JSON.stringify(CHIP)}))`, 60_000), `${tag} 1. the app is up, with the Claude chip`);
+        const reach = `(() => { const el = document.querySelector(${JSON.stringify(CHIP)}); if (!el) return false; const r = el.getBoundingClientRect(); const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return Boolean(at && at.closest('[data-account-chip]')); })()`;
+        for (let i = 0; i < 3 && !(await c.evaluate(reach)); i++) { await escape(c); await sleep(500); }
+        check(await click(c, CHIP), `${tag} 2. a click on the chip`);
+        check(await waitFor(c, `(() => { const r = document.querySelector(${JSON.stringify(POP)})?.getBoundingClientRect(); return Boolean(r && r.left >= 0 && r.top >= 0); })()`, 8_000), `${tag} 3. opens the popover, on screen`);
+        const main = await windowsIn(c, MAIN), weekly = await windowsIn(c, WEEKLY), never = await windowsIn(c, NEVER);
+        check(JSON.stringify(main) === JSON.stringify(['5h', '7d']), `${tag} 4. Main shows ITS windows: 5h and 7d`, JSON.stringify(main));
+        check(JSON.stringify(weekly) === JSON.stringify(['7d', '7d fable']), `${tag} 5. Weekly shows its week and its per-model weekly cap, and NO 5h bar`, JSON.stringify(weekly));
+        const pct = JSON.parse(await c.evaluate(`JSON.stringify(Object.fromEntries([...document.querySelectorAll(${JSON.stringify(`${POP} [data-account] [data-account-window]`)})].map((w) => [w.closest('[data-account]').getAttribute('data-account').slice(-1) + ' ' + w.getAttribute('data-account-window'), ((w.textContent || '').match(/\\d+%|over/) || [''])[0]])))`));
+        check(pct['1 5h'] === '0%' && pct['1 7d'] === '64%' && pct['2 7d'] === '95%' && pct['2 7d fable'] === '50%', `${tag} 6. different accounts, different figures`, JSON.stringify(pct));
+        const unknown = await c.evaluate(`document.querySelector(${JSON.stringify(`${POP} [data-account="${NEVER}"] [data-account-usage-unknown]`)})?.textContent ?? null`);
+        check(never.length === 0 && /unknown/.test(String(unknown)), `${tag} 7. the account never read says unknown, with no bars`, `${JSON.stringify(never)} ${unknown}`);
+        const callout = await c.evaluate(`document.querySelector(${JSON.stringify(`${POP} [data-switch-offer]`)})?.textContent ?? null`);
+        if (active === MAIN) {
+            check(String(callout).includes('Main: 0% left in the 5-hour window.') && !/window window|of its/.test(String(callout)), `${tag} 8. the switch offer says the bar's figure, in words that read`, String(callout));
+            check(String(callout).includes('Weekly (50% left in the 7d fable window)') && String(callout).includes('Never read (room not known yet)'), `${tag} 9. its suggestions name each account's own tightest window`, String(callout));
+        } else {
+            check(callout === null, `${tag} 8. no offer stands for Weekly, whose windows have room`, String(callout));
+        }
+        await shoot(c, `accounts-1070-popover-${tag}.png`);
+        // Settings → Providers → Accounts: the same accounts, each with its own windows.
+        await escape(c);
+        await c.evaluate(`window.location.hash = '#genie://settings'; true`);
+        if (await waitFor(c, `Boolean(document.querySelector('[data-settings-nav="providers"]'))`, 15_000)) await click(c, '[data-settings-nav="providers"]');
+        const listed = await waitFor(c, `Boolean(document.querySelector('[data-settings-account="${WEEKLY}"]'))`, 15_000);
+        check(listed, `${tag} 10. Settings → Providers lists the accounts`);
+        if (listed) {
+            await c.evaluate(`document.querySelector('[data-settings-account="${MAIN}"]').scrollIntoView({ block: 'start' }); true`);
+            await sleep(300);
+            const rows = await c.evaluate(`JSON.stringify(Object.fromEntries([${JSON.stringify(MAIN)}, ${JSON.stringify(WEEKLY)}, ${JSON.stringify(NEVER)}].map((id) => { const r = document.querySelector('[data-settings-account="' + id + '"]'); return [id.slice(-1), r ? [...r.querySelectorAll('[data-account-usage]')].map((u) => u.getAttribute('data-account-usage')).concat(r.querySelector('[data-account-usage-unknown]') ? ['unknown'] : []) : null]; })))`);
+            check(rows === JSON.stringify({ 1: ['5h', '7d'], 2: ['7d', '7d fable'], 3: ['unknown'] }), `${tag} 11. there too: Main 5h+7d, Weekly 7d+7d fable, Never read unknown`, rows);
+            await shoot(c, `accounts-1070-settings-${tag}.png`);
+        }
+    } catch (error) {
+        check(false, `${tag}: the phase did not finish`, error instanceof Error ? error.message : String(error));
+    } finally {
+        if (c) c.close();
+        await stop(app2);
+    }
+}
+try { await phase1070(MAIN, 'main-active'); await phase1070(WEEKLY, 'weekly-active'); } finally { try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 }); } catch { /* the runner cleans up */ } }
 
 if (failures.length > 0) {
     console.log(`\nACCOUNTS POPOVER FAILED — ${failures.length} check(s):`);

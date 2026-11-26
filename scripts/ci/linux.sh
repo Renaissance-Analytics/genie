@@ -536,7 +536,7 @@ row_ui-lag() { need_app && timeout 420 node scripts/ui-lag-cdp.mjs --budget; }
 # The Dashboard's plan popover, capped to the screen and scrolling, on a 77-step plan from a stub agent (Tynn #1021).
 row_plan-popover() { need_build && need_display && on_display timeout 420 node scripts/plan-popover-cdp.mjs; }
 row_trust-step() { need_build && need_display && on_display timeout 300 node scripts/trust-step-cdp.mjs; }
-row_accounts-popover() { need_build && need_display && on_display timeout 240 node scripts/accounts-popover-cdp.mjs; }
+row_accounts-popover() { need_build && need_display && on_display timeout 480 node scripts/accounts-popover-cdp.mjs; }
 # Claude accounts of their own (Tynn #1011): live state, one-click switch, add, sign in, in the real app (a stand-in CLI).
 row_claude-accounts() { need_build && need_display && on_display timeout 240 node scripts/claude-accounts-cdp.mjs; }
 row_sound-picker() { need_build && need_display && on_display timeout 240 node scripts/sound-picker-cdp.mjs; }
@@ -697,7 +697,7 @@ ceiling() {
         bundles|sounds|spawn-host) echo 60 ;;
         seed) echo 300 ;;
         no-pty|smoke|layout|local-door-break|local-door|gapp-open|trust-step) echo 360 ;;
-        accounts-popover) echo 300 ;;
+        accounts-popover) echo 540 ;;
         plan-popover) echo 480 ;;
         claude-accounts) echo 300 ;;
         sound-picker|question-maximize) echo 300 ;;
