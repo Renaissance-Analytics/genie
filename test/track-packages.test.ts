@@ -131,7 +131,6 @@ describe('the client and the browser packages', () => {
             .toEqual(['genie-client.exe', 'resources/app.asar']);
     });
 });
-});
 
 describe('the host package: P6-1\'s copy, made at build time', () => {
     async function inputs(platform: 'win32' | 'linux') {
