@@ -26,7 +26,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFile
 import { delimiter, join, resolve } from 'node:path';
 import { isHostWaitWindow } from './cdp-main-window.mjs';
 import { closeWhatsNew } from './cdp-whats-new.mjs';
-import { attach, Cdp, check, failures, hostPid, killHard, launch, makeHome, readOr, sleep, step, until, WIN } from './crash-cdp-lib.mjs';
+import { attach, Cdp, check, failures, hostPid, killHard, launch, makeHome, readOr, sleep, step, until, whyOf, WIN } from './crash-cdp-lib.mjs';
 
 if (process.env.GENIE_TEST_MACHINE !== '1') {
     console.error('cli-drain-real-cdp installs Claude Code and launches Genie: a test machine only (GENIE_TEST_MACHINE=1)');
@@ -179,8 +179,11 @@ async function partDrain() {
     const program = stubCli(h.root);
     const state = join(h.root, 'stub-bin', 'state');
     writeFileSync(join(state, 'update-ms'), '8000');
-    // On PATH as `claude` too: the Toolchain row reads the `claude` on PATH, the agents and the health check the configured one.
-    h.env = { ...h.env, GENIE2_CLAUDE_BINARY: program, PATH: `${join(h.root, 'stub-bin')}${delimiter}${h.env.PATH ?? h.env.Path ?? ''}` };
+    // FOUND ON PATH as `claude`, as a person's install is, never configured (GENIE2_CLAUDE_BINARY): the health check does not
+    // run a configured program's --version (provider-health.ts), so neither the start nor the Toolchain row would know it.
+    void program;
+    h.env = { ...h.env, PATH: `${join(h.root, 'stub-bin')}${delimiter}${h.env.PATH ?? h.env.Path ?? ''}` };
+    delete h.env.GENIE2_CLAUDE_BINARY;
     seedAgent(h, { interrupted: false });
     const app = launch(h, { port: PORT, inspect: INSPECT, label: 'manual' });
     cleanups.push(() => { keepLogs(h, 'manual'); return stopGenie(h, app); });
@@ -198,7 +201,10 @@ async function partDrain() {
     // The CLI is spawned for a turn: the first one the stub holds open for 12 s, so the drain has a turn to wait for.
     const prompted = await cdp.evaluate(`(window.genieTest ?? window.genie).prompt(${JSON.stringify(AGENT)}, 'Work on it for a while.').then((r) => JSON.stringify(r))`, 30_000);
     const live = await until(() => events(state).some((l) => / session start/.test(l)), 60_000);
-    check(running === true && Boolean(live), '4a. CONTROL: the agent runs, and a session of the stub runs for its turn', `running ${running}; prompt ${prompted}; ${events(state).filter((l) => / session start/.test(l)).length} session(s)`);
+    if (!check(running === true && Boolean(live), '4a. CONTROL: the agent runs, and a session of the stub runs for its turn', `running ${running}; prompt ${prompted}; ${events(state).filter((l) => / session start/.test(l)).length} session(s)`)) {
+        console.log(`  agent: ${await whyOf(cdp, AGENT)}`);
+        console.log(`  stub: ${events(state).join(' | ').slice(0, 1200)}`);
+    }
     await cdp.evaluate(`window.location.hash = '#genie://toolchain'; true`);
     await until(() => cdp.evaluate(`Boolean(document.querySelector('li[data-tool="claude-code"]'))`), 120_000);
     const mark = events(state).length;
