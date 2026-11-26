@@ -103,7 +103,8 @@ describe('running them', () => {
     it('THE TIME LIMIT: a task that never ends does not hold the host; at the limit it resolves, says so and clears progress; its late end is logged', async () => {
         vi.useFakeTimers();
         let finish!: (words: string) => void;
-        const r = rig([{ label: 'Updating Claude Code 2.1.0 → 2.2.0', run: () => new Promise<string>((ok) => { finish = ok; }) }]);
+        // It says a step of its own first: the limit still names the TASK, not that step (the host row, 2026-11-26).
+        const r = rig([{ label: 'Updating Claude Code 2.1.0 → 2.2.0', run: (say) => { say('Running Claude Code’s installer'); return new Promise<string>((ok) => { finish = ok; }); } }]);
         let settled = false;
         const pending = runStartupUpdates(r.ports, 30_000).then((report) => { settled = true; return report; });
         await vi.advanceTimersByTimeAsync(29_999);
