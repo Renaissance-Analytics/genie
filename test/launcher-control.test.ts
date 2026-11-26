@@ -7,7 +7,7 @@ import { callLauncher, launcherReachable, type LauncherWire } from '../src/main/
  * THE LAUNCHER'S CONTROL WIRE, FROM TYPESCRIPT (Tynn #1058 L4). The client asks the launcher to start the host (the
  * directory's Start: `launcher.ensureHost`), and the host asks it to start the Genie browser (`launcher.startBrowser`).
  * The wire is native/launcher/src/control.rs: `<runtime>/launcher.json` names the endpoint, `<runtime>/launcher.token` is
- * the token, the hello carries an offer on track `launcher`, then one call and its result.
+ * the token, the hello carries the caller's offer with `launcher@1`, then one call and its result.
  */
 const runtime = join('home', '.genie', 'runtime');
 
@@ -44,24 +44,26 @@ const files = (over: Record<string, string | null> = {}) => (file: string): stri
 const welcome = { kind: 'welcome', track: 'launcher', build: '2026.11.26-1', schema: '2026.11.25', minSchema: '2026.10.26', capabilities: ['launcher@1'] };
 
 describe('one call on the launcher\'s wire', () => {
-    it('hello with the token and an offer on track launcher, then the call; the result is the answer, and the link is closed', async () => {
+    it('hello with the token and the caller's offer (its track, launcher@1), then the call; the result is the answer, and the link is closed', async () => {
         const fake = fakeLauncher((f) => (f.kind === 'hello' ? welcome : f.kind === 'call' ? { kind: 'result', id: f.id, ok: true, value: { how: 'started', pid: 9, build: '2026.11.26-1' } } : null));
         const endpoints: string[] = [];
-        const wire: LauncherWire = { runtimeDir: runtime, readFile: files(), alive: (pid) => pid === 4242, connectTo: async (e) => { endpoints.push(e); return fake.transport; } };
+        const wire: LauncherWire = { runtimeDir: runtime, track: 'client', readFile: files(), alive: (pid) => pid === 4242, connectTo: async (e) => { endpoints.push(e); return fake.transport; } };
         await expect(callLauncher(wire, 'launcher.ensureHost')).resolves.toEqual({ ok: true, value: { how: 'started', pid: 9, build: '2026.11.26-1' } });
         expect(endpoints).toEqual(['\\\\.\\pipe\\genie-launcher-S-1-5-21']);
-        expect(fake.sent[0]).toMatchObject({ kind: 'hello', auth: { kind: 'token', token: 'tok' }, track: 'launcher' });
+        // The caller's own offer (the shared table's "launcher to host on the control wire"): its track, and launcher@1.
+        expect(fake.sent[0]).toMatchObject({ kind: 'hello', auth: { kind: 'token', token: 'tok' }, track: 'client' });
         expect(typeof fake.sent[0]!.schema).toBe('string');
+        expect(fake.sent[0]!.capabilities).toContain('launcher@1');
         expect(fake.sent[1]).toMatchObject({ kind: 'call', method: 'launcher.ensureHost', args: [] });
         expect(fake.closed()).toBe(true);
     });
 
     it('a refusal or a failed result is the launcher\'s own words', async () => {
         const refusing = fakeLauncher(() => ({ kind: 'refused', reason: 'this launcher answers only its own user\'s programs (wrong token)' }));
-        await expect(callLauncher({ runtimeDir: runtime, readFile: files(), alive: () => true, connectTo: async () => refusing.transport }, 'launcher.startBrowser'))
+        await expect(callLauncher({ runtimeDir: runtime, track: 'host', readFile: files(), alive: () => true, connectTo: async () => refusing.transport }, 'launcher.startBrowser'))
             .resolves.toEqual({ ok: false, reason: 'this launcher answers only its own user\'s programs (wrong token)' });
         const failing = fakeLauncher((f) => (f.kind === 'hello' ? welcome : { kind: 'result', id: f.id, ok: false, reason: 'No browser is installed on this computer.' }));
-        await expect(callLauncher({ runtimeDir: runtime, readFile: files(), alive: () => true, connectTo: async () => failing.transport }, 'launcher.startBrowser'))
+        await expect(callLauncher({ runtimeDir: runtime, track: 'host', readFile: files(), alive: () => true, connectTo: async () => failing.transport }, 'launcher.startBrowser'))
             .resolves.toEqual({ ok: false, reason: 'No browser is installed on this computer.' });
     });
 
@@ -69,9 +71,9 @@ describe('one call on the launcher\'s wire', () => {
         let dialled = 0;
         const connectTo = async (): Promise<LineTransport> => { dialled += 1; throw new Error('never'); };
         for (const wire of [
-            { runtimeDir: runtime, readFile: files({ 'launcher.json': null }), alive: () => true, connectTo },
-            { runtimeDir: runtime, readFile: files(), alive: () => false, connectTo },
-            { runtimeDir: runtime, readFile: files({ 'launcher.token': null }), alive: () => true, connectTo },
+            { runtimeDir: runtime, track: 'host', readFile: files({ 'launcher.json': null }), alive: () => true, connectTo },
+            { runtimeDir: runtime, track: 'host', readFile: files(), alive: () => false, connectTo },
+            { runtimeDir: runtime, track: 'host', readFile: files({ 'launcher.token': null }), alive: () => true, connectTo },
         ] satisfies LauncherWire[]) {
             expect(launcherReachable(wire)).toBe(false);
             await expect(callLauncher(wire, 'launcher.status')).resolves.toMatchObject({ ok: false, code: 'no-launcher' });
@@ -81,7 +83,7 @@ describe('one call on the launcher\'s wire', () => {
 
     it('a launcher that never answers is given up on in bounded time, in words', async () => {
         const silent = fakeLauncher(() => null);
-        await expect(callLauncher({ runtimeDir: runtime, readFile: files(), alive: () => true, connectTo: async () => silent.transport, timeoutMs: 20 }, 'launcher.status'))
+        await expect(callLauncher({ runtimeDir: runtime, track: 'host', readFile: files(), alive: () => true, connectTo: async () => silent.transport, timeoutMs: 20 }, 'launcher.status'))
             .resolves.toMatchObject({ ok: false, reason: expect.stringMatching(/did not answer/) });
         expect(silent.closed()).toBe(true);
     });
