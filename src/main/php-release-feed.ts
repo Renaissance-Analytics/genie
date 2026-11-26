@@ -80,7 +80,10 @@ export class PhpReleaseFeed {
         const windowsText = await windowsP;
         const windows = windowsText === null ? null : parseWindowsReleaseLines(windowsText);
         const candidates = [...new Set([...(supported ?? []), ...PHP_RECIPES.map((r) => r.version.split('.').slice(0, 2).join('.')), ...Object.keys(windows ?? {})])];
-        const lineTexts = await Promise.all(candidates.map(async (line) => [line, await get(phpNetLineJson(line))] as const));
+        // One at a time: a handful of small requests, and the host's event loop is never handed several TLS handshakes and
+        // parses at once (the ui-lag row measures the host's gaps, and this runs while people work).
+        const lineTexts: Array<readonly [string, string | null]> = [];
+        for (const line of candidates) lineTexts.push([line, await get(phpNetLineJson(line))] as const);
         const lines = Object.fromEntries(lineTexts.map(([line, text]) => [line, text === null ? null : parsePhpNetLine(text, line)]));
         const windowsToolsets = windowsText === null ? null : parseWindowsToolsets(windowsText);
         const built = buildPhpCatalog({ platform: this.#p.platform, at: this.#p.now(), windows, windowsToolsets, supported, lines });
