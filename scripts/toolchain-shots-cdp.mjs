@@ -213,27 +213,38 @@ try {
     const card = `[data-tool-card=${JSON.stringify(INSTALL)}]`;
     // Through the action the card's button sends (the photographs need the state, not a test of the click; the 2026-11-26
     // BEFORE run's click left PHP uninstalled with nothing said). The outcome and any refusal are printed.
-    const version = await cdp.evaluate(`document.querySelector('${card} [data-card-primary="install"]')?.getAttribute('data-version') ?? null`);
-    const kind = { php: 'toolchain.installPhp', node: 'toolchain.installNode', python: 'toolchain.installPython', go: 'toolchain.installGo' }[INSTALL];
-    if (version && kind) {
-        note(`installing ${INSTALL} ${version}`);
-        const outcome = await cdp.evaluate(`(window.genieTest ?? window.genie).features.act(${JSON.stringify({ kind, version, consent: true })}).then((r) => JSON.stringify(r ?? null)).catch((e) => 'threw: ' + String(e))`);
-        note(`install answered: ${String(outcome).slice(0, 300)}`);
-        const done = await waitFor(cdp, `(() => { const c = document.querySelector('${card}'); return Boolean(c && !c.querySelector('[data-card-progress]') && c.getAttribute('data-card-state') !== 'missing' && !c.querySelector('[data-card-primary="install"]')); })()`, 420_000, 2000);
-        const refusals = await cdp.evaluate(`(window.genieTest ?? window.genie).features.snapshot().then((d) => JSON.stringify({ refusals: d?.toolchain?.refusals ?? [], result: d?.toolchain?.result ?? null, defaults: d?.toolchain?.defaults ?? null }))`);
-        note(`${INSTALL} ${done ? 'installed' : 'NOT installed in 7 min'}: ${String(refusals).slice(0, 400)}`);
-        if (!done) problems.push(`${INSTALL} install did not finish`);
-        // Made the default, as the owner's PHP was.
-        const lang = INSTALL;
-        await cdp.evaluate(`(window.genieTest ?? window.genie).features.act(${JSON.stringify({ kind: 'toolchain.setDefault', lang, version })}).then(() => true).catch(() => false)`);
-    } else {
-        note(`no install offered on the ${INSTALL} card: ${await cdp.evaluate(`document.querySelector('${card}')?.innerText.replace(/\\s+/g, ' ') ?? 'no card'`)}`);
-    }
-    if (OS === 'windows' && (await cdp.evaluate(`Boolean(document.querySelector('[data-machine-path-apply]'))`))) {
-        if (await click(cdp, '[data-machine-path-apply]')) {
-            const on = await waitFor(cdp, `Boolean(document.querySelector('[data-machine-path="on"]'))`, 60_000, 1000);
-            note(on ? "Genie's defaults are on in every terminal" : 'the machine PATH did not turn on in 60 s');
+    // The action answers when the install has ended. A version the release offers can be refused (2026-11-26: Windows'
+    // "8.5.12" is no longer windows.php.net's current 8.5 build, so it is refused unverified), so the next is tried.
+    const bridge = '(window.genieTest ?? window.genie).features';
+    const KINDS = { php: 'toolchain.installPhp', node: 'toolchain.installNode', python: 'toolchain.installPython', go: 'toolchain.installGo' };
+    // When no version of the first language installs (2026-11-26: every PHP version beta.66 offers on Windows is refused as
+    // no longer windows.php.net's current build), Node, so a Genie-managed default is still in the photographs.
+    let installed = null;
+    for (const lang of [...new Set([INSTALL, 'node'])]) {
+        const kind = KINDS[lang];
+        const offered = JSON.parse(await cdp.evaluate(`${bridge}.snapshot().then((d) => JSON.stringify((d?.toolchain?.[${JSON.stringify(lang)}]?.available ?? []).filter((a) => !a.installed).map((a) => a.version)))`));
+        for (const version of kind ? offered.slice(0, 2) : []) {
+            note(`installing ${lang} ${version}`);
+            await cdp.evaluate(`${bridge}.act(${JSON.stringify({ kind, version, consent: true })}).then(() => true).catch((e) => String(e))`);
+            await waitFor(cdp, `${bridge}.snapshot().then((d) => !d?.toolchain?.busy)`, 420_000, 2000);
+            const after = JSON.parse(await cdp.evaluate(`${bridge}.snapshot().then((d) => JSON.stringify({ managed: (d?.toolchain?.[${JSON.stringify(lang)}]?.managed ?? []).map((m) => m.version), refusals: d?.toolchain?.refusals ?? [] }))`));
+            if (after.managed.includes(version)) { installed = { lang, version }; break; }
+            note(`${lang} ${version} was not installed: ${JSON.stringify(after.refusals.filter((r) => r.version === version)).slice(0, 300)}`);
         }
+        if (installed) break;
+        problems.push(`no ${lang} version could be installed (offered: ${offered.join(', ') || 'none'})`);
+    }
+    if (installed) {
+        // The default, as the owner's PHP was.
+        await cdp.evaluate(`${bridge}.act(${JSON.stringify({ kind: 'toolchain.setDefault', lang: installed.lang, version: installed.version })}).then(() => true).catch(() => false)`);
+        note(`${installed.lang} ${installed.version} installed and made the default`);
+    }
+    const PANEL = installed?.lang ?? INSTALL;
+    if (OS === 'windows') {
+        // Genie's versions outside Genie too, as the owner had it (his screenshot's "Undo" state).
+        await cdp.evaluate(`${bridge}.act(${JSON.stringify({ kind: 'toolchain.machinePath', apply: true, consent: true })}).then(() => true).catch(() => false)`);
+        const on = await waitFor(cdp, `Boolean(document.querySelector('[data-machine-path="on"]'))`, 60_000, 1000);
+        note(on ? "Genie's versions are on outside Genie too" : 'the machine PATH did not turn on in 60 s');
     }
     await sleep(2000);
 
@@ -250,8 +261,8 @@ try {
         if (!closed) note('the panel does not close: the "grid" photograph has it open');
         await measureAndShoot(cdp, `${PREFIX}-${OS}-${w}x${h}-grid.png`);
         shots++;
-        if (await click(cdp, `[data-select-tool=${JSON.stringify(INSTALL)}]`)) {
-            await waitFor(cdp, `Boolean(document.querySelector('[data-toolchain-panel=${JSON.stringify(INSTALL)}]'))`, 10_000);
+        if (await click(cdp, `[data-select-tool=${JSON.stringify(PANEL)}]`)) {
+            await waitFor(cdp, `Boolean(document.querySelector('[data-toolchain-panel=${JSON.stringify(PANEL)}]'))`, 10_000);
         }
         await measureAndShoot(cdp, `${PREFIX}-${OS}-${w}x${h}-panel.png`);
         shots++;

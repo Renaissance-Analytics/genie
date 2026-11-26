@@ -195,10 +195,10 @@ describe('#1062 — a refusal in plain words, its detail behind "Details", its w
 });
 
 describe('#1062 — the problems collapse to one row on a narrow page', () => {
-    it('a summary row ("2 need you") with a button that shows them; the rows and their Repair stay in the page', () => {
+    it('a summary row ("3 need you": two CLIs and Docker) with a button that shows them; the rows and their Repair stay in the page', () => {
         const html = render({ ...OWNER, tools: [...OWNER.tools, t('claude-code', '2.1.0', 'broken', { problem: 'npm skipped its setup step' }), t('codex', '0.71.0', 'broken', { problem: 'no codex program' })] });
-        expect(html).toMatch(/data-problems-summary="2"[^>]*>[^]*?2 need you/);
-        expect(html).toMatch(/<button[^>]*data-problems-toggle=""[^>]*aria-expanded="false"/);
-        expect((html.match(/data-problem-action=/g) ?? []).length).toBe(2);
+        expect(html).toMatch(/data-problems-summary="3"[^>]*>[^]*?3 need you/);
+        expect(html).toMatch(/<button[^>]*data-problems-toggle=""[^>]*aria-expanded="false"|<button[^>]*aria-expanded="false"[^>]*data-problems-toggle=""/);
+        expect((html.match(/data-problem-action=/g) ?? []).length).toBe(3);
     });
 });

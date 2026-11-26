@@ -190,6 +190,21 @@ export function installNote(preview: InstallPreview | undefined): 'asks once' | 
     return preview.elevated ? 'asks once' : null;
 }
 
+/**
+ * A REFUSAL, IN PLAIN WORDS (Tynn #1062: the engine's sentence in a red banner read as an error dumped on the person). A
+ * short line; the version to install instead when the refusal names one; the full sentence as `details`, behind a
+ * "Details" disclosure. A reason short enough to read is said as it is.
+ */
+export function plainRefusal(reason: string): { text: string; install?: string; details?: string } {
+    const stale = /current (\w[\w.]*) [\d.]+ build is ([\d.]+), not ([\d.]+)/i.exec(reason);
+    if (stale) return { text: `${stale[1]} ${stale[3]} isn't available any more.`, install: stale[2]!, details: reason };
+    const missing = /^(\w[\w.]*) ([\d.]+) is not a version Genie manages here/i.exec(reason);
+    if (missing) return { text: `${missing[1]} ${missing[2]} isn't installed.`, details: reason };
+    if (reason.length <= 90) return { text: reason };
+    const first = reason.split(/;\s/)[0]!.replace(/[.\s]+$/, '');
+    return { text: `${first}.`, details: reason };
+}
+
 export interface ToolchainProblem {
     /** Stable: the tool, or `<lang>:<version>` for one installed version. */
     readonly key: string;
