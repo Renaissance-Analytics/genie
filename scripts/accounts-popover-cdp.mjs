@@ -300,12 +300,13 @@ try {
  * then Weekly active (an account with NO 5 h window, its week at 95 % and a per-model weekly cap at half). A third account was
  * never read. Each phase draws the popover and Settings → Providers and takes their pictures for the owner's review.
  */
-const MAIN = hex('1'), WEEKLY = hex('2'), NEVER = hex('3');
+// Main is the default home's account, as the first seed's active one is: a book with no default-home Claude account showed no window.
+const MAIN = 'account_legacy_claude', WEEKLY = hex('2'), NEVER = hex('3');
 const book1070 = (active) => ({
     version: 1,
     active: { claude: active },
     accounts: [
-        account(MAIN, 'Main', 'main@example.invalid', 'max 20x'),
+        account(MAIN, 'Main', 'main@example.invalid', 'max 20x', true),
         account(WEEKLY, 'Weekly', 'weekly@example.invalid', 'max 5x'),
         account(NEVER, 'Never read', 'never@example.invalid', 'pro'),
         account('account_legacy_codex', 'Account 1', null, null, true, 'codex'),
@@ -350,8 +351,8 @@ async function phase1070(active, tag) {
         const main = await windowsIn(c, MAIN), weekly = await windowsIn(c, WEEKLY), never = await windowsIn(c, NEVER);
         check(JSON.stringify(main) === JSON.stringify(['5h', '7d']), `${tag} 4. Main shows ITS windows: 5h and 7d`, JSON.stringify(main));
         check(JSON.stringify(weekly) === JSON.stringify(['7d', '7d fable']), `${tag} 5. Weekly shows its week and its per-model weekly cap, and NO 5h bar`, JSON.stringify(weekly));
-        const pct = JSON.parse(await c.evaluate(`JSON.stringify(Object.fromEntries([...document.querySelectorAll(${JSON.stringify(`${POP} [data-account] [data-account-window]`)})].map((w) => [w.closest('[data-account]').getAttribute('data-account').slice(-1) + ' ' + w.getAttribute('data-account-window'), ((w.textContent || '').match(/\\d+%|over/) || [''])[0]])))`));
-        check(pct['1 5h'] === '0%' && pct['1 7d'] === '64%' && pct['2 7d'] === '95%' && pct['2 7d fable'] === '50%', `${tag} 6. different accounts, different figures`, JSON.stringify(pct));
+        const pct = JSON.parse(await c.evaluate(`JSON.stringify(Object.fromEntries([...document.querySelectorAll(${JSON.stringify(`${POP} [data-account] [data-account-window]`)})].map((w) => [w.closest('[data-account]').getAttribute('data-account') + ' ' + w.getAttribute('data-account-window'), ((w.textContent || '').match(/\\d+%|over/) || [''])[0]])))`));
+        check(pct[`${MAIN} 5h`] === '0%' && pct[`${MAIN} 7d`] === '64%' && pct[`${WEEKLY} 7d`] === '95%' && pct[`${WEEKLY} 7d fable`] === '50%', `${tag} 6. different accounts, different figures`, JSON.stringify(pct));
         const unknown = await c.evaluate(`document.querySelector(${JSON.stringify(`${POP} [data-account="${NEVER}"] [data-account-usage-unknown]`)})?.textContent ?? null`);
         check(never.length === 0 && /unknown/.test(String(unknown)), `${tag} 7. the account never read says unknown, with no bars`, `${JSON.stringify(never)} ${unknown}`);
         const callout = await c.evaluate(`document.querySelector(${JSON.stringify(`${POP} [data-switch-offer]`)})?.textContent ?? null`);
@@ -371,13 +372,15 @@ async function phase1070(active, tag) {
         if (listed) {
             await c.evaluate(`document.querySelector('[data-settings-account="${MAIN}"]').scrollIntoView({ block: 'start' }); true`);
             await sleep(300);
-            const rows = await c.evaluate(`JSON.stringify(Object.fromEntries([${JSON.stringify(MAIN)}, ${JSON.stringify(WEEKLY)}, ${JSON.stringify(NEVER)}].map((id) => { const r = document.querySelector('[data-settings-account="' + id + '"]'); return [id.slice(-1), r ? [...r.querySelectorAll('[data-account-usage]')].map((u) => u.getAttribute('data-account-usage')).concat(r.querySelector('[data-account-usage-unknown]') ? ['unknown'] : []) : null]; })))`);
-            check(rows === JSON.stringify({ 1: ['5h', '7d'], 2: ['7d', '7d fable'], 3: ['unknown'] }), `${tag} 11. there too: Main 5h+7d, Weekly 7d+7d fable, Never read unknown`, rows);
+            const rows = await c.evaluate(`JSON.stringify(Object.fromEntries([${JSON.stringify(MAIN)}, ${JSON.stringify(WEEKLY)}, ${JSON.stringify(NEVER)}].map((id) => { const r = document.querySelector('[data-settings-account="' + id + '"]'); return [id, r ?[...r.querySelectorAll('[data-account-usage]')].map((u) => u.getAttribute('data-account-usage')).concat(r.querySelector('[data-account-usage-unknown]') ? ['unknown'] : []) : null]; })))`);
+            check(rows === JSON.stringify({ [MAIN]: ['5h', '7d'], [WEEKLY]: ['7d', '7d fable'], [NEVER]: ['unknown'] }), `${tag} 11. there too: Main 5h+7d, Weekly 7d+7d fable, Never read unknown`, rows);
             await shoot(c, `accounts-1070-settings-${tag}.png`);
         }
     } catch (error) {
         check(false, `${tag}: the phase did not finish`, error instanceof Error ? error.message : String(error));
         if (existsSync(log)) console.log(readFileSync(log, 'utf8').slice(-2000));
+        const phaseHostLog = join(home, '.genie', 'logs', 'genie-host.log');
+        if (existsSync(phaseHostLog)) console.log(`  genie-host.log:\n    ${readFileSync(phaseHostLog, 'utf8').split(/\r?\n/).slice(-30).join('\n    ')}`);
     } finally {
         if (c) c.close();
         await stop(app2);
