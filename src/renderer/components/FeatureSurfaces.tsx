@@ -1200,7 +1200,7 @@ export function ToolchainCheckBar({ tc, busy, onAction }: { tc: ToolchainData | 
     const at = tc?.checkedAt ?? null;
     return (
         <>
-            <span data-toolchain-checked={at ?? ''} className="ml-auto hidden whitespace-nowrap text-xs text-[var(--fg-3)] @min-[440px]:inline" {...(at !== null ? { title: new Date(at).toLocaleString() } : {})}>
+            <span data-toolchain-checked={at ?? ''} className="ml-auto hidden w-28 truncate whitespace-nowrap text-right text-xs text-[var(--fg-3)] @min-[440px]:inline" {...(at !== null ? { title: new Date(at).toLocaleString() } : {})}>
                 {at === null ? 'Not checked yet' : `Checked ${agoText(at, Date.now())}`}
             </span>
             {running ? (
@@ -1301,15 +1301,19 @@ export function ToolchainSurface({ data, onAction: act, selected: initial }: Sur
         <div data-surface="toolchain" className="@container flex h-full min-h-0 flex-1 flex-col">
             <div data-toolchain-toolbar="" className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-2 border-b border-[var(--border-1)] px-4 py-2.5 @min-[440px]:gap-x-3 @min-[440px]:px-6">
                 {tc !== null ? <ToolchainTallies tally={tally} /> : null}
-                <ToolchainCheckBar tc={tc} busy={busy !== null} onAction={onAction} />
-                <Button size="xs" type="button" labelClassName="contents" className="shrink-0 gap-1.5 whitespace-nowrap" aria-label="Check and repair" title="Check and repair" disabled={busy !== null} onClick={() => onAction({ kind: 'toolchain.repair' })}>
-                    <Icon name="stethoscope" size="xs" /><span className="hidden @min-[440px]:inline">Check and repair</span>
-                </Button>
-                {fixable.length > 0 ? (
-                    <Button size="sm" type="button" color="blue" labelClassName="contents" className="shrink-0 gap-1.5 whitespace-nowrap" data-action="toolchain-fix-all" disabled={running || fix !== null} loading={fix !== null} onClick={() => setFix({ queue: fixable, waiting: false, refusals: refusals.length })}>
-                        <Icon name="wrench" size="xs" />Fix {fixable.length} {fixable.length === 1 ? 'problem' : 'problems'}
+                {/* ONE GROUP, KEPT TOGETHER ON THE RIGHT (Tynn #1066): "Checked just now" growing into "Checked 8m ago" wrapped
+                    "Fix 2 problems" under the counts on one page and not the next. The group never wraps inside itself. */}
+                <div data-toolchain-actions="" className="ml-auto flex flex-nowrap shrink-0 items-center gap-x-2 @min-[440px]:gap-x-3">
+                    <ToolchainCheckBar tc={tc} busy={busy !== null} onAction={onAction} />
+                    <Button size="xs" type="button" labelClassName="contents" className="shrink-0 gap-1.5 whitespace-nowrap" aria-label="Check and repair" title="Check and repair" disabled={busy !== null} onClick={() => onAction({ kind: 'toolchain.repair' })}>
+                        <Icon name="stethoscope" size="xs" /><span className="hidden @min-[440px]:inline">Check and repair</span>
                     </Button>
-                ) : null}
+                    {fixable.length > 0 ? (
+                        <Button size="sm" type="button" color="blue" labelClassName="contents" className="shrink-0 gap-1.5 whitespace-nowrap" data-action="toolchain-fix-all" disabled={running || fix !== null} loading={fix !== null} title={`Fixes: ${problems.filter((p) => p.action !== null).map((p) => p.title).join('; ')}`} onClick={() => setFix({ queue: fixable, waiting: false, refusals: refusals.length })}>
+                            <Icon name="wrench" size="xs" />Fix {fixable.length} {fixable.length === 1 ? 'problem' : 'problems'}
+                        </Button>
+                    ) : null}
+                </div>
             </div>
             {tc === null ? (
                 <Skeletons rows={6} />
@@ -1355,6 +1359,8 @@ export function ToolchainSurface({ data, onAction: act, selected: initial }: Sur
                     </div>
                     {selectedCard ? (
                         <aside data-toolchain-aside="" className="flex min-h-0 w-full flex-col overflow-y-auto bg-[var(--bg-1)] @min-[860px]:w-[340px] @min-[860px]:shrink-0 @min-[860px]:border-l @min-[860px]:border-[var(--border-1)]">
+                            {/* Tynn #1066: where the cards are hidden by the panel, what "need you" counts is still named here. */}
+                            {problems.length > 0 ? <div data-toolchain-aside-problems="" className="pb-1 @min-[860px]:hidden"><ProblemsStrip problems={problems} busy={running} onAction={onAction} onOpen={setChosen} /></div> : null}
                             <ToolPanel card={selectedCard} tc={tc} busy={busy !== null} check={selectedCard.lang ? checkRows[selectedCard.lang] : undefined} onAction={onAction} onClose={() => setChosen(null)} />
                         </aside>
                     ) : null}

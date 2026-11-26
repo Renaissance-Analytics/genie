@@ -260,6 +260,23 @@ async function cardRun(cdp) {
         const offered = await cdp.evaluate(`document.querySelector('${PANEL} [data-php-install]')?.getAttribute('data-php-install') ?? null`);
         next = offered && !asked.includes(offered) ? offered : null;
     }
+    // THE HEADER, at the two widths people use (Tynn #1066 review): the controls in one place, and what "need you" counts
+    // named on this page while a tool's panel is open.
+    for (const [w, h] of [[1600, 900], [1280, 800]]) {
+        await cdp.send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false });
+        await sleep(1000);
+        await openPhpPanel(cdp);
+        await cdp.evaluate(`document.querySelector('[data-toolchain-toolbar]')?.scrollIntoView({ block: 'start' }); true`);
+        await sleep(600);
+        const header = await cdp.evaluate(`JSON.stringify((() => {
+            const box = (el) => { if (!el) return null; const r = el.getBoundingClientRect(); return [r.left, r.top, r.width, r.height].map(Math.round); };
+            return { toolbar: box(document.querySelector('[data-toolchain-toolbar]')), fix: box(document.querySelector('[data-action="toolchain-fix-all"]')), tallies: box(document.querySelector('[data-toolchain-tallies]')),
+                problemsBesidePanel: document.querySelector('[data-toolchain-aside-problems]')?.innerText.replace(/\\s+/g, ' ').slice(0, 300) ?? null };
+        })())`);
+        note(`MEASURE header ${w}x${h} ${header}`);
+        await shot(cdp, `${OS}-header-${w}x${h}.png`);
+        taken++;
+    }
     const lines = new Set(asked.map((v) => v.split('.').slice(0, 2).join('.')));
     note(`installed from the card and the panel: ${asked.join(', ')} — lines ${[...lines].join(', ')}`);
     if (lines.size < 4) problems.push(`only ${lines.size} PHP lines were installed (${asked.join(', ')}); php.net supports at least 8.2–8.5`);
