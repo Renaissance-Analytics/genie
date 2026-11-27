@@ -1,4 +1,4 @@
-//! THE KEYS A MANIFEST IS CHECKED WITH. The public keys built into the launcher (GENIE_MANIFEST_PUBLIC_KEYS at build
+//! THE KEYS A MANIFEST IS CHECKED WITH. Genie's release key (RELEASE_PUBLIC_KEY, always), the public keys built into the launcher (GENIE_MANIFEST_PUBLIC_KEYS at build
 //! time, comma-separated, from the protected release environment), plus every `nextKey` a trusted manifest has named
 //! (rotation without a launcher update), kept in `<code root>/trusted-keys.json`. Under the `test-keys` feature only
 //! (cargo test), GENIE_LAUNCHER_TEST_PUBLIC_KEY adds a throwaway key; a release build never reads it.
@@ -8,6 +8,12 @@ use crate::manifest::{parse_public_key, Manifest};
 use ed25519_dalek::VerifyingKey;
 
 pub const TRUSTED_KEYS_FILE: &str = "trusted-keys.json";
+
+/// Genie's release key (Tynn #1058 L8): the public half of the `release` environment's GENIE_MANIFEST_SIGNING_KEY on
+/// Renaissance-Analytics/genie, which the owner made on 2026-11-27 (its variable GENIE_MANIFEST_PUBLIC_KEY). Every launcher
+/// trusts it, whoever built it, so the stable (and dev) releases verify everywhere; release.yml refuses to sign with any
+/// other key. Test runs add a throwaway key of their own through GENIE_MANIFEST_PUBLIC_KEYS; a rotation is a `nextKey`.
+pub const RELEASE_PUBLIC_KEY: &str = "ydpbhCd7vI9op9SIft6OaN3A8n9aMXjETzBjXRG/49s=";
 
 const BUILT_IN: Option<&str> = option_env!("GENIE_MANIFEST_PUBLIC_KEYS");
 
@@ -19,7 +25,8 @@ fn learned(roots: &Roots) -> Vec<String> {
 }
 
 pub fn trusted_keys(roots: &Roots) -> Vec<VerifyingKey> {
-    let mut texts: Vec<String> = BUILT_IN.unwrap_or("").split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect();
+    let mut texts: Vec<String> = vec![RELEASE_PUBLIC_KEY.to_string()];
+    texts.extend(BUILT_IN.unwrap_or("").split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string));
     texts.extend(learned(roots));
     #[cfg(feature = "test-keys")]
     {
