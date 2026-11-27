@@ -134,6 +134,8 @@ try {
         await sleep(400);
     };
     const chatText = () => text(CHAT);
+    // The thread at its end before a shot: the bar's progress and results are at the bottom (Jump to latest when not there).
+    const toEnd = async () => { await press(`${CHAT} [data-chat-jump]`); await sleep(400); };
     await page.evaluate(`window.location.hash = '#genie://agent/${atlas.id}?tab=stream'; true`);
     await until('atlas with its composer', () => page.evaluate(`Boolean(document.querySelector(${q(FIELD)}))`), 60_000);
 
@@ -218,11 +220,12 @@ try {
     check('L4e', await press(`${CHAT} [data-action="send-all"]`), 'Send all now takes a click');
     const progress = await maybe('the progress', () => text(`${CHAT} [data-send-all-progress="running"]`), 10_000);
     check('L4f', /Sending \d of 2…/.test(progress ?? ''), 'it says how far it is', progress);
-    if (progress) await shot('07-sending');
+    if (progress) { await toEnd(); await shot('07-sending'); }
     // atlas starts again, still held by Roomy's refusal: both handed over and WAITING — said so at the bar, never "Sent".
     const done = await maybe('the results', () => page.evaluate(`(() => { const r = [...document.querySelectorAll(${q(`${CHAT} [data-send-all-result]`)})]; return r.length === 2 ? r.map((e) => [e.getAttribute('data-outcome'), e.textContent]) : null; })()`), 90_000);
     check('L4g', Array.isArray(done) && done.every(([o]) => o === 'waiting' || o === 'sent'), "each message's result at the bar, as the chat has it (held: waiting)", done);
     check('L4g2', !/Not delivered/.test((await chatText()) ?? ''), 'neither is "Not delivered" any more');
+    await toEnd();
     await shot('08-send-all-results');
     // The person: Roomy has room again, so Resume now. Both go, and the bar says Sent.
     await maybe('Resume now', () => page.evaluate(`Boolean(document.querySelector(${q(`${CHAT} [data-action="resume-limit"]`)}))`), 30_000);
@@ -231,6 +234,7 @@ try {
     check('L4i', Boolean(both), 'atlas received both, on Roomy');
     const sentNow = await maybe('both sent', () => page.evaluate(`(() => { const r = [...document.querySelectorAll(${q(`${CHAT} [data-send-all-result]`)})]; return r.length === 2 && r.every((e) => e.getAttribute('data-outcome') === 'sent') ? r.map((e) => e.textContent) : null; })()`), 30_000);
     check('L4j', Boolean(sentNow), 'the bar now says Sent for each', sentNow);
+    await toEnd();
     await shot('09-send-all-delivered');
 
     // L5: the setting.

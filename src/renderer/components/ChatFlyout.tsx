@@ -756,7 +756,7 @@ function ChatFlyoutBody({
 
             {/* THE CONTEXT LINE: what the agent is doing, in the board's words. Absent until read — never "Idle" as a guess.
                 While a turn runs that can be stopped, `Stop this turn` sits at its end: with the turn, not under Send. */}
-            {thread?.context || thread?.account || thread?.activeOut || onStopTurn || onResumeLimit || onProviderLogin || onAccountRetry || onDesignLogin ? (
+            {thread?.context || thread?.account || onStopTurn || onResumeLimit || onProviderLogin || onAccountRetry || onDesignLogin ? (
                 <div data-chat-context={thread?.context?.tone ?? 'ok'} {...(thread?.context?.title ? { title: thread.context.title } : {})} className={`flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-1.5 text-[12px] ${CONTEXT_TONE[thread?.context?.tone ?? 'ok']}`}>
                     {thread?.context?.retryAt !== undefined ? <RetryCountdown at={thread.context.retryAt} /> : <ChatPlanLine text={thread?.context?.text ?? 'Working'} plan={thread?.context?.planView} />}
                     {thread?.account ? (
@@ -764,23 +764,6 @@ function ChatFlyoutBody({
                         <span data-chat-account="" className={`shrink-0 truncate ${thread.account.movesTo || thread.account.stays ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}`}
                             title={thread.account.stays ? `It stays on ${thread.account.label}: ${thread.account.stays}` : thread.account.movesTo ? `Still running on ${thread.account.label} until its current work is idle; then it continues on ${thread.account.movesTo}` : `Running on ${thread.account.label}`}>
                             {thread.account.stays ? `· stays on ${thread.account.label}: ${thread.account.stays}` : thread.account.movesTo ? `· on ${thread.account.label} until idle, then ${thread.account.movesTo}` : `· on ${thread.account.label}`}
-                        </span>
-                    ) : null}
-                    {thread?.activeOut ? (
-                        // THE ACTIVE ACCOUNT RAN OUT (Tynn #1089): which has room, and under Ask me the one click to switch to it.
-                        <span data-chat-active-out="" className="flex min-w-0 items-center gap-2 text-[var(--warning)]">
-                            <span className="truncate">{thread.activeOut.words}</span>
-                            {thread.activeOut.switchTo && onSwitchAccount ? (
-                                <Button size="xs"
-                                    type="button"
-                                    data-action="switch-account"
-                                    title={`Make ${thread.activeOut.switchTo.label} the active account: every agent continues on it, on its own conversation`}
-                                    onClick={() => onSwitchAccount(thread.activeOut!.switchTo!.id)}
-                                    className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--warning)] bg-[var(--warning)]/10 px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--warning)]/20"
-                                >
-                                    {`Switch to ${thread.activeOut.switchTo.label}`}
-                                </Button>
-                            ) : null}
                         </span>
                     ) : null}
                     {thread?.account?.movesTo && onMoveNow ? (
@@ -838,6 +821,24 @@ function ChatFlyoutBody({
                             className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--bg-2)]"
                         >
                             Resume now
+                        </Button>
+                    ) : null}
+                </div>
+            ) : null}
+            {thread?.activeOut ? (
+                // THE ACTIVE ACCOUNT RAN OUT (Tynn #1089): a row of its own under the context line, the words whole (squeezed into
+                // that line it read "Spent is out…"), and under Ask me the one click to switch.
+                <div data-chat-active-out="row" role="status" className="flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] bg-[var(--warning)]/10 px-4 py-1.5 text-[12px] text-[var(--warning)]">
+                    <span className="min-w-0 flex-1">{thread.activeOut.words}</span>
+                    {thread.activeOut.switchTo && onSwitchAccount ? (
+                        <Button size="xs"
+                            type="button"
+                            data-action="switch-account"
+                            title={`Make ${thread.activeOut.switchTo.label} the active account: every agent continues on it, on its own conversation`}
+                            onClick={() => onSwitchAccount(thread.activeOut!.switchTo!.id)}
+                            className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--warning)] bg-[var(--warning)]/10 px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--warning)]/20"
+                        >
+                            {`Switch to ${thread.activeOut.switchTo.label}`}
                         </Button>
                     ) : null}
                 </div>
