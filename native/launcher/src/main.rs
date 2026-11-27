@@ -47,6 +47,9 @@ fn main() -> ExitCode {
         Some(t) => t,
         None => return fail("an argument is not valid Unicode"),
     };
+    if shown_to_a_person(text.first().map(String::as_str)) {
+        release_own_console();
+    }
     let roots = match Roots::from_env() {
         Ok(r) => r,
         Err(why) => return fail(&why),
@@ -182,6 +185,27 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Some(other) => fail(&format!("unknown command '{other}' (install, status, ensure-host, stop-host, uninstall, version, --doctor, serve, or none to open Genie)")),
+    }
+}
+
+/// The modes a person sees (Genie opened, the logon run, the resident launcher, the setup window, the doctor, the
+/// migration's card), as against the command line's (status, install, version, ...).
+fn shown_to_a_person(first: Option<&str>) -> bool {
+    matches!(first, None | Some("--updated" | "--logon" | "serve" | "--hidden" | "setup" | "--doctor" | "moving-card"))
+}
+
+/// THE LAUNCHER IS A CONSOLE PROGRAM (it is also the command line, and genie-launch.exe's modes): started from a
+/// shortcut, the logon entry or the installer, Windows gives it a console window of its own, which a person saw behind
+/// the migration's card (run 1127-223352-5d8720). In the modes a person sees it lets go of that console when it is the
+/// console's only process; one it shares (a terminal it was typed into) is kept. Nothing elsewhere.
+fn release_own_console() {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::System::Console::{FreeConsole, GetConsoleProcessList};
+        let mut pids = [0u32; 4];
+        if GetConsoleProcessList(pids.as_mut_ptr(), pids.len() as u32) == 1 {
+            FreeConsole();
+        }
     }
 }
 
