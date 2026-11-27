@@ -291,6 +291,8 @@ async function cleanup(why) {
         for (const pid of installedClientPids) endPid(pid);
     }
     await feed?.close();
+    // The code root this row installed (hundreds of MB) goes once nothing of the run runs from it; the logs stay for the report.
+    try { rmSync(CODE_ROOT, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 }); console.log(`  removed ${CODE_ROOT}`); } catch (e) { console.log(`  could not remove ${CODE_ROOT}: ${e.message}`); }
 }
 function finish() {
     if (run.failures.length) {

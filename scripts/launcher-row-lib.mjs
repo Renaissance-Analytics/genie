@@ -76,7 +76,11 @@ export function testMachineOrRefuse(allowVar) {
  * shim that reads the real home. A seed that fails is "cannot run here", said with its words.
  */
 export function ownHome(prefix) {
-    const root = mkdtempSync(join(tmpdir(), prefix));
+    // On the work tree's disk, never the system's temp folder: each home holds a whole code root (hundreds of MB), and the
+    // Linux image's /tmp has a quota (run 1127-141104-e4b35f: "Disk quota exceeded" for every row after the first).
+    const homes = process.env.LAUNCHER_ROW_HOMES || resolve('.row-homes');
+    mkdirSync(homes, { recursive: true });
+    const root = mkdtempSync(join(homes, prefix));
     const env = { HOME: root, USERPROFILE: root, APPDATA: join(root, 'AppData', 'Roaming'), LOCALAPPDATA: join(root, 'AppData', 'Local'), XDG_CONFIG_HOME: join(root, '.config'), XDG_DATA_HOME: join(root, '.local', 'share') };
     for (const dir of [env.APPDATA, env.LOCALAPPDATA, env.XDG_CONFIG_HOME, env.XDG_DATA_HOME]) mkdirSync(dir, { recursive: true });
     Object.assign(process.env, env);
