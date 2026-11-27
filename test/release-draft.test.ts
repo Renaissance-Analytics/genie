@@ -252,9 +252,9 @@ describe('the release workflow publishes each TRACK as its own draft', () => {
         expect(s).toMatch(/needs:\s*\[tracks-guard, tracks-linux, tracks-windows\]/);
         expect(s).toMatch(/GENIE_MANIFEST_SIGNING_KEY:\s*\$\{\{\s*secrets\.GENIE_MANIFEST_SIGNING_KEY\s*\}\}/);
         expect(s).toMatch(/GENIE_MANIFEST_PUBLIC_KEY:\s*\$\{\{\s*vars\.GENIE_MANIFEST_PUBLIC_KEY\s*\}\}/);
-        // The key is never echoed and never written to a file.
-        expect(s).not.toMatch(/(echo|printf|cat)[^\n]*GENIE_MANIFEST_SIGNING_KEY/);
-        expect(s).not.toMatch(/GENIE_MANIFEST_SIGNING_KEY[^\n]*>/);
+        // The key's VALUE is never echoed and never written to a file (the refusals name the secret, never print it).
+        expect(s).not.toMatch(/(echo|printf|cat)[^\n]*\$\{?GENIE_MANIFEST_SIGNING_KEY/);
+        expect(s).not.toMatch(/\$\{?GENIE_MANIFEST_SIGNING_KEY\}?"?\s*>/);
     });
 
     it('with no key or no public key, tracks-sign stops before it signs or uploads anything, and says so plainly', () => {
