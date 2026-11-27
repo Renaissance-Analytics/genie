@@ -869,10 +869,21 @@ pub fn self_update(ctx: &Arc<Context>, build: &str) {
         program
     };
     let put_back = |st_before: &Option<state::TrackState>| {
+        // The old program back over the new one (a rename replaces it). Windows may hold the image of a process it has just
+        // ended for a moment after it has gone, so the rename is tried again for up to 10 s, and a failure is said.
         #[cfg(windows)]
         {
-            let _ = std::fs::remove_file(&exe);
-            let _ = std::fs::rename(&stale, &exe);
+            let t = std::time::Instant::now();
+            loop {
+                match std::fs::rename(&stale, &exe) {
+                    Ok(()) => break,
+                    Err(e) if t.elapsed() >= std::time::Duration::from_secs(10) => {
+                        eprintln!("genie: the old launcher could not be put back at {}: {e}", exe.display());
+                        break;
+                    }
+                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(200)),
+                }
+            }
         }
         #[cfg(unix)]
         if let Some(prev) = st_before.as_ref().and_then(|t| t.current.clone()) {
