@@ -89,7 +89,20 @@ sleep 3
 [ ! -e "$A/.genie/runtime/host.json" ] || fail 'A wrote a host.json'
 [ ! -e "$A/.genie/host" ] || fail 'A made a host copy'
 [ -z "$(hosts_of "$ACODE")" ] && [ "$(pgrep -x genie-host | wc -l)" = "$hosts_before" ] || fail 'a genie-host started for A'
-for c in $(clients_of "$ACODE"); do for k in $(pgrep -P "$c" || true); do [[ "$(readlink "/proc/$k/exe" 2>/dev/null)" == "$ACODE"/client/* ]] || fail "A's client started $(readlink "/proc/$k/exe") (pid $k)"; done; done
+# NO HOST AND NOTHING RUN AS ONE: every process under A's client, said with its command line. The client's own renderers
+# and what the OS toolkit runs for a window (GTK's sandboxed image loaders, bwrap, seen in gate 1127-042835-66f1c2) are
+# not Genie's; a genie-host, a node, anything run as Node, or any other program of A's code root is a failure.
+under() { local k; for k in $(pgrep -P "$1" || true); do echo "$k"; under "$k"; done; }
+for c in $(clients_of "$ACODE"); do
+    for k in $(under "$c"); do
+        exe="$(readlink "/proc/$k/exe" 2>/dev/null)"; cmd="$(tr '\0' ' ' <"/proc/$k/cmdline" 2>/dev/null | cut -c1-200)"
+        echo "A's client $c -> $k $exe: $cmd"
+        [[ "$exe" == "$ACODE"/client/* ]] && continue
+        case "$(basename "$exe")" in genie-host|node|nodejs) fail "A's client started $exe (pid $k)";; esac
+        [[ "$exe" == "$ACODE"/* ]] && fail "A's client started a program of its code root: $exe (pid $k)"
+        tr '\0' '\n' <"/proc/$k/environ" 2>/dev/null | grep -qx 'ELECTRON_RUN_AS_NODE=1' && fail "A's client started $exe as Node (pid $k)"
+    done
+done
 echo 'A: no host.json, no host copy, no genie-host, no child process but its own'
 stop_clients "$ACODE"
 
