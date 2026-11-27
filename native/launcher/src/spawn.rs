@@ -15,7 +15,7 @@ pub fn start_detached(program: &Program, args: &[String], env: &[(String, String
 
 /// Detached, with its windows shown as it shows them (the client).
 /// What an AppImage's runtime (and electron-updater's AppImage install) set: the bridge AppImage's alone (L9).
-pub const APPIMAGE_ENV: [&str; 6] = ["APPIMAGE", "APPDIR", "ARGV0", "OWD", "APPIMAGE_SILENT_INSTALL", "APPIMAGE_EXIT_AFTER_INSTALL"];
+pub const APPIMAGE_ENV: [&str; 7] = ["APPIMAGE", "APPDIR", "ARGV0", "OWD", "APPIMAGE_SILENT_INSTALL", "APPIMAGE_EXIT_AFTER_INSTALL", "APPIMAGE_EXTRACT_AND_RUN"];
 
 pub fn start_window(program: &Program, args: &[String], env: &[(String, String)], log: &Path) -> Result<u32, String> {
     start(program, args, env, log, false)
