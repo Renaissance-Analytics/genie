@@ -545,7 +545,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             }
             case 'agents.restart':
                 if (typeof args[0] !== 'string' || (args[1] !== 'graceful' && args[1] !== 'fresh')) return { ok: false, reason: 'a restart names an agent and a kind: graceful or fresh' };
-                return deps.agentOps.restart(args[0], args[1], args[2] === undefined ? undefined : startWhyOf(args[2]));
+                // A reason only when the caller gave one: the person's own Restart passes two arguments, as it always did.
+                return args[2] === undefined ? deps.agentOps.restart(args[0], args[1]) : deps.agentOps.restart(args[0], args[1], startWhyOf(args[2]));
             case 'agents.previewDelete':
                 if (typeof args[0] !== 'string' || (args[1] !== 'unmount' && args[1] !== 'delete')) return { ok: false, reason: 'a delete names an agent and an outcome: unmount or delete' };
                 return deps.agentOps.previewDelete(args[0], args[1], Array.isArray(args[2]) ? args[2].map(String) : []);
