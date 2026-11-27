@@ -282,3 +282,40 @@ describe('the host says when an agent is held on the limit, or let go', () => {
         }
     });
 });
+
+describe('what a stopped run wrote last reaches the window', () => {
+    it('the ledger read the moment the run stopped is read again once its last rows are written (the kept messages read "Not delivered", with Send all now)', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'genie-1089-stale-'));
+        let running = false;
+        const events: { e: DriverEvents | null } = { e: null };
+        const driverFor: DriverFor = () => ({ events: ev }) => { events.e = ev; return { start: () => { running = true; }, prompt: () => {}, cancel: () => Promise.resolve(), kill: () => { running = false; }, get running() { return running; }, get cliSessionId() { return THREAD; } } as SessionDriver; };
+        const tree: ProcessTree = { snapshot: () => [{ pid: process.pid, ppid: 1, started: 1, name: 'genie-test' }], killTree: () => ({ killed: 0, refused: false }) };
+        const store = openDurableStore(sessionsDir(dir));
+        const host = new SessionHost({ userData: dir, driverFor, processTree: tree, stopGraceMs: 0, activeAccount: () => A, threadInAccount: () => 'present', store: () => store });
+        try {
+            const record: AgentRecord = { ...agentRecord({ id: mintAgentId(), workspaceId: 'workspace', provider: 'claude', name: 'atlas' }), threadId: THREAD };
+            host.start(record, dir);
+            await vi.waitFor(() => expect(events.e).not.toBeNull());
+            host.prompt(record.id, 'work', 'you');
+            events.e!.onUpdate?.(weekSpent(Date.now()));
+            events.e!.onTurnEnd?.(endOnLimit);
+            await new Promise((r) => setTimeout(r, 0));
+            host.prompt(record.id, 'first kept', 'you');
+            await host.settled();
+            host.stop(record.id, { graceful: false });
+            // The window asks at once (as it does on the change the stop announces): the history is read now.
+            host.ledgerFor(record.id);
+            await host.ended(record.id);
+            await host.settled();
+            const status = () => {
+                const rows = host.ledgerFor(record.id);
+                const id = rows.flatMap(({ event: e }) => (e.kind === 'message' && e.text === 'first kept' && e.pending ? [e.pending.id] : []))[0];
+                return id === undefined ? 'no message' : promptDeliveries(rows).get(id);
+            };
+            await vi.waitFor(() => expect(status()).toBe('undelivered'), { timeout: 3_000 });
+        } finally {
+            host.stopAll(); await host.drained(0); await host.settled();
+            await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
+        }
+    });
+});
