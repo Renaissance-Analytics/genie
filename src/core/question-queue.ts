@@ -6,10 +6,10 @@ import { PRIORITIES, type DeckItem } from './deck.js';
  * sync)"). The window and the Pending Questions list read the SAME items; this decides what the window holds:
  *
  * - only questions this machine can answer (a form that carries its questions);
- * - only LIVE ones: a STALE question (its agent gone, its session ended, or asked by an earlier run — core/deck.ts) stays
- *   in the Deck, marked, with Dismiss, and never takes the window — nobody is waiting for its answer. A question from a
- *   previous run is stale by definition; an agent that is resumed and still needs it asks again, as a new question.
- *   One that goes stale while on screen leaves the window the same way an answered one does;
+ * - only LIVE ones: a STALE question (its agent gone from the roster — core/deck.ts) stays in the Deck, marked, with
+ *   Dismiss, and never takes the window — nobody can read its answer. A session that ended or restarted does not make it
+ *   stale: the answer is mailed (Tynn #1085). One that goes stale while ON SCREEN is held there, marked, never closed
+ *   under the person (main/question-window.ts);
  * - ITS OWN QUEUE (the owner, 2026-10-15: "The FTQ window should have its own queue so I can answer any and all
  *   questions of all agents just like genie 1 had"): every live question from every agent, oldest first, each one
  *   reachable from the window in any order (`windowQueue`). Genie 1's PendingQuestions v2 strip (genie
@@ -23,6 +23,11 @@ import { PRIORITIES, type DeckItem } from './deck.js';
  */
 export function isWindowQuestion(item: DeckItem): boolean {
     return item.source === 'agent-question' && item.answer.kind === 'form' && (item.answer.questions?.length ?? 0) > 0 && item.stale === undefined;
+}
+
+/** A question the window would hold if it were live: an agent's form, gone stale. The window keeps one only while it is on screen. */
+export function isWindowStale(item: DeckItem): boolean {
+    return item.source === 'agent-question' && item.answer.kind === 'form' && (item.answer.questions?.length ?? 0) > 0 && item.stale !== undefined;
 }
 
 /** Every question the window holds, oldest first — what its queue lists, parked ones included. */

@@ -323,7 +323,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         startForYourMessage: (record) => startForYourMessage({
             startForWork: startOnDemand,
             needsNewDriver: (id) => ports.engine()?.needsNewDriver(id) ?? false,
-            restart: (id) => restartAgent(agentOps, id, 'graceful'),
+            restart: (id) => restartAgent(agentOps, id, 'graceful', 'new-driver'),
             notice: (id, message) => ports.engine()?.notice(id, message) ?? false,
         }, record),
         host: {
@@ -344,7 +344,7 @@ export function hostAloneApi(ports: HostAlonePorts): HostApi {
         retryPausedAccount: (provider) => {
             void retryPausedAgents({
                 paused: (p) => ports.engine()?.pausedAgents(p) ?? [],
-                restart: (id) => restartAgent(agentOps, id, 'graceful'),
+                restart: (id, why) => restartAgent(agentOps, id, 'graceful', why),
                 prompt: (id, text) => { void ports.engine()?.prompt(id as AgentId, text, 'genie'); },
                 touch: () => registry.touch(),
             }, provider).catch(() => {});

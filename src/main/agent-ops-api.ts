@@ -94,7 +94,7 @@ export function agentOpsPorts(wiring: AgentOpsWiring): AgentOpsPorts {
 /** The host API's `agents.*`, over those ports. Every write refreshes what clients see the moment it ends (`touch`). */
 export function agentOpsApi(ops: AgentOpsPorts, touch: () => void, engine: () => Pick<AgentEngine, 'toolOutput' | 'attachment'> | null): HostApiDeps['agentOps'] {
     return {
-        restart: (id, kind) => restartAgent(ops, id, kind).finally(touch),
+        restart: (id, kind, why) => restartAgent(ops, id, kind, why ?? (kind === 'fresh' ? 'fresh' : 'restart')).finally(touch),
         previewDelete: (id, outcome, also) => previewDelete(ops, id, outcome, also),
         delete: (id, outcome, also, handoff) => deleteAgent(ops, id, outcome, also, { handoff }).finally(touch),
         switchDriver: (id, to) => switchDriver(ops, id, to).finally(touch),

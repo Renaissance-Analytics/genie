@@ -162,7 +162,7 @@ describe('with NO window connected, the host still recovers (the gap this closes
     it('genie-host’s session host is built with the recovery, restarting through its own graceful restart', () => {
         const host = code(src('src/main/genie-host.ts'));
         expect(host).toMatch(/onMcpServers: withMcpRecovery\(engineHostOptions\.onMcpServers, mcpRecovery\)/);
-        expect(host).toMatch(/const mcpRecovery = hostMcpRecovery\(\{[\s\S]{0,900}restart: \(id\) => trustRestart\(id as AgentId\)/);
+        expect(host).toMatch(/const mcpRecovery = hostMcpRecovery\(\{[\s\S]{0,900}restart: \(id\) => trustRestart\(id as AgentId, 'mcp-recovery'\)/);
         expect(host).toMatch(/const mcpRecovery = hostMcpRecovery\(\{[\s\S]{0,900}noteSeen: [^\n]*noteMcpSeen\(/);
     });
 });

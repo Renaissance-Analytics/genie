@@ -38,10 +38,11 @@ export interface DeckSourceInput {
     /** Workspace id → its colour (genie#1300), carried beside the name. An id not here gets none. */
     readonly workspaceColors?: Readonly<Record<string, string>>;
     /**
-     * Is the asking agent still WAITING — its session as Genie runs it (or its Take Over terminal): `null` when it has
-     * none, `undefined` when LIVENESS IS NOT KNOWN yet (the roster and the session host have not reported once). Only a
-     * known answer is judged (`questionStale`); `undefined`, or no port at all, judges nothing — "we have not heard" is
-     * never "the agent is gone".
+     * The asking agent's session as Genie runs it (or its Take Over terminal): `null` when it has none, `undefined` when
+     * LIVENESS IS NOT KNOWN yet (the roster and the session host have not reported once). Read only to know liveness has
+     * been heard: then a question whose agent is gone from the roster is stale (`questionStale`); `undefined`, or no port
+     * at all, judges nothing — "we have not heard" is never "the agent is gone". The session's own state never makes a
+     * question stale (Tynn #1085).
      */
     readonly asker?: (agentId: string) => AskerState | null | undefined;
 }
@@ -53,16 +54,14 @@ export interface AskerState {
 }
 
 /**
- * DOES ITS AGENT STILL WAIT FOR THIS QUESTION? (the owner, 2026-10-15: old items — "Keep, but mark stale"). It does not
- * when the agent is gone from the roster, when it has no running session (its session ended), or when the session
- * running now started AFTER the question was asked — an earlier run asked it, and the run now has never heard of it.
- * A session with no recorded start is not judged on that last count: "we have not heard" is not "it was earlier".
+ * DOES ITS AGENT STILL WAIT FOR THIS QUESTION? (the owner, 2026-10-15: old items — "Keep, but mark stale"). Only an agent
+ * GONE FROM THE ROSTER no longer does. A ForceTheQuestion never blocks its agent: the answer is MAILED to it (attention-store
+ * `answer`), so a session that ended, restarted, moved to another account or came back after a Genie upgrade still gets it
+ * and still wants it (Tynn #1085: the owner's open windows closed under him at every one of those restarts, while each
+ * asker waited for its mail). An asker that no longer wants an answer withdraws the question (FTQ `cancel`), which removes it.
  */
-export function questionStale(askedAt: number, known: boolean, session: AskerState | null): StaleReason | null {
-    if (!known) return 'agent-gone';
-    if (session === null || !session.running) return 'session-ended';
-    if (session.startedAt !== null && Number.isFinite(askedAt) && askedAt < session.startedAt) return 'earlier-run';
-    return null;
+export function questionStale(known: boolean): StaleReason | null {
+    return known ? null : 'agent-gone';
 }
 
 const option = (id: string, label: string) => ({ id, label, tone: 'neutral' as const });
@@ -119,11 +118,8 @@ export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
     const items: DeckItem[] = [];
 
     for (const q of input.questions) {
-        const live = input.asker?.(q.agentId);
-        // Judged from the LATEST ask: an agent that asked again (a rejoin) is waiting now, even if its first ask came
-        // from an earlier run. Its age on the Deck stays the first ask's — it has been waiting that long.
-        const lastAsked = Date.parse(q.reaskedAt ?? q.askedAt);
-        const stale = live === undefined ? null : questionStale(lastAsked, input.agents[q.agentId] !== undefined, live);
+        // Judged only once liveness has been heard: before that, an agent missing from the roster is not yet "gone".
+        const stale = input.asker?.(q.agentId) === undefined ? null : questionStale(input.agents[q.agentId] !== undefined);
         const workspaceName = nameOf(q.workspaceId);
         const workspaceColor = colorOf(q.workspaceId);
         const kept = keptItem(q, workspaceName, workspaceColor, stale, undefined);

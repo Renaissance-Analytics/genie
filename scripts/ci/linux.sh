@@ -41,8 +41,8 @@ SETUP="$OUT/setup"
 ROWS=(
     deps electron-binary
     typecheck unit build bundles sounds
-    seed no-pty smoke layout local-door-break local-door host-late-ready files-watch chat-drafts gapp-open artboard ui-lag plan-popover
-    trust-step accounts-popover claude-accounts sound-picker sound-cues esc-unsend question-maximize site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash rebuilt-machine cli-drain
+    seed no-pty smoke layout local-door-break local-door host-late-ready files-watch chat-drafts gapp-open artboard ui-lag plan-popover ftq-survives-restart
+    trust-step accounts-popover claude-accounts usage-on-switch sound-picker sound-cues esc-unsend question-maximize site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash rebuilt-machine cli-drain
     flows zip64 host-plain-node mailpit launcher-unit
     package package-fuse
     package-tracks packed-tree-client packed-tree-browser packed-tree-host track-manifest launcher-install client-no-host quit-keeps-host
@@ -538,6 +538,8 @@ row_ui-lag() { need_app && timeout 420 node scripts/ui-lag-cdp.mjs --budget; }
 # These start the app themselves, on a home and ports of their own.
 # The Dashboard's plan popover, capped to the screen and scrolling, on a 77-step plan from a stub agent (Tynn #1021).
 row_plan-popover() { need_build && need_display && on_display timeout 420 node scripts/plan-popover-cdp.mjs; }
+# An open ForceTheQuestion window survives its agent's restart, and says its agent's removal (Tynn #1085); screenshots.
+row_ftq-survives-restart() { need_build && need_display && on_display timeout 420 node scripts/ftq-survives-restart-cdp.mjs; }
 row_trust-step() { need_build && need_display && on_display timeout 300 node scripts/trust-step-cdp.mjs; }
 row_accounts-popover() { need_build && need_display && on_display timeout 480 node scripts/accounts-popover-cdp.mjs; }
 # Claude accounts of their own (Tynn #1011): live state, one-click switch, add, sign in, in the real app (a stand-in CLI).
@@ -549,6 +551,8 @@ row_sound-cues() { need_build && need_display && on_display timeout 240 node scr
 row_question-maximize() { need_build && need_display && on_display timeout 240 node scripts/question-maximize-cdp.mjs; }
 # Esc unsends a message still in the send buffer, files and all, in the real chat with a real key press (Tynn #1029).
 row_esc-unsend() { need_build && need_display && on_display timeout 240 node scripts/esc-unsend-cdp.mjs; }
+# Tynn #1084: after a switch the new account's usage is read at once; agents say which account they are really on.
+row_usage-on-switch() { need_build && need_display && on_display timeout 480 node scripts/usage-on-switch-cdp.mjs; }
 row_site-panel() { need_app && need_keyring && timeout 280 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/site-panel-cdp.mjs; }
 row_site-panel-locked() { need_app && SITE_PANEL_LOCKED=1 CDP_PORT=9408 timeout 120 node scripts/site-panel-cdp.mjs; }
 row_browser-process() { need_app && need_keyring && timeout 260 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/browser-process-cdp.mjs; }
@@ -814,10 +818,11 @@ ceiling() {
         seed) echo 300 ;;
         no-pty|smoke|layout|local-door-break|local-door|gapp-open|trust-step) echo 360 ;;
         accounts-popover) echo 540 ;;
-        plan-popover) echo 480 ;;
+        plan-popover|ftq-survives-restart) echo 480 ;;
         claude-accounts) echo 300 ;;
         sound-picker|sound-cues|question-maximize) echo 300 ;;
         esc-unsend) echo 300 ;;
+        usage-on-switch) echo 540 ;;
         files-watch) echo 240 ;;
         chat-drafts|artboard) echo 420 ;;
         ui-lag|renderer-crash) echo 480 ;;
@@ -1026,7 +1031,7 @@ run_rows() {
     for name in "${selected[@]}"; do
         echo "=== $name"
         machine_line "$name"
-        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover trust-step accounts-popover claude-accounts sound-picker sound-cues esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash quit-keeps-host cli-drain host-late-ready package-fuse launcher-install client-no-host logon toolchain client-only-update host-update host-update-rollback launcher-self-update " in
+        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover ftq-survives-restart trust-step accounts-popover claude-accounts usage-on-switch sound-picker sound-cues esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash quit-keeps-host cli-drain host-late-ready package-fuse launcher-install client-no-host logon toolchain client-only-update host-update host-update-rollback launcher-self-update " in
             *" $name "*) reap_leftovers "$name" ;;
         esac
         from="$(now_ms)"

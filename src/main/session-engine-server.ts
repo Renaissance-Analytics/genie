@@ -1,5 +1,6 @@
 import { accountsActionOf } from '../core/account-settings.js';
 import type { FeatureCallers, FeatureBrowser } from './feature-callers.js';
+import { startWhyOf } from '../core/start-why.js';
 import type { HostAgentKeys } from './host-agent-keys.js';
 import type { WorkstationService } from './workstation-service.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
@@ -530,7 +531,8 @@ export class SessionEngineServer {
                 if (!record || typeof record.id !== 'string') throw new Error('engine.start needs a record');
                 const windowEnv = args[3];
                 if (windowEnv && typeof windowEnv === 'object') (this.#options.adoptWindowEnv ?? ((e) => adoptWindowEnv(process.env, e)))(windowEnv as Record<string, string>);
-                return host.start(record, str(1));
+                const how = args[2] as { why?: unknown } | undefined;
+                return host.start(record, str(1), how && how.why !== undefined ? { why: startWhyOf(how.why) } : {});
             }
             case 'engine.stop':
                 return host.stop(id(), (args[1] as { graceful?: boolean } | undefined) ?? {});

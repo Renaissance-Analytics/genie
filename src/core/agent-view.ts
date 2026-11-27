@@ -191,6 +191,8 @@ export interface HeaderActions {
     retryAccount: boolean;
     /** A tool was refused for want of `/design-login` (#1081): `Log in to Claude Design` opens it in a window of its own. */
     designLogin: boolean;
+    /** Tynn #1084: still on another account than the active one, until idle: `Restart on <active> now`. */
+    moveNow: boolean;
     /** A declared agent with no live session (stopped, its run ended, never started): `Start` — the same one restart. */
     start: boolean;
     takeOver: boolean;
@@ -212,7 +214,8 @@ export function headerActions(session: LiveSession | null, fidelity: Fidelity, p
     const login = (managed && session.signedOut === true) || (start && providerSignedOut);
     const retryAccount = managed && session.accountPaused != null;
     const designLogin = managed && session.designLogin === true;
-    return { stop: managed && turnStopOffered(session), restart, openTerminal: broken, resumeLimit: held, login, retryAccount, designLogin, start, takeOver: true, chat: true };
+    const moveNow = managed && (session.account?.movesTo !== undefined || session.account?.stays !== undefined);
+    return { stop: managed && turnStopOffered(session), restart, openTerminal: broken, resumeLimit: held, login, retryAccount, designLogin, moveNow, start, takeOver: true, chat: true };
 }
 
 export interface PlanPanel {

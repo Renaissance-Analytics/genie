@@ -56,8 +56,8 @@ $Rows = @(
     'deps', 'electron-binary',
     'unit-build', 'unit',
     'build', 'seed', 'no-pty', 'smoke', 'layout', 'app-stopped',
-    'local-door-break', 'local-door', 'host-late-ready', 'files-watch', 'chat-drafts', 'gapp-open', 'artboard', 'ui-lag', 'plan-popover',
-    'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'sound-cues', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash', 'rebuilt-machine', 'cli-drain',
+    'local-door-break', 'local-door', 'host-late-ready', 'files-watch', 'chat-drafts', 'gapp-open', 'artboard', 'ui-lag', 'plan-popover', 'ftq-survives-restart',
+    'trust-step', 'accounts-popover', 'claude-accounts', 'usage-on-switch', 'sound-picker', 'sound-cues', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash', 'rebuilt-machine', 'cli-drain',
     'package', 'sign-plan', 'packed-tree', 'update-metadata', 'package-fuse', 'packaged-launcher',
     'package-tracks', 'sign-plan-client', 'sign-plan-browser', 'sign-plan-host', 'sign-plan-launcher',
     'packed-tree-client', 'packed-tree-browser', 'packed-tree-host', 'track-manifest', 'launcher-install', 'client-no-host', 'quit-keeps-host',
@@ -418,6 +418,7 @@ function Row-ui-lag { Need-Build; Need-TestMachine; Run 'ui-lag-cdp' { node scri
 function Row-plan-popover { Need-Build; Need-TestMachine; Run 'plan-popover-cdp' { node scripts/plan-popover-cdp.mjs } }
 function Row-php-live-shots { Need-Build; Need-TestMachine; Run 'php-live-shots-cdp' { node scripts/php-live-shots-cdp.mjs } }
 function Row-php-card-shots { Need-Build; Need-TestMachine; Run 'php-card-shots-cdp' { node scripts/php-live-shots-cdp.mjs --card } }
+function Row-ftq-survives-restart { Need-Build; Need-TestMachine; Run 'ftq-survives-restart-cdp' { node scripts/ftq-survives-restart-cdp.mjs } }
 function Row-trust-step { Need-Build; Need-TestMachine; Run 'trust-step-cdp' { node scripts/trust-step-cdp.mjs } }
 function Row-accounts-popover { Need-Build; Need-TestMachine; Run 'accounts-popover-cdp' { node scripts/accounts-popover-cdp.mjs } }
 function Row-claude-accounts { Need-Build; Need-TestMachine; Run 'claude-accounts-cdp' { node scripts/claude-accounts-cdp.mjs } }
@@ -428,6 +429,7 @@ function Row-sound-cues { Need-Build; Need-TestMachine; Run 'sound-cues-cdp' { n
 function Row-question-maximize { Need-Build; Need-TestMachine; Run 'question-maximize-cdp' { node scripts/question-maximize-cdp.mjs } }
 # Esc unsends a message still in the send buffer, files and all, in the real chat with a real key press (Tynn #1029).
 function Row-esc-unsend { Need-Build; Need-TestMachine; Run 'esc-unsend-cdp' { node scripts/esc-unsend-cdp.mjs } }
+function Row-usage-on-switch { Need-Build; Need-TestMachine; Run 'usage-on-switch-cdp' { node scripts/usage-on-switch-cdp.mjs } }
 # The app opened for no-pty..layout wrote this log: the spawn host started, and never fell back.
 function Row-spawn-host {
     if (-not $script:AppHome) { Block 'the app was not opened in this run (the seed row opens it)' }
@@ -689,7 +691,7 @@ function Ceiling([string]$name) {
         { $_ -in 'spawn-host', 'app-stopped' } { return 120 }
         { $_ -in 'no-pty', 'smoke', 'layout', 'local-door-break', 'local-door', 'gapp-open', 'trust-step' } { return 360 }
         'accounts-popover' { return 540 }
-        'plan-popover' { return 480 }
+        { $_ -in 'plan-popover', 'ftq-survives-restart' } { return 480 }
         'php-live-shots' { return 1200 }
         'php-card-shots' { return 3000 }
         'claude-accounts' { return 300 }
@@ -697,6 +699,7 @@ function Ceiling([string]$name) {
         'sound-cues' { return 300 }
         'question-maximize' { return 300 }
         'esc-unsend' { return 300 }
+        'usage-on-switch' { return 540 }
         'files-watch' { return 240 }
         { $_ -in 'chat-drafts', 'artboard' } { return 420 }
         { $_ -in 'ui-lag', 'renderer-crash' } { return 480 }

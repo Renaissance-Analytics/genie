@@ -11,8 +11,8 @@ import { control } from './helpers/control-markup.js';
  * WHAT WAITS, KEPT (the owner, 2026-10-15, answering the Deck's purpose; since Tynn #730 on the Dashboard, under each agent's row):
  *
  * - Each thing that needs the person, with the agent, the question or request, its age, and Answer / Open / Dismiss in place.
- * - Old items, "Keep, but mark stale": a question whose agent no longer waits (gone, session ended, or asked by an
- *   earlier run) stays, greyed and said, with one-click Dismiss and "Dismiss all stale".
+ * - Old items, "Keep, but mark stale": a question whose agent no longer waits (its agent gone from the roster; Tynn #1085)
+ *   stays, greyed and said, with one-click Dismiss and "Dismiss all stale".
  *
  * Names are RFC 2606 (`*.example`); agent names are fixtures.
  */
@@ -39,7 +39,7 @@ const question = (id: string, workspaceId: string | null, workspaceName: string 
 const ITEMS: DeckItem[] = [
     // Stale and urgent: on origin/main's single ranked band these two came FIRST (blocking + urgent).
     question('q_c1', 'ws_c', 'docs.example', { priority: 'urgent', stale: 'agent-gone' }),
-    question('q_a3', 'ws_a', 'shop.example', { priority: 'urgent', stale: 'session-ended' }),
+    question('q_a3', 'ws_a', 'shop.example', { priority: 'urgent', stale: 'agent-gone' }),
     question('q_a2', 'ws_a', 'shop.example', { priority: 'low', at: 1_759_999_000_000 }),
     question('q_a1', 'ws_a', 'shop.example', { priority: 'normal' }),
     question('q_b1', 'ws_b', 'blog.example', { priority: 'high' }),
@@ -93,9 +93,8 @@ describe('stale: kept, and marked', () => {
 
     it('a stale question SAYS why; its form is folded behind Answer; one-click Dismiss', () => {
         expect(html).toContain('data-deck-item-stale="agent-gone"');
-        expect(html).toContain('data-deck-item-stale="session-ended"');
         expect(rowOf('q_c1')).toMatch(/data-deck-stale-reason="agent-gone"[\s\S]*?>agent gone</);
-        expect(rowOf('q_a3')).toMatch(/data-deck-stale-reason="session-ended"[\s\S]*?>session ended</);
+        expect(rowOf('q_a3')).toMatch(/data-deck-stale-reason="agent-gone"[\s\S]*?>agent gone</);
         expect(html).not.toContain('data-deck-form="q_c1"');
         expect(html).toContain('data-deck-answer-anyway="q_c1"');
         expect(control(rowOf('q_c1'), 'data-deck-dismiss="q_c1"')).toMatchObject({ tag: 'button', fancy: true, text: 'Dismiss' });
@@ -149,9 +148,9 @@ describe('which questions are stale (the source)', () => {
         userList: [], unreadDms: [], agents,
     };
 
-    it('gone from the roster, session ended, an earlier run asked it — each said; control: the agent still waiting is not marked', () => {
+    it('only gone from the roster is stale; a session that ended, or a run started after the ask, still gets its answer by mail (Tynn #1085)', () => {
         const items = deckItemsFrom({ ...input, asker: (id) => sessions[id] ?? null });
-        expect(Object.fromEntries(items.map((i) => [i.id, i.stale ?? 'live']))).toEqual({ q_live: 'live', q_ended: 'session-ended', q_earlier: 'earlier-run', q_gone: 'agent-gone' });
+        expect(Object.fromEntries(items.map((i) => [i.id, i.stale ?? 'live']))).toEqual({ q_live: 'live', q_ended: 'live', q_earlier: 'live', q_gone: 'agent-gone' });
     });
 
     it('LIVENESS NOT KNOWN yet (the asker answers undefined): 0 stale — not even the agent gone from the roster — and all are counted waiting', () => {
@@ -163,16 +162,16 @@ describe('which questions are stale (the source)', () => {
     it('control: once liveness IS known, the gone agent’s question is stale (and no longer counted)', () => {
         const items = deckItemsFrom({ ...input, asker: (id) => sessions[id] ?? null });
         expect(items.find((i) => i.id === 'q_gone')!.stale).toBe('agent-gone');
-        expect(needsYouCount(items)).toBe(1);
+        expect(needsYouCount(items)).toBe(3);
     });
 
     it('control: with no liveness to judge by, nothing is called stale', () => {
         expect(deckItemsFrom(input).filter((i) => i.stale !== undefined)).toHaveLength(0);
     });
 
-    it('a session with no recorded start is not judged "earlier" — "we have not heard" is not "it was earlier"', () => {
-        expect(questionStale(at, true, { running: true, startedAt: null })).toBeNull();
-        expect(questionStale(at, true, null)).toBe('session-ended');
+    it('questionStale reads only whether the roster knows the agent', () => {
+        expect(questionStale(true)).toBeNull();
+        expect(questionStale(false)).toBe('agent-gone');
     });
 });
 

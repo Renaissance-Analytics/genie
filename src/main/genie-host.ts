@@ -60,6 +60,8 @@ import { removeAccountDir, signInFolderRefusal } from './claude-account-dirs.js'
 import { HostRegistryStore } from './agent-stores-replica.js';
 import { ProviderModelCache } from '../core/provider-models.js';
 import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
+import { UsageProbes } from '../core/usage-probe.js';
+import { readClaudeUsage } from './claude-usage-read.js';
 import type { Headroom, ReadingStamp } from '../core/headroom.js';
 import { ReadingAttribution } from '../core/reading-attribution.js';
 import { LIMIT_ALERTS_SETTING, LimitAlertService, LimitNoticeBook, parseLimitAlerts } from '../core/limit-alerts.js';
@@ -205,6 +207,7 @@ import { FilesHost } from './files-host.js';
 import { fileEventsOf } from '../core/files-panel.js';
 import { gitFileStatus, gitShowHead } from './git-ports.js';
 import { askerLiveFrom } from './asker-live.js';
+import { agentRunLine } from '../core/start-why.js';
 import { assembleDeckItems } from './deck-assembly.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
@@ -1107,7 +1110,8 @@ async function main(): Promise<void> {
                 },
                 writeRunningAtQuit: (ids) => registryStore.writeRunningAtQuit(ids),
                 writeInterruptedAtQuit: (ids) => registryStore.writeInterruptedAtQuit(ids),
-                stopAll: async (onLeft) => { await host.stopAll(onLeft); await host.drained(2_000).catch(() => undefined); },
+                // The upgrade stops every agent (Tynn #1085): said once, so the exits that follow are not read as restarts.
+                stopAll: async (onLeft) => { lifecycleLog(`agents stop why=upgrade count=${host.count}`); await host.stopAll(onLeft); await host.drained(2_000).catch(() => undefined); },
                 onRecordError: (error) => { const line = `update: the agents to start again could not be recorded: ${error instanceof Error ? error.message : String(error)}`; say(line); lifecycleLog(line); },
             }),
             // P5a.3's order: the browser told to end, then sites, the front door and kept processes stopped; containers stay up.
@@ -1517,6 +1521,28 @@ async function main(): Promise<void> {
         changed: () => { accountsChangedNow?.(); },
     });
     void claudeLive.refresh();
+    /*
+     * EACH ACCOUNT'S USAGE, READ WHEN IT IS NEEDED (Tynn #1084). A Claude reading only came from an agent's turn in that account's
+     * folder, so an account switched to with no agent on it yet read "Usage unknown" for good. A switch, an account's first use
+     * and the Accounts panel ask here; the probe's rules (core/usage-probe.ts) decide whether to read. The read is one tiny turn
+     * in that account's folder (main/claude-usage-read.ts); Genie touches no credential. The default home holds one sign-in, so
+     * a default-home account is read only while Claude Code says that home is signed in to IT.
+     */
+    const usageProbes = new UsageProbes({
+        read: (account) => readClaudeUsage({ configDir: claudeLaunchConfigDir(account), cwd: join(home, 'usage-probe'), ...realClaudeCliOptions() }),
+        // Asked of Claude Code afresh (`claude auth status`, credentials withheld), as a Switch asks: the default home holds ONE
+        // sign-in, and is read for a default-home account only while it is that account's.
+        canRead: async (account) => {
+            const signedIn = await claudeSignedInNow(account, { accounts: () => accounts.list(), describe: (dir) => realDescribeClaude(dir), defaultDir: () => claudeLaunchConfigDir({}) });
+            if (signedIn === true) return null;
+            if (signedIn === null) return 'Claude Code could not be asked who is signed in';
+            return account.configDir === undefined ? "Claude Code's default home is signed in to another account now" : 'Claude Code says this account is not signed in';
+        },
+        lastReadingAt: (id) => headroomFeedNow?.readingAt('claude', id) ?? null,
+        offer: (account, room) => { offerReadingNow?.(account.provider, room, { accountId: account.id, runId: 'usage-probe', fresh: true }); },
+        changed: () => { accountsChangedNow?.(); },
+        now: () => Date.now(),
+    });
     // EVERY SWITCH TELLS THE AGENTS THEIR NEW ROOM (Tynn #1011, the owner's requirement): the new account's last reading,
     // published at once and put ahead of each running agent's next turn; its limit holds lifted.
     const announceSwitch = (provider: string, accountId: string): void => {
@@ -1524,6 +1550,8 @@ async function main(): Promise<void> {
         if (!account) return;
         const reading = headroomFeedNow?.accounts().find((r) => r.provider === provider && r.accountId === accountId);
         host.accountSwitched(provider, { account, headroom: reading?.room ?? null });
+        // Its own reading, at once when it has none of its own in 15 min (Tynn #1084).
+        void usageProbes.request(account);
     };
     // EVERY CLAUDE SIGN-IN IN THE BROWSER (Tynn #1011; the owner: "I should not see any terminals nor do we store login keys"):
     // prism-acp's hidden login(), Anthropic's page opened on the screen of the window that asked; sign out is its logout().
@@ -1566,7 +1594,7 @@ async function main(): Promise<void> {
             refreshHealth: (provider) => { void providerHealth.refresh(provider); },
             refreshLive: () => { void claudeLive.refresh(); },
             signedOutAgents: (provider, id) => host.signedOutAgents(provider, id),
-            restart: (id) => { void trustRestart(id as AgentId).then((r) => { if (r.ok) host.prompt(id as AgentId, SIGNED_IN_AGAIN, 'genie'); }); },
+            restart: (id) => { void trustRestart(id as AgentId, 'signed-in').then((r) => { if (r.ok) host.prompt(id as AgentId, SIGNED_IN_AGAIN, 'genie'); }); },
             resumeLimit: (provider, id) => { host.resumeLimit(provider, id); },
         }),
     });
@@ -1606,14 +1634,31 @@ async function main(): Promise<void> {
                 void claudeLive.refresh();
                 accountsChangedNow?.();
             }
-            else { await accounts.forget(action.id); headroomFeedNow?.forget(action.id); saveBoardNow?.(); }
+            else if (action.kind === 'read-usage') {
+                // Tynn #1084: the panel opening (each account under the 15-min rules), or "Check usage now" (that one, at once).
+                // Answered at once: "Reading usage…" and then the result reach the windows as the accounts change.
+                if (action.id !== undefined) {
+                    const account = accounts.get(action.id);
+                    if (!account) throw new Error('Genie does not know that account.');
+                    void usageProbes.request(account, action.manual === true ? { manual: true } : {});
+                } else {
+                    for (const account of accounts.list()) if (account.provider === action.provider) void usageProbes.request(account);
+                }
+            }
+            else if (action.kind === 'move-now') {
+                // Tynn #1084: "Restart on <active> now": the person's go for the agents still on another account.
+                const moved = host.moveNow(action.provider, action.agentId as AgentId | undefined, action.fresh === true ? { fresh: true } : {});
+                if (moved === 0) return { ok: false, reason: 'No agent is waiting to move to the active account.' };
+                accountsChangedNow?.();
+            }
+            else { await accounts.forget(action.id); headroomFeedNow?.forget(action.id); usageProbes.forget(action.id); saveBoardNow?.(); }
             return { ok: true };
         } catch (error) {
             return { ok: false, reason: error instanceof Error ? error.message : String(error) };
         }
     };
     // The header's account chips (Tynn #483): the book, each account's readings from the board, and the standing offers.
-    const accountsSnapshot = (): AccountsSnapshot => ({ providers: accountsView(accounts.list(), headroomFeedNow?.accounts() ?? [], Object.fromEntries(ACP_PROVIDERS.map((p) => [p, accounts.activeFor(p).id])), claudeLive.current(20_000)), offers: switchOffersNow?.offers() ?? [], design: designAuthNow?.view(), signIns: claudeSignIns.view() });
+    const accountsSnapshot = (): AccountsSnapshot => ({ providers: accountsView(accounts.list(), headroomFeedNow?.accounts() ?? [], Object.fromEntries(ACP_PROVIDERS.map((p) => [p, accounts.activeFor(p).id])), claudeLive.current(20_000), { usage: usageProbes.states(), stillOn: Object.fromEntries(ACP_PROVIDERS.map((p) => [p, host.stillOn(p)])) }), offers: switchOffersNow?.offers() ?? [], design: designAuthNow?.view(), signIns: claudeSignIns.view() });
     // ...the same book on the one protocol (Tynn #895), answered here for every client.
     accountsPortNow = { list: () => accountsSnapshot(), act: (action, context) => accountsAct(action, context), dismissOffer: (id) => switchOffersNow?.dismiss(id) ?? false };
     // WHOSE READING IT IS ACROSS A SIGN-IN (Tynn #753, core/reading-attribution.ts): while who is signed in is read, a provider's
@@ -1913,7 +1958,7 @@ async function main(): Promise<void> {
     // kept on its record (Tynn #628).
     const mcpRecovery = hostMcpRecovery({
         notice: (id, text) => { host.notice(id as AgentId, text); },
-        restart: (id) => trustRestart(id as AgentId),
+        restart: (id) => trustRestart(id as AgentId, 'mcp-recovery'),
         noteSeen: (id, names) => { void phoneRegistryNow?.noteMcpSeen(id as AgentId, names).catch(() => undefined); },
         now: () => Date.now(),
         later: (run, ms) => { const timer = setTimeout(run, ms); timer.unref?.(); return () => clearTimeout(timer); },
@@ -1922,6 +1967,10 @@ async function main(): Promise<void> {
         activeAccount: provider => isAcpProvider(provider) ? accounts.activeFor(provider) : null,
         // Nothing launches in a folder a Claude sign-in is running in (prism-acp: one process per folder; Tynn #1011).
         launchBlocked: (account) => (account.configDir !== undefined && claudeSignIns.busy(account.configDir) ? 'That account is signing in; it starts once the sign-in is over.' : null),
+        // An account's first use (Tynn #1084): its usage is read when it has none of its own, and the panel's "still on" count moves.
+        onAccountUsed: (account) => { void usageProbes.request(account); accountsChangedNow?.(); },
+        // An agent turned out to stay on its account (or stopped): the Accounts panel's count changes (Tynn #1084).
+        onMovesChanged: () => { accountsChangedNow?.(); },
         userData: home,
         ...engineHostOptions,
         // The servers Genie provides to every agent (Tynn #1017; the Fancy Dev Kit's fancy-ui), each switchable off per workspace.
@@ -1983,6 +2032,8 @@ async function main(): Promise<void> {
                 lifecycleLog(`spawn kind=agent owner=${agentId} run=${run} pids=${describeProcesses(processes)}`);
             },
             phase: (agentId, run, phase) => { lifecycleLog(`agent start owner=${agentId} run=${run} phase=${phase}`); },
+            // WHY each run started (Tynn #1085): one line per run, so a restart of every agent at once can be traced.
+            starting: (agentId, run, why) => { lifecycleLog(agentRunLine(agentId, run, why)); },
             ended: (agentId, run, verdict) => {
                 if (verdict.verified) {
                     spawnLedger.forget('agent', agentId, run);
@@ -2004,7 +2055,7 @@ async function main(): Promise<void> {
      * A WORKSPACE'S VERDICT CHANGES WHILE ITS AGENT RUNS (genie#1519, trust-verdict.ts), compared here, on the host's own
      * sessions. A restart is the graceful one: stop, the old run ended, the same conversation started, what it was owed.
      */
-    const trustRestart = async (id: AgentId): Promise<{ ok: true } | { ok: false; reason: string | null }> => {
+    const trustRestart = async (id: AgentId, why: 'signed-in' | 'mcp-recovery' | 'trust'): Promise<{ ok: true } | { ok: false; reason: string | null }> => {
         const record = hostRegistry.find(id);
         if (!record) return { ok: false, reason: null };
         // Its workspace's folder is gone (P7): refused before the stop, so a running agent is left as it was.
@@ -2013,7 +2064,7 @@ async function main(): Promise<void> {
         host.stop(id);
         const verdict = await host.ended(id);
         if (verdict && !verdict.verified && verdict.survivors.length > 0) return { ok: false, reason: `${record.name}'s previous run did not end, so it was not started again: ${verdict.reason}` };
-        const started = host.start(record, hostRegistry.workspace(record.workspaceId)?.path ?? osaHome);
+        const started = host.start(record, hostRegistry.workspace(record.workspaceId)?.path ?? osaHome, { why });
         if (!started.ok) return started;
         await host.deliverOwed(id);
         return { ok: true };
@@ -2035,7 +2086,7 @@ async function main(): Promise<void> {
         hold: (id, text) => host.holdForNextWork(id, text),
         withdraw: (id) => host.withdrawHeld(id),
         notice: (id, text) => { host.notice(id, text); },
-        restart: (id) => trustRestart(id),
+        restart: (id) => trustRestart(id, 'trust'),
     });
     host.subscribe((id) => hostVerdicts?.check(id));
     /*
@@ -2069,7 +2120,7 @@ async function main(): Promise<void> {
             void (isAcpProvider(provider) ? accountIdentity.refreshProvider(provider) : Promise.resolve()).then(() => {
                 afterSignedIn(provider, {
                     signedOutAgents: (p, id) => host.signedOutAgents(p, id),
-                    restart: (id) => { void trustRestart(id as AgentId).then((r) => { if (r.ok) host.prompt(id as AgentId, SIGNED_IN_AGAIN, 'genie'); }); },
+                    restart: (id) => { void trustRestart(id as AgentId, 'signed-in').then((r) => { if (r.ok) host.prompt(id as AgentId, SIGNED_IN_AGAIN, 'genie'); }); },
                     resumeLimit: (p, id) => host.resumeLimit(p, id),
                 });
             });
@@ -2867,7 +2918,7 @@ async function main(): Promise<void> {
     // THE MAIL WAKE (P3.2): mail reaches its agent with no window — told, or started for it under the person's refusals.
     // ISSUEWATCH's queue is the wake's second source (P5c): `push` starts a stopped agent through this same wake, `next-turn` waits.
     planKeepalive = wireHostPlanKeepalive({ host, registry: hostRegistry, asked: (id) => own.attention.pending().some((q) => q.agentId === id), settings, log: (line) => { say(line); lifecycleLog(line); },
-        stalledTurns, restart: (id) => (phoneApi ? phoneApi.invoke('agents.restart', [id, 'graceful']) : Promise.reject(new Error('Genie’s agents are still starting'))) });
+        stalledTurns, restart: (id) => (phoneApi ? phoneApi.invoke('agents.restart', [id, 'graceful', 'keepalive']) : Promise.reject(new Error('Genie’s agents are still starting'))) });
     clocks.push(planKeepalive);
     wireHostMailWake({ inbox: own.inbox, host, registry: hostRegistry, settings, osaDir: osaHome, log: (line) => { say(line); lifecycleLog(line); }, issueWatch: issueWatch.delivery, safeMode: safeNow });
     bootStep('sessions', stepAt);

@@ -95,8 +95,7 @@ describe('a note reaches the agent', () => {
 
     it('dismissed in the question window: the form’s notes travel through the window to the same mail (exact text)', async () => {
         const agent = enlist('kai');
-        // The window shows only LIVE questions (core/question-queue.ts): the asking agent has a running session that started
-        // before it asked. Without one its question is stale ("session ended") and stays in the Deck, never in the window.
+        // The window shows only LIVE questions (core/question-queue.ts): the asking agent is on the roster (enlisted).
         sessions[agent] = { running: true, startedAt: 0 };
         const asked = await services.attention.ask({ agentId: agent as never, agentName: 'kai', workspaceId: 'ws_shop', questions: q('Engine') }, { userActive: true });
         const shown: string[] = [];
@@ -119,34 +118,36 @@ describe('a note reaches the agent', () => {
 });
 
 describe('stale questions on the composed Deck, and "Dismiss all stale"', () => {
-    it('marks each by why; dismisses exactly the stale ones the person saw — a live one sent with them stays, and so does a stale one they did not see', async () => {
+    it('marks only an agent gone from the roster; dismisses exactly the stale ones the person saw — live ones sent with them stay, and so does a stale one they did not see', async () => {
         const kai = enlist('kai');
         const wren = enlist('wren');
         const ivy = enlist('ivy');
         const ghost = mintAgentId();
+        const ghost2 = mintAgentId();
         sessions[kai] = { running: true, startedAt: 0 };
+        // wren's session ended, and ivy's started after it asked: both still get their answer by mail (Tynn #1085), so live.
         sessions[wren] = { running: false, startedAt: 0 };
-        // ivy's session started after it asked: an earlier run asked.
         sessions[ivy] = { running: true, startedAt: Date.now() + 3_600_000 };
         const ask = (agentId: string, name: string, header: string) => services.attention.ask({ agentId: agentId as never, agentName: name, workspaceId: 'ws_shop', questions: q(header) }, { userActive: true });
         const live = await ask(kai, 'kai', 'Live');
         const ended = await ask(wren, 'wren', 'Ended');
         const earlier = await ask(ivy, 'ivy', 'Earlier');
         const gone = await ask(ghost, 'ghost', 'Gone');
+        const gone2 = await ask(ghost2, 'ghost2', 'Gone too');
 
         const stale = Object.fromEntries(services.deckItems().filter((i) => i.source === 'agent-question').map((i) => [i.id, i.stale ?? 'live']));
-        expect(stale).toEqual({ [live.questionId]: 'live', [ended.questionId]: 'session-ended', [earlier.questionId]: 'earlier-run', [gone.questionId]: 'agent-gone' });
+        expect(stale).toEqual({ [live.questionId]: 'live', [ended.questionId]: 'live', [earlier.questionId]: 'live', [gone.questionId]: 'agent-gone', [gone2.questionId]: 'agent-gone' });
 
-        // The person saw `ended` and `gone` marked stale (ivy's arrived after); a LIVE id rides along (a race, or a bad caller).
-        await handleFeatureAction(services, { kind: 'deck.dismissStale', ids: [ended.questionId, gone.questionId, live.questionId] }, STATE);
+        // The person saw `gone` marked stale (gone2 arrived after); LIVE ids ride along (a race, or a bad caller).
+        await handleFeatureAction(services, { kind: 'deck.dismissStale', ids: [gone.questionId, live.questionId, ended.questionId] }, STATE);
 
-        // COUNTED: two left; the live one and the stale one not seen stay.
-        expect(services.attention.pending().map((p) => p.id).sort()).toEqual([live.questionId, earlier.questionId].sort());
-        expect(services.inbox.unread(wren as never)).toHaveLength(1);
+        // COUNTED: four left; the live ones and the stale one not seen stay.
+        expect(services.attention.pending().map((p) => p.id).sort()).toEqual([live.questionId, ended.questionId, earlier.questionId, gone2.questionId].sort());
         expect(services.inbox.unread(ghost as never)).toHaveLength(1);
-        // Controls: the live agent and the unseen stale one heard nothing.
+        // Controls: the live agents and the unseen stale one heard nothing.
         expect(services.inbox.unread(kai as never)).toHaveLength(0);
-        expect(services.inbox.unread(ivy as never)).toHaveLength(0);
+        expect(services.inbox.unread(wren as never)).toHaveLength(0);
+        expect(services.inbox.unread(ghost2 as never)).toHaveLength(0);
     });
 });
 

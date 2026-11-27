@@ -13,7 +13,7 @@ export type AgentOpsHostEngine = Pick<AgentEngine, 'start' | 'stop' | 'ended' | 
  */
 export function sessionHostPort(host: () => AgentOpsHostEngine | null): AgentOpsPorts['host'] {
     return {
-        start: (record, cwd) => host()!.start(record, cwd),
+        start: (record, cwd, how) => host()!.start(record, cwd, how),
         stop: (id) => host()!.stop(id),
         // How the last stop ended, once it has: restart and switch wait on it. Missing here, the wait was a no-op and a
         // Claude restart inside its stop grace was refused "still stopping", with nothing to retry it (2026-10-22).

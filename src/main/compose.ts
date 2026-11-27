@@ -146,10 +146,10 @@ export interface ComposeInput extends HostingOptions {
     /** A workspace's COLOUR (genie#1300, main/workspace-color-host.ts), carried on its Deck items beside the name. Absent = none. */
     readonly workspaceColor?: (path: string) => string | null;
     /**
-     * Is an agent still WAITING for what it asked — its session as Genie runs it (or its Take Over terminal), `null` when
-     * it has none (main.ts asks the session host and the take-over host), `undefined` while LIVENESS IS NOT KNOWN yet
-     * (before the roster and the session host have reported once). The Deck marks a question whose agent no longer
-     * waits as STALE (core/deck-sources.ts `questionStale`); absent, or `undefined`, no question is judged.
+     * The asking agent's session as Genie runs it (or its Take Over terminal), `null` when it has none, `undefined` while
+     * LIVENESS IS NOT KNOWN yet (before the roster and the session host have reported once). Once known, the Deck marks a
+     * question whose agent is gone from the roster as STALE (core/deck-sources.ts `questionStale`; a session's own state
+     * never does, Tynn #1085); absent, or `undefined`, no question is judged.
      */
     readonly askerLive?: (agentId: string) => AskerState | null | undefined;
 }

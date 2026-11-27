@@ -1,11 +1,13 @@
 import { Avatar, Badge, Button, Callout, Icon, Input, Popover, Progress } from '@particle-academy/react-fancy';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { activeAccountOf, chooseWords, type AccountView, type AccountWindowRow, type ProviderAccountsView } from '../../core/accounts-view.js';
 import { shortDateTime } from '../../core/clock-words.js';
 import { limitLevel, usedPct, usedWords, resetsIn, windowWords, type LimitLevel, type WindowReading } from '../../core/headroom.js';
 import { offerWords, targetWords, type SwitchOffer } from '../../core/switch-offer.js';
 import { rankSwitchNext } from '../../core/switch-next.js';
 import { DesignAuthRow } from './DesignAuthRow.js';
+import { PANEL_RECHECK_MS } from '../../core/usage-probe.js';
+import { MoveFreshConfirm } from './MoveFreshConfirm.js';
 import type { AccountsAction, AccountsActResult } from '../../core/account-settings.js';
 import { mismatchWords, type ClaudeAccountLive, type ClaudeSignInView } from '../../core/claude-accounts.js';
 import type { DesignAuthView } from '../../core/design-auth.js';
@@ -56,6 +58,21 @@ function tightest(account: AccountView): LiveWindow | null {
 
 export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, design, onDesignSignIn, onAccountsAct, signIns }: AccountsChipProps) {
     const [open, setOpen] = useState(false);
+    // Tynn #1084: the fresh restart of agents that cannot move is asked first.
+    const [askFresh, setAskFresh] = useState(false);
+    /*
+     * THE PANEL ASKS FOR READINGS (Tynn #1084): when it opens, and every 5 min while it stays open, the host reads each account
+     * that has no reading of its own in 15 min (its probe's rules). Never on a timer while closed.
+     */
+    const act = useRef(onAccountsAct);
+    act.current = onAccountsAct;
+    useEffect(() => {
+        if (!open) return undefined;
+        const ask = () => { void act.current?.({ kind: 'read-usage', provider: view.provider }); };
+        ask();
+        const timer = setInterval(ask, PANEL_RECHECK_MS);
+        return () => clearInterval(timer);
+    }, [open, view.provider]);
     const active = activeAccountOf(view);
     if (!active) return null;
     const provider = view.provider;
@@ -134,7 +151,33 @@ export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, desig
                         </Callout>
                     ) : null}
                     {(signIns ?? []).filter((s) => view.accounts.some((a) => a.id === s.accountId) || provider === 'claude').map((s) => <SignInPending key={s.accountId} signIn={s} onAct={onAccountsAct} />)}
-                    <ActiveAccount account={active} now={now} onSignIn={provider === 'claude' && onAccountsAct && active.ownDirectory === true && active.live?.signedIn !== true ? () => { void onAccountsAct({ kind: 'sign-in', id: active.id }); } : undefined} />
+                    {view.stillOn && view.stillOn.length > 0 ? (
+                        /*
+                         * AGENTS NOT YET ON THE ACTIVE ACCOUNT (Tynn #1084). One that moves at its next idle says so, and Restart moves it
+                         * now on its conversation. One whose conversation cannot move STAYS, and says why; its Restart starts it fresh
+                         * on the active account, a new conversation, asked first.
+                         */
+                        <Callout color="amber" icon={<Icon name="info" size="sm" />} data-accounts-still-on="">
+                            {view.stillOn.filter((s) => s.stays === undefined).map((s) => <p key={`${s.accountId}|moves`}>{`${s.count} ${s.count === 1 ? 'agent' : 'agents'} still on ${s.label} until idle`}</p>)}
+                            {view.stillOn.filter((s) => s.stays !== undefined).map((s) => <p key={`${s.accountId}|${s.stays}`}>{`${s.count} ${s.count === 1 ? 'agent stays' : 'agents stay'} on ${s.label}: ${s.stays}`}</p>)}
+                            {onAccountsAct ? (
+                                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                                    {view.stillOn.some((s) => s.stays === undefined)
+                                        ? <Button type="button" size="xs" icon="rotate-cw" data-action="move-now" onClick={() => { void onAccountsAct({ kind: 'move-now', provider }); }}>{`Restart on ${active.label} now`}</Button>
+                                        : null}
+                                    {view.stillOn.some((s) => s.stays !== undefined)
+                                        ? <Button type="button" size="xs" icon="rotate-cw" data-action="move-now" data-fresh="true" onClick={() => setAskFresh(true)}>{`Restart on ${active.label} now`}</Button>
+                                        : null}
+                                </div>
+                            ) : null}
+                            {askFresh && onAccountsAct ? (
+                                <div className="mt-1.5">
+                                    <MoveFreshConfirm to={active.label} onConfirm={() => { setAskFresh(false); void onAccountsAct({ kind: 'move-now', provider, fresh: true }); }} onCancel={() => setAskFresh(false)} />
+                                </div>
+                            ) : null}
+                        </Callout>
+                    ) : null}
+                    <ActiveAccount account={active} now={now} onCheck={onAccountsAct ? () => { void onAccountsAct({ kind: 'read-usage', provider, id: active.id, manual: true }); } : undefined} onSignIn={provider === 'claude' && onAccountsAct && active.ownDirectory === true && active.live?.signedIn !== true ? () => { void onAccountsAct({ kind: 'sign-in', id: active.id }); } : undefined} />
                     {design && provider === 'claude' ? <DesignAuthRow design={design} onSignIn={onDesignSignIn} /> : null}
                 </div>
                 <div data-accounts-pane="others" className="flex w-60 shrink-0 flex-col border-l border-[var(--border-1)] bg-[var(--bg-1)]">
@@ -143,7 +186,7 @@ export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, desig
                     <div data-accounts-others-list="" className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3">
                         <span className="text-[11px] font-medium uppercase tracking-wide text-[var(--fg-3)]">{others.length > 0 ? 'Switch to next' : 'Other accounts'}</span>
                         {others.length === 0 ? <span className="text-[var(--fg-3)]">No other {name} account yet.</span> : null}
-                        {others.map((a, i) => <OtherAccount key={a.id} account={a} rank={i + 1} now={now} action={choose(a)} />)}
+                        {others.map((a, i) => <OtherAccount key={a.id} account={a} rank={i + 1} now={now} action={choose(a)} onCheck={onAccountsAct ? () => { void onAccountsAct({ kind: 'read-usage', provider, id: a.id, manual: true }); } : undefined} />)}
                     </div>
                     {/* USE ANOTHER ACCOUNT (Tynn #850): always here, even with one known account. The provider's own login,
                         naming no account: the person picks or creates a different one, and Genie reads who it is afterwards. */}
@@ -171,7 +214,7 @@ function PlanChip({ plan }: { plan: string | null }) {
 }
 
 /** THE LEFT PANE: the account the chip names, large, with who it is and every window it reported. */
-function ActiveAccount({ account, now, onSignIn }: { account: AccountView; now: number; onSignIn?: (() => void) | undefined }) {
+function ActiveAccount({ account, now, onSignIn, onCheck }: { account: AccountView; now: number; onSignIn?: (() => void) | undefined; onCheck?: (() => void) | undefined }) {
     return (
         <section data-account={account.id} data-active={account.active ? 'true' : 'false'} className="flex flex-col gap-3">
             <div className="flex items-center gap-3">
@@ -196,7 +239,7 @@ function ActiveAccount({ account, now, onSignIn }: { account: AccountView; now: 
             </div>
             {onSignIn ? <Button type="button" size="sm" icon="log-in" data-action="account-sign-in" className="self-start" onClick={onSignIn}>Sign in</Button> : null}
             <div className="flex flex-col gap-2.5 border-t border-[var(--border-1)] pt-3">
-                {account.read === false ? <UsageUnknown /> : null}
+                <UsageState account={account} onCheck={onCheck} />
                 {account.windows.map((w) => <WindowRow key={w.window} w={w} now={now} />)}
             </div>
         </section>
@@ -204,7 +247,7 @@ function ActiveAccount({ account, now, onSignIn }: { account: AccountView; now: 
 }
 
 /** THE RIGHT COLUMN: another account, compact: its name, plan, a line per window and its Switch. */
-function OtherAccount({ account, rank, now, action }: { account: AccountView; rank: number; now: number; action: { kind: 'switch' | 'sign-in'; run: () => void } }) {
+function OtherAccount({ account, rank, now, action, onCheck }: { account: AccountView; rank: number; now: number; action: { kind: 'switch' | 'sign-in'; run: () => void }; onCheck?: (() => void) | undefined }) {
     return (
         <section data-account={account.id} data-active="false" data-switch-rank={rank} className="flex flex-col gap-1.5 rounded-md border border-[var(--border-1)] bg-[var(--surface-raised)] p-2">
             <div className="flex items-center gap-1.5">
@@ -213,7 +256,7 @@ function OtherAccount({ account, rank, now, action }: { account: AccountView; ra
                 <PlanChip plan={account.plan} />
             </div>
             {account.live ? <div className="flex flex-wrap gap-1"><LiveBadge live={account.live} /><BillingChip live={account.live} /></div> : null}
-            {account.read === false ? <UsageUnknown /> : null}
+            <UsageState account={account} onCheck={onCheck} />
             {account.windows.map((w) => <CompactWindow key={w.window} w={w} now={now} />)}
             {action.kind === 'switch'
                 ? <Button type="button" size="xs" icon="arrow-right-left" data-action="account-switch" aria-label={`Switch to ${account.label}`} className="self-end" onClick={action.run}>Switch</Button>
@@ -267,6 +310,27 @@ function LiveBadge({ live }: { live: ClaudeAccountLive }) {
 function BillingChip({ live }: { live: ClaudeAccountLive }) {
     const words = live.billing === 'subscription' ? 'Subscription' : live.billing === 'apiUsage' ? 'API usage' : null;
     return words ? <Badge size="sm" variant="soft" color="zinc" data-account-billing="">{words}</Badge> : null;
+}
+
+/**
+ * AN ACCOUNT'S USAGE READ (Tynn #1084): being read now ("Reading usage…"), why the last read failed, or never read; and, on
+ * every card, "Check usage now", which reads THAT account at once.
+ */
+function UsageState({ account, onCheck }: { account: AccountView; onCheck?: (() => void) | undefined }) {
+    const reading = account.usage?.state === 'reading';
+    // Being read replaces "not read yet"; a read that failed says why, under "Usage unknown" when the account was never read.
+    return (
+        <>
+            {reading
+                // Never read: still "unknown" (#1070), and being read now.
+                ? <div data-account-usage-reading="" {...(account.read === false ? { 'data-account-usage-unknown': '' } : {})} className="flex items-center gap-2 text-[11px] text-[var(--fg-3)]"><Icon name="loader" size="xs" className="animate-spin" /><span>{account.read === false ? 'Usage unknown · Reading usage…' : 'Reading usage…'}</span></div>
+                : account.read === false ? <UsageUnknown /> : null}
+            {!reading && account.usage?.state === 'failed'
+                ? <div data-account-usage-failed="" className="flex items-center gap-2 text-[11px] text-[var(--warning)]"><Icon name="triangle-alert" size="xs" /><span>{`Could not read usage: ${account.usage.reason}`}</span></div>
+                : null}
+            {onCheck ? <Button type="button" size="xs" variant="ghost" icon="refresh-cw" data-action="check-usage" className="self-start" disabled={reading} onClick={onCheck}>Check usage now</Button> : null}
+        </>
+    );
 }
 
 /** Tynn #1070: an account with no reading of its own yet. Its usage is unknown; no other account's figures stand in for it. */
