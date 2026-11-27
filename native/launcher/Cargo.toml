@@ -41,6 +41,9 @@ getrandom = "0.2"
 miniz_oxide = "0.8"
 ruzstd = "0.8"
 wry = { version = "0.58", optional = true }
+# The feed (src/feed.rs, L6): GitHub's REST list and the packages over https, rustls with the OS trust store (the
+# spec's choice); no OpenSSL, no runtime.
+ureq = { version = "2.12", default-features = false, features = ["tls", "native-certs"] }
 tao = { version = "0.38", optional = true }
 
 [target.'cfg(unix)'.dependencies]

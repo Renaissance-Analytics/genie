@@ -107,12 +107,32 @@ pub fn hello(record: &HostRecord, token: &str, timeout: Duration) -> Result<Valu
     Ok(welcome)
 }
 
-fn host_log(roots: &Roots) -> std::path::PathBuf {
+pub fn host_log(roots: &Roots) -> std::path::PathBuf {
     roots.logs_dir().join("genie-host.log")
 }
 
 /// `{how: adopted|started, pid, build}`, or the person's words.
 pub fn ensure_host(roots: &Roots, keys: &[VerifyingKey]) -> Result<Value, String> {
+    ensure_host_within(roots, keys, ready_bound())
+}
+
+/// How long a new host has to write host.json and answer: HOST_READY, or GENIE_LAUNCHER_HOST_READY_MS (a test's, a VM
+/// row's rollback case).
+pub fn ready_bound() -> Duration {
+    std::env::var("GENIE_LAUNCHER_HOST_READY_MS").ok().and_then(|v| v.parse::<u64>().ok()).filter(|ms| *ms > 0).map(Duration::from_millis).unwrap_or(HOST_READY)
+}
+
+/// One call to the running host on the launcher's link: its result's value, or why not.
+pub fn call(roots: &Roots, method: &str, args: Value, timeout: Duration) -> Result<Value, String> {
+    let rec = read_record(roots).filter(|r| pid_alive(r.pid)).ok_or("No host is running.")?;
+    let token = read_token(roots)?;
+    let answers = converse(&rec, &token, &[(method, args)], timeout)?;
+    let r = &answers[1];
+    if r["ok"] == true { Ok(r["value"].clone()) } else { Err(r["reason"].as_str().unwrap_or("the host refused").to_string()) }
+}
+
+/// `ensure_host`, a new host given `ready` to answer.
+pub fn ensure_host_within(roots: &Roots, keys: &[VerifyingKey], ready: Duration) -> Result<Value, String> {
     if let Some(rec) = read_record(roots).filter(|r| pid_alive(r.pid)) {
         let token = read_token(roots)?;
         return match hello(&rec, &token, Duration::from_secs(10)) {
@@ -138,7 +158,7 @@ pub fn ensure_host(roots: &Roots, keys: &[VerifyingKey]) -> Result<Value, String
     let log = host_log(roots);
     let pid = start_detached(&program, &[entry.display().to_string()], &env, &log)?;
     let t = Instant::now();
-    while t.elapsed() < HOST_READY {
+    while t.elapsed() < ready {
         if !pid_alive(pid) {
             return Err(format!("The new host exited before it answered. The host's log: {}", log.display()));
         }

@@ -216,16 +216,23 @@ fn retention_keeps_current_and_previous_and_deletes_what_nothing_runs() {
     let feed = Feed::start(&base.join("feed"));
     let _l = start_with(&r, &key, launcher_reading(&r, &key, &feed, None, &[]));
     let mut w = Wire::hello(&r);
+    // Each client with its browser: the browser runs on the client build its manifest names, so a client build a kept
+    // browser needs is kept too.
     for build in [NEW, "2026.11.27-1"] {
         write_package(&feed.dir, &key, &fake_client_package(build));
         feed.publish("client", build, false);
+        write_package(&feed.dir, &key, &browser_package(build));
+        feed.publish("browser", build, false);
         ok(&w.call("launcher.check", json!([])));
         ok(&w.call("launcher.apply", json!([{"track": "client"}])));
+        ok(&w.call("launcher.apply", json!([{"track": "browser"}])));
     }
     assert_eq!(current(&r, "client"), "2026.11.27-1");
     assert_eq!(state(&r)["tracks"]["client"]["previous"], NEW);
     assert!(r.code.join("client").join(NEW).is_dir(), "previous is kept (a rollback goes there)");
-    assert!(!r.code.join("client").join(OLD).exists(), "the build before previous, run by nothing, is deleted");
+    assert!(!r.code.join("client").join(OLD).exists(), "the client build before previous, run by nothing, is deleted");
+    assert!(!r.code.join("browser").join(OLD).exists(), "and the browser's");
+    assert!(r.code.join("browser").join(NEW).is_dir() && r.code.join("browser").join("2026.11.27-1").is_dir());
 }
 
 #[test]

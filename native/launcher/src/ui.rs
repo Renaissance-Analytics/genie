@@ -352,6 +352,105 @@ pub fn prompt_html(q: &Question) -> String {
 enum Resident {
     Ask(Question, std::sync::mpsc::Sender<bool>),
     Ipc(tao::window::WindowId, String),
+    /// L6: the Updates window opened (or brought forward).
+    ShowUpdates(std::sync::Arc<crate::control::Context>),
+    /// L6: what the open Updates window shows now.
+    UpdatesView(Value),
+}
+
+// --- L6 (Tynn #1058): the Updates window -----------------------------------------------------------------------------
+
+/// The Updates page with the mockup's CSS and what it shows first in place.
+pub fn updates_html(first: &Value) -> String {
+    let css = format!("{}\n{}", include_str!("../ui/base.css"), include_str!("../ui/theme-c.css"));
+    let literal = first.to_string().replace('<', "\\u003c");
+    include_str!("../ui/updates.html").replace("/*GENIE_CSS*/", &css).replace("/*GENIE_UPDATES*/null", &literal)
+}
+
+/// What the Updates window is given: `launcher.updates`, and whether a check is running.
+fn updates_data(ctx: &crate::control::Context, checking: bool) -> Value {
+    let mut v = crate::updates::view(&ctx.updates, &ctx.roots);
+    v["checking"] = json!(checking);
+    v
+}
+
+/// Opens the launcher's Updates window, or brings it forward: `false` when this launcher has no window loop.
+pub fn show_updates(ctx: std::sync::Arc<crate::control::Context>) -> bool {
+    let Some(proxy) = RESIDENT.get().and_then(|p| p.lock().ok().map(|p| p.clone())) else { return false };
+    proxy.send_event(Resident::ShowUpdates(ctx)).is_ok()
+}
+
+static UPDATES_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static CHECKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The window's buttons, each acted on off the window's thread (a host's drain or a download takes a while).
+fn updates_act(ctx: std::sync::Arc<crate::control::Context>, msg: Value, proxy: EventLoopProxy<Resident>) {
+    use std::sync::atomic::Ordering;
+    std::thread::spawn(move || {
+        let kind = msg["kind"].as_str().unwrap_or("");
+        eprintln!("genie: updates window: {kind} {}", msg["track"].as_str().unwrap_or(""));
+        match kind {
+            "check" => {
+                CHECKING.store(true, Ordering::SeqCst);
+                let _ = proxy.send_event(Resident::UpdatesView(updates_data(&ctx, true)));
+                if let Err(why) = crate::updates::check_now(&ctx.updates, &ctx.roots) {
+                    eprintln!("genie: updates window: the check failed: {why}");
+                }
+                CHECKING.store(false, Ordering::SeqCst);
+            }
+            "apply" => {
+                if let Some(track) = msg["track"].as_str().and_then(Track::parse) {
+                    if let Err(why) = crate::control::apply_track(&ctx, track) {
+                        eprintln!("genie: updates window: {why}");
+                    }
+                }
+            }
+            "applyAll" => {
+                // The client and the browser first (nothing stops), then the host (its drain), the launcher last (it hands over).
+                let v = crate::updates::view(&ctx.updates, &ctx.roots);
+                let ready = |t: &str| v["tracks"].as_array().map_or(false, |rows| rows.iter().any(|r| r["track"] == t && r["state"] == "ready"));
+                for track in [Track::Client, Track::Browser, Track::Host, Track::Launcher] {
+                    if ready(track.as_str()) {
+                        if let Err(why) = crate::control::apply_track(&ctx, track) {
+                            eprintln!("genie: updates window: {why}");
+                        }
+                    }
+                }
+            }
+            "openGenie" => {
+                if let Err(why) = crate::control::open_window(&ctx) {
+                    eprintln!("genie: updates window: Open Genie: {why}");
+                }
+            }
+            "hostLog" => {
+                let log = crate::host::host_log(&ctx.roots);
+                let path = log.display().to_string().replace('\\', "/");
+                let uri = if path.starts_with('/') { format!("file://{path}") } else { format!("file:///{path}") };
+                if let Err(why) = open_with_the_os(&uri) {
+                    eprintln!("genie: updates window: the host's log: {why}");
+                }
+            }
+            _ => {}
+        }
+        let _ = proxy.send_event(Resident::UpdatesView(updates_data(&ctx, CHECKING.load(Ordering::SeqCst))));
+    });
+}
+
+/// A fixed address opened by the OS's own opener (ShellExecuteW; GTK's show_uri): no shell, no PATH search.
+fn open_with_the_os(uri: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+        let (op, target) = (wide("open"), wide(uri));
+        let r = unsafe { ShellExecuteW(std::ptr::null_mut(), op.as_ptr(), target.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL) };
+        if (r as isize) <= 32 { Err(format!("{uri} could not be opened (error {})", r as isize)) } else { Ok(()) }
+    }
+    #[cfg(unix)]
+    {
+        gtk::show_uri_on_window(None::<&gtk::Window>, uri, 0).map_err(|e| format!("{uri} could not be opened: {e}"))
+    }
 }
 
 static RESIDENT: std::sync::OnceLock<std::sync::Mutex<EventLoopProxy<Resident>>> = std::sync::OnceLock::new();
@@ -388,9 +487,100 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
     }
     let mut context = WebContext::new(Some(data_dir));
     let mut open: std::collections::HashMap<tao::window::WindowId, (tao::window::Window, wry::WebView, std::sync::mpsc::Sender<bool>, String)> = Default::default();
+    // L6: the Updates window, one at most, and the launcher it shows.
+    let mut updates: Option<(tao::window::Window, wry::WebView, std::sync::Arc<crate::control::Context>)> = None;
     event_loop.run_return(|event, target, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
+            Event::UserEvent(Resident::ShowUpdates(ctx)) => {
+                if let Some((window, _, _)) = &updates {
+                    window.set_minimized(false);
+                    window.set_focus();
+                    return;
+                }
+                let first = updates_data(&ctx, false);
+                let made = (|| -> Result<(tao::window::Window, wry::WebView), String> {
+                    let window = WindowBuilder::new()
+                        .with_title("Updates")
+                        .with_inner_size(LogicalSize::new(520.0, 640.0))
+                        .with_resizable(false)
+                        .with_decorations(false)
+                        .build(target)
+                        .map_err(|e| format!("the Updates window could not be made: {e}"))?;
+                    if let Some(m) = window.current_monitor().or_else(|| window.primary_monitor()) {
+                        let (ms, mp, ws) = (m.size(), m.position(), window.outer_size());
+                        let x = mp.x + (ms.width.saturating_sub(ws.width) / 2) as i32;
+                        let y = mp.y + (ms.height.saturating_sub(ws.height) / 2) as i32;
+                        window.set_outer_position(tao::dpi::PhysicalPosition::new(x, y));
+                    }
+                    let id = window.id();
+                    let ipc = proxy.clone();
+                    let builder = WebViewBuilder::new_with_web_context(&mut context).with_html(updates_html(&first)).with_ipc_handler(move |req: wry::http::Request<String>| {
+                        let _ = ipc.send_event(Resident::Ipc(id, req.body().clone()));
+                    });
+                    #[cfg(windows)]
+                    let webview = builder.build(&window).map_err(|e| format!("the Updates webview (WebView2) could not start: {e}"))?;
+                    #[cfg(unix)]
+                    let webview = {
+                        use tao::platform::unix::WindowExtUnix;
+                        use wry::WebViewBuilderExtUnix;
+                        let vbox = window.default_vbox().ok_or("the Updates window has no GTK box for its webview")?;
+                        builder.build_gtk(vbox).map_err(|e| format!("the Updates webview (WebKitGTK) could not start: {e}"))?
+                    };
+                    window.set_focus();
+                    Ok((window, webview))
+                })();
+                match made {
+                    Ok((window, webview)) => {
+                        updates = Some((window, webview, std::sync::Arc::clone(&ctx)));
+                        UPDATES_OPEN.store(true, std::sync::atomic::Ordering::SeqCst);
+                        // Once a second while it is open: what it shows, from the launcher's own view (no network).
+                        let proxy = proxy.clone();
+                        std::thread::spawn(move || {
+                            while UPDATES_OPEN.load(std::sync::atomic::Ordering::SeqCst) {
+                                std::thread::sleep(std::time::Duration::from_secs(1));
+                                let _ = proxy.send_event(Resident::UpdatesView(updates_data(&ctx, CHECKING.load(std::sync::atomic::Ordering::SeqCst))));
+                            }
+                        });
+                    }
+                    Err(why) => eprintln!("genie: {why}"),
+                }
+            }
+            Event::UserEvent(Resident::UpdatesView(v)) => {
+                if let Some((_, webview, _)) = &updates {
+                    let _ = webview.evaluate_script(&format!("window.render && window.render({})", v.to_string().replace('<', "\\u003c")));
+                }
+            }
+            Event::UserEvent(Resident::Ipc(id, body)) if updates.as_ref().map_or(false, |(w, _, _)| w.id() == id) => {
+                let msg = serde_json::from_str::<Value>(&body).unwrap_or(Value::Null);
+                match msg["kind"].as_str() {
+                    Some("shown") => eprintln!("genie: the Updates window is shown"),
+                    Some("drag") => {
+                        if let Some((window, _, _)) = &updates {
+                            let _ = window.drag_window();
+                        }
+                    }
+                    Some("minimize") => {
+                        if let Some((window, _, _)) = &updates {
+                            window.set_minimized(true);
+                        }
+                    }
+                    Some("close") | Some("later") => {
+                        UPDATES_OPEN.store(false, std::sync::atomic::Ordering::SeqCst);
+                        updates = None;
+                    }
+                    Some(_) => {
+                        if let Some((_, _, ctx)) = &updates {
+                            updates_act(std::sync::Arc::clone(ctx), msg, proxy.clone());
+                        }
+                    }
+                    None => {}
+                }
+            }
+            Event::WindowEvent { window_id, event: WindowEvent::CloseRequested, .. } if updates.as_ref().map_or(false, |(w, _, _)| w.id() == window_id) => {
+                UPDATES_OPEN.store(false, std::sync::atomic::Ordering::SeqCst);
+                updates = None;
+            }
             Event::UserEvent(Resident::Ask(q, reply)) => {
                 let made = (|| -> Result<(tao::window::Window, wry::WebView), String> {
                     let window = WindowBuilder::new()

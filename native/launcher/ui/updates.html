@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Updates</title>
+<!-- THE LAUNCHER'S UPDATES WINDOW (Tynn #1058 L6), in the owner's direction C, "Wish Orb": the mockup's screens 3a (each
+     item on its own), 3b (a host update in progress), 5a (an update not from Genie) and 5b (back on the version that
+     worked). base.css and theme-c.css are put in place of the CSS marker by src/ui.rs, which then calls render(data) with
+     `launcher.updates` (src/updates.rs view) once a second. Every button answers through window.ipc.postMessage (wry):
+     apply {track}, applyAll, check, later, openGenie, hostLog, drag, minimize, close. Nothing here is fetched, and no text
+     from the feed is ever read as HTML (textContent only). -->
+<style>/*GENIE_CSS*/
+html,body{height:100%;overflow:hidden;user-select:none}
+[hidden]{display:none!important}
+.win{width:100%;height:100%}
+.tb-ctl i{cursor:pointer}
+.body{position:relative;z-index:3;box-sizing:border-box;width:100%;max-width:520px;margin:0 auto}
+.u-head .check{margin-left:auto;font-size:13px}
+.urow .why{color:#ff9aae;font-size:12.5px}
+.urow .busy{font-size:12.5px;color:var(--muted)}
+</style>
+</head>
+<body class="only">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="lampfill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="var(--lamp-a)"/><stop offset="1" stop-color="var(--lamp-b)"/></linearGradient>
+    <symbol id="lamp" viewBox="0 0 72 44">
+      <path fill="url(#lampfill)" d="M12 27c0-5.5 7.6-8.6 19.5-8.6S51 21.5 51 27c0 0 5.8-.6 10.2-6 2.1-2.5 4.6-3.6 7.3-2.6-3.5 1.3-5.6 5.4-8.7 9.6-3.3 4.4-8 6.8-13.4 7.4H24.5C17 35.4 12 32 12 27z"/>
+      <path fill="none" stroke="url(#lampfill)" stroke-width="2.6" stroke-linecap="round" d="M12.4 25.5c-6.4.4-9.2-5.8-5.2-8.4 2.3-1.5 4.9-.4 6 1.8"/>
+      <path fill="url(#lampfill)" d="M21.5 19c2.2-4.4 6.2-5.8 10-5.8s7.8 1.4 10 5.8z"/>
+      <circle fill="url(#lampfill)" cx="31.5" cy="10.6" r="2.4"/>
+      <path fill="url(#lampfill)" d="M24 35.6h15l3.6 5H20.4z"/>
+    </symbol>
+    <symbol id="i-check" viewBox="0 0 20 20"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M5 10.5l3.2 3.2L15 6.8"/></symbol>
+    <symbol id="i-host" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6.5" rx="2"/><rect x="3" y="13.5" width="18" height="6.5" rx="2"/></g><circle cx="7" cy="7.2" r="1.2" fill="currentColor"/><circle cx="7" cy="16.8" r="1.2" fill="currentColor"/></symbol>
+    <symbol id="i-window" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M3 9h18"/></g><circle cx="6.2" cy="6.8" r=".9" fill="currentColor"/><circle cx="8.8" cy="6.8" r=".9" fill="currentColor"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.6 2.6 3.6 5.4 3.6 8.5s-1 5.9-3.6 8.5c-2.6-2.6-3.6-5.4-3.6-8.5s1-5.9 3.6-8.5z"/></g></symbol>
+    <symbol id="i-apps" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.8"/><path d="M16.75 14v5.5M14 16.75h5.5" stroke-linecap="round"/></g></symbol>
+    <symbol id="i-rocket" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3c3.5 2 5 5.5 5 9.5l-2 3.5H9l-2-3.5C7 8.5 8.5 5 12 3z"/><circle cx="12" cy="10" r="1.8"/><path d="M9 16l-2.5 3M15 16l2.5 3" stroke-linecap="round"/></g></symbol>
+    <symbol id="i-tools" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M14.5 6.5a4 4 0 0 0 5 5l-8.5 8.5a2.1 2.1 0 0 1-3-3l8.5-8.5a4 4 0 0 0-2-2zM14.5 6.5l3-3"/></symbol>
+    <symbol id="i-seal" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5.5c0 4.5-3 7.8-7 9.5-4-1.7-7-5-7-9.5V6z"/><path d="M9.5 9.5l5 5M14.5 9.5l-5 5"/></g></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 7L4 11l4 4"/><path d="M4 11h10a6 6 0 0 1 0 12h-3"/></g></symbol>
+  </defs>
+</svg>
+<main class="board">
+  <div class="win">
+    <div class="tb" id="tb"><svg class="tb-lamp"><use href="#lamp"/></svg><span id="tb-title">Updates</span><div class="tb-ctl"><i data-act="minimize">–</i><i data-act="close">×</i></div></div>
+
+    <!-- 3a: every item on its own -->
+    <div class="body" id="s-list">
+      <div class="u-head">
+        <h1>Updates</h1>
+        <span class="pill soft" id="ready-pill"></span>
+        <a class="link check" id="check">Check now</a>
+      </div>
+      <p class="muted small">Each one updates on its own. Only the host pauses your agents, briefly.</p>
+      <div class="ulist" id="ulist"></div>
+      <div class="foot split">
+        <a class="link" id="later">Later</a>
+        <button class="btn primary" id="all">Update all</button>
+      </div>
+    </div>
+
+    <!-- 3b: a host update in progress -->
+    <div class="body" id="s-host" hidden>
+      <div class="hero working hero-sm-c" id="host-hero" style="--p:10"><div class="glow"></div><div class="smoke"><i></i><i></i><i></i></div><div class="dust" data-n="14"></div><svg class="lamp"><use href="#lamp"/></svg></div>
+      <h1 class="center">Updating the host</h1>
+      <p class="muted center" id="host-lead"></p>
+      <ul class="agents" id="host-agents"></ul>
+      <div class="phases" id="phases"><span class="ph">1 · Pausing agents</span><span class="ph">2 · Swapping the host</span><span class="ph">3 · Bringing them back</span></div>
+      <div class="bar" id="host-bar" style="--p:10%"><div class="fill"></div></div>
+      <div class="foot split">
+        <span class="muted tiny">Genie client updates with it.</span>
+        <span class="muted tiny" id="host-build"></span>
+      </div>
+    </div>
+
+    <!-- 5a: an update not from Genie -->
+    <div class="body" id="s-error" hidden>
+      <div class="hero bad" style="--p:100"><div class="glow"></div><div class="ico-xl"><svg><use href="#i-seal"/></svg></div></div>
+      <h1 class="center">This update isn’t from Genie</h1>
+      <p class="muted center">Its signature didn’t match, so nothing was installed. Genie is fine and still on the version you had.</p>
+      <div class="facts">
+        <div><span class="muted">Update</span><b id="err-update"></b></div>
+        <div><span class="muted">You have</span><b id="err-have"></b></div>
+        <div><span class="muted">Your agents</span><b>Not touched</b></div>
+      </div>
+      <div class="foot">
+        <button class="btn primary wide" id="err-ok">OK</button>
+      </div>
+    </div>
+
+    <!-- 5b: back on the version that worked -->
+    <div class="body" id="s-back" hidden>
+      <div class="hero warn" style="--p:100"><div class="glow"></div><div class="smoke"><i></i><i></i><i></i></div><div class="ico-xl"><svg><use href="#i-undo"/></svg></div></div>
+      <h1 class="center">Back on the version that worked</h1>
+      <p class="muted center" id="back-said"></p>
+      <ul class="agents compact" id="back-agents"></ul>
+      <div class="foot">
+        <button class="btn primary wide" id="back-open">Open Genie</button>
+        <a class="link center" id="back-log">See what went wrong (host log)</a>
+      </div>
+    </div>
+  </div>
+</main>
+<script>
+(function () {
+  var say = function (kind, extra) { var m = extra || {}; m.kind = kind; window.ipc.postMessage(JSON.stringify(m)); };
+  var $ = function (id) { return document.getElementById(id); };
+  var NAMES = { host: 'Host', client: 'Genie client', browser: 'Genie Browser', launcher: 'Launcher' };
+  var ICONS = { host: 'i-host', client: 'i-window', browser: 'i-globe', launcher: 'i-rocket' };
+  var dismissed = { error: null, back: null };
+  var data = null;
+
+  // Deterministic stardust (the mockup's): the same sparkle layout on every load, so screenshots are stable.
+  var seed = 7;
+  function rnd() { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; }
+  document.querySelectorAll('.dust').forEach(function (d) {
+    var n = +d.getAttribute('data-n') || 12;
+    for (var i = 0; i < n; i++) {
+      var s = document.createElement('span');
+      s.style.left = (8 + rnd() * 84).toFixed(1) + '%';
+      s.style.top = (rnd() * 90).toFixed(1) + '%';
+      s.style.setProperty('--d', (rnd() * 2.4).toFixed(2) + 's');
+      s.style.setProperty('--s', (0.5 + rnd() * 1.1).toFixed(2));
+      d.appendChild(s);
+    }
+  });
+
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
+  function icon(id) { var ns = 'http://www.w3.org/2000/svg'; var s = document.createElementNS(ns, 'svg'); var u = document.createElementNS(ns, 'use'); u.setAttribute('href', '#' + id); s.appendChild(u); return s; }
+  function firstLine(t) { return (t || '').split('\n').map(function (l) { return l.trim(); }).filter(Boolean)[0] || ''; }
+  function agentNames(h) { var a = h && h.agents; if (a && Array.isArray(a.names)) return a.names; return []; }
+  function initial(n) { return (n || '?').trim().charAt(0).toUpperCase(); }
+  function show(id, title) { ['s-list', 's-host', 's-error', 's-back'].forEach(function (s) { $(s).hidden = s !== id; }); $('tb-title').textContent = title; }
+
+  function row(t) {
+    var r = el('div', 'urow' + (t.track === 'host' && t.state === 'ready' ? ' hostrow' : '') + (t.state === 'ready' ? '' : ' quiet'));
+    var ico = el('div', 'ico'); ico.appendChild(icon(ICONS[t.track])); r.appendChild(ico);
+    var g = el('div', 'grow');
+    var title = el('div', 'row-title', NAMES[t.track] + ' ');
+    var offer = t.offer && t.offer.build;
+    var ver = offer ? (t.track === 'host' ? (t.current || '') + ' → ' + offer : '→ ' + offer) : (t.state === 'unchecked' ? 'not checked yet' : 'up to date' + (t.track === 'launcher' ? ' · updates itself, nothing stops' : ''));
+    title.appendChild(el('span', 'ver', ver));
+    g.appendChild(title);
+    if (t.state === 'ready') {
+      if (t.track === 'host') g.appendChild(el('div', 'note host-note', 'Includes a client update · your agents keep working'));
+      else if (t.track === 'launcher') g.appendChild(el('div', 'note', 'Updates itself · nothing stops'));
+      else g.appendChild(el('div', 'note', 'No restart of your host'));
+      var notes = firstLine(t.offer && t.offer.notes);
+      if (notes) g.appendChild(el('div', 'muted tiny', notes));
+    } else if (t.state === 'refused' || t.state === 'failed') {
+      g.appendChild(el('div', 'why', t.why || 'This update could not be made ready.'));
+    }
+    r.appendChild(g);
+    if (t.state === 'ready') {
+      var b = el('button', 'btn sm' + (t.track === 'host' ? ' primary' : ''), 'Update');
+      b.onclick = function () { b.disabled = true; b.textContent = 'Updating…'; say('apply', { track: t.track }); };
+      r.appendChild(b);
+    } else if (t.state === 'up-to-date') {
+      var ok = el('span', 'st-ok'); ok.appendChild(icon('i-check')); r.appendChild(ok);
+    }
+    return r;
+  }
+
+  function quietRow(iconId, name, ver, pill) {
+    var r = el('div', 'urow quiet');
+    var ico = el('div', 'ico'); ico.appendChild(icon(iconId)); r.appendChild(ico);
+    var g = el('div', 'grow'); var title = el('div', 'row-title', name + ' '); title.appendChild(el('span', 'ver', ver)); g.appendChild(title); r.appendChild(g);
+    if (pill) r.appendChild(el('span', 'pill soft', pill));
+    return r;
+  }
+
+  function renderList(d) {
+    var list = $('ulist'); list.textContent = '';
+    var tracks = d.tracks || [];
+    var byTrack = {}; tracks.forEach(function (t) { byTrack[t.track] = t; });
+    ['host', 'client', 'browser'].forEach(function (k) { if (byTrack[k]) list.appendChild(row(byTrack[k])); });
+    // The host's tools are its own (Tynn #716, L7): listed here once the launcher asks the host for them.
+    if (byTrack.host) list.appendChild(quietRow('i-tools', 'Tools', 'installed by your host · no restart', null));
+    list.appendChild(quietRow('i-apps', 'Genie Apps', 'each app on its own · no restart of your host', 'Coming soon'));
+    if (byTrack.launcher) list.appendChild(row(byTrack.launcher));
+    var ready = tracks.filter(function (t) { return t.state === 'ready'; }).length;
+    $('ready-pill').textContent = ready > 0 ? ready + ' ready' : 'up to date';
+    $('all').disabled = ready === 0;
+    $('check').textContent = d.checking ? 'Checking…' : 'Check now';
+  }
+
+  function renderHost(h) {
+    var phase = h.phase;
+    var names = agentNames(h);
+    var n = names.length || (h.agents && h.agents.count) || 0;
+    $('host-lead').textContent = n > 0
+      ? 'Your ' + (n === 1 ? 'agent keeps' : n + ' agents keep') + ' working until a safe moment, then pick' + (n === 1 ? 's' : '') + ' up right where ' + (n === 1 ? 'it' : 'they') + ' left off.'
+      : 'Nothing is running on the host, so nothing waits. It is back in a moment.';
+    var step = phase === 'draining' ? 0 : phase === 'stopping' ? 1 : phase === 'swapping' ? 1 : 2;
+    var pct = { draining: 30, stopping: 45, swapping: 60, starting: 80, 'rolling-back': 90 }[phase] || 10;
+    $('host-hero').style.setProperty('--p', String(pct));
+    $('host-bar').style.setProperty('--p', pct + '%');
+    var phs = $('phases').children;
+    for (var i = 0; i < phs.length; i++) phs[i].className = 'ph' + (i === step ? ' now' : i < step ? ' done' : '');
+    $('host-build').textContent = (h.from || '') + ' → ' + (h.to || '');
+    var ul = $('host-agents'); ul.textContent = '';
+    names.forEach(function (name) {
+      var paused = phase !== 'draining';
+      var li = el('li', paused ? 'done' : 'now');
+      li.appendChild(el('span', 'av', initial(name)));
+      var g = el('span', 'grow', name); g.appendChild(el('span', 'muted tiny block', phase === 'starting' ? 'Coming back…' : paused ? 'Paused safely' : 'Finishing up…')); li.appendChild(g);
+      var st = el('span', 'st'); if (paused) st.appendChild(icon('i-check')); li.appendChild(st);
+      ul.appendChild(li);
+    });
+  }
+
+  function renderBack(h) {
+    $('back-said').textContent = (h.said || '').replace(/ The host's log: .*$/, '');
+    var ul = $('back-agents'); ul.textContent = '';
+    agentNames(h).forEach(function (name) {
+      var li = el('li', 'done');
+      li.appendChild(el('span', 'av', initial(name)));
+      li.appendChild(el('span', 'grow', name));
+      li.appendChild(el('span', 'muted tiny', 'back'));
+      var st = el('span', 'st'); st.appendChild(icon('i-check')); li.appendChild(st);
+      ul.appendChild(li);
+    });
+  }
+
+  window.render = function (d) {
+    data = d;
+    var h = d.hostUpdate || {};
+    var busy = ['draining', 'stopping', 'swapping', 'starting', 'rolling-back'].indexOf(h.phase) >= 0;
+    var refused = (d.tracks || []).filter(function (t) { return t.state === 'refused' && /signature is not Genie/.test(t.why || ''); })[0];
+    if (busy) { renderHost(h); show('s-host', 'Updating the host'); return; }
+    if (h.phase === 'rolled-back' && dismissed.back !== h.at) { renderBack(h); show('s-back', 'Genie'); return; }
+    if (refused && dismissed.error !== refused.track + (refused.offer && refused.offer.build)) {
+      $('err-update').textContent = NAMES[refused.track] + ' ' + ((refused.offer && refused.offer.build) || '');
+      $('err-have').textContent = NAMES[refused.track] + ' ' + (refused.current || '');
+      $('err-ok').onclick = function () { dismissed.error = refused.track + (refused.offer && refused.offer.build); window.render(data); };
+      show('s-error', 'Updates');
+      return;
+    }
+    renderList(d);
+    show('s-list', 'Updates');
+  };
+
+  $('check').onclick = function () { say('check'); };
+  $('later').onclick = function () { say('later'); };
+  $('all').onclick = function () { $('all').disabled = true; say('applyAll'); };
+  $('back-open').onclick = function () { dismissed.back = data && data.hostUpdate && data.hostUpdate.at; say('openGenie'); window.render(data); };
+  $('back-log').onclick = function () { say('hostLog'); };
+  document.querySelectorAll('[data-act]').forEach(function (i) { i.onclick = function (e) { e.stopPropagation(); say(i.getAttribute('data-act')); }; });
+  $('tb').addEventListener('mousedown', function (e) { if (e.button === 0 && !e.target.closest('.tb-ctl')) say('drag'); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') say('later'); });
+  var first = /*GENIE_UPDATES*/null;
+  if (first) window.render(first);
+  say('shown');
+})();
+</script>
+</body>
+</html>
