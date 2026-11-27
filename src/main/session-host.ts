@@ -2475,6 +2475,17 @@ export class SessionHost {
             if (!verdict.verified && verdict.survivors.length > 0) this.#leftovers.set(agentId, verdict.survivors);
             else { this.#leftovers.delete(agentId); this.#stoppingIn.delete(agentId); }
             this.#lifecycle?.ended(agentId, entry.run, verdict);
+            /*
+             * ITS LAST ROWS REACH THE WINDOW (Tynn #1089). The ledger of a stopped agent is its history, read once (`ledgerFor`),
+             * and the window asks for it the moment the stop is announced — before the run's last rows (what it kept
+             * "undelivered", a cancelled approval) are written. Read then, it stayed that way: the kept messages read as
+             * queued, never "Not delivered" with Send all now. Read again once they are written, unless a new run began.
+             */
+            void entry.session.settled().then(() => {
+                if (this.#running.has(agentId)) return;
+                this.#histories.delete(agentId);
+                this.#emit(agentId);
+            });
         };
         // Known at once when no grace and no retry was needed (and then a start right after is not refused).
         const known = entry.session.stopVerdict;

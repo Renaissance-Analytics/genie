@@ -172,7 +172,7 @@ try {
             console.log(`  NOT DELIVERED SEEN: ${seen}`);
         }
         const note = await text(`${CHAT} [data-chat-queued]`).catch(() => null);
-        if (!movingShot && note && calls().some((c) => c.dir === roomyDir && !c.probe && c.args?.includes('--print'))) { await shot('03-moving'); movingShot = true; console.log(`  the note during the move: ${note}`); }
+        if (!movingShot && note && !/Queued · waiting for the provider/.test(note)) { await shot('03-moving'); movingShot = true; console.log(`  the note during the move: ${note}`); }
         await sleep(100);
     }
     check('L3b', said(roomyDir, 'why do I keep getting this?'), 'the message reached atlas on Roomy, in Roomy\'s own folder');
