@@ -117,6 +117,39 @@ async function reportPlanToGenie(steps) {
     } catch (error) { say(`plan call failed: ${String(error)}`); }
 }
 /**
+ * ASK MODE (scripts/ftq-survives-restart-cdp.mjs, Tynn #1085): while `<tmpdir>/genie-stub-codex-ask` holds `{ owner, questions }`
+ * with a live owner pid, a turn asks those questions the way an agent in Genie does — a `tools/call` of Genie's own
+ * `ForceTheQuestion` on the `genie` MCP server this provider was given, with the agent's own key — and ENDS: FTQ never
+ * blocks, so the agent is idle, waiting for its mail. Asked once per marker (the marker's `asked` file records it), so a
+ * restarted run does not ask again. What Genie answered goes to `<tmpdir>/genie-stub-codex-ask.result`. Without the file
+ * nothing below changes.
+ */
+function askScript() {
+    const marker = join(tmpdir(), 'genie-stub-codex-ask');
+    if (!existsSync(marker) || existsSync(`${marker}.asked`)) return null;
+    try {
+        const script = JSON.parse(readFileSync(marker, 'utf8'));
+        process.kill(script.owner, 0);
+        return Array.isArray(script.questions) ? script : null;
+    } catch { return null; }
+}
+async function askGenie(questions) {
+    const marker = join(tmpdir(), 'genie-stub-codex-ask');
+    appendFileSync(`${marker}.asked`, `${process.pid}
+`);
+    const say = (line) => { appendFileSync(`${marker}.result`, `${line}
+`); note(line); };
+    if (!genieServer) { say('no genie MCP server was given at thread start'); return; }
+    const call = async (id, method, params) => {
+        const res = await fetch(genieServer.url, { method: 'POST', headers: genieServer.headers, body: JSON.stringify({ jsonrpc: '2.0', id, method, params }) });
+        return `${method} ${res.status} ${(await res.text()).slice(0, 400)}`;
+    };
+    try {
+        say(await call(1, 'initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'stub-codex', version: '0.0.0' } }));
+        say(await call(2, 'tools/call', { name: 'ForceTheQuestion', arguments: { questions } }));
+    } catch (error) { say(`ForceTheQuestion call failed: ${String(error)}`); }
+}
+/**
  * RECORD MODE (scripts/agent-key-no-window-cdp.mjs, genie#1457): while `<tmpdir>/genie-stub-codex-record-servers` exists, a
  * thread's start appends the MCP servers this provider was REALLY given, the bearer read from the variable Genie bound it to.
  * The file exists only in a test VM. Without it nothing below changes. With it a turn also ENDS at once, with no approval to ask: a stub parked on a question nobody
@@ -352,6 +385,15 @@ function handle(frame) {
 
             if (existsSync(RECORD_SERVERS)) {
                 send({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId, turn: { id: TURN_ID, status: 'completed', items: [], error: null } } });
+                return;
+            }
+
+            const asking = askScript();
+            if (asking) {
+                note(`ask: ${asking.questions.length} question(s)`);
+                void askGenie(asking.questions).finally(() => {
+                    send({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId, turn: { id: TURN_ID, status: 'completed', items: [], error: null } } });
+                });
                 return;
             }
 

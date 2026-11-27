@@ -1,6 +1,6 @@
 import type { DeckItem } from '../core/deck.js';
 import { dropDraft, pruneDrafts, putDraft, type QuestionDraft, type QuestionDrafts } from '../core/question-drafts.js';
-import { isWindowQuestion, nextQuestion, waitingBehind, windowQueue } from '../core/question-queue.js';
+import { isWindowQuestion, isWindowStale, nextQuestion, waitingBehind, windowQueue } from '../core/question-queue.js';
 
 /**
  * THE FORCETHEQUESTION WINDOW — the logic (the Electron window is `question-window-electron.ts`, behind a port so this is
@@ -10,6 +10,11 @@ import { isWindowQuestion, nextQuestion, waitingBehind, windowQueue } from '../c
  * always opens for every agent." Genie 1's rules (genie main/ask/force-question.ts, renderer/pages/ask.tsx), carried over:
  *
  * - Only LIVE questions take the window (core/question-queue.ts): a stale one stays in the Deck, marked, with Dismiss.
+ * - THE WINDOW NEVER CLOSES UNDER THE PERSON (Tynn #1085; the owner, 2026-11-27: "I will have an FTQ window open and then
+ *   suddenly it closes"). The question on screen that goes stale (its agent removed) is HELD: it stays selected, in the
+ *   queue, with its draft, and carries its `stale` reason so the window says so and offers "Answer anyway". It is let go
+ *   when the person moves on (another question, Later, Dismiss, an answer, closing the window), or when it leaves the
+ *   store (answered elsewhere, withdrawn by its agent).
  * - ONE shared window holding ITS OWN QUEUE: every live question from every agent, in every workspace — the view
  *   carries all of them, so a second agent's question is in front of the person, not a count in a corner while the
  *   question is only in the Deck. The person answers any of them, in any order (`select`, and an id on answer/dismiss).
@@ -94,7 +99,8 @@ export class QuestionWindow {
     /** Call on every change to the questions, and once at boot. */
     changed(): void {
         const items = this.#deps.items();
-        const queue = windowQueue(items);
+        const held = this.#held(items);
+        const queue = held ? [held, ...windowQueue(items)].sort((a, b) => a.at - b.at) : windowQueue(items);
         this.#drafts = pruneDrafts(this.#drafts, queue.map((i) => i.id));
         // A park made on an earlier ask is lifted: its agent asked again (or the question is gone).
         for (const [id, asks] of this.#parkedAt) {
@@ -120,7 +126,7 @@ export class QuestionWindow {
             return;
         }
         const parked = new Set(this.#parkedAt.keys());
-        const next = nextQuestion(items, parked, this.#current);
+        const next = held ?? nextQuestion(items, parked, this.#current);
         if (next === null) {
             this.#current = null;
             const closing = this.#window;
@@ -148,7 +154,7 @@ export class QuestionWindow {
 
     /** The person picked a question from the window's queue — any of them, parked ones included. */
     select(id: string): void {
-        if (!this.#deps.items().some((i) => i.id === id && isWindowQuestion(i))) { this.changed(); return; }
+        if (!this.#deps.items().some((i) => i.id === id && this.#answerable(i))) { this.changed(); return; }
         this.#current = id;
         this.changed();
     }
@@ -158,7 +164,7 @@ export class QuestionWindow {
      * loses nothing; never pushed back while they type — the window's own copy is what they are typing into.
      */
     draft(id: string, draft: QuestionDraft): void {
-        if (!this.#deps.items().some((i) => i.id === id && isWindowQuestion(i))) return;
+        if (!this.#deps.items().some((i) => i.id === id && this.#answerable(i))) return;
         this.#drafts = putDraft(this.#drafts, id, draft);
     }
 
@@ -212,6 +218,17 @@ export class QuestionWindow {
         this.#parkCurrent();
         this.#current = null;
         this.changed();
+    }
+
+    /** The question on screen, gone stale while the person had it open: kept until they move on (Tynn #1085). */
+    #held(items: readonly DeckItem[]): DeckItem | null {
+        if (this.#window === null || this.#current === null) return null;
+        return items.find((i) => i.id === this.#current && isWindowStale(i)) ?? null;
+    }
+
+    /** A question the window can act on now: a live one, or the stale one it holds. */
+    #answerable(item: DeckItem): boolean {
+        return isWindowQuestion(item) || (this.#window !== null && item.id === this.#current && isWindowStale(item));
     }
 
     #parkCurrent(): void {

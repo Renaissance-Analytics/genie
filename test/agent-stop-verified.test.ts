@@ -164,7 +164,7 @@ describe('restart waits for the verified end of the previous run (hosting plan 1
         const h = hostWith(t, log, 2_000);
         expect(h.host.start(h.record(), h.dir)).toEqual({ ok: true });
 
-        const result = await restartAgent(h.ports, h.record().id, 'graceful');
+        const result = await restartAgent(h.ports, h.record().id, 'graceful', 'restart');
 
         expect(result).toMatchObject({ ok: true, kind: 'graceful' });
         const firstExit = log.indexOf('exit:950010:stdin closed');
@@ -205,7 +205,7 @@ describe('restart waits for the verified end of the previous run (hosting plan 1
         h.host.start(h.record(), h.dir);
         t.unkillable(h.drivers[0]!.claude);
 
-        const result = await restartAgent(h.ports, h.record().id, 'fresh');
+        const result = await restartAgent(h.ports, h.record().id, 'fresh', 'fresh');
 
         expect(result.ok).toBe(false);
         expect(h.drivers).toHaveLength(1);

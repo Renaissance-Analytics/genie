@@ -94,10 +94,12 @@ describe('deckItemsFrom reuses what did not change (Tynn #663)', () => {
         const recoloured = deckItemsFrom(input([q], { workspaceNames: { tynn: 'Tynn' }, workspaceColors: { tynn: '#f00' } }))[0]!;
         expect(recoloured).not.toBe(renamed);
         expect(recoloured.workspaceColor).toBe('#f00');
+        // A session that ended changes nothing: its answer is still mailed (Tynn #1085) — the same item, kept.
         const ended = deckItemsFrom(input([q], { workspaceNames: { tynn: 'Tynn' }, workspaceColors: { tynn: '#f00' }, asker: () => ({ running: false, startedAt: 0 }) }))[0]!;
-        expect(ended).not.toBe(recoloured);
-        expect(ended.stale).toBe('session-ended');
+        expect(ended).toBe(recoloured);
+        expect(ended.stale).toBeUndefined();
         const gone = deckItemsFrom(input([q], { agents: {}, workspaceNames: { tynn: 'Tynn' }, workspaceColors: { tynn: '#f00' }, asker: () => ({ running: false, startedAt: 0 }) }))[0]!;
+        expect(gone).not.toBe(recoloured);
         expect(gone.stale).toBe('agent-gone');
         // And back: liveness not known judges nothing, so the mark goes.
         const unknown = deckItemsFrom(input([q], { workspaceNames: { tynn: 'Tynn' }, workspaceColors: { tynn: '#f00' }, asker: () => undefined }))[0]!;

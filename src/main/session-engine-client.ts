@@ -1,5 +1,6 @@
 import type { StreamEvent } from '../core/stream-event.js';
 import type { ToolOutputReply } from '../core/tool-row-bound.js';
+import type { StartWhy } from '../core/start-why.js';
 import type { AttachmentReply } from '../core/thread-store.js';
 import type { readTynnPage } from './tynn-page-client.js';
 import { WorkstationReplica } from './workstation-replica.js';
@@ -862,10 +863,10 @@ export class SessionEngineClient {
         return !r || r.ledger === null || r.partial || r.view.historyPending === true;
     }
 
-    start(record: AgentRecord, cwd: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+    start(record: AgentRecord, cwd: string, how: { readonly why?: StartWhy } = {}): Promise<{ ok: true } | { ok: false; reason: string }> {
         const env = Object.fromEntries(Object.entries((this.#options.env ?? (() => process.env))()).filter((e): e is [string, string] => typeof e[1] === 'string'));
-        // The third place was the window's service env: genie-host computes its own since Tynn #1044, so an empty one goes.
-        return this.#value('engine.start', [record, cwd, {}, env], { ok: false, reason: NOT_CONNECTED });
+        // The third place was the window's service env until Tynn #1044; it carries why the start was asked now (Tynn #1085).
+        return this.#value('engine.start', [record, cwd, how.why ? { why: how.why } : {}, env], { ok: false, reason: NOT_CONNECTED });
     }
 
     stop(agentId: AgentId, options: { graceful?: boolean } = {}): Promise<boolean> {

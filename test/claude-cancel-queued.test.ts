@@ -167,7 +167,7 @@ describe('SessionHost — Claude’s cancel state uncertain: the person’s next
         const ports = {
             startForWork: (r: AgentRecord) => startForWork({ probe: (id) => host.probe(id), start: (a, cwd) => host.start(a, cwd), cwdFor: () => dir, startRefusal: () => null }, r),
             needsNewDriver: (id: AgentRecord['id']) => host.needsNewDriver(id),
-            restart: (id: AgentRecord['id']) => { restarts.push(id); return restartAgent(ops, id, 'graceful'); },
+            restart: (id: AgentRecord['id']) => { restarts.push(id); return restartAgent(ops, id, 'graceful', 'restart'); },
             notice: (id: AgentRecord['id'], message: string) => host.notice(id, message),
         };
         return { host, record, drivers, resumedWith, ports, restarts };

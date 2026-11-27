@@ -56,7 +56,7 @@ $Rows = @(
     'deps', 'electron-binary',
     'unit-build', 'unit',
     'build', 'seed', 'no-pty', 'smoke', 'layout', 'app-stopped',
-    'local-door-break', 'local-door', 'host-late-ready', 'files-watch', 'chat-drafts', 'gapp-open', 'artboard', 'ui-lag', 'plan-popover',
+    'local-door-break', 'local-door', 'host-late-ready', 'files-watch', 'chat-drafts', 'gapp-open', 'artboard', 'ui-lag', 'plan-popover', 'ftq-survives-restart',
     'trust-step', 'accounts-popover', 'claude-accounts', 'usage-on-switch', 'sound-picker', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash', 'quit-keeps-host', 'rebuilt-machine',
     'package', 'sign-plan', 'packed-tree', 'update-metadata', 'package-fuse', 'packaged-launcher',
     'logon',
@@ -357,6 +357,7 @@ function Row-gapp-open { Need-Build; Need-TestMachine; Run 'gapp-open-cdp' { nod
 function Row-artboard { Need-Build; Need-TestMachine; Run 'artboard-cdp' { node scripts/artboard-cdp.mjs --trace-main } }
 function Row-ui-lag { Need-Build; Need-TestMachine; Run 'ui-lag-cdp' { node scripts/ui-lag-cdp.mjs --budget } }
 function Row-plan-popover { Need-Build; Need-TestMachine; Run 'plan-popover-cdp' { node scripts/plan-popover-cdp.mjs } }
+function Row-ftq-survives-restart { Need-Build; Need-TestMachine; Run 'ftq-survives-restart-cdp' { node scripts/ftq-survives-restart-cdp.mjs } }
 function Row-trust-step { Need-Build; Need-TestMachine; Run 'trust-step-cdp' { node scripts/trust-step-cdp.mjs } }
 function Row-accounts-popover { Need-Build; Need-TestMachine; Run 'accounts-popover-cdp' { node scripts/accounts-popover-cdp.mjs } }
 function Row-claude-accounts { Need-Build; Need-TestMachine; Run 'claude-accounts-cdp' { node scripts/claude-accounts-cdp.mjs } }
@@ -511,7 +512,7 @@ function Ceiling([string]$name) {
         { $_ -in 'spawn-host', 'app-stopped' } { return 120 }
         { $_ -in 'no-pty', 'smoke', 'layout', 'local-door-break', 'local-door', 'gapp-open', 'trust-step' } { return 360 }
         'accounts-popover' { return 540 }
-        'plan-popover' { return 480 }
+        { $_ -in 'plan-popover', 'ftq-survives-restart' } { return 480 }
         'claude-accounts' { return 300 }
         'sound-picker' { return 300 }
         'question-maximize' { return 300 }

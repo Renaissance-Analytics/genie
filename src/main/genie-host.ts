@@ -192,6 +192,7 @@ import { FilesHost } from './files-host.js';
 import { fileEventsOf } from '../core/files-panel.js';
 import { gitFileStatus, gitShowHead } from './git-ports.js';
 import { askerLiveFrom } from './asker-live.js';
+import { agentRunLine } from '../core/start-why.js';
 import { assembleDeckItems } from './deck-assembly.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
@@ -1024,7 +1025,8 @@ async function main(): Promise<void> {
                 },
                 writeRunningAtQuit: (ids) => registryStore.writeRunningAtQuit(ids),
                 writeInterruptedAtQuit: (ids) => registryStore.writeInterruptedAtQuit(ids),
-                stopAll: async (onLeft) => { await host.stopAll(onLeft); await host.drained(2_000).catch(() => undefined); },
+                // The upgrade stops every agent (Tynn #1085): said once, so the exits that follow are not read as restarts.
+                stopAll: async (onLeft) => { lifecycleLog(`agents stop why=upgrade count=${host.count}`); await host.stopAll(onLeft); await host.drained(2_000).catch(() => undefined); },
                 onRecordError: (error) => { const line = `update: the agents to start again could not be recorded: ${error instanceof Error ? error.message : String(error)}`; say(line); lifecycleLog(line); },
             }),
             // P5a.3's order: the browser told to end, then sites, the front door and kept processes stopped; containers stay up.
@@ -1506,7 +1508,7 @@ async function main(): Promise<void> {
             refreshHealth: (provider) => { void providerHealth.refresh(provider); },
             refreshLive: () => { void claudeLive.refresh(); },
             signedOutAgents: (provider, id) => host.signedOutAgents(provider, id),
-            restart: (id) => { void trustRestart(id as AgentId).then((r) => { if (r.ok) host.prompt(id as AgentId, SIGNED_IN_AGAIN, 'genie'); }); },
+            restart: (id) => { void trustRestart(id as AgentId, 'signed-in').then((r) => { if (r.ok) host.prompt(id as AgentId, SIGNED_IN_AGAIN, 'genie'); }); },
             resumeLimit: (provider, id) => { host.resumeLimit(provider, id); },
         }),
     });
@@ -1861,7 +1863,7 @@ async function main(): Promise<void> {
     // kept on its record (Tynn #628).
     const mcpRecovery = hostMcpRecovery({
         notice: (id, text) => { host.notice(id as AgentId, text); },
-        restart: (id) => trustRestart(id as AgentId),
+        restart: (id) => trustRestart(id as AgentId, 'mcp-recovery'),
         noteSeen: (id, names) => { void phoneRegistryNow?.noteMcpSeen(id as AgentId, names).catch(() => undefined); },
         now: () => Date.now(),
         later: (run, ms) => { const timer = setTimeout(run, ms); timer.unref?.(); return () => clearTimeout(timer); },
@@ -1933,6 +1935,8 @@ async function main(): Promise<void> {
                 lifecycleLog(`spawn kind=agent owner=${agentId} run=${run} pids=${describeProcesses(processes)}`);
             },
             phase: (agentId, run, phase) => { lifecycleLog(`agent start owner=${agentId} run=${run} phase=${phase}`); },
+            // WHY each run started (Tynn #1085): one line per run, so a restart of every agent at once can be traced.
+            starting: (agentId, run, why) => { lifecycleLog(agentRunLine(agentId, run, why)); },
             ended: (agentId, run, verdict) => {
                 if (verdict.verified) {
                     spawnLedger.forget('agent', agentId, run);
@@ -1954,7 +1958,7 @@ async function main(): Promise<void> {
      * A WORKSPACE'S VERDICT CHANGES WHILE ITS AGENT RUNS (genie#1519, trust-verdict.ts), compared here, on the host's own
      * sessions. A restart is the graceful one: stop, the old run ended, the same conversation started, what it was owed.
      */
-    const trustRestart = async (id: AgentId): Promise<{ ok: true } | { ok: false; reason: string | null }> => {
+    const trustRestart = async (id: AgentId, why: 'signed-in' | 'mcp-recovery' | 'trust'): Promise<{ ok: true } | { ok: false; reason: string | null }> => {
         const record = hostRegistry.find(id);
         if (!record) return { ok: false, reason: null };
         // Its workspace's folder is gone (P7): refused before the stop, so a running agent is left as it was.
@@ -1963,7 +1967,7 @@ async function main(): Promise<void> {
         host.stop(id);
         const verdict = await host.ended(id);
         if (verdict && !verdict.verified && verdict.survivors.length > 0) return { ok: false, reason: `${record.name}'s previous run did not end, so it was not started again: ${verdict.reason}` };
-        const started = host.start(record, hostRegistry.workspace(record.workspaceId)?.path ?? osaHome);
+        const started = host.start(record, hostRegistry.workspace(record.workspaceId)?.path ?? osaHome, { why });
         if (!started.ok) return started;
         await host.deliverOwed(id);
         return { ok: true };
@@ -1985,7 +1989,7 @@ async function main(): Promise<void> {
         hold: (id, text) => host.holdForNextWork(id, text),
         withdraw: (id) => host.withdrawHeld(id),
         notice: (id, text) => { host.notice(id, text); },
-        restart: (id) => trustRestart(id),
+        restart: (id) => trustRestart(id, 'trust'),
     });
     host.subscribe((id) => hostVerdicts?.check(id));
     /*
@@ -2019,7 +2023,7 @@ async function main(): Promise<void> {
             void (isAcpProvider(provider) ? accountIdentity.refreshProvider(provider) : Promise.resolve()).then(() => {
                 afterSignedIn(provider, {
                     signedOutAgents: (p, id) => host.signedOutAgents(p, id),
-                    restart: (id) => { void trustRestart(id as AgentId).then((r) => { if (r.ok) host.prompt(id as AgentId, SIGNED_IN_AGAIN, 'genie'); }); },
+                    restart: (id) => { void trustRestart(id as AgentId, 'signed-in').then((r) => { if (r.ok) host.prompt(id as AgentId, SIGNED_IN_AGAIN, 'genie'); }); },
                     resumeLimit: (p, id) => host.resumeLimit(p, id),
                 });
             });
@@ -2737,7 +2741,7 @@ async function main(): Promise<void> {
     // THE MAIL WAKE (P3.2): mail reaches its agent with no window — told, or started for it under the person's refusals.
     // ISSUEWATCH's queue is the wake's second source (P5c): `push` starts a stopped agent through this same wake, `next-turn` waits.
     planKeepalive = wireHostPlanKeepalive({ host, registry: hostRegistry, asked: (id) => own.attention.pending().some((q) => q.agentId === id), settings, log: (line) => { say(line); lifecycleLog(line); },
-        stalledTurns, restart: (id) => (phoneApi ? phoneApi.invoke('agents.restart', [id, 'graceful']) : Promise.reject(new Error('Genie’s agents are still starting'))) });
+        stalledTurns, restart: (id) => (phoneApi ? phoneApi.invoke('agents.restart', [id, 'graceful', 'keepalive']) : Promise.reject(new Error('Genie’s agents are still starting'))) });
     clocks.push(planKeepalive);
     wireHostMailWake({ inbox: own.inbox, host, registry: hostRegistry, settings, osaDir: osaHome, log: (line) => { say(line); lifecycleLog(line); }, issueWatch: issueWatch.delivery, safeMode: safeNow });
     bootStep('sessions', stepAt);

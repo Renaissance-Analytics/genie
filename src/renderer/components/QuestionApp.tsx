@@ -213,6 +213,13 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
             <div className="flex min-h-0 flex-1">
             <main ref={scrollRef} data-question-scroll="" className="relative min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden px-4 py-3">
                 <QuestionFiles item={item} existing={existing} open={drawer?.path ?? null} {...(onOpenFile ? { onOpen: onOpenFile } : {})} />
+                {/* HELD, STALE (Tynn #1085): the question on screen whose agent was removed stays, and says so. The form is not
+                    folded: what the person was typing stays in front of them, and the answer is still sent if they choose. */}
+                {item.stale ? (
+                    <p role="status" data-question-stale={item.stale} className="mb-2 rounded-md border border-[var(--border-2)] bg-[var(--bg-2)] px-3 py-2 text-[12px] text-[var(--fg-2)]">
+                        {staleNotice(item)}
+                    </p>
+                ) : null}
                 {/* Keyed by the question AND its revision: another question, or this one updated by its agent, is another form.
                     Its draft comes back from the window's drafts (by question id), so returning to it loses nothing. */}
                 {visuals?.error ? <p role="alert" data-question-visuals-error="" className="mb-2 text-[12px] text-[var(--warning)]">The visuals could not be loaded: {visuals.error}</p> : null}
@@ -230,6 +237,7 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
                     {...(draft ? { initial: draft } : {})}
                     onDraft={(d) => onDraft?.(item.id, { ...d, revision: item.revision ?? 0 })}
                     wide={maximized}
+                    {...(item.stale ? { submitLabel: 'Answer anyway' } : {})}
                 />
                 </QuestionVisualsContext.Provider>
             </main>
@@ -259,6 +267,15 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
             </div>
         </div>
     );
+}
+
+/** Why a held question no longer has its agent waiting, in words (Tynn #1085). */
+function staleNotice(item: DeckItem): string {
+    const who = item.agentName ?? 'The agent that asked';
+    switch (item.stale) {
+        case 'agent-gone': return `${who} is no longer in this workspace, so nobody may read this answer. You can still answer it, or dismiss it.`;
+        default: return '';
+    }
 }
 
 /**

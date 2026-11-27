@@ -40,7 +40,7 @@ describe('main: opening shows, a message starts', () => {
         expect(open).not.toMatch(/\.start\(/);
         expect(open).not.toMatch(/restartAgent\(/);
         // CONTROL: the same reader finds a start where there is one (Doctor's own handler).
-        expect(main).toMatch(/\.start\(record, cwdFor\(record\)\)/);
+        expect(main).toMatch(/\.start\(record, cwdFor\(record\)[,)]/);
     });
 
     it('`prompt` (the composer) starts the agent on demand before it delivers', () => {

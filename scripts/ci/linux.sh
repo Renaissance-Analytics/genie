@@ -41,7 +41,7 @@ SETUP="$OUT/setup"
 ROWS=(
     deps electron-binary
     typecheck unit build bundles sounds
-    seed no-pty smoke layout local-door-break local-door host-late-ready files-watch chat-drafts gapp-open artboard ui-lag plan-popover
+    seed no-pty smoke layout local-door-break local-door host-late-ready files-watch chat-drafts gapp-open artboard ui-lag plan-popover ftq-survives-restart
     trust-step accounts-popover claude-accounts usage-on-switch sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash quit-keeps-host rebuilt-machine
     flows zip64 host-plain-node mailpit
     package package-fuse
@@ -535,6 +535,8 @@ row_ui-lag() { need_app && timeout 420 node scripts/ui-lag-cdp.mjs --budget; }
 # These start the app themselves, on a home and ports of their own.
 # The Dashboard's plan popover, capped to the screen and scrolling, on a 77-step plan from a stub agent (Tynn #1021).
 row_plan-popover() { need_build && need_display && on_display timeout 420 node scripts/plan-popover-cdp.mjs; }
+# An open ForceTheQuestion window survives its agent's restart, and says its agent's removal (Tynn #1085); screenshots.
+row_ftq-survives-restart() { need_build && need_display && on_display timeout 420 node scripts/ftq-survives-restart-cdp.mjs; }
 row_trust-step() { need_build && need_display && on_display timeout 300 node scripts/trust-step-cdp.mjs; }
 row_accounts-popover() { need_build && need_display && on_display timeout 480 node scripts/accounts-popover-cdp.mjs; }
 # Claude accounts of their own (Tynn #1011): live state, one-click switch, add, sign in, in the real app (a stand-in CLI).
@@ -700,7 +702,7 @@ ceiling() {
         seed) echo 300 ;;
         no-pty|smoke|layout|local-door-break|local-door|gapp-open|trust-step) echo 360 ;;
         accounts-popover) echo 540 ;;
-        plan-popover) echo 480 ;;
+        plan-popover|ftq-survives-restart) echo 480 ;;
         claude-accounts) echo 300 ;;
         sound-picker|question-maximize) echo 300 ;;
         esc-unsend) echo 300 ;;
@@ -907,7 +909,7 @@ run_rows() {
     for name in "${selected[@]}"; do
         echo "=== $name"
         machine_line "$name"
-        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover trust-step accounts-popover claude-accounts usage-on-switch sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash quit-keeps-host host-late-ready package-fuse logon toolchain client-only-update host-update " in
+        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover ftq-survives-restart trust-step accounts-popover claude-accounts usage-on-switch sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash quit-keeps-host host-late-ready package-fuse logon toolchain client-only-update host-update " in
             *" $name "*) reap_leftovers "$name" ;;
         esac
         from="$(now_ms)"

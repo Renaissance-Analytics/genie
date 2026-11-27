@@ -30,14 +30,14 @@ describe('what kind an item is', () => {
     });
 
     it('stale beats every other kind: its agent no longer waits', () => {
-        expect(waitingKind(question(1, { stale: 'earlier-run' }))).toBe('stale');
+        expect(waitingKind(question(1, { stale: 'agent-gone' }))).toBe('stale');
         expect(waitingKind(approval(1, { stale: 'agent-gone' }))).toBe('stale');
     });
 });
 
 describe('the badges on a row', () => {
     it('one badge per kind, counted, in blocking-first order; no items, no badges', () => {
-        const badges = waitingBadges([mail(1), question(1), approval(1), approval(2), question(2, { stale: 'session-ended' })]);
+        const badges = waitingBadges([mail(1), question(1), approval(1), approval(2), question(2, { stale: 'agent-gone' })]);
         expect(badges.map((b) => b.label)).toEqual(['2 approvals', '1 question', '1 mail', '1 stale']);
         expect(waitingBadges([])).toEqual([]);
     });
@@ -90,7 +90,7 @@ describe('the Needs you filter', () => {
     });
 
     it('the chip counts what waits, never a stale item — the sidebar badge’s own number', () => {
-        expect(needsYouChipCount([approval(1), question(1), question(2, { stale: 'earlier-run' })])).toBe(2);
+        expect(needsYouChipCount([approval(1), question(1), question(2, { stale: 'agent-gone' })])).toBe(2);
     });
 });
 
