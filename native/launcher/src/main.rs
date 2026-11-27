@@ -1,3 +1,6 @@
+// A WINDOWS PROGRAM (Tynn #1058 L9; the coordinator, 2026-11-27): started from a shortcut, at logon or by the installer, no
+// console window is ever made for it. The command line attaches to its caller's console instead (attach_parent_console).
+#![cfg_attr(windows, windows_subsystem = "windows")]
 //! `Genie.exe` / `genie`: the launcher's command line (Tynn #1058 L2).
 //!
 //!   genie                         open Genie, as the Start menu and the desktop entry run it: with a launcher already
@@ -39,6 +42,11 @@ fn main() -> ExitCode {
     }
     let args: Vec<OsString> = std::env::args_os().collect();
     let first = args.get(1).and_then(|a| a.to_str()).unwrap_or("");
+    // The command line (and genie-launch.exe's modes) answer in the terminal that started them; what a person opens stays
+    // windowless.
+    if !shown_to_a_person(Some(first).filter(|f| !f.is_empty())) {
+        attach_parent_console();
+    }
     console_probe();
     match first {
         "detach" | "job" | "pipe-owner-only" => return code(compat(first, &args)),
@@ -188,6 +196,34 @@ fn main() -> ExitCode {
 
 /// The modes a person sees (Genie opened, the logon run, the resident launcher, the setup window, the doctor, the
 /// migration's card), as against the command line's (status, install, version, ...).
+/// Attach to the console of the program that started this one, when it has one (a terminal): the CLI's output goes
+/// there. Standard handles the caller already gave (a pipe, a file: the installer's log, a test) are kept; only missing
+/// ones are pointed at that console. With no console to attach to, nothing: the process stays windowless.
+fn attach_parent_console() {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING};
+        use windows_sys::Win32::System::Console::{AttachConsole, GetStdHandle, SetStdHandle, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE};
+        let valid = |h: HANDLE| !h.is_null() && h != INVALID_HANDLE_VALUE;
+        let which = [(STD_INPUT_HANDLE, "CONIN$"), (STD_OUTPUT_HANDLE, "CONOUT$"), (STD_ERROR_HANDLE, "CONOUT$")];
+        let had: Vec<bool> = which.iter().map(|(k, _)| valid(GetStdHandle(*k))).collect();
+        if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
+            return;
+        }
+        for (i, (k, name)) in which.iter().enumerate() {
+            if had[i] {
+                continue;
+            }
+            let w: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+            let h = CreateFileW(w.as_ptr(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, std::ptr::null(), OPEN_EXISTING, 0, std::ptr::null_mut());
+            if valid(h) {
+                SetStdHandle(*k, h);
+            }
+        }
+    }
+}
+
 /// A test build's word on this process's console (GENIE_LAUNCHER_CONSOLE_PROBE names the file): `console=true|false`.
 fn console_probe() {
     #[cfg(all(windows, feature = "test-keys"))]
@@ -198,7 +234,6 @@ fn console_probe() {
     }
 }
 
-#[allow(dead_code)]
 fn shown_to_a_person(first: Option<&str>) -> bool {
     matches!(first, None | Some("--updated" | "--logon" | "serve" | "--hidden" | "setup" | "--doctor" | "moving-card"))
 }

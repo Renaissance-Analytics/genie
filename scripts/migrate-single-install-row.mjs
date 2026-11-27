@@ -319,6 +319,13 @@ async function main() {
     const card = await until(() => /the moving card closed/.test(readOr(migrationLog)), 60_000, 1_000);
     check(/the moving card is shown/.test(readOr(migrationLog)), '5f. the card "Moving Genie to its new launcher…" was shown during the move', readOr(migrationLog).trim().split('\n').slice(-6).join(' | '));
     check(card === true && /the moving card closed: a client window is attached/.test(readOr(migrationLog)), '5g. it closed once the launcher\'s client window was attached');
+    // NO CONSOLE WINDOW (the coordinator, 2026-11-27): Genie.exe is a windows program, so nothing of the launcher's has a
+    // console host (conhost.exe) of its own, the card's process included.
+    if (WIN) {
+        const launcherPid = launcherRecord()?.pid ?? -1;
+        const hosts = (await processesNamed('conhost.exe') ?? []).filter((c) => c.ppid === launcherPid || commandLine(c.ppid).toLowerCase().includes('genie.exe'));
+        check(hosts.length === 0, '5h. no console window belongs to the launcher (Genie.exe is a windows program)', hosts.map((h) => `conhost ${h.pid} of ${h.ppid}: ${commandLine(h.ppid).slice(0, 120)}`).join(' | '));
+    }
     await sleep(8_000);
     clearInterval(shooter);
     shooter = null;
@@ -372,6 +379,10 @@ async function main() {
     const closed = await wireCall(RUNTIME, 'launcher.closeUi', []);
     console.log(`  launcher.closeUi: ${JSON.stringify(closed).slice(0, 160)}`);
     await until(async () => ((await processesNamed('genie-client') ?? []).length === 0), 30_000, 1_000);
+    // THE DESKTOP, as the person has it after the move: the Genie shortcut (now the launcher) with Genie's icon.
+    await sleep(2_000);
+    clearNotifications();
+    shot(name('desktop'));
     const session = await openClient({ label: 'after', id: '8', port: CLIENT_PORT, launcherExe: WIN ? join(INSTALL_DIR, 'Genie.exe') : join(HOME, '.local', 'bin', 'genie'), hostBuild: hostRecord()?.build ?? BUILD, program: clientExe });
     if (CASE === 'unchanged') {
         const t = spawnSync(process.execPath, ['scripts/update-ticks-after-cdp.mjs'], { stdio: 'inherit', timeout: 240_000, windowsHide: true, env: { ...process.env, UPDATE_TICKS_FILE: ticksFile, CDP_PORT: String(CLIENT_PORT), CDP_OWN_PID: String(session.app.pid) } });
