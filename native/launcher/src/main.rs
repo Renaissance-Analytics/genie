@@ -494,7 +494,9 @@ fn cmd_bridge(roots: Roots, packages: PathBuf, text: Vec<String>) -> ExitCode {
     }
     let Some(build) = installed(&roots) else { return fail("the bridge installed no launcher") };
     let Some(program) = roots.program(genie_launcher::layout::Track::Launcher, &build) else { return fail("not a track build") };
-    let args: Vec<String> = text.into_iter().filter(|a| a != "--updated").collect();
+    // What the old updater and the AppImage's desktop entry add for an Electron app (`--updated`, `--no-sandbox`) means
+    // nothing to the launcher.
+    let args: Vec<String> = text.into_iter().filter(|a| a != "--updated" && a != "--no-sandbox").collect();
     match genie_launcher::spawn::start_window(&program, &args, &[], &roots.logs_dir().join("genie-launcher.log")) {
         Ok(pid) => {
             eprintln!("genie: the bridge AppImage handed over to the installed launcher {build} (pid {pid})");
