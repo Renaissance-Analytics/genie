@@ -52,6 +52,7 @@ ROWS=(
     host-update
     host-update-rollback
     launcher-self-update
+    version-skew
 )
 
 # TRACKED RED ROWS (Tynn #967). An acceptance row that lands RED ahead of the stories that fix it, with the reasons it
@@ -777,6 +778,9 @@ row_launcher-self-update() {
     ( cd native/launcher && GENIE_TRACK_BUILD="$next" GENIE_MANIFEST_PUBLIC_KEYS="$pub" cargo build $locked --release --bin genie --target-dir target-l6 ) || return 1
     on_display timeout 1320 env LAUNCHER_ROW_OUT="$OUT/launcher-self-update" LAUNCHER_ROW_KEY_DIR="$SETUP" LAUNCHER_ROW_NEW_LAUNCHER="$PWD/native/launcher/target-l6/release/genie" CDP_PORT=9418 LAUNCHER_ROW_DEADLINE_MS=1200000 node scripts/launcher-updates-row.mjs --row launcher-self-update
 }
+# VERSION SKEW (Tynn #1058 L8): the INSTALLED client NEW against the host OLD, then the client OLD against the host NEW,
+# each a real program from its own build folder, a turn streamed both ways in each (scripts/launcher-updates-row.mjs).
+row_version-skew() { need_build && need_tracks && need_display && on_display timeout 1500 env LAUNCHER_ROW_OUT="$OUT/version-skew" LAUNCHER_ROW_KEY_DIR="$SETUP" CDP_PORT=9419 LAUNCHER_ROW_DEADLINE_MS=1380000 node scripts/launcher-updates-row.mjs --row version-skew; }
 row_toolchain() {
     need_build && need_display || return 1
     local ran
@@ -844,6 +848,7 @@ ceiling() {
         client-no-host) echo 900 ;;
         client-only-update|host-update|host-update-rollback) echo 1500 ;;
         launcher-self-update) echo 2400 ;;
+        version-skew) echo 1680 ;;
         *) echo 600 ;;
     esac
 }
@@ -1031,7 +1036,7 @@ run_rows() {
     for name in "${selected[@]}"; do
         echo "=== $name"
         machine_line "$name"
-        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover ftq-survives-restart trust-step accounts-popover claude-accounts usage-on-switch sound-picker sound-cues esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash quit-keeps-host cli-drain host-late-ready package-fuse launcher-install client-no-host logon toolchain client-only-update host-update host-update-rollback launcher-self-update " in
+        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover ftq-survives-restart trust-step accounts-popover claude-accounts usage-on-switch sound-picker sound-cues esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash quit-keeps-host cli-drain host-late-ready package-fuse launcher-install client-no-host logon toolchain client-only-update host-update host-update-rollback launcher-self-update version-skew " in
             *" $name "*) reap_leftovers "$name" ;;
         esac
         from="$(now_ms)"

@@ -30,7 +30,7 @@ describe('registered as a row: the launcher’s since L6 (Tynn #1058)', () => {
      * scripts below stay on disk for the bridge release (L9), which electron-updater still installs, and no row runs them.
      */
     it('linux.sh: before host-update and its rollback and the launcher’s own update, run by launcher-updates-row.mjs', () => {
-        expect(linuxRows.slice(-4)).toEqual(['client-only-update', 'host-update', 'host-update-rollback', 'launcher-self-update']);
+        expect(linuxRows.slice(-5)).toEqual(['client-only-update', 'host-update', 'host-update-rollback', 'launcher-self-update', 'version-skew']);
         expect(linuxRow('client-only-update')).toBe('row_client-only-update() { need_build && need_tracks && need_display && on_display timeout 1320 env LAUNCHER_ROW_OUT="$OUT/client-only-update" LAUNCHER_ROW_KEY_DIR="$SETUP" CDP_PORT=9401 LAUNCHER_ROW_DEADLINE_MS=1200000 node scripts/launcher-updates-row.mjs --row client-only-update; }');
         expect(linuxSh).toMatch(/\n\s*client-only-update\|host-update\|host-update-rollback\) echo 1500 ;;/);
         expect(/case " ([^"\n]*) " in\n\s*\*" \$name "\*\) reap_leftovers "\$name" ;;/.exec(linuxSh)?.[1]?.split(' ')).toContain('client-only-update');
@@ -38,7 +38,7 @@ describe('registered as a row: the launcher’s since L6 (Tynn #1058)', () => {
     });
 
     it('windows.ps1: the same order, its function, its ceiling; the old script is run by no row', () => {
-        expect(windowsRows.slice(-4)).toEqual(['client-only-update', 'host-update', 'host-update-rollback', 'launcher-self-update']);
+        expect(windowsRows.slice(-5)).toEqual(['client-only-update', 'host-update', 'host-update-rollback', 'launcher-self-update', 'version-skew']);
         expect(windowsPs1).toContain("function Row-client-only-update {\n    Need-Build; Need-Tracks; Need-TestMachine\n    Invoke-LauncherUpdatesRow 'client-only-update' @{ LAUNCHER_ROW_OUT = (Join-Path $Out 'client-only-update'); LAUNCHER_ROW_KEY_DIR = $Setup; CDP_PORT = '9401'; LAUNCHER_ROW_DEADLINE_MS = '1620000' }\n}");
         expect(windowsPs1).toMatch(/\n\s*\{ \$_ -in 'client-only-update', 'host-update', 'host-update-rollback' \} \{ return 1800 \}/);
         expect(windowsPs1).not.toContain('vm-client-only-update.ps1');

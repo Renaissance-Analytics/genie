@@ -4,6 +4,7 @@
  * "What the CI rows become"). One script, four rows, both OSes:
  *
  *   node scripts/launcher-updates-row.mjs --row client-only-update | host-update | host-update-rollback | launcher-self-update
+ *                                              | version-skew
  *
  * EVERY ROW starts the same way. A home of its own (HOME, USERPROFILE, APPDATA, LOCALAPPDATA, XDG_CONFIG_HOME,
  * XDG_DATA_HOME), seeded with smoke-seed.mjs. The package-tracks row's signed packages (release/tracks/packages, the build
@@ -50,6 +51,19 @@
  *   on Linux ~/.local/bin/genie points at <code root>/launcher/<NEW>/genie, on Windows Genie.exe holds the NEW bytes and
  *   Genie.exe.old is cleared. The tray after the handover is photographed (tray-after-handover-<os>.png).
  *
+ * version-skew  (Tynn #1058 L8: "the previous published client against the new host and the reverse, as real processes").
+ *   The feed offers client and host NEW. The client NEW is applied alone; the INSTALLED client program of NEW
+ *   (<code root>/client/<NEW>/genie-client, by its own path, its debugger port and page probe on) is run against the host OLD
+ *   the launcher started from <code root>/host/<OLD>: a turn both ways (an agent added, started and prompted from that
+ *   client, its ticks streamed back into it, from one provider under that host) and the three tickers still streaming into
+ *   it. Then the host goes to NEW through its own drain and the launcher's swap, and the INSTALLED client OLD (kept as the
+ *   previous build) is run against it: the same turn, and every ticker restored under the new host streaming into it.
+ *   WHAT N-1 IS HERE: until a track has a published release, OLD and NEW are two builds of this one tree (the package-tracks
+ *   row's packages and their repack at the next build): two installs, two folders, two processes of each pairing, each
+ *   speaking the wire to the other, so the row proves the pairings run and stream, not a difference of code between them.
+ *   Once a track release is published, OLD is meant to be that release (version-skew-client-new-host-old-<os>.png,
+ *   version-skew-client-old-host-new-<os>.png).
+ *
  * RESTORE ONCE (vm-host-update-linux.sh and vm-windows-update.ps1's proof, P6-2, kept): the agents' provider processes are
  * sampled the whole time the update runs (pid and start time, so a reused pid is another process), never only after it.
  * Every provider from before is gone; exactly as many new providers as agents run under the new host, after ten more
@@ -90,7 +104,7 @@ import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, openSync, readF
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
-const ROWS = ['client-only-update', 'host-update', 'host-update-rollback', 'launcher-self-update'];
+const ROWS = ['client-only-update', 'host-update', 'host-update-rollback', 'launcher-self-update', 'version-skew'];
 const ROW = (() => { const i = process.argv.indexOf('--row'); return i > 0 ? process.argv[i + 1] : null; })();
 run.name = `launcher-updates ${ROW ?? '(no row)'}`;
 step('0.1', `reading the settings (row ${ROW})`);
@@ -307,6 +321,7 @@ function finish() {
         'host-update': `the host went ${OLD} -> ${NEW} through its own drain and the launcher's swap; every agent came back once`,
         'host-update-rollback': `a host ${NEW} that could not start was ended and Genie went back to ${OLD}; every agent came back once`,
         'launcher-self-update': `the launcher ${OLD} handed its endpoint to ${NEW}; the host and every provider kept their pids`,
+        'version-skew': `the installed client ${NEW} ran against the installed host ${OLD}, and the client ${OLD} against the host ${NEW}, a turn streamed both ways in each`,
     }[ROW];
     console.log(`\n[${since()}] ${ROW.toUpperCase()} (LAUNCHER L6) — measured: ${words}.`);
     process.exit(0);
@@ -370,7 +385,7 @@ try {
         await offer('browser', await newPackage('browser'));
         // The host is offered too, for the tray's "Update host" (NEW in its tooltip) in its screenshot; this row never applies it.
         await offer('host', await newPackage('host'));
-    } else if (ROW === 'host-update') {
+    } else if (ROW === 'host-update' || ROW === 'version-skew') {
         await offer('client', await newPackage('client'));
         await offer('host', await newPackage('host'));
     } else if (ROW === 'host-update-rollback') {
@@ -715,6 +730,105 @@ async function hostUpdate(broken) {
     }
 }
 
+/** An installed client build's own program: <code root>/client/<build>/genie-client(.exe). */
+const clientProgram = (build) => join(CODE_ROOT, 'client', build, WIN ? 'genie-client.exe' : 'genie-client');
+const skewAgents = [];
+/**
+ * A TURN BOTH WAYS through `session` (version-skew): an agent of its own added, started and prompted FROM this client (the
+ * request goes client -> host), and its provider's reply streamed back INTO this client's ledger (host -> client), from
+ * one provider process under the host now running.
+ */
+async function skewTurn(session, id, label) {
+    const snap = await session.cdp.evaluate('window.genieTest.snapshot()', 15_000);
+    const workspaceId = snap.workspaces?.[0]?.id ?? null;
+    if (!check(typeof workspaceId === 'string', `${id}.1 ${label}: this client reads the host's workspaces`, JSON.stringify(snap.workspaces ?? null).slice(0, 200))) return;
+    const name = `skew-${label}-${process.pid}`;
+    step(`${id}.2`, `${label}: adding the agent ${name} from this client`);
+    const added = await session.cdp.evaluate(`(window.genieTest ?? window.genie).addAgent(${JSON.stringify(workspaceId)}, { name: ${JSON.stringify(name)}, purpose: 'Streams ticks for the version-skew row.', provider: 'codex' })`, 30_000);
+    if (!check(added?.ok === true, `${id}.2 ${label}: the host took the new agent from this client`, added?.ok ? added.id : added?.reason)) return;
+    const ag = { id: added.id, name };
+    skewAgents.push(ag);
+    step(`${id}.3`, `${label}: starting and prompting ${name} (≤ 60 s to running)`);
+    await waitForPageProbe(session.cdp);
+    await session.cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(ag.id)}, "graceful"); true`, 15_000);
+    const running = await until(() => session.cdp.evaluate(`window.genieTest.agentDetail(${JSON.stringify(ag.id)}).then((d) => d?.session?.running === true)`, 5_000), 60_000);
+    check(running === true, `${id}.3 ${label}: ${name}'s session is running`);
+    const sent = await session.cdp.evaluate(`(window.genieTest ?? window.genie).prompt(${JSON.stringify(ag.id)}, 'Stream ticks until stopped.')`, 15_000);
+    check(sent?.ok === true, `${id}.4 ${label}: the prompt went from this client to the host`, sent?.reason ?? '');
+    step(`${id}.5`, `${label}: the reply streams back into this client: 8 ticks (≤ 45 s)`);
+    const t = await until(async () => { const x = await ticksOf(session.cdp, ag.id); return x.max >= 8 ? x : null; }, 45_000) ?? await ticksOf(session.cdp, ag.id);
+    const host = hostRecord()?.pid ?? -1;
+    const pid = t.pids.length === 1 ? t.pids[0] : null;
+    if (Number.isInteger(pid)) restoredPids.add(pid);
+    check(pid !== null && descends(pid, host, parents()) && /stub-codex/.test(commandLine(pid)), `${id}.5 ${label}: the turn streamed back, from ONE provider under the host ${host}`, `ticks to ${t.max}, pids ${JSON.stringify(t.pids)}`);
+    const gap = contiguous(t.ticks, 1, t.max);
+    check(gap === null, `${id}.6 ${label}: every tick of the turn is in this client's ledger, in order`, gap === null ? `1..${t.max}` : `tick ${gap} missing`);
+}
+
+/**
+ * VERSION SKEW (Tynn #1058 L8; the spec's "Mixed pairs are tested, not assumed"): the client N-1 against the host N, and
+ * the reverse, as the real installed programs of each build, each from its own folder, with a turn streamed both ways.
+ * OLD is N-1 and NEW is N (see the header for what they are made of).
+ */
+async function versionSkew() {
+    step('10', 'launcher.check: the client and the host NEW made READY, nothing applied (≤ 600 s)');
+    const checked = await wireCall(RUNTIME, 'launcher.check', [], 600_000);
+    const host = trackRow(checked.value, 'host');
+    const client = trackRow(checked.value, 'client');
+    check(checked.ok && client?.state === 'ready' && host?.state === 'ready' && host?.withClient === NEW, `10a. the client ${NEW} and the host ${NEW} (with its client ${NEW}) are READY`, checked.reason ?? JSON.stringify(checked.value?.tracks));
+
+    // ---------------------------------------------------------------- the client NEW against the host OLD
+    step('11', `the client ${NEW} applied by itself: the host stays ${OLD}`);
+    const applied = await wireCall(RUNTIME, 'launcher.apply', [{ track: 'client' }], 60_000);
+    check(applied.ok && applied.value?.build === NEW, `11a. the client ${NEW} is applied`, applied.reason ?? JSON.stringify(applied.value));
+    check(state().host?.current === OLD && hostRecord()?.build === OLD && hostRecord()?.pid === hostPid, `11b. the host is still ${OLD}, the same pid ${hostPid}`, JSON.stringify(hostRecord()));
+    await endClient(a);
+    const newOld = await openClient({ label: 'client-new-host-old', id: 12, port: PORT, launcherExe: LAUNCHER, hostBuild: OLD, program: clientProgram(NEW) });
+    sessions.push(newOld);
+    if (Number.isInteger(newOld.app.pid)) installedClientPids.add(newOld.app.pid);
+    check(under(executableOf(newOld.app.pid), join(CODE_ROOT, 'client', NEW)), `12d. the client is the INSTALLED ${NEW}, run from its own folder`, executableOf(newOld.app.pid));
+    const oldHostCmd = commandLine(hostPid);
+    check(hostRecord()?.build === OLD && (oldHostCmd.includes(join(CODE_ROOT, 'host', OLD)) || (WIN && oldHostCmd.toLowerCase().includes(join(CODE_ROOT, 'host', OLD).toLowerCase()))), `12e. against the INSTALLED host ${OLD}, run from its own folder`, oldHostCmd.slice(0, 240));
+    await skewTurn(newOld, '12', `client-${NEW}-host-${OLD}`);
+    await ledgersStreamedThrough(newOld, '12t', `into the client ${NEW} from the host ${OLD}`);
+    shot(`version-skew-client-new-host-old-${OS}.png`);
+
+    // ---------------------------------------------------------------- the host NEW, then the client OLD against it
+    step('13', `the host to ${NEW} through its own drain and the launcher's swap (≤ 540 s)`);
+    const logAt = readOr(LAUNCHER_LOG).length;
+    const act = await wireCall(RUNTIME, 'launcher.trayAct', [{ action: 'installHostUpdate' }], 15_000);
+    check(act.ok, "13a. the tray's \"Update host\" was chosen", act.reason ?? '');
+    const ended = await until(async () => { const u = await updatesNow(); const p = u?.hostUpdate?.phase; return ['done', 'rolled-back', 'failed'].includes(p) ? u.hostUpdate : null; }, 540_000, 2_000);
+    check(ended?.phase === 'done', `13b. the host update ended done`, JSON.stringify(ended));
+    const rec = await until(() => { const r = hostRecord(); return r && r.pid !== hostPid && alive(r.pid) ? r : null; }, 60_000) ?? hostRecord();
+    if (Number.isInteger(rec?.pid)) hostPids.add(rec.pid);
+    check(rec?.build === NEW && alive(rec?.pid), `13c. a new host runs ${NEW}`, JSON.stringify(rec));
+    const reopened = await until(() => {
+        const m = /Genie opened again after the host's update \((\{.*\})\)/.exec(readOr(LAUNCHER_LOG).slice(logAt));
+        try { return m ? JSON.parse(m[1]) : null; } catch { return null; }
+    }, 60_000);
+    // The launcher opens its current client (NEW) after the swap; this row opens the OLD one instead.
+    if (Number.isInteger(reopened?.pid)) { installedClientPids.add(reopened.pid); endPid(reopened.pid); await until(() => (!alive(reopened.pid) ? true : null), 15_000); }
+    if (newOld.app && !newOld.app.gone) await endClient(newOld);
+    const st = state();
+    check(st.client?.current === NEW && st.client?.previous === OLD && existsSync(clientProgram(OLD)), `13d. the client ${OLD} is still installed, as the previous build`, JSON.stringify(st.client));
+
+    step('14', `the client ${OLD} against the host ${NEW}`);
+    const oldNew = await openClient({ label: 'client-old-host-new', id: 14, port: PORT, launcherExe: LAUNCHER, hostBuild: NEW, program: clientProgram(OLD) });
+    sessions.push(oldNew);
+    if (Number.isInteger(oldNew.app.pid)) installedClientPids.add(oldNew.app.pid);
+    check(under(executableOf(oldNew.app.pid), join(CODE_ROOT, 'client', OLD)), `14d. the client is the INSTALLED ${OLD}, run from its own folder`, executableOf(oldNew.app.pid));
+    const hostCmd = Number.isInteger(rec?.pid) ? commandLine(rec.pid) : '';
+    check(hostCmd.includes(join(CODE_ROOT, 'host', NEW)) || (WIN && hostCmd.toLowerCase().includes(join(CODE_ROOT, 'host', NEW).toLowerCase())), `14e. against the INSTALLED host ${NEW}, run from its own folder`, hostCmd.slice(0, 240));
+    await skewTurn(oldNew, '14', `client-${OLD}-host-${NEW}`);
+    for (const ag of agents) {
+        const t = await until(async () => { const x = await ticksOf(oldNew.cdp, ag.id).catch(() => null); return x && x.running && x.pids.some((p) => p !== ag.pid) ? x : null; }, 90_000);
+        check(t !== null, `14t. ${ag.name}, restored under the host ${NEW}, streams into the client ${OLD}`, t ? `pids ${JSON.stringify(t.pids)}` : 'no new provider in its ledger');
+        for (const p of t?.pids ?? []) restoredPids.add(p);
+    }
+    shot(`version-skew-client-old-host-new-${OS}.png`);
+}
+
 async function launcherSelfUpdate() {
     step('10', 'launcher.check: the launcher NEW made READY (≤ 300 s)');
     const checked = await wireCall(RUNTIME, 'launcher.check', [], 300_000);
@@ -779,6 +893,7 @@ try {
     if (ROW === 'client-only-update') await clientOnlyUpdate();
     else if (ROW === 'host-update') await hostUpdate(false);
     else if (ROW === 'host-update-rollback') await hostUpdate(true);
+    else if (ROW === 'version-skew') await versionSkew();
     else await launcherSelfUpdate();
 } catch (error) {
     check(false, `the run stopped in step ${run.current}`, String(error?.stack ?? error?.message ?? error).split('\n').slice(0, 3).join(' | '));
