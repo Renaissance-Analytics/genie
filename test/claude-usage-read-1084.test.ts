@@ -39,7 +39,7 @@ describe('readClaudeUsage: one tiny turn in the account\'s own folder', () => {
         expect(room.windows.map((w) => [w.window, Math.round(w.usedPct)])).toEqual([['7d', 32]]);
     }, 30_000);
 
-    it('runs in THAT folder, on the account's own default model, with no tools and nothing kept in history, one turn', async () => {
+    it("runs in THAT folder, on the account's own default model, with no tools and nothing kept in history, one turn", async () => {
         const acct = folder('acct');
         const cwd = folder('cwd');
         const s = standIn({ [acct]: { limit: { seven_day: 0.32 } } });
