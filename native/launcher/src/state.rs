@@ -8,6 +8,9 @@ use std::path::Path;
 
 pub const FORMAT: u32 = 1;
 
+/// `host.current` for a host the launcher adopted but did not start: the single-app install's, at the bridge (L9).
+pub const ADOPTED: &str = "adopted";
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrackState {
     pub current: Option<String>,
