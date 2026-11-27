@@ -272,7 +272,12 @@ async function main() {
     }
     const entriesBefore = await until(() => { const e = genieEntries(); return e.length > 0 && e.every((x) => /--hidden/.test(x.data)) ? e : null; }, 30_000, 1_000);
     check(Boolean(entriesBefore), `3c. ${BASE} wrote its own logon entry, with --hidden`, JSON.stringify(entriesBefore ?? genieEntries()));
+    // The photograph shows the dashboard as the person has it, not its loading frame (run 1127-211951-3a8597), and no
+    // desktop notification over it.
+    await until(() => cdpOld.evaluate('!!document.querySelector("main, [data-route]") && document.body.innerText.includes("Dashboard")', 5_000), 30_000, 1_000);
+    await sleep(4_000);
     cdpOld.close();
+    clearNotifications();
     shot(name('before'));
 
     // `changed`: no turn mid-flight when install is asked (the host-update row's way), so the drain does not wait on one.
@@ -281,7 +286,8 @@ async function main() {
     shooter = setInterval(() => { n += 1; if (n <= 30) shot(name(`during-${String(n).padStart(2, '0')}`)); }, 4_000);
     const samples = new Set();
     const sampler = setInterval(() => { void stubKeys().then((ks) => { for (const k of ks) samples.add(k); }); }, 1_000);
-    const drive = spawnSync(process.execPath, ['scripts/update-cdp.mjs'], { stdio: 'inherit', timeout: 900_000, windowsHide: true, env: { ...process.env, EXPECT_VERSION: BRIDGE, CDP_PORT: String(OLD_PORT), CDP_OWN_PID: String(old.pid), ...(CASE === 'unchanged' ? { UPDATE_TICKS_FILE: ticksFile } : {}) } });
+    // Asynchronous, so the sampler above runs while it drives (a spawnSync blocked it: run 1127-211951-3a8597 sampled none).
+    const drive = await spawnAsync(process.execPath, ['scripts/update-cdp.mjs'], { stdio: 'inherit', windowsHide: true, env: { ...process.env, EXPECT_VERSION: BRIDGE, CDP_PORT: String(OLD_PORT), CDP_OWN_PID: String(old.pid), ...(CASE === 'unchanged' ? { UPDATE_TICKS_FILE: ticksFile } : {}) } });
     clearInterval(sampler);
     const stubsBefore = [...samples].sort();
     console.log(`  agent providers while install was asked: ${stubsBefore.join(' ') || 'none'}`);
@@ -309,6 +315,7 @@ async function main() {
     await sleep(8_000);
     clearInterval(shooter);
     shooter = null;
+    clearNotifications();
     shot(name('after'));
 
     step('6', CASE === 'unchanged' ? 'the host was adopted: every pid kept' : 'the host was changed: the bridge\'s host, every agent restored once');
@@ -365,6 +372,7 @@ async function main() {
         // proven at the OS (6f, 6g), and this window is photographed linked to the bridge's host.
         check(Boolean(session.cdp), "8a. a client window of the installed build linked to the bridge's host");
     }
+    clearNotifications();
     shot(name('agent'));
     if (!WIN) {
         step('9', 'the AppImage at the single app\'s path only reaches the launcher now');
@@ -375,6 +383,21 @@ async function main() {
     }
     session.cdp?.close();
     session.app.kill();
+}
+
+/** The desktop's own notifications dismissed before a photograph (mako on the Linux VM; best effort). */
+function clearNotifications() {
+    if (!WIN) spawnSync('makoctl', ['dismiss', '--all'], { timeout: 5_000 });
+}
+
+/** A child run to its end without blocking the event loop (bounded at 15 min): `{status}`. */
+function spawnAsync(file, args, options) {
+    return new Promise((done) => {
+        const child = spawn(file, args, options);
+        const t = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* gone */ } }, 900_000);
+        child.once('exit', (code) => { clearTimeout(t); done({ status: code }); });
+        child.once('error', () => { clearTimeout(t); done({ status: null }); });
+    });
 }
 
 /** beta.66.1's page on its debugger port. */
