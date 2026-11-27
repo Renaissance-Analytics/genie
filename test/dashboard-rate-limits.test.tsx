@@ -82,12 +82,12 @@ describe('a reading in an agent’s stream reaches the host’s owner with its p
 });
 
 describe('in the header', () => {
-    it('one pill per provider, its share left and window; the detail is a popover (rate-limit-popover)', () => {
+    it('one pill per provider, its share used and window; the detail is a popover (rate-limit-popover)', () => {
         const html = renderToStaticMarkup(<RateLimitPills limits={{ claude: h(62), codex: h(97, '7d') }} now={NOW} />);
-        expect(html).toMatch(/data-rate-limit="claude"[^>]*aria-label="Claude Code rate limits: 62% left in the 5-hour window"/);
-        expect(html).toContain('62%');
+        expect(html).toMatch(/data-rate-limit="claude"[^>]*aria-label="Claude Code rate limits: 38% used in the 5-hour window"/);
+        expect(html).toContain('38% used');
         expect(html).toMatch(/data-rate-limit="codex"/);
-        expect(html).toContain('97%');
+        expect(html).toContain('3% used');
     });
 
     it('nothing reported yet: nothing drawn', () => {

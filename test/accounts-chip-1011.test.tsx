@@ -209,7 +209,7 @@ describe('Switch names the account by its id; Sign in only for an account known 
         const onAct = vi.fn<Act>(async () => ({ ok: true }));
         const onSwitch = vi.fn<(provider: string, choose?: string) => void>();
         const offer = { id: 'switch-offer:a:5h:1', provider: 'claude', accountId: A, label: 'Work', window: '5h' as const, leftPct: 8, over: false, resetsAtMs: NOW + 3_600_000,
-            targets: [{ accountId: C, label: 'Lab', room: 'unknown' as const, leftPct: null, resetsAtMs: null }] };
+            targets: [{ accountId: C, label: 'Lab', room: 'unknown' as const, leftPct: null, resetsAtMs: null, window: null }] };
         act(() => root.render(<AccountsChip view={VIEW} offer={offer} now={NOW} onSwitch={onSwitch} onAccountsAct={onAct} />));
         click(host.querySelector('[data-account-chip="claude"]'));
         click(document.querySelector('[data-action="switch-offer-switch"]'));

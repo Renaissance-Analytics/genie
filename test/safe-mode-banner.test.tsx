@@ -108,6 +108,13 @@ describe('the safe-mode banner', () => {
         expect(r.start).not.toHaveBeenCalled();
     });
 
+    it('a Leave that succeeds SAYS SO, never nothing (Tynn #1076): the button gives way to "Left safe mode" until the banner goes', async () => {
+        render(view(), { leave: async () => ({ ok: true }) });
+        await act(async () => { leaveButton()!.click(); await Promise.resolve(); });
+        expect(host.querySelector('[data-safe-mode-outcome="leave"]')?.textContent).toBe('Left safe mode. Automatic starts are back on.');
+        expect(leaveButton()).toBeNull();
+    });
+
     it('a Leave that fails says why', async () => {
         render(view(), { leave: async () => ({ ok: false, reason: 'Genie’s host is not connected' }) });
         await act(async () => { leaveButton()!.click(); await Promise.resolve(); });

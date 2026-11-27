@@ -2090,6 +2090,9 @@ async function main(): Promise<void> {
     phoneRegistry.setProbe(withComms((id) => host.probe(id), (id) => own.inbox.involving(id, 2000)));
     phoneRegistry.setHandoffProbe((id) => own.attention.lastHandoff(id));
     phoneRegistry.setSafeMode(() => safeMode.view());
+    // Leaving (or a held item) is pushed at once (Tynn #1076): this registry is read only when touched, so with nothing
+    // running to push a snapshot, Leave safe mode cleared the host and the banner stayed up.
+    safeMode.onChange(() => { phoneRegistry.touch(); });
     phoneRegistry.setHangNotice(() => crashState.view().notice);
     phoneRegistry.setObservedProbe((id) => takeOverHost.probe(id));
     const workspaceColors = new WorkspaceColors({ fs: nodeEnvelopeFs(), writesAssigned: false, mayReadFolder: (path) => hostRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true, onChanged: () => phoneRegistry.touch() });
