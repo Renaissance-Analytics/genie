@@ -195,22 +195,61 @@ function cursorAt() {
     const m = /(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/.exec(r.stdout ?? '');
     return m ? { x: Number(m[1]), y: Number(m[2]) } : null;
 }
-function openLinuxTrayMenu(before) {
-    const at = trayIconOf(before, screenPixels());
-    if (!at) { console.log('  linux tray: the icon was not found in the bar (no change where the launcher put it)'); return false; }
-    console.log(`  linux tray: the icon is at about ${at.x},${at.y}`);
-    const tries = [
-        ['hyprctl', ['-i', '0', 'dispatch', 'movecursor', String(at.x), String(at.y)]],
-        ['hyprctl', ['-i', '0', 'eval', `hl.dispatch("movecursor", "${at.x} ${at.y}")`]],
-        ['hyprctl', ['-i', '0', 'eval', `hl.dispatch("movecursor ${at.x} ${at.y}")`]],
-    ];
-    let moved = false;
-    for (const [cmd, args] of tries) {
-        spawnSync(cmd, args, { encoding: 'utf8', timeout: SYNC_MS });
-        const c = cursorAt();
-        if (c && Math.abs(c.x - at.x) <= 3 && Math.abs(c.y - at.y) <= 3) { moved = true; console.log(`  linux tray: the cursor is on it (${args.slice(2).join(' ')})`); break; }
+/** Runs of columns in the bar's right part where `hit(x)` is true: [{from, to}], left to right. */
+function runs(w, from, hit) {
+    const out = [];
+    for (let x = from; x < w; x++) {
+        if (!hit(x)) continue;
+        const last = out[out.length - 1];
+        if (last && x - last.to <= 3) last.to = x; else out.push({ from: x, to: x });
     }
-    if (!moved) { console.log(`  linux tray: Hyprland did not move the cursor there (it is at ${JSON.stringify(cursorAt())})`); return false; }
+    return out;
+}
+const lum = (img, x, y) => { const k = (y * img.w + x) * 3; return (img.px[k] + img.px[k + 1] + img.px[k + 2]) / 3; };
+/** Move Hyprland's cursor to (x, y), checked with `hyprctl cursorpos`; the way that worked, or null. */
+function moveCursor(x, y) {
+    const tries = [
+        ['hyprctl', ['-i', '0', 'dispatch', 'movecursor', String(x), String(y)]],
+        ['hyprctl', ['-i', '0', 'eval', `hl.dispatch("movecursor", "${x} ${y}")`]],
+        ['hyprctl', ['-i', '0', 'eval', `hl.dispatch("movecursor ${x} ${y}")`]],
+    ];
+    for (const [cmd, args] of tries) {
+        const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: SYNC_MS });
+        const c = cursorAt();
+        if (c && Math.abs(c.x - x) <= 3 && Math.abs(c.y - y) <= 3) return args.slice(2).join(' ');
+        console.log(`  linux tray: ${args.slice(2).join(' ')} -> ${String(r.stdout ?? '').trim().slice(0, 80)} (cursor ${JSON.stringify(c)})`);
+    }
+    return null;
+}
+/**
+ * Omarchy keeps the tray's icons in a drawer behind its "<" (Waybar's group drawer, opened on hover): the cursor goes to
+ * the "<" (the leftmost light glyph of the bar's right group), the bar is read again, and the icons that appeared are the
+ * tray's; ours is right-clicked.
+ */
+function openLinuxTrayMenu() {
+    const bar = screenPixels();
+    if (!bar) { console.log('  linux tray: the screen could not be read (grim -t ppm)'); return false; }
+    const rows = Math.min(28, bar.h);
+    const bright = (img) => (x) => { for (let y = 4; y < rows - 4; y++) if (lum(img, x, y) > 120) return true; return false; };
+    const glyphs = runs(bar.w, Math.floor(bar.w * 0.75), bright(bar));
+    console.log(`  linux tray: the bar's right group: ${JSON.stringify(glyphs)}`);
+    if (glyphs.length === 0) return false;
+    const expander = { x: Math.round((glyphs[0].from + glyphs[0].to) / 2), y: Math.round(rows / 2) };
+    const how = moveCursor(expander.x, expander.y);
+    if (!how) { console.log('  linux tray: Hyprland did not move the cursor'); return false; }
+    console.log(`  linux tray: the cursor is on the drawer at ${expander.x},${expander.y} (${how})`);
+    spawnSync('sleep', ['1.2']);
+    const open = screenPixels();
+    if (!open) return false;
+    const changed = runs(open.w, Math.floor(open.w * 0.5), (x) => { for (let y = 0; y < rows; y++) if (Math.abs(lum(open, x, y) - lum(bar, x, y)) > 40) return true; return false; });
+    console.log(`  linux tray: what the drawer showed: ${JSON.stringify(changed)}`);
+    // The revealed icons are the ones that were not there; the drawer's own glyph changing is not one (it is at the expander).
+    const icons = changed.filter((r) => r.to - r.from >= 8 && Math.abs((r.from + r.to) / 2 - expander.x) > 10);
+    if (icons.length === 0) return false;
+    const ours = icons[icons.length - 1];
+    const at = { x: Math.round((ours.from + ours.to) / 2), y: expander.y };
+    const moved = moveCursor(at.x, at.y);
+    if (!moved) return false;
     if (spawnSync('sh', ['-c', 'command -v ydotool'], { timeout: SYNC_MS }).status !== 0) {
         spawnSync('sudo', ['-n', 'pacman', '-S', '--needed', '--noconfirm', 'ydotool'], { timeout: 180_000, stdio: 'ignore' });
     }
@@ -219,7 +258,7 @@ function openLinuxTrayMenu(before) {
     spawn('sudo', ['-n', 'ydotoold', `--socket-path=${sock}`, `--socket-own=${ids}`], { detached: true, stdio: 'ignore' }).unref();
     spawnSync('sleep', ['1.5']);
     const click = spawnSync('ydotool', ['click', '0xC1'], { encoding: 'utf8', timeout: SYNC_MS, env: { ...process.env, YDOTOOL_SOCKET: sock } });
-    console.log(`  linux tray: the right button pressed (ydotool exit ${click.status}${click.stderr ? `: ${String(click.stderr).trim().slice(0, 120)}` : ''})`);
+    console.log(`  linux tray: right-click on ${at.x},${at.y} (ydotool exit ${click.status}${click.stderr ? `: ${String(click.stderr).trim().slice(0, 120)}` : ''})`);
     return click.status === 0;
 }
 let barBefore = null;
@@ -814,7 +853,7 @@ try {
     check(menu.code === 0 && said >= AGENTS && items.includes('Open Genie') && items.includes('Stop this computer’s host') && items.includes('Shut down everything') && items.includes('Close Genie (agents keep running) (unavailable)'),
         '17m. the TRAY (the launcher\'s) says the host runs the agents, offers Open Genie, Stop this computer\'s host and Shut down everything; Close Genie is unavailable with no window', menu.out.slice(0, 400));
     // Windows: the probe showed the menu at the icon. Linux: a pointer opens Waybar's menu (best effort, said either way).
-    const linuxMenu = WIN ? true : openLinuxTrayMenu(barBefore);
+    const linuxMenu = WIN ? true : openLinuxTrayMenu();
     await sleep(1_500);
     shot(`tray-menu-${WIN ? 'windows' : 'linux'}.png`);
     console.log(`  the tray menu ${linuxMenu ? 'was opened for this screenshot' : 'could not be opened on this desktop: the screenshot shows the bar and its icon only'}`);
