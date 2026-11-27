@@ -282,6 +282,7 @@ async function main() {
 
     // `changed`: no turn mid-flight when install is asked (the host-update row's way), so the drain does not wait on one.
     step('4', `${BASE}'s own updater installs the bridge (update-cdp.mjs: check, download, install), photographed every 4 s`);
+    clearNotifications();
     let n = 0;
     shooter = setInterval(() => { n += 1; if (n <= 30) shot(name(`during-${String(n).padStart(2, '0')}`)); }, 4_000);
     const samples = new Set();
