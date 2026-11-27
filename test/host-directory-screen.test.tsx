@@ -50,7 +50,7 @@ describe('it looks like Genie (the coordinator\'s review, 2026-11-27)', () => {
         const html = draw(stopped);
         const bar = html.slice(html.indexOf('data-host-directory-titlebar'), html.indexOf('</header>'));
         expect(bar).toContain('Genie');
-        expect(bar).toMatch(/<svg/);
+        expect(bar).toMatch(/data-brand-mark=""/);
         expect(tag(html, 'data-host-directory-titlebar')).toMatch(/-webkit-app-region:drag/);
     });
 
