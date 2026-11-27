@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Genie</title>
+<!-- THE MIGRATION'S CARD (Tynn #1058 L9; the coordinator, 2026-11-27): from the moment the single app's window closes until the
+     launcher's client opens, the person sees this, never a blank desktop that reads as "Genie crashed". Direction C, "Wish
+     Orb": base.css and theme-c.css are put in place of the CSS marker by src/ui.rs. It asks nothing and fetches nothing; the
+     launcher closes it once a client window is attached (src/migrate.rs card_may_close). -->
+<style>/*GENIE_CSS*/
+html,body{height:100%;overflow:hidden;user-select:none}
+[hidden]{display:none!important}
+.win{width:100%;height:100%}
+.tb{-webkit-app-region:drag}
+.tb-ctl i{cursor:pointer;-webkit-app-region:no-drag}
+/* A card of its own size, centred: a tiling desktop (Hyprland) may give the window the whole screen. Above the theme's
+   aurora overlays (position + z-index), or they wash the lower half out (the first Linux run's screenshot). */
+.moving{padding:22px 28px 26px;display:flex;flex-direction:column;align-items:center;gap:8px;width:100%;max-width:420px;margin:auto;position:relative;z-index:3;box-sizing:border-box}
+.moving .hero{width:150px;height:150px}
+.moving h1{margin:6px 0 0;font-size:21px}
+.moving p{margin:0;font-size:14px}
+</style>
+</head>
+<body class="only">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="lampfill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="var(--lamp-a)"/><stop offset="1" stop-color="var(--lamp-b)"/></linearGradient>
+    <symbol id="lamp" viewBox="0 0 72 44">
+      <path fill="url(#lampfill)" d="M12 27c0-5.5 7.6-8.6 19.5-8.6S51 21.5 51 27c0 0 5.8-.6 10.2-6 2.1-2.5 4.6-3.6 7.3-2.6-3.5 1.3-5.6 5.4-8.7 9.6-3.3 4.4-8 6.8-13.4 7.4H24.5C17 35.4 12 32 12 27z"/>
+      <path fill="none" stroke="url(#lampfill)" stroke-width="2.6" stroke-linecap="round" d="M12.4 25.5c-6.4.4-9.2-5.8-5.2-8.4 2.3-1.5 4.9-.4 6 1.8"/>
+      <path fill="url(#lampfill)" d="M21.5 19c2.2-4.4 6.2-5.8 10-5.8s7.8 1.4 10 5.8z"/>
+      <circle fill="url(#lampfill)" cx="31.5" cy="10.6" r="2.4"/>
+      <path fill="url(#lampfill)" d="M24 35.6h15l3.6 5H20.4z"/>
+    </symbol>
+  </defs>
+</svg>
+<main class="board">
+  <div class="win">
+    <div class="tb"><svg class="tb-lamp"><use href="#lamp"/></svg><span>Genie</span></div>
+    <div class="moving">
+      <div class="hero working"><div class="glow"></div><div class="smoke"><i></i><i></i><i></i><i></i></div><svg class="lamp"><use href="#lamp"/></svg></div>
+      <h1 class="center">Moving Genie to its new launcher…</h1>
+      <p class="muted center">This takes a few seconds, and your agents keep working.</p>
+    </div>
+  </div>
+</main>
+</body>
+</html>

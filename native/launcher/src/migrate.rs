@@ -226,10 +226,23 @@ pub fn run_values(key: &str) -> Vec<(String, String)> {
     out
 }
 
-/// THE MIGRATION'S CARD (L9). RED STUB.
-pub const CARD_LIMIT: std::time::Duration = std::time::Duration::from_secs(0);
+/// THE MIGRATION'S CARD (the coordinator, 2026-11-27): never a blank desktop that reads as "Genie crashed" between the
+/// single app's window closing and the launcher's client opening. The card stays no longer than this.
+pub const CARD_LIMIT: std::time::Duration = std::time::Duration::from_secs(120);
 
-/// RED STUB.
-pub fn card_may_close(_status: Option<&serde_json::Value>) -> bool {
-    false
+/// The card may close once the launcher answers with a client window attached (`launcher.status`'s `clients`).
+pub fn card_may_close(status: Option<&serde_json::Value>) -> bool {
+    status.and_then(|s| s["clients"].as_array()).map(|c| !c.is_empty()).unwrap_or(false)
+}
+
+/// One line of the migration's own log, `<data root>/logs/migration.log` (the bridge's processes have no other output
+/// a person or a row can read). Never fatal.
+pub fn log_line(roots: &Roots, line: &str) {
+    use std::io::Write;
+    let dir = roots.logs_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("migration.log")) {
+        let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let _ = writeln!(f, "{secs} {line}");
+    }
 }

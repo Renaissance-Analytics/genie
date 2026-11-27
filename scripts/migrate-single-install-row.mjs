@@ -312,6 +312,12 @@ async function main() {
         try { link = readlinkSync(join(HOME, '.local', 'bin', 'genie')); } catch { /* none */ }
         check(link.startsWith(join(CODE, 'launcher')), '5e. ~/.local/bin/genie leads to the installed launcher', link);
     }
+    // NEVER A BLANK SCREEN (the coordinator, 2026-11-27): the launcher's card from the bridge's first act until the client
+    // window is attached; the during-NN screenshots show it.
+    const migrationLog = join(GHOME, 'logs', 'migration.log');
+    const card = await until(() => /the moving card closed/.test(readOr(migrationLog)), 60_000, 1_000);
+    check(/the moving card is shown/.test(readOr(migrationLog)), '5f. the card "Moving Genie to its new launcher…" was shown during the move', readOr(migrationLog).trim().split('\n').slice(-6).join(' | '));
+    check(card === true && /the moving card closed: a client window is attached/.test(readOr(migrationLog)), '5g. it closed once the launcher\'s client window was attached');
     await sleep(8_000);
     clearInterval(shooter);
     shooter = null;
