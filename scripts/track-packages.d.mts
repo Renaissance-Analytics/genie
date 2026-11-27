@@ -7,6 +7,7 @@ export function programName(track: Track, platform: Platform): string;
 export function hostRuntimeFiles(platform: Platform): string[];
 export function clientBuilderConfig(base: Record<string, unknown>): Record<string, unknown>;
 export function launcherInstallerConfig(base: Record<string, unknown>, options: { version: string }): Record<string, unknown>;
+export function bridgeConfig(base: Record<string, unknown>, options: { version: string; os: 'win' | 'linux'; feed?: string }): Record<string, unknown>;
 export const BROWSER_JSON: { runs: string; args: string[] };
 export function layoutBrowser(options: { out: string }): Promise<{ files: number }>;
 export function layoutWindowApp(options: { from: string; out: string; track: 'client'; platform: Platform }): Promise<{ files: number }>;
