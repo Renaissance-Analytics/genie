@@ -1,5 +1,6 @@
 import { Avatar, Badge, Button, Input, MultiSwitch } from '@particle-academy/react-fancy';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { PANEL_RECHECK_MS } from '../../core/usage-probe.js';
 import { chooseWords, type AccountView, type AccountsSnapshot, type AccountWindowRow } from '../../core/accounts-view.js';
 import { forgetRefusal, SWITCH_OFFER_WINDOW_CHOICES, type AccountsAction, type AccountsActResult } from '../../core/account-settings.js';
 import { shortDateTime } from '../../core/clock-words.js';
@@ -29,6 +30,17 @@ export interface AccountsSettingsProps {
 
 export function AccountsSettings({ snapshot, offerWindows, onSetOfferWindows, onSwitch, onAct, now, onDesignSignIn }: AccountsSettingsProps) {
     const at = now ?? Date.now();
+    // Tynn #1084: open, this page asks for readings (under the probe's 15-min rules), and every 5 min while it stays open.
+    const act = useRef(onAct);
+    act.current = onAct;
+    const providers = (snapshot?.providers ?? []).map((p) => p.provider).join(',');
+    useEffect(() => {
+        if (providers === '') return undefined;
+        const ask = () => { for (const provider of providers.split(',')) void act.current?.({ kind: 'read-usage', provider }); };
+        ask();
+        const timer = setInterval(ask, PANEL_RECHECK_MS);
+        return () => clearInterval(timer);
+    }, [providers]);
     return (
         <section data-settings-accounts="" className="mt-4 flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-3">
@@ -103,6 +115,7 @@ function AccountRow({ account, now, onSwitch, onAct }: { account: AccountView; n
                     <Button type="button" size="xs" variant="ghost" data-action="account-forget" onClick={forget}>Forget</Button>
                     {/* SIGN OUT AND REMOVE (Tynn #1011): prism-acp's logout() for an account with a folder of its own, not the
                         one every agent uses; then the account and its folder go. No window, no terminal. */}
+                    {onAct ? <Button type="button" size="xs" variant="ghost" icon="refresh-cw" data-action="check-usage" disabled={account.usage?.state === 'reading'} onClick={() => act({ kind: 'read-usage', provider: account.provider, id: account.id, manual: true })}>Check usage now</Button> : null}
                     {account.ownDirectory === true && !account.active
                         ? <Button type="button" size="xs" variant="ghost" icon="log-out" data-action="account-sign-out" onClick={() => act({ kind: 'sign-out', id: account.id })}>Sign out and remove</Button>
                         : null}
@@ -110,7 +123,11 @@ function AccountRow({ account, now, onSwitch, onAct }: { account: AccountView; n
             </div>
             <div className="flex flex-wrap gap-3 pl-7 text-xs text-[var(--fg-3)]">
                 {/* Tynn #1070: an account never read says so; one read lists the windows IT has, and only those. */}
-                {account.read === false ? <span data-account-usage-unknown="">Usage unknown: not read yet</span> : null}
+                {/* Tynn #1084: being read now, or why it could not be; "Check usage now" reads it at once. */}
+                {account.usage?.state === 'reading'
+                    ? <span data-account-usage-reading="" {...(account.read === false ? { 'data-account-usage-unknown': '' } : {})}>{account.read === false ? 'Usage unknown · Reading usage…' : 'Reading usage…'}</span>
+                    : account.read === false ? <span data-account-usage-unknown="">Usage unknown: not read yet</span> : null}
+                {account.usage?.state === 'failed' ? <span data-account-usage-failed="" className="text-[var(--warning)]">{`Could not read usage: ${account.usage.reason}`}</span> : null}
                 {account.windows.map((w) => <span key={w.window} data-account-usage={w.window}><span className="text-[var(--fg-2)]">{w.window}</span> {usageWords(w, now)}</span>)}
             </div>
             {said ? <p role="alert" data-account-refused="" className="pl-7 text-xs text-[var(--warning)]">{said}</p> : null}

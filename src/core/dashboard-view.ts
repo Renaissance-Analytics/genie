@@ -72,6 +72,8 @@ export interface AgentRow {
     accountPaused?: AccountPause | null | undefined;
     /** Waiting on the Claude Design login (#1081): said while it is idle. Absent = not waiting. */
     designLogin?: boolean | undefined;
+    /** Tynn #1084: the account it is on, and the one it moves to at its next idle. Absent = not known. */
+    account?: { readonly label: string; readonly movesTo?: string } | undefined;
     /** Background shells and tasks still running after its turn ended: it reads Working, not Idle. */
     background?: number | null | undefined;
     id: string;

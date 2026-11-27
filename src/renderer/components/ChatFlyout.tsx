@@ -69,6 +69,8 @@ import { WorkspaceSwatch, useAgentColor, wsStyle } from '../workspace-colors.js'
 export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'queuedForStart' | 'silentSince' | 'attachmentRefs' | 'promptId' | 'draftProblem' | 'carried' | 'withdrawn'>>;
 
 export interface ChatThread {
+    /** Tynn #1084: the account the agent is really on, and the one it moves to at its next idle. */
+    account?: { readonly label: string; readonly movesTo?: string } | undefined;
     agentId: string;
     name: string;
     fidelity: Fidelity;
@@ -327,6 +329,8 @@ export interface ChatFlyoutProps {
     onAccountRetry?: (() => void) | undefined;
     /** A tool was refused for want of Claude Design's login (#1081): `Log in to Claude Design` on the context line. */
     onDesignLogin?: (() => void) | undefined;
+    /** Tynn #1084: `Restart on <active> now` on the context line, while the agent is still on another account. */
+    onMoveNow?: (() => void) | undefined;
     /** Where the width is remembered; absent = the window's localStorage (tests pass their own). */
     widthStorage?: Pick<Storage, 'getItem' | 'setItem'> | null | undefined;
     /** The width the dock gives the chat (the content row reserves the same; Tynn #798). Absent = the remembered width. */
@@ -423,7 +427,7 @@ export const ChatFlyout = stableView(ChatFlyoutBody, 'ChatFlyout');
 function ChatFlyoutBody({
     busy = false, onChooseProviderProgram,
     thread, onWindowLines, contextUsage = null, approval, approvalInToast = false, commands, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace,
-    onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onResolveQueued, onStopTurn, onInterruptAndSend, loadAttachment, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth, drafts, onTyping, peerTyping, insert, onInserted,
+    onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onResolveQueued, onStopTurn, onInterruptAndSend, loadAttachment, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onMoveNow, widthStorage, scope, dockWidth, onDockWidth, drafts, onTyping, peerTyping, insert, onInserted,
 }: ChatFlyoutProps) {
     countRender('ChatFlyout');
     const keeper = drafts === 'loading' ? undefined : drafts;
@@ -737,9 +741,27 @@ function ChatFlyoutBody({
 
             {/* THE CONTEXT LINE: what the agent is doing, in the board's words. Absent until read — never "Idle" as a guess.
                 While a turn runs that can be stopped, `Stop this turn` sits at its end: with the turn, not under Send. */}
-            {thread?.context || onStopTurn || onResumeLimit || onProviderLogin || onAccountRetry || onDesignLogin ? (
+            {thread?.context || thread?.account || onStopTurn || onResumeLimit || onProviderLogin || onAccountRetry || onDesignLogin ? (
                 <div data-chat-context={thread?.context?.tone ?? 'ok'} {...(thread?.context?.title ? { title: thread.context.title } : {})} className={`flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-1.5 text-[12px] ${CONTEXT_TONE[thread?.context?.tone ?? 'ok']}`}>
                     {thread?.context?.retryAt !== undefined ? <RetryCountdown at={thread.context.retryAt} /> : <ChatPlanLine text={thread?.context?.text ?? 'Working'} plan={thread?.context?.planView} />}
+                    {thread?.account ? (
+                        // THE ACCOUNT IT IS REALLY ON (Tynn #1084), and where it moves at its next idle.
+                        <span data-chat-account="" className={`shrink-0 truncate ${thread.account.movesTo ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}`}
+                            title={thread.account.movesTo ? `Still running on ${thread.account.label} until its current work is idle; then it continues on ${thread.account.movesTo}` : `Running on ${thread.account.label}`}>
+                            {thread.account.movesTo ? `· on ${thread.account.label} until idle, then ${thread.account.movesTo}` : `· on ${thread.account.label}`}
+                        </span>
+                    ) : null}
+                    {thread?.account?.movesTo && onMoveNow ? (
+                        <Button size="xs"
+                            type="button"
+                            data-action="move-now"
+                            title={`Stop what it is doing and continue on ${thread.account.movesTo} now, on this same conversation`}
+                            onClick={() => onMoveNow()}
+                            className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--warning)] bg-[var(--warning)]/10 px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--warning)]/20"
+                        >
+                            {`Restart on ${thread.account.movesTo} now`}
+                        </Button>
+                    ) : null}
                     {onStopTurn ? <TurnStop onStop={onStopTurn} agentName={thread?.name} className="ml-auto" /> : null}
                     {onProviderLogin ? (
                         <Button size="xs" labelClassName="contents"

@@ -141,7 +141,8 @@ describe('S11: the Accounts block in Settings → Providers', () => {
         await click(row(A).querySelector('[data-action="account-forget"]')!);
         expect(row(A).querySelector('[data-account-refused]')!.textContent).toBe(forgetRefusal(SNAP.providers[0]!.accounts[0]!));
         expect(row(A).querySelector('[data-account-refused]')!.textContent).toMatch(/signed in/i);
-        expect(p.onAct).not.toHaveBeenCalled();
+        // The host is asked for nothing but the page's usage read when it was shown (Tynn #1084): never the forget.
+        expect((p.onAct as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => c[0])).toEqual(SNAP.providers.map((v) => ({ kind: 'read-usage', provider: v.provider })));
     });
     it('Forget on another account asks the host; Rename saves the typed name', async () => {
         const p = render();

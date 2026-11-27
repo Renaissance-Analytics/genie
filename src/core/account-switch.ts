@@ -81,3 +81,14 @@ export function accountSwitchNote(label: string, headroom: Headroom | null, nowM
     const resets = upcoming.length > 0 ? `, resets ${clockAmPm(Math.min(...upcoming))}` : '';
     return `Account switched to ${label}: ${parts.join(', ')}${resets}. ${after}`;
 }
+
+/**
+ * WHAT AN AGENT IS TOLD ON A SWITCH (Tynn #1084). One that moves now hears the switch and the new account's room. One still in
+ * the old account's folder (busy: it moves at its next clean idle) is told exactly that: it is still running on the old
+ * account until its current work is idle, then continues on the new one. "Account switched" to an agent that had not switched
+ * is what the owner's coordinator was told on beta.66.1.
+ */
+export function switchNoteFor(input: { readonly to: string; readonly from: string; readonly movesLater: boolean; readonly headroom: Headroom | null; readonly nowMs: number }): string {
+    if (!input.movesLater) return accountSwitchNote(input.to, input.headroom, input.nowMs);
+    return `The active account is ${input.to} now, but you are still running on ${input.from} until your current work is idle; then you continue on ${input.to}, on this same conversation. Rate-limit readings until then are ${input.from}'s.`;
+}

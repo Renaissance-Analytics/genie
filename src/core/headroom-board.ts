@@ -70,6 +70,12 @@ export class HeadroomBoard {
         return true;
     }
 
+    /** When an account's last reading was shown here, or `null` when it has none since this host started (Tynn #1084). */
+    readingAt(provider: string, accountId: string): number | null {
+        const at = this.#shown.get(`${provider}:${accountId}`)?.at;
+        return at === undefined || !Number.isFinite(at) ? null : at;
+    }
+
     /** A forgotten account's readings leave the board (Tynn #484). */
     forget(accountId: string): void {
         for (const [key, s] of this.#shown) if (s.source.accountId === accountId) this.#shown.delete(key);
@@ -134,6 +140,11 @@ export class HeadroomFeed {
 
     view(): Record<string, Headroom> {
         return this.#board.view();
+    }
+
+    /** When an account's last reading was shown, or `null` (Tynn #1084: the probe's 15-min rule). */
+    readingAt(provider: string, accountId: string): number | null {
+        return this.#board.readingAt(provider, accountId);
     }
 
     /** A forgotten account's readings go (Tynn #484). */

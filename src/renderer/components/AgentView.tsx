@@ -328,6 +328,8 @@ export interface AgentViewProps {
     onStopToolCall?: ((agentId: string, toolCallId: string) => void) | undefined;
     /** `Resume now` while the agent's provider login is held for its rate limit (Tynn #794). */
     onResumeLimit?: ((agentId: string) => void) | undefined;
+    /** Tynn #1084: `Restart on <active> now` while it is still on another account than the active one (until idle). */
+    onMoveNow?: ((agentId: string) => void) | undefined;
     /** `Log in to <provider>` for a signed-out agent (the owner, 2026-10-18). */
     onProviderLogin?: ((agentId: string) => void) | undefined;
     /** `Try again` for an agent whose ACCOUNT the provider paused (the owner, 2026-10-21): every agent on that login comes back. */
@@ -401,7 +403,7 @@ export const AgentView = stableView(AgentViewBody, 'AgentView');
 function AgentViewBody({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, chatRefs, onSelect, now,
     chatSubject, approvalInToast = false, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace, onLanes, range = null, onRange, onTakeOver, bar, chatInView = false, ops,
-    startRefusal, providerSignedOut, files, workspace, initialChanges, initialDiskChanges, readCommits, loadToolOutput, initialCommits, takeOver = null, terminals, terminalsReadOnly = false, onStop, onCancelTurn, onStopToolCall, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, planStorage, onPlanCollapse, onDiscussStep, settingsSection: settingsSectionProp,
+    startRefusal, providerSignedOut, files, workspace, initialChanges, initialDiskChanges, readCommits, loadToolOutput, initialCommits, takeOver = null, terminals, terminalsReadOnly = false, onStop, onCancelTurn, onStopToolCall, onResumeLimit, onMoveNow, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, planStorage, onPlanCollapse, onDiscussStep, settingsSection: settingsSectionProp,
 }: AgentViewProps) {
     countRender('AgentView');
     const tabs = tabsFor(agent.fidelity);
@@ -799,6 +801,25 @@ function AgentViewBody({
                             Log in to Claude Design
                         </Button>
                     ) : null}
+                    {session?.account ? (
+                        // THE ACCOUNT IT IS REALLY ON (Tynn #1084), and where it moves at its next idle when that is not the active one.
+                        <span data-agent-runs-on={session.account.id} data-moves-to={session.account.movesTo?.id}
+                            title={session.account.movesTo ? `Still running on ${session.account.label} until its current work is idle; then it continues on ${session.account.movesTo.label}` : `Running on ${session.account.label}`}
+                            className={`shrink-0 truncate text-xs ${session.account.movesTo ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}`}>
+                            {session.account.movesTo ? `On ${session.account.label} · moves to ${session.account.movesTo.label} at next idle` : `On ${session.account.label}`}
+                        </span>
+                    ) : null}
+                    {actions.moveNow && onMoveNow && session?.account?.movesTo ? (
+                        <Button size="xs"
+                            type="button"
+                            data-action="move-now"
+                            title={`Stop what it is doing and continue on ${session.account.movesTo.label} now, on this same conversation`}
+                            onClick={() => onMoveNow(agent.id)}
+                            className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--warning)] bg-[var(--warning)]/10 px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--warning)]/20"
+                        >
+                            {`Restart on ${session.account.movesTo.label} now`}
+                        </Button>
+                    ) : null}
                     {actions.resumeLimit && onResumeLimit ? (
                         <Button size="xs"
                             type="button"
@@ -1155,7 +1176,7 @@ function AgentViewBody({
                                             </span>
                                         ) : null}
                                         {headroom ? (
-                                            <span data-rail-headroom title={headroomTitle(headroom)} className={`font-mono ${headroom.over || headroom.leftPct < 10 ? 'text-[var(--warning)]' : ''}`}>{headroomLine(headroom)}</span>
+                                            <span data-rail-headroom title={headroomTitle(headroom)} className={`font-mono ${headroom.over || headroom.leftPct < 10 ? 'text-[var(--warning)]' : ''}`}>{headroomLine(headroom, session?.account?.label ?? null)}</span>
                                         ) : null}
                                         {/* Whether this session was STARTED with Genie's MCP — the servers the host handed the driver. */}
                                         {session?.mcpServers ? (

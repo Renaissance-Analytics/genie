@@ -59,6 +59,11 @@ export interface LiveSession {
     accountPaused?: AccountPause | null | undefined;
     /** Waiting on the Claude Design login (core/design-login.ts, #1081): `Log in to Claude Design`. Absent = not waiting. */
     designLogin?: boolean | undefined;
+    /**
+     * The account it is really on (Tynn #1084), and the active one it moves to at its next clean idle when that differs.
+     * Absent = not known (no account, or an older snapshot).
+     */
+    account?: { readonly id: string; readonly label: string; readonly movesTo?: { readonly id: string; readonly label: string } } | undefined;
     /** Background shells and tasks it still has running (core/background-count.ts); absent/`null` = not reported. */
     background?: number | null | undefined;
     running: boolean;
@@ -237,6 +242,7 @@ export function agentRowFor(
         signedOut: session?.signedOut === true,
         accountPaused: session?.accountPaused ?? null,
         designLogin: session?.designLogin === true,
+        ...(session?.account ? { account: { label: session.account.label, ...(session.account.movesTo ? { movesTo: session.account.movesTo.label } : {}) } } : {}),
         // Only a running process has work running: a process that exited leaves its last count behind, until its next `run`.
         background: session?.running ? session.background ?? null : null,
     };

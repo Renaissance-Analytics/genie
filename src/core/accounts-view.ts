@@ -3,6 +3,7 @@ import type { Headroom, WindowReading } from './headroom.js';
 import type { SwitchOffer } from './switch-offer.js';
 import type { DesignAuthView } from './design-auth.js';
 import type { ClaudeAccountLive } from './claude-accounts.js';
+import type { UsageProbeState } from './usage-probe.js';
 
 /**
  * THE ACCOUNTS A WINDOW IS SHOWN (Tynn #483, Accounts S10). One active account per provider is signed in on the host and every
@@ -35,9 +36,25 @@ export interface AccountView {
     readonly method?: 'subscription' | 'console';
     /** Tynn #1011: what Claude Code reports for it now (prism-acp `describe` + `compare`); absent = not known now. */
     readonly live?: ClaudeAccountLive;
+    /** Tynn #1084: its usage is being read now, or why the last read failed. Absent: nothing to say. */
+    readonly usage?: UsageProbeState;
 }
 
-export interface ProviderAccountsView { readonly provider: string; readonly accounts: readonly AccountView[] }
+/** Tynn #1084: running agents of a provider still on another account than its active one, until each is idle. */
+export interface StillOnAccount { readonly accountId: string; readonly label: string; readonly count: number }
+
+export interface ProviderAccountsView {
+    readonly provider: string;
+    readonly accounts: readonly AccountView[];
+    /** Tynn #1084: agents still on another account than the active one; absent or empty = every agent is on it. */
+    readonly stillOn?: readonly StillOnAccount[];
+}
+
+/** What the host adds to the book (Tynn #1084): each account's usage read, and the agents not yet on the active account. */
+export interface AccountsViewExtras {
+    readonly usage?: Readonly<Record<string, UsageProbeState>>;
+    readonly stillOn?: Readonly<Record<string, readonly StillOnAccount[]>>;
+}
 
 /** What `engine.accounts` answers: every provider's accounts, and the switch offers standing (S8). */
 export interface AccountsSnapshot {
@@ -58,7 +75,7 @@ export interface KnownAccountRecord {
     readonly method?: 'subscription' | 'console';
 }
 
-export function accountsView(known: readonly KnownAccountRecord[], readings: readonly AccountHeadroom[], active: Readonly<Record<string, string>>, live: Readonly<Record<string, ClaudeAccountLive>> = {}): ProviderAccountsView[] {
+export function accountsView(known: readonly KnownAccountRecord[], readings: readonly AccountHeadroom[], active: Readonly<Record<string, string>>, live: Readonly<Record<string, ClaudeAccountLive>> = {}, extras: AccountsViewExtras = {}): ProviderAccountsView[] {
     const providers = [...new Set(known.map((a) => a.provider))].sort();
     const out: ProviderAccountsView[] = [];
     for (const provider of providers) {
@@ -71,9 +88,10 @@ export function accountsView(known: readonly KnownAccountRecord[], readings: rea
             const r = readingOf(a.id);
             const windows: AccountWindowRow[] = [...(r?.windows ?? [])];
             const own = a.configDir !== undefined ? { ownDirectory: true as const, ...(a.method ? { method: a.method } : {}) } : {};
-            return { id: a.id, provider, label: a.label, email: a.identity.email, plan: a.identity.plan ?? r?.room.plan ?? null, active: active[provider] === a.id, read: r !== undefined, windows, ...own, ...(live[a.id] ? { live: live[a.id]! } : {}) };
+            return { id: a.id, provider, label: a.label, email: a.identity.email, plan: a.identity.plan ?? r?.room.plan ?? null, active: active[provider] === a.id, read: r !== undefined, windows, ...own, ...(live[a.id] ? { live: live[a.id]! } : {}), ...(extras.usage?.[a.id] ? { usage: extras.usage[a.id]! } : {}) };
         });
-        out.push({ provider, accounts: [...accounts.filter((a) => a.active), ...accounts.filter((a) => !a.active)] });
+        const stillOn = (extras.stillOn?.[provider] ?? []).filter((s) => s.count > 0 && s.accountId !== active[provider]);
+        out.push({ provider, accounts: [...accounts.filter((a) => a.active), ...accounts.filter((a) => !a.active)], ...(stillOn.length > 0 ? { stillOn } : {}) });
     }
     return out;
 }

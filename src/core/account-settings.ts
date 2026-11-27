@@ -26,7 +26,14 @@ export type AccountsAction =
     /** Tynn #1011: prism-acp logout() for that folder, then the account and its folder go. */
     | { readonly kind: 'sign-out'; readonly id: string }
     /** Tynn #1011: a new account, signed in in the browser, active once it is. */
-    | { readonly kind: 'use-another'; readonly method: 'subscription' | 'console' };
+    | { readonly kind: 'use-another'; readonly method: 'subscription' | 'console' }
+    /**
+     * Tynn #1084: read the provider's accounts' usage. From the panel opening (and every 5 min while open): each account under
+     * the probe's 15-min rules. With an id and `manual` ("Check usage now"): that account, at once.
+     */
+    | { readonly kind: 'read-usage'; readonly provider: string; readonly id?: string; readonly manual?: true }
+    /** Tynn #1084: "Restart on <active> now": the provider's agents still on another account move now (one, by `agentId`). */
+    | { readonly kind: 'move-now'; readonly provider: string; readonly agentId?: string };
 
 export type AccountsActResult = { readonly ok: true } | { readonly ok: false; readonly reason: string };
 
@@ -57,6 +64,13 @@ export function accountsActionOf(value: unknown): AccountsAction | null {
         const code = typeof v['code'] === 'string' ? v['code'].trim() : '';
         if (typeof v['requestId'] !== 'string' || v['requestId'] === '' || code === '' || code.length > 512 || /[\x00-\x1f\x7f]/.test(code)) return null;
         return { kind: 'submit-code', requestId: v['requestId'], code };
+    }
+    // Tynn #1084: only these fields are kept.
+    if (v['kind'] === 'read-usage' || v['kind'] === 'move-now') {
+        if (typeof v['provider'] !== 'string' || v['provider'] === '') return null;
+        if (v['kind'] === 'move-now') return { kind: 'move-now', provider: v['provider'], ...(typeof v['agentId'] === 'string' && v['agentId'] !== '' ? { agentId: v['agentId'] } : {}) };
+        const id = typeof v['id'] === 'string' && v['id'] !== '' ? { id: v['id'] } : {};
+        return { kind: 'read-usage', provider: v['provider'], ...id, ...('id' in id && v['manual'] === true ? { manual: true as const } : {}) };
     }
     if (typeof v['id'] !== 'string' || v['id'] === '') return null;
     if (v['kind'] === 'sign-in' || v['kind'] === 'cancel-sign-in' || v['kind'] === 'sign-out') return { kind: v['kind'], id: v['id'] };

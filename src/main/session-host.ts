@@ -23,7 +23,7 @@ import { McpPreparationError } from './mcp-preparation-error.js';
 import { mcpOffFor, sameMcpServer } from '../core/agent-mcp.js';
 import { CLAUDE_DRIVER_CAPABILITIES, CODEX_DRIVER_CAPABILITIES, ClaudeDriver, CodexDriver, claudeAccounts, probeSessionStore } from '@particle-academy/prism-acp';
 import { respawnDecision, stayedWords } from '../core/claude-accounts.js';
-import { accountSwitchNote } from '../core/account-switch.js';
+import { switchNoteFor } from '../core/account-switch.js';
 
 /**
  * Whether an agent can ask for approval — the DRIVER's published claim (`permissionRequests`), read from prism-acp's
@@ -623,6 +623,7 @@ export class SessionHost {
     readonly #activeAccount: ((provider: string) => AccountRecord | null) | undefined;
     readonly #threadInAccount: (threadId: string, configDir: string | null) => 'present' | 'absent' | 'indeterminate';
     readonly #launchBlocked: ((account: AccountRecord) => string | null) | undefined;
+    readonly #onAccountUsed: ((account: AccountRecord) => void) | undefined;
     /** Starts a sign-in in their account's folder refused (Tynn #1011), as they were asked: started when the sign-in is over (`launchUnblocked`). */
     readonly #blockedStarts = new Map<AgentId, { readonly record: AgentRecord; readonly cwd: string; readonly how: { readonly account?: AccountRecord; readonly quiet?: boolean; readonly movedFrom?: AccountRecord }; readonly reason: string }>();
     /** The Claude folder of each run that is stopping, or that a stop could not end: its process is in that folder until it has ended. */
@@ -796,6 +797,8 @@ export class SessionHost {
         threadInAccount?: (threadId: string, configDir: string | null) => 'present' | 'absent' | 'indeterminate';
         /** Why nothing may launch in that account's folder now (a sign-in is running there, Tynn #1011), or `null`. */
         launchBlocked?: (account: AccountRecord) => string | null;
+        /** An agent launched on this account (Tynn #1084): its first use, so its usage can be read (the probe's own rules apply). */
+        onAccountUsed?: (account: AccountRecord) => void;
         /** The person wrote to an agent (a message of their own starts a turn): the plan keepalive's count starts again. */
         onPersonTurn?: (agentId: AgentId) => void;
         /** Each agent's headroom reading, with its provider: the Dashboard header's one-per-provider indicator (main buffers). */
@@ -851,6 +854,7 @@ export class SessionHost {
         this.#activeAccount = options.activeAccount;
         this.#threadInAccount = options.threadInAccount ?? realThreadInAccount;
         this.#launchBlocked = options.launchBlocked;
+        this.#onAccountUsed = options.onAccountUsed;
         this.#mcpServersFor = options.mcpServersFor;
         this.#untrustedFilesFor = options.untrustedFilesFor;
         this.#endToolCalls = options.endToolCalls;
@@ -1360,6 +1364,8 @@ export class SessionHost {
             ...(record.lastTurn !== undefined ? { turnsBefore: record.lastTurn } : {}),
             onRateLimit: (readings, message) => this.#limitReport(this.#runLogin(entry), readings, message),
             ...(this.#onHeadroom ? { onHeadroom: (room: Headroom) => this.#onHeadroom!(record.provider, room, { ...this.#readingAccount(entry), runId }) } : {}),
+            // Whose limit a rate-limit row is (Tynn #1084): the account this run is on when the reading comes.
+            ...(entry.account ? { readingAccountLabel: () => this.#accountOn(entry)?.label ?? null } : {}),
             onMcpServers: (reports) => this.#onMcpServers?.(record.id, reports),
             ...(this.#onDesignAuth && record.provider === 'claude' ? { onDesignAuth: (event: import('../core/design-auth.js').DesignAuthEvent) => this.#onDesignAuth!(record.id, event) } : {}),
             onRestartForQueue: () => this.#restartForQueue(record, cwd),
@@ -1473,6 +1479,8 @@ export class SessionHost {
 
         entry.session = session;
         this.#running.set(record.id, entry);
+        // An account's first use (Tynn #1084): its usage is read now if it has none of its own (the probe's rules decide).
+        if (account) { try { this.#onAccountUsed?.(account); } catch { /* a reader's failure is not the launch's */ } }
 
         /**
          * A provider can fail to spawn SYNCHRONOUSLY, and that path reaches none of the
@@ -1591,6 +1599,61 @@ export class SessionHost {
      * never dictate agent operations, only rate limits." Each running agent of the provider draws on the new account from its
      * next clean idle: one idle now moves now; one in a turn, a tool, an approval or with work queued moves when that is over.
      */
+    /**
+     * THE AGENTS NOT YET ON THE ACTIVE ACCOUNT (Tynn #1084): per account they are still on, how many. An agent moves at its next
+     * clean idle, and a busy one may not have one for hours; the panel says so instead of leaving the person to guess.
+     */
+    stillOn(provider: string): Array<{ accountId: string; label: string; count: number }> {
+        const out = new Map<string, { accountId: string; label: string; count: number }>();
+        for (const entry of this.#running.values()) {
+            if (entry.provider !== provider || !this.#movesTo(entry)) continue;
+            const on = entry.account!;
+            const seen = out.get(on.id) ?? { accountId: on.id, label: on.label, count: 0 };
+            seen.count += 1;
+            out.set(on.id, seen);
+        }
+        return [...out.values()];
+    }
+
+    /**
+     * "RESTART ON <ACTIVE> NOW" (Tynn #1084): the person's explicit go. Every agent of the provider still on another account
+     * (or the one named) moves now, through the same move as an idle one (same thread, what waited delivered to the new run,
+     * back to the old account if it does not come up), but without waiting for its turn, its tools or its queue: the person
+     * chose to cut them. How many were asked to move.
+     */
+    moveNow(provider: string, agentId?: AgentId): number {
+        let count = 0;
+        for (const [id, entry] of this.#running) {
+            if (entry.provider !== provider || (agentId !== undefined && id !== agentId) || !this.#movesTo(entry)) continue;
+            this.#toldStayed.delete(id);
+            void this.#considerMove(id, true);
+            count += 1;
+        }
+        return count;
+    }
+
+    /** The account a run is on now: the active one when it runs in the active account's folder, else the one it launched on. */
+    #accountOn(entry: Running): AccountRecord | undefined {
+        const active = this.#activeAccount?.(entry.provider);
+        if (active && entry.launchedConfigDir !== undefined && claudeLaunchConfigDir(active) === entry.launchedConfigDir) return active;
+        return entry.account;
+    }
+
+    /** The active account a Claude run moves to at its next idle, or `null` when it is on it already. */
+    #movesTo(entry: Running): AccountRecord | null {
+        if (entry.provider !== 'claude' || entry.account === undefined || entry.launchedConfigDir === undefined) return null;
+        const active = this.#activeAccount?.(entry.provider);
+        if (!active || active.provider !== entry.provider || claudeLaunchConfigDir(active) === entry.launchedConfigDir) return null;
+        return active;
+    }
+
+    #accountView(entry: Running): Pick<LiveSession, 'account'> {
+        const on = this.#accountOn(entry);
+        if (!on) return {};
+        const to = this.#movesTo(entry);
+        return { account: { id: on.id, label: on.label, ...(to ? { movesTo: { id: to.id, label: to.label } } : {}) } };
+    }
+
     accountChanged(provider: string): void {
         for (const [id, entry] of this.#running) if (entry.provider === provider) this.#scheduleMove(id);
     }
@@ -1605,7 +1668,6 @@ export class SessionHost {
      */
     accountSwitched(provider: string, input: { readonly account: AccountRecord; readonly headroom: Headroom | null }): void {
         const now = this.#clock();
-        const note = accountSwitchNote(input.account.label, input.headroom, now);
         if (input.headroom) this.#onHeadroom?.(provider, input.headroom, { accountId: input.account.id, runId: 'account-switch', fresh: true });
         const login = this.#loginOf(provider, input.account.id);
         if (!this.#gate.limitedByReading(login, now)) this.#gate.resumeNow(login);
@@ -1615,7 +1677,8 @@ export class SessionHost {
             // A run in another directory than the new account's moves (`#considerMove`); until it does it is on the OLD account,
             // so its hold stays and what waited goes to the new process, never to the account that refuses it.
             const moves = entry.account !== undefined && entry.launchedConfigDir !== undefined && entry.launchedConfigDir !== claudeLaunchConfigDir(input.account);
-            entry.session.accountSwitched(note, input.headroom, !moves);
+            // Honest about where it is (Tynn #1084): one that moves later is still on the old account until it is idle.
+            entry.session.accountSwitched(switchNoteFor({ to: input.account.label, from: entry.account?.label ?? input.account.label, movesLater: moves, headroom: input.headroom, nowMs: now }), input.headroom, !moves);
             if (moves) this.#scheduleMove(id);
             // Only a run on the new account can read the new account's room.
             else if (reader === null && entry.session.canReadRateLimits) reader = entry;
@@ -1652,7 +1715,7 @@ export class SessionHost {
         setTimeout(() => { void this.#considerMove(agentId); }, 0);
     }
 
-    async #considerMove(agentId: AgentId): Promise<void> {
+    async #considerMove(agentId: AgentId, force = false): Promise<void> {
         const entry = this.#running.get(agentId);
         if (!entry || entry.provider !== 'claude' || entry.account === undefined || this.#moving.has(agentId)) return;
         const active = this.#activeAccount?.(entry.provider);
@@ -1667,11 +1730,12 @@ export class SessionHost {
             // prompt it took mid-turn. A move while it is not would cut that prompt's work.
             // HELD ON THE LIMIT with nothing working (`limitIdle`): the old account refuses it, so moving cuts nothing, and what
             // waits is owed to the next run (`deliverOwed`), so it does not hold the move either.
-            inTurn: !session.limitIdle && (session.inTurn || session.starting || !session.quiet), pendingApproval: session.pendingApproval !== null,
+            // The person's "Restart on <active> now" (`force`, Tynn #1084) cuts what is under way: it does not wait for it.
+            inTurn: !force && !session.limitIdle && (session.inTurn || session.starting || !session.quiet), pendingApproval: !force && session.pendingApproval !== null,
             // A question to the person parks as an approval (`pendingApproval`); an answer arrives as queued work.
             pendingQuestion: false,
-            backgroundRunning: session.runningCall !== null || entry.background.count(entry.rows) > 0,
-            queued: session.limitIdle ? 0 : session.queuedPromptIds.length + (session.workWaiting ? 1 : 0), threadId,
+            backgroundRunning: !force && (session.runningCall !== null || entry.background.count(entry.rows) > 0),
+            queued: force || session.limitIdle ? 0 : session.queuedPromptIds.length + (session.workWaiting ? 1 : 0), threadId,
         };
         const first = respawnDecision({ ...base, store: 'absent' });
         if (first.kind === 'stay' || first.kind === 'wait') return;
@@ -2609,6 +2673,8 @@ export class SessionHost {
                 : null;
 
         return {
+            // The account it is really on, and where it moves at its next idle (Tynn #1084).
+            ...this.#accountView(entry),
             limit: this.#limitOf(this.#loginFor(entry.provider), entry.session.held),
             signedOut: entry.session.signedOut,
             // The turn its provider stopped, explained and counted (Tynn #859): the red stop line's words.

@@ -2428,6 +2428,7 @@ function DesktopApp({ bridge }: AppProps) {
             onProviderLogin={(agentId) => { void resolvedBridge?.providerLogin(agentId).then((r) => { if (r.ok) openCompanion(r, 'Log in'); else showAlert({ title: 'Log in', body: r.reason }); }, () => {}); }}
             onAccountRetry={(agentId) => { void resolvedBridge?.accountRetry?.(agentId); }}
             onDesignLogin={(agentId) => { void resolvedBridge?.designLogin?.(agentId).then((r) => { if (r.ok) openCompanion(r, 'Design sign-in'); else showAlert({ title: 'Design sign-in', body: r.reason }); }, () => {}); }}
+            onMoveNow={(agentId) => { void accountsAct({ kind: 'move-now', provider: 'claude', agentId }).then((r) => { if (!r.ok) showAlert({ title: 'Restart on the active account', body: r.reason }); }, () => {}); }}
             onChooseProviderProgram={chooseProviderProgram ?? undefined}
             onStartAgent={(agentId) => { void restartOne(agentId).then((r) => { if (!r.ok) setDockNotice({ kind: 'refused', reason: r.reason, workspaceId: null }); }, (error: unknown) => setDockNotice({ kind: 'refused', reason: error instanceof Error ? error.message : String(error), workspaceId: null })); }}
             onSafeModeStartAgent={restartOne}
