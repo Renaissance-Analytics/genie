@@ -39,6 +39,7 @@ fn main() -> ExitCode {
     }
     let args: Vec<OsString> = std::env::args_os().collect();
     let first = args.get(1).and_then(|a| a.to_str()).unwrap_or("");
+    console_probe();
     match first {
         "detach" | "job" | "pipe-owner-only" => return code(compat(first, &args)),
         _ => {}
@@ -47,9 +48,6 @@ fn main() -> ExitCode {
         Some(t) => t,
         None => return fail("an argument is not valid Unicode"),
     };
-    if shown_to_a_person(text.first().map(String::as_str)) {
-        release_own_console();
-    }
     let roots = match Roots::from_env() {
         Ok(r) => r,
         Err(why) => return fail(&why),
@@ -190,23 +188,19 @@ fn main() -> ExitCode {
 
 /// The modes a person sees (Genie opened, the logon run, the resident launcher, the setup window, the doctor, the
 /// migration's card), as against the command line's (status, install, version, ...).
-fn shown_to_a_person(first: Option<&str>) -> bool {
-    matches!(first, None | Some("--updated" | "--logon" | "serve" | "--hidden" | "setup" | "--doctor" | "moving-card"))
+/// A test build's word on this process's console (GENIE_LAUNCHER_CONSOLE_PROBE names the file): `console=true|false`.
+fn console_probe() {
+    #[cfg(all(windows, feature = "test-keys"))]
+    if let Some(file) = std::env::var_os("GENIE_LAUNCHER_CONSOLE_PROBE") {
+        let has = unsafe { !windows_sys::Win32::System::Console::GetConsoleWindow().is_null() };
+        let _ = std::fs::write(file, format!("console={has}
+"));
+    }
 }
 
-/// THE LAUNCHER IS A CONSOLE PROGRAM (it is also the command line, and genie-launch.exe's modes): started from a
-/// shortcut, the logon entry or the installer, Windows gives it a console window of its own, which a person saw behind
-/// the migration's card (run 1127-223352-5d8720). In the modes a person sees it lets go of that console when it is the
-/// console's only process; one it shares (a terminal it was typed into) is kept. Nothing elsewhere.
-fn release_own_console() {
-    #[cfg(windows)]
-    unsafe {
-        use windows_sys::Win32::System::Console::{FreeConsole, GetConsoleProcessList};
-        let mut pids = [0u32; 4];
-        if GetConsoleProcessList(pids.as_mut_ptr(), pids.len() as u32) == 1 {
-            FreeConsole();
-        }
-    }
+#[allow(dead_code)]
+fn shown_to_a_person(first: Option<&str>) -> bool {
+    matches!(first, None | Some("--updated" | "--logon" | "serve" | "--hidden" | "setup" | "--doctor" | "moving-card"))
 }
 
 /// Open Genie. A launcher already running is asked for a window; otherwise this one becomes the launcher, starts the host
