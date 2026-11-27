@@ -47,7 +47,7 @@ describe('main.ts wiring', () => {
         // The SAME entry, deferred past the notification (core/quit-flag.ts `answerSecondInstance`, driven in
         // quit-second-instance.test.ts): its question asked inside the handler had Genie terminated as hung.
         // A genie:// URL in its argv (Tynn's sign-in coming back) is handed to openGenieUrl, deferred the same way.
-        expect(handler).toMatch(/answerSecondInstance\(argv, additionalData, \{ quit: requestQuit, reveal: \(\) => \{ revealMainWindow\('second launch'\); \}, defer: \(run\) => \{ setImmediate\(run\); \}, open: openGenieUrl, openHost: \(address\) => \{ openRemoteWindow\(address\); \} \}\);/);
+        expect(handler).toMatch(/answerSecondInstance\(argv, additionalData, \{ quit: requestQuit, reveal: \(\) => \{ revealMainWindow\('second launch'\); \}, defer: \(run\) => \{ setImmediate\(run\); \}, open: openGenieUrl, openHost: \(address\) => \{ openRemoteWindow\(address\); \}, show: \(route\) => \{ showToPerson\(\{ activation: 'user-gesture', route, reason: 'launcher tray' \}\); \} \}\);/);
         // Never run inside the handler.
         expect(handler).not.toMatch(/requestQuit\(\)/);
         // Not a second, private quit path: the handler never calls app.quit itself.

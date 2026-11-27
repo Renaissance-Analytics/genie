@@ -39,7 +39,11 @@ describe('main.ts wires the error policy', () => {
         const src = main();
         // On the Deck through this window's own features (mainErrors.deckItems below), and at once on the tray's count: since
         // Tynn #998 (2g-4b1) not through the window registry's Deck, which nothing read.
-        // The tray's waiting count went with the client's tray (Tynn #1058 L5): nothing of main counts them for a tray.
+        // AT ONCE: a recorded error says this window's features again down the tunnel, so the in-app Deck shows it now.
+        expect(src).toMatch(/mainErrors\.onChange\(\(\) => \{ requestFeaturePush\(\); \}\);/);
+        expect(src.indexOf('mainErrors.onChange(() => { requestFeaturePush(); });')).toBeGreaterThan(src.indexOf('requestFeaturePush = pushFeatures;'));
+        expect(src).toMatch(/const pushFeatures = \(\) => \{\s*windowTunnel\.refreshWindow\(\);/);
+        // The tray's waiting count went with the client's tray (Tynn #1058 L5): the launcher's tray reads the host's Deck.
         expect(src).not.toMatch(/refreshTrayWaiting|trayWaiting/);
         expect(src).not.toMatch(/registry\.setDeckSource\(/);
         const ports = src.slice(src.indexOf('const ownFeatureUi = featureWindow(localDoor, {'), src.indexOf('featureEffectNow = ownFeatureUi;'));

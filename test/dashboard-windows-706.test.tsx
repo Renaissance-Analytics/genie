@@ -150,11 +150,28 @@ describe('the row menu (happy-dom)', () => {
         expect(trigger('a_fancy')).toBeNull();
     });
 
-    it('Genie’s own row has no menu (it has no workspace to open)', () => {
+    it('Genie’s own row opens Genie’s own scratch terminal, and no Files (Tynn #1058 L5: its home since the client tray went)', () => {
         mount({ genie: row({ id: 'genie', name: 'genie', workspaceId: '__genie__' }) });
         expect(host.querySelector('[data-agent="genie"]')).not.toBeNull();
-        expect(trigger('genie')).toBeNull();
+        click(trigger('genie'));
+        const [terminal, filesItem] = items();
+        expect(items().map((i) => i.textContent!.trim())).toEqual(['Terminal', 'Files']);
+        // Files is there and disabled: Genie's own workspace has no folder of the person's to show.
+        expect(filesItem!.getAttribute('aria-disabled') === 'true' || filesItem!.hasAttribute('disabled') || filesItem!.closest('[aria-disabled="true"],[data-disabled]') !== null).toBe(true);
+        click(terminal);
+        expect(terminals).toEqual(['__genie__']);
+        expect(files).toEqual([]);
+        expect(navigated).toEqual([]);
         expect(trigger('a_tynn')).not.toBeNull();
+    });
+
+    it('CONTROL: with no terminal opener Genie’s own row has no menu; a workspace window never offers it', () => {
+        mount({ genie: row({ id: 'genie', name: 'genie', workspaceId: '__genie__' }), onOpenTerminalWindow: undefined });
+        expect(trigger('genie')).toBeNull();
+        act(() => root.unmount());
+        root = createRoot(host);
+        mount({ genie: row({ id: 'genie', name: 'genie', workspaceId: '__genie__' }), scopeWorkspaceId: 'tynn' });
+        expect(trigger('genie')).toBeNull();
     });
 
     it('without any window opener the button is disabled, never a navigation', () => {

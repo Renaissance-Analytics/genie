@@ -20,13 +20,16 @@ import { getTailscaleStatus, installTailscale, tailscaleCommand, tailscaleUp } f
 import { tailscaleLive } from './tailscale-live.js';
 import { ensureFirewallRule, firewallReader, readFirewallRule, removeFirewallRule } from './remote-firewall.js';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { connect, createServer, type Server } from 'node:net';
 import { hostname, uptime } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ENGINE_PROTOCOL, hostEndpoint, parseHostRecord, type HostRecord } from '../core/engine-protocol.js';
 import { stopProgress } from '../core/stop-progress.js';
+import { hostActivityOf } from '../core/host-activity.js';
+import { needsYouCount } from '../core/deck.js';
+import { renameOverSync } from '../core/atomic-rename.js';
 import { lineTransport } from '../core/line-transport.js';
 import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
 import { makeServiceExec } from './service-exec.js';
@@ -1715,11 +1718,14 @@ async function main(): Promise<void> {
         log: say,
         onShutdown: () => void shutdown('a window asked'),
         // What this host runs now, for the launcher's tray and its questions (Tynn #1058 L5).
-        activity: () => {
-            const running = hostRegistry.listAgents().filter((a) => host.probe(a.id as AgentId)?.running === true);
-            const s = hostSummary.now();
-            return { agents: running.length, agentNames: running.map((a) => a.name), terminals: s.terminals.length, processes: s.processes.length, services: s.services.length };
-        },
+        activity: () => hostActivityOf({
+            running: hostRegistry.listAgents().filter((a) => host.probe(a.id as AgentId)?.running === true),
+            summary: hostSummary.now(),
+            flows: hostFlows.list(),
+            kept: hostBook.kept(),
+            browserUp: browserService.up,
+            needsYou: needsYouCount(featureDeckItems()),
+        }),
         heartbeat: hangWatchdog,
         crash: crashState,
         // Every window shows the banner, and may leave it (safe-mode-host.ts).
@@ -3033,7 +3039,7 @@ async function main(): Promise<void> {
             say(`shutting down: ${why}`);
             // ITS PROGRESS, SAID AS IT GOES (Tynn #1079): the launcher waits as long as this moves, and ends the host only when
             // it stands still. Written whole each time (core/stop-progress.ts).
-            const stopping = stopProgress(runtime, { pid: process.pid, now: Date.now, write: (file, text) => { writeFileSync(`${file}.tmp`, text); renameSync(`${file}.tmp`, file); } });
+            const stopping = stopProgress(runtime, { pid: process.pid, now: Date.now, write: (file, text) => { const temp = `${file}.${process.pid}.tmp`; writeFileSync(temp, text); renameOverSync(temp, file); } });
             stopping.step('agents', host.count);
             if (marketplaceHost) await marketplaceHost.close().catch((error: unknown) => say(`Marketplace shutdown: ${error instanceof Error ? error.message : String(error)}`));
             lifecycleLog(`host shutdown pid=${process.pid} reason=${why}`);

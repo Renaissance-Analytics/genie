@@ -121,7 +121,7 @@ describe('scripts/quit-keeps-host-cdp.mjs runs as a CI row', () => {
     it('L5: the tray (the launcher\u2019s) and its question are photographed; Escape cancels and nothing stops', () => {
         expect(script).toMatch(/shot\(`tray-menu-\$\{WIN \? 'windows' : 'linux'\}\.png`\)/);
         expect(script).toMatch(/shot\(`quit-prompt-\$\{WIN \? 'windows' : 'linux'\}\.png`\)/);
-        expect(script).toMatch(/'26f\. Cancel stopped NOTHING: the launcher, the host and the providers all alive'/);
+        expect(script).toMatch(/'25t\. Cancel stopped NOTHING: the launcher, the host and the providers all alive'/);
     });
 
     it('L5 and Tynn #1079: Shut down everything is graceful (never ended), the launcher exits, and the next boot reads no crash', () => {

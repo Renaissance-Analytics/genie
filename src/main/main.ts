@@ -83,7 +83,7 @@ import { legacyHostFinder } from './legacy-host-start.js';
 import { HostDirectory, localHostState, readPairedHosts } from './host-directory-window.js';
 import { attachLauncher, callLauncher, launcherReachable, launcherWire } from './launcher-control.js';
 import { materializeHostRuntime } from './host-runtime.js';
-import { launcherLink } from '../core/launcher-link.js';
+import { launcherLink, launcherShowRoute } from '../core/launcher-link.js';
 import { HostRestart, HostWait } from './host-wait-window.js';
 import { readStartupProgress } from './startup-updates-file.js';
 import { scheduleScratchSweep } from './scratch-area.js';
@@ -1980,6 +1980,9 @@ async function boot(): Promise<void> {
         if (b.width === 0 || b.height === 0) browserPane.hide();
         else browserPane.setBounds({ x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) });
     });
+    // AN ERROR MAIN CAUGHT AND SURVIVED reaches the in-app Deck AT ONCE (Tynn #998, 2g-4b1): this window's features are said
+    // again down the tunnel (mainErrors.deckItems), never through the window registry's Deck, which nothing reads.
+    mainErrors.onChange(() => { requestFeaturePush(); });
     let published = '';
     /*
      * A ledger row can change a Dashboard cell — a plan step, a context figure — so the estate-wide snapshot is refreshed
@@ -2029,6 +2032,9 @@ async function boot(): Promise<void> {
     // THE LAUNCHER DECIDES WHETHER A WINDOW OPENS (Tynn #1058 L5): at logon with start minimised it starts no client at all,
     // so a client that runs shows its window. With no tray of its own a hidden client could never be reached.
     mountMainWindow(true);
+    // THE LAUNCHER'S TRAY ASKED FOR A PLACE (L5: Needs you, Settings…, Task Manager…): `--show <route>`, one it offers.
+    const shownAtBoot = launcherShowRoute(process.argv);
+    if (shownAtBoot) showToPerson({ activation: 'user-gesture', route: shownAtBoot, reason: 'launcher tray' });
     // START ON LOGON IS THE LAUNCHER'S (Tynn #1058 L5): it writes the entry (the Run value, the autostart file) running
     // itself with --logon, and decides with the logon table. This client says the person's two settings to it: at boot, on
     // every change, and when genie-host says its settings whole (late, after the boot's deadline).
@@ -2162,7 +2168,7 @@ app.on('browser-window-focus', (_event, focused) => {
 
 app.on('second-instance', (_event, argv, _workingDirectory, additionalData) => {
     // ONE WINDOW PER HOST (Tynn #1058 L4): the launcher's openWindow {host} arrives here as `--host <address>`.
-    answerSecondInstance(argv, additionalData, { quit: requestQuit, reveal: () => { revealMainWindow('second launch'); }, defer: (run) => { setImmediate(run); }, open: openGenieUrl, openHost: (address) => { openRemoteWindow(address); } });
+    answerSecondInstance(argv, additionalData, { quit: requestQuit, reveal: () => { revealMainWindow('second launch'); }, defer: (run) => { setImmediate(run); }, open: openGenieUrl, openHost: (address) => { openRemoteWindow(address); }, show: (route) => { showToPerson({ activation: 'user-gesture', route, reason: 'launcher tray' }); } });
 });
 
 /**

@@ -601,12 +601,12 @@ INSPECT = await freePort(INSPECT, 'inspector', '0.5');
 
 console.log(`\nQUIT KEEPS THE HOST — "Just close the UI" with agents streaming, then open Genie again (deadline ${Math.round(DEADLINE_MS / 1000)} s)\n`);
 gaugeFrom = readOr(LIFECYCLE).length;
-step('0.7', `the launcher (${LAUNCHER_SRC}) installs the signed packages into ${CODE_ROOT}`);
+step('0.5a', `the launcher (${LAUNCHER_SRC}) installs the signed packages into ${CODE_ROOT}`);
 if (!existsSync(LAUNCHER_SRC) || !existsSync(PACKAGES)) refuse(`no launcher or packages from the package-tracks row (${LAUNCHER_SRC}, ${PACKAGES})`);
 const installed = launcherCli(['install', '--profile', 'both', '--from', PACKAGES, '--yes'], 300_000);
 if (installed.code !== 0) refuse(`the launcher did not install the packages: ${installed.out.slice(0, 400)}`);
 console.log(`  ${installed.out.split(/\r?\n/).join(' | ')}`);
-step('0.8', 'the launcher started (serve, with its tray probe) (≤ 30 s)');
+step('0.5b', 'the launcher started (serve, with its tray probe) (≤ 30 s)');
 mkdirSync(OUT, { recursive: true });
 {
     const log = openSync(LAUNCHER_LOG, 'a');
@@ -617,7 +617,7 @@ const record = await until(() => { const r = launcherRecord(); return r && alive
 if (!record) refuse(`the launcher did not start: ${readOr(LAUNCHER_LOG).slice(-400)}`);
 launcherPid = record.pid;
 console.log(`  launcher pid ${launcherPid} on ${record.endpoint}`);
-step('0.9', 'the host, started through the launcher (≤ 90 s)');
+step('0.5c', 'the host, started through the launcher (≤ 90 s)');
 const ensured = launcherCli(['ensure-host'], 90_000);
 try { launcherHostBuild = JSON.parse(ensured.out.split(/\r?\n/).filter((l) => l.startsWith('{')).pop() ?? 'null')?.build ?? null; } catch { /* said below */ }
 if (ensured.code !== 0 || !launcherHostBuild) refuse(`the launcher did not start the host: ${ensured.out.slice(0, 400)}`);
@@ -721,14 +721,14 @@ try {
     for (const ag of agents) check(alive(ag.pid), `15. with no client, ${ag.name}'s provider is alive`, `pid ${ag.pid}`);
     check(alive(launcherPid), '16. the launcher (the tray) is alive', `pid ${launcherPid}`);
     check(!(await pageOn(PORT)), '17. no page on the debugger port (the client really went)');
-    step('13', 'the launcher\'s tray: its menu, as words, and shown (Windows) for the screenshot');
+    step('17m', 'the launcher\'s tray: its menu, as words, and shown (Windows) for the screenshot');
     const menu = launcherCli(['tray-menu']);
     let items = [];
     try { items = JSON.parse(menu.out).items ?? []; } catch { /* said below */ }
     const header = items.find((i) => i.startsWith('[This computer’s host · running')) ?? '';
     const said = Number(/· (\d+) agents?\]/.exec(header)?.[1] ?? 0);
     check(menu.code === 0 && said >= AGENTS && items.includes('Open Genie') && items.includes('Stop this computer’s host') && items.includes('Shut down everything') && items.includes('Close Genie (agents keep running) (unavailable)'),
-        '13. the TRAY (the launcher\'s) says the host runs the agents, offers Open Genie, Stop this computer\'s host and Shut down everything; Close Genie is unavailable with no window', menu.out.slice(0, 400));
+        '17m. the TRAY (the launcher\'s) says the host runs the agents, offers Open Genie, Stop this computer\'s host and Shut down everything; Close Genie is unavailable with no window', menu.out.slice(0, 400));
     await sleep(1_500);
     shot(`tray-menu-${WIN ? 'windows' : 'linux'}.png`);
     if (WIN) pressKey('Escape');
@@ -769,19 +769,19 @@ try {
 
     // -------------------------------------------------------------------------------- the tray's Shut down everything ASKS
     // ALWAYS ASK (the owner, 2026-11-02), in the launcher's own window (direction C). Cancel: nothing stops.
-    step('26c', 'the tray\'s Shut down everything ASKS in the launcher\'s window; Escape cancels it');
+    step('25q', 'the tray\'s Shut down everything ASKS in the launcher\'s window; Escape cancels it');
     const askAt = readOr(LAUNCHER_LOG).length;
     const askTray = launcherCli(['tray-act', 'shutDown']);
-    check(askTray.code === 0, '26c. the tray\'s Shut down everything was chosen', askTray.out.slice(0, 200));
+    check(askTray.code === 0, '25q. the tray\'s Shut down everything was chosen', askTray.out.slice(0, 200));
     const asking = await until(() => /genie: asking: Shut down everything\?/.test(readOr(LAUNCHER_LOG).slice(askAt)) ? true : null, 20_000);
-    check(asking === true, '26d. the launcher ASKED "Shut down everything?" in its own window', readOr(LAUNCHER_LOG).slice(askAt).slice(-300));
+    check(asking === true, '25r. the launcher ASKED "Shut down everything?" in its own window', readOr(LAUNCHER_LOG).slice(askAt).slice(-300));
     await sleep(2_000);
     shot(`quit-prompt-${WIN ? 'windows' : 'linux'}.png`);
     pressKey('Escape');
     const cancelled = await until(() => /genie: Shut down everything\?: cancelled/.test(readOr(LAUNCHER_LOG).slice(askAt)) ? true : null, 15_000);
-    check(cancelled === true, '26e. Escape CANCELLED it (the launcher said so)', readOr(LAUNCHER_LOG).slice(askAt).slice(-300));
+    check(cancelled === true, '25s. Escape CANCELLED it (the launcher said so)', readOr(LAUNCHER_LOG).slice(askAt).slice(-300));
     await sleep(2_000);
-    check(alive(launcherPid) && alive(hostPid) && agents.every((ag) => alive(ag.pid)), '26f. Cancel stopped NOTHING: the launcher, the host and the providers all alive');
+    check(alive(launcherPid) && alive(hostPid) && agents.every((ag) => alive(ag.pid)), '25t. Cancel stopped NOTHING: the launcher, the host and the providers all alive');
 
     // -------------------------------------------------------------------------------- Shut down everything, from the quit
     c = await open('third', 26);

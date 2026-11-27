@@ -5,7 +5,8 @@
 //! own menu draws it:
 //!
 //!   This computer's host · running · 3 agents
-//!   Open Genie / Open Genie Browser
+//!   Needs you: 2                               (only while the host's Deck waits on the person: the icon has its dot)
+//!   Open Genie / Open Genie Browser / Settings… / Task Manager…
 //!   Stop (or Start) this computer's host
 //!   Close Genie (agents keep running)          = "Just close the UI"
 //!   Shut down everything
@@ -31,10 +32,34 @@ pub enum Action {
     StopHost,
     CloseUi,
     ShutDown,
+    /// "Needs you: N": Genie opened on the Dashboard, where the Deck is (a held login's Resume, a signed-out login's Log in,
+    /// a paused account's Try again live there).
+    OpenDeck,
+    OpenSettings,
+    OpenTaskManager,
 }
 
 impl Action {
-    pub const ALL: [Action; 6] = [Action::OpenGenie, Action::OpenBrowser, Action::StartHost, Action::StopHost, Action::CloseUi, Action::ShutDown];
+    pub const ALL: [Action; 9] = [
+        Action::OpenGenie,
+        Action::OpenBrowser,
+        Action::StartHost,
+        Action::StopHost,
+        Action::CloseUi,
+        Action::ShutDown,
+        Action::OpenDeck,
+        Action::OpenSettings,
+        Action::OpenTaskManager,
+    ];
+    /// The client's route for an action that opens Genie at a place (src/core/launcher-link.ts LAUNCHER_SHOW_ROUTES).
+    pub fn route(self) -> Option<&'static str> {
+        match self {
+            Action::OpenDeck => Some("genie://dashboard"),
+            Action::OpenSettings => Some("genie://settings"),
+            Action::OpenTaskManager => Some("genie://hosting?tab=processes"),
+            _ => None,
+        }
+    }
     pub fn id(self) -> u32 {
         Action::ALL.iter().position(|a| *a == self).unwrap_or(0) as u32 + 100
     }
@@ -47,6 +72,9 @@ impl Action {
             "stopHost" => Some(Action::StopHost),
             "closeUi" => Some(Action::CloseUi),
             "shutDown" => Some(Action::ShutDown),
+            "openDeck" => Some(Action::OpenDeck),
+            "openSettings" => Some(Action::OpenSettings),
+            "openTaskManager" => Some(Action::OpenTaskManager),
             _ => None,
         }
     }
@@ -78,6 +106,8 @@ pub struct View {
     pub host: HostView,
     pub windows: usize,
     pub browser: bool,
+    /// What waits on the person on the host's Deck (`engine.activity` needsYou): the dot, and "Needs you: N".
+    pub needs_you: u64,
 }
 
 fn agents(n: u64) -> String {
@@ -95,14 +125,28 @@ pub fn host_line(v: &View) -> String {
 }
 
 pub fn tooltip(v: &View) -> String {
-    format!("Genie · {}", host_line(v))
+    if v.needs_you > 0 {
+        format!("Genie · Needs you: {} · {}", v.needs_you, host_line(v))
+    } else {
+        format!("Genie · {}", host_line(v))
+    }
 }
 
 /// The menu, top to bottom.
 pub fn menu(v: &View) -> Vec<Item> {
-    let mut items = vec![Item::Label(host_line(v)), Item::Separator, Item::Do { action: Action::OpenGenie, label: "Open Genie".to_string(), enabled: true }];
+    let mut items = vec![Item::Label(host_line(v))];
+    if v.needs_you > 0 {
+        items.push(Item::Do { action: Action::OpenDeck, label: format!("Needs you: {}", v.needs_you), enabled: true });
+    }
+    items.push(Item::Separator);
+    items.push(Item::Do { action: Action::OpenGenie, label: "Open Genie".to_string(), enabled: true });
     if v.browser {
         items.push(Item::Do { action: Action::OpenBrowser, label: "Open Genie Browser".to_string(), enabled: true });
+    }
+    items.push(Item::Do { action: Action::OpenSettings, label: "Settings…".to_string(), enabled: true });
+    // The kept processes are the host's: Task Manager has nothing to show on a computer with no host.
+    if v.host != HostView::NotHere {
+        items.push(Item::Do { action: Action::OpenTaskManager, label: "Task Manager…".to_string(), enabled: true });
     }
     match v.host {
         HostView::Running { .. } => {
@@ -126,7 +170,14 @@ pub fn menu(v: &View) -> Vec<Item> {
 pub fn stopping(activity: Option<&Value>) -> Vec<String> {
     let Some(a) = activity else { return Vec::new() };
     let mut out = Vec::new();
-    for (key, one, many) in [("agents", "agent", "agents"), ("terminals", "terminal", "terminals"), ("processes", "kept process", "kept processes"), ("services", "service", "services")] {
+    for (key, one, many) in [
+        ("agents", "agent", "agents"),
+        ("terminals", "terminal", "terminals"),
+        ("processes", "kept process", "kept processes"),
+        ("services", "service", "services"),
+        ("armedFlows", "armed flow", "armed flows"),
+        ("scheduledTasks", "scheduled task", "scheduled tasks"),
+    ] {
         if let Some(n) = a[key].as_u64().filter(|n| *n > 0) {
             let what = if key == "agents" {
                 let names: Vec<&str> = a["agentNames"].as_array().map(|v| v.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
@@ -136,6 +187,9 @@ pub fn stopping(activity: Option<&Value>) -> Vec<String> {
             };
             out.push(what);
         }
+    }
+    if a["browser"] == true {
+        out.push("the Genie Browser".to_string());
     }
     out
 }
@@ -171,14 +225,16 @@ pub fn view(ctx: &Context) -> View {
     let st = state::read(&roots.state_file()).ok();
     let has = |t: &str| st.as_ref().and_then(|s| s.track(t).and_then(|t| t.current.clone())).is_some();
     let running = host::read_record(roots).filter(|r| crate::spawn::pid_alive(r.pid)).is_some();
+    let activity = if running { host::activity(roots) } else { None };
     let host = if running {
-        HostView::Running { agents: host::activity(roots).and_then(|a| a["agents"].as_u64()) }
+        HostView::Running { agents: activity.as_ref().and_then(|a| a["agents"].as_u64()) }
     } else if has("host") {
         HostView::Stopped
     } else {
         HostView::NotHere
     };
-    View { host, windows: control::attached_pids(ctx).len(), browser: has("browser") }
+    let needs_you = activity.as_ref().and_then(|a| a["needsYou"].as_u64()).unwrap_or(0);
+    View { host, windows: control::attached_pids(ctx).len(), browser: has("browser"), needs_you }
 }
 
 fn ask(q: Question) -> Option<bool> {
@@ -194,8 +250,18 @@ fn ask(q: Question) -> Option<bool> {
 }
 
 fn open_genie(ctx: &Context) {
+    open_genie_at(ctx, None);
+}
+
+/// Genie opened, at `route` when one is named (`--show <route>`: src/core/launcher-link.ts takes only the tray's routes).
+fn open_genie_at(ctx: &Context, route: Option<&str>) {
     control::opened(&ctx.roots);
-    let started = crate::components::component("client").ok_or_else(|| "no client component".to_string()).and_then(|c| control::start_component(&ctx.roots, c, vec!["--open-window".to_string()]));
+    let mut args = vec!["--open-window".to_string()];
+    if let Some(r) = route {
+        args.push("--show".to_string());
+        args.push(r.to_string());
+    }
+    let started = crate::components::component("client").ok_or_else(|| "no client component".to_string()).and_then(|c| control::start_component(&ctx.roots, c, args));
     if let Err(why) = started {
         eprintln!("genie: tray: Open Genie: {why}");
     }
@@ -207,6 +273,7 @@ pub fn act(ctx: Arc<Context>, action: Action) {
         eprintln!("genie: tray: {action:?}");
         match action {
             Action::OpenGenie => open_genie(&ctx),
+            Action::OpenDeck | Action::OpenSettings | Action::OpenTaskManager => open_genie_at(&ctx, action.route()),
             Action::OpenBrowser => {
                 if let Err(why) = crate::components::component("browser").ok_or_else(|| "no browser component".to_string()).and_then(|c| control::start_component(&ctx.roots, c, Vec::new())) {
                     eprintln!("genie: tray: Open Genie Browser: {why}");
@@ -290,6 +357,48 @@ pub fn probe_enabled() -> bool {
     std::env::var("GENIE_LAUNCHER_TRAY_PROBE").as_deref() == Ok("1")
 }
 
+/// The attention dot (src/core/tray-attention.ts withAttentionDot, the same geometry and colour): a filled circle in the
+/// bottom-right corner, Genie's danger red, over the mark. The owner, 2026-10-26: "the mark with a dot while anything
+/// waits on the person".
+pub const ATTENTION_RGB: [u8; 3] = [0xef, 0x44, 0x44];
+pub fn with_attention_dot(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let mut out = rgba.to_vec();
+    let radius = ((width as f64 * 0.2).round()).max(2.0);
+    let (cx, cy) = (width as f64 - radius - 0.5, height as f64 - radius - 0.5);
+    for y in 0..height {
+        for x in 0..width {
+            let (dx, dy) = (x as f64 - cx, y as f64 - cy);
+            if dx * dx + dy * dy > radius * radius {
+                continue;
+            }
+            let i = ((y * width + x) * 4) as usize;
+            out[i..i + 4].copy_from_slice(&[ATTENTION_RGB[0], ATTENTION_RGB[1], ATTENTION_RGB[2], 0xff]);
+        }
+    }
+    out
+}
+
+/// An icon resource (BITMAPINFOHEADER, the colour bits bottom-up as BGRA, an all-clear AND mask) for
+/// CreateIconFromResourceEx, from RGBA pixels: how the dotted mark becomes a Windows icon without a PNG encoder.
+pub fn icon_resource(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    for v in [40u32, width, height * 2] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&32u16.to_le_bytes());
+    out.extend_from_slice(&[0u8; 24]);
+    for y in (0..height).rev() {
+        for x in 0..width {
+            let i = ((y * width + x) * 4) as usize;
+            out.extend_from_slice(&[rgba[i + 2], rgba[i + 1], rgba[i], rgba[i + 3]]);
+        }
+    }
+    let mask_row = ((width + 31) / 32 * 4) as usize;
+    out.extend(std::iter::repeat(0u8).take(mask_row * height as usize));
+    out
+}
+
 /// RGBA pixels of a non-interlaced 8-bit RGBA PNG (the tray mark): `(width, height, rgba)`.
 pub fn decode_png_rgba(png: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
     if png.len() < 8 || &png[..8] != b"\x89PNG\r\n\x1a\n" {
@@ -350,6 +459,7 @@ mod win {
     use std::sync::atomic::{AtomicIsize, Ordering};
     use std::sync::{Arc, OnceLock};
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+    use windows_sys::Win32::UI::WindowsAndMessaging::HICON;
     use windows_sys::Win32::UI::Shell::{Shell_NotifyIconGetRect, Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW, NOTIFYICONIDENTIFIER};
     use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
@@ -378,12 +488,33 @@ mod win {
         d.szTip[w.len()] = 0;
     }
 
+    static DOTTED: AtomicIsize = AtomicIsize::new(0);
+    static PLAIN: AtomicIsize = AtomicIsize::new(0);
+
+    /// The mark, and the mark with the attention dot: made once.
+    fn icon(dotted: bool) -> HICON {
+        let slot = if dotted { &DOTTED } else { &PLAIN };
+        let held = slot.load(Ordering::SeqCst);
+        if held != 0 {
+            return held as HICON;
+        }
+        let made = match (dotted, super::decode_png_rgba(ICON_PNG)) {
+            (true, Some((w, h, rgba))) => {
+                let res = super::icon_resource(&super::with_attention_dot(&rgba, w, h), w, h);
+                unsafe { CreateIconFromResourceEx(res.as_ptr(), res.len() as u32, 1, 0x0003_0000, w as i32, h as i32, LR_DEFAULTCOLOR) }
+            }
+            _ => unsafe { CreateIconFromResourceEx(ICON_PNG.as_ptr(), ICON_PNG.len() as u32, 1, 0x0003_0000, 0, 0, LR_DEFAULTCOLOR) },
+        };
+        let made = if made.is_null() { unsafe { LoadIconW(std::ptr::null_mut(), IDI_APPLICATION) } } else { made };
+        slot.store(made as isize, Ordering::SeqCst);
+        made
+    }
+
     fn add(hwnd: HWND) {
-        let icon = unsafe { CreateIconFromResourceEx(ICON_PNG.as_ptr(), ICON_PNG.len() as u32, 1, 0x0003_0000, 0, 0, LR_DEFAULTCOLOR) };
         let mut d = data(hwnd);
         d.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         d.uCallbackMessage = WM_TRAY;
-        d.hIcon = if icon.is_null() { unsafe { LoadIconW(std::ptr::null_mut(), IDI_APPLICATION) } } else { icon };
+        d.hIcon = icon(false);
         set_tip(&mut d, "Genie");
         if unsafe { Shell_NotifyIconW(NIM_ADD, &d) } == 0 {
             eprintln!("genie: the tray icon could not be added");
@@ -494,9 +625,11 @@ mod win {
             let tip_ctx = Arc::clone(&ctx);
             let tip_hwnd = hwnd as isize;
             std::thread::spawn(move || loop {
+                let v = view(&tip_ctx);
                 let mut d = data(tip_hwnd as HWND);
-                d.uFlags = NIF_TIP;
-                set_tip(&mut d, &tooltip(&view(&tip_ctx)));
+                d.uFlags = NIF_TIP | NIF_ICON;
+                d.hIcon = icon(v.needs_you > 0);
+                set_tip(&mut d, &tooltip(&v));
                 #[allow(unused_unsafe)]
                 unsafe {
                     Shell_NotifyIconW(NIM_MODIFY, &d);
@@ -522,6 +655,7 @@ mod linux {
         ctx: Arc<Context>,
         view: View,
         icon: Vec<ksni::Icon>,
+        dotted: Vec<ksni::Icon>,
     }
 
     impl ksni::Tray for GenieTray {
@@ -532,7 +666,7 @@ mod linux {
             "Genie".to_string()
         }
         fn icon_pixmap(&self) -> Vec<ksni::Icon> {
-            self.icon.clone()
+            if self.view.needs_you > 0 { self.dotted.clone() } else { self.icon.clone() }
         }
         fn tool_tip(&self) -> ksni::ToolTip {
             ksni::ToolTip { title: tooltip(&self.view), ..Default::default() }
@@ -558,13 +692,14 @@ mod linux {
     }
 
     pub fn run(ctx: Arc<Context>) {
-        // StatusNotifierItem's pixmap: ARGB32 in network byte order.
-        let icon = decode_png_rgba(ICON_PNG)
-            .map(|(w, h, rgba)| vec![ksni::Icon { width: w as i32, height: h as i32, data: rgba.chunks(4).flat_map(|p| [p[3], p[0], p[1], p[2]]).collect() }])
+        // StatusNotifierItem's pixmap: ARGB32 in network byte order; the dotted one while the Deck waits on the person.
+        let argb = |w: u32, h: u32, rgba: &[u8]| vec![ksni::Icon { width: w as i32, height: h as i32, data: rgba.chunks(4).flat_map(|p| [p[3], p[0], p[1], p[2]]).collect() }];
+        let (icon, dotted) = decode_png_rgba(ICON_PNG)
+            .map(|(w, h, rgba)| (argb(w, h, &rgba), argb(w, h, &super::with_attention_dot(&rgba, w, h))))
             .unwrap_or_default();
         let first = view(&ctx);
         eprintln!("genie: tray menu: {}", super::menu_text(&menu(&first)).join(" | "));
-        let service = ksni::TrayService::new(GenieTray { ctx: Arc::clone(&ctx), view: first, icon });
+        let service = ksni::TrayService::new(GenieTray { ctx: Arc::clone(&ctx), view: first, icon, dotted });
         let handle = service.handle();
         // Its own thread, its error said (no session bus: no tray), never a panic: the launcher's release build aborts on one.
         std::thread::spawn(move || {
@@ -591,17 +726,42 @@ mod tests {
 
     #[test]
     fn the_menu_with_the_host_running_and_a_window_open_is_the_mockups() {
-        let v = View { host: HostView::Running { agents: Some(3) }, windows: 1, browser: true };
+        let v = View { host: HostView::Running { agents: Some(3) }, windows: 1, browser: true, needs_you: 0 };
         assert_eq!(
             labels(&menu(&v)),
-            vec!["[This computer’s host · running · 3 agents]", "---", "Open Genie", "Open Genie Browser", "---", "Stop this computer’s host", "---", "Close Genie (agents keep running)", "Shut down everything"]
+            vec!["[This computer’s host · running · 3 agents]", "---", "Open Genie", "Open Genie Browser", "Settings…", "Task Manager…", "---", "Stop this computer’s host", "---", "Close Genie (agents keep running)", "Shut down everything"]
         );
         assert_eq!(tooltip(&v), "Genie · This computer’s host · running · 3 agents");
     }
 
     #[test]
+    fn while_the_deck_waits_on_the_person_the_tray_says_so_and_opens_genie_there() {
+        let v = View { host: HostView::Running { agents: Some(1) }, windows: 0, browser: false, needs_you: 2 };
+        let m = menu(&v);
+        assert_eq!(labels(&m)[1], "Needs you: 2", "second, under the host's line");
+        assert!(matches!(m[1], Item::Do { action: Action::OpenDeck, enabled: true, .. }));
+        assert_eq!(Action::OpenDeck.route(), Some("genie://dashboard"), "the Dashboard: the Deck merged into it");
+        assert_eq!(Action::OpenSettings.route(), Some("genie://settings"));
+        assert_eq!(Action::OpenTaskManager.route(), Some("genie://hosting?tab=processes"));
+        assert_eq!(tooltip(&v), "Genie · Needs you: 2 · This computer’s host · running · 1 agent");
+        assert!(!labels(&menu(&View { needs_you: 0, ..v.clone() })).iter().any(|l| l.starts_with("Needs you")), "nothing waiting: no item");
+    }
+
+    #[test]
+    fn the_attention_dot_is_red_in_the_bottom_right_and_leaves_the_rest_of_the_mark() {
+        let (w, h, rgba) = decode_png_rgba(ICON_PNG).unwrap();
+        let dotted = with_attention_dot(&rgba, w, h);
+        let px = |b: &[u8], x: u32, y: u32| { let i = ((y * w + x) * 4) as usize; [b[i], b[i + 1], b[i + 2], b[i + 3]] };
+        assert_eq!(px(&dotted, w - 4, h - 4), [0xef, 0x44, 0x44, 0xff], "the dot");
+        assert_eq!(px(&dotted, 2, 2), px(&rgba, 2, 2), "the top-left is the mark's own");
+        let res = icon_resource(&dotted, w, h);
+        assert_eq!(res.len(), 40 + (w * h * 4) as usize + ((w + 31) / 32 * 4 * h) as usize, "header, colour, mask");
+        assert_eq!(u32::from_le_bytes(res[8..12].try_into().unwrap()), h * 2, "an icon's height counts the mask");
+    }
+
+    #[test]
     fn with_no_window_open_close_genie_has_nothing_to_close() {
-        let v = View { host: HostView::Running { agents: Some(1) }, windows: 0, browser: false };
+        let v = View { host: HostView::Running { agents: Some(1) }, windows: 0, browser: false, needs_you: 0 };
         let m = labels(&menu(&v));
         assert!(m.contains(&"Close Genie (agents keep running) (unavailable)".to_string()), "{m:?}");
         assert!(m.contains(&"[This computer’s host · running · 1 agent]".to_string()), "{m:?}");
@@ -610,10 +770,11 @@ mod tests {
 
     #[test]
     fn a_stopped_host_offers_start_and_a_client_only_computer_offers_neither() {
-        let stopped = labels(&menu(&View { host: HostView::Stopped, windows: 1, browser: true }));
+        let stopped = labels(&menu(&View { host: HostView::Stopped, windows: 1, browser: true, needs_you: 0 }));
         assert!(stopped.contains(&"Start this computer’s host".to_string()), "{stopped:?}");
         assert!(stopped.contains(&"Close Genie".to_string()), "{stopped:?}");
-        let none = labels(&menu(&View { host: HostView::NotHere, windows: 1, browser: false }));
+        let none = labels(&menu(&View { host: HostView::NotHere, windows: 1, browser: false, needs_you: 0 }));
+        assert!(!none.contains(&"Task Manager…".to_string()), "no host: no kept processes to manage: {none:?}");
         assert!(!none.iter().any(|l| l.contains("this computer’s host") && !l.starts_with('[')), "{none:?}");
         assert_eq!(none[0], "[No host on this computer]");
         assert_eq!(none.last().map(String::as_str), Some("Shut down everything"));
@@ -630,11 +791,13 @@ mod tests {
 
     #[test]
     fn shut_down_everything_asks_naming_what_stops_and_whether_genie_comes_back() {
-        let a = json!({"agents": 2, "agentNames": ["genie", "tynn"], "terminals": 1, "processes": 0, "services": 3});
+        let a = json!({"agents": 2, "agentNames": ["genie", "tynn"], "terminals": 1, "processes": 0, "services": 3, "armedFlows": 1, "scheduledTasks": 2, "browser": true});
         let q = shut_down_question(Some(&a), false);
         assert_eq!(q.title, "Shut down everything?");
         assert_eq!(q.confirm, "Shut down everything", "the confirm button names the action");
-        assert_eq!(q.stops, vec!["2 agents: genie, tynn", "1 terminal", "3 services"]);
+        // Everything that stops is named, as the client's tray counted it: what waits on the clock and the Browser too.
+        assert_eq!(q.stops, vec!["2 agents: genie, tynn", "1 terminal", "3 services", "1 armed flow", "2 scheduled tasks", "the Genie Browser"]);
+        assert!(stopping(Some(&json!({"agents": 0, "browser": false}))).is_empty(), "nothing running: nothing named");
         assert_eq!(q.note, "Genie stays closed until you open it again.");
         assert_eq!(shut_down_question(None, true).note, "Genie starts again when you sign in.");
         assert!(shut_down_question(None, true).stops.is_empty());

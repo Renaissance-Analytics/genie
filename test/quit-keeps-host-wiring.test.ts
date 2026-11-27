@@ -79,9 +79,33 @@ describe('main.ts', () => {
         expect(src).toMatch(/restart: panelRestart\(confirmTray, restartGenie\)/);
         const restart = block(src, 'function restartGenie(', '\n}\n');
         expect(restart).toMatch(/if \(launcherLink\(process\.env\) !== null\) \{\s*\n\s*void launcherCall\('launcher\.restart'\)/);
-        // With no launcher (a development run), the relaunch it always was.
+    });
+
+    it('Restart with no launcher (a development run): recorded, everything shut down, and Genie started again (`--hidden`)', () => {
+        const restart = block(main(), 'function restartGenie(', '\n}\n');
         expect(restart).toMatch(/app\.relaunch\(\{ args: \[\.\.\.process\.argv\.slice\(1\)\.filter\(\(a\) => a !== HIDDEN_ARG\), HIDDEN_ARG\] \}\);/);
+        expect(restart).toMatch(/requestQuit\('shut-down'\);/);
+        // The launcher's restart comes first, and returns before the relaunch.
+        expect(restart.indexOf("launcherCall('launcher.restart')")).toBeLessThan(restart.indexOf('app.relaunch('));
+    });
+
+    it('the question (a site panel’s Restart): what stops, named; Cancel the default and the cancel; only the confirm button goes on', () => {
+        const ask = block(main(), 'async function confirmTray(', '\n}\n');
+        // The busy marks come from a table read OFF main, and only for as long as the question can wait (ss-repeat5,
+        // 2026-11-05: a synchronous read froze the window 30 s before the question came).
+        expect(ask).toMatch(/const table = await tableWithin\(\(\) => systemProcessTree\.read\?\.\(\) \?\? Promise\.resolve\(null\), TRAY_TABLE_MS\);/);
+        expect(ask).toMatch(/const q = trayConfirm\(action, stoppingNow\(table\)\);/);
+        expect(block(main(), 'function stoppingNow(', '\n}\n')).not.toMatch(/systemProcessTree\.snapshot\(/);
+        expect(ask).toMatch(/return trayConfirmed\(dialog\.showMessageBoxSync\(\{ type: 'question', title: q\.title, message: q\.message, buttons: \[\.\.\.q\.buttons\], defaultId: q\.defaultId, cancelId: q\.cancelId \}\)\);/);
+    });
+
+    it('never asked twice or of nobody: the quit dialog’s own answer, Restart itself, the OS ending the session', () => {
+        const src = main();
         expect(block(src, "app.on('before-quit'")).not.toMatch(/confirmTray/);
+        expect(block(src, 'function restartGenie(', '\n}\n')).not.toMatch(/confirmTray/);
+        expect(block(src, "powerMonitor.on('shutdown'")).not.toMatch(/confirmTray/);
+        // Only its definition calls it by name: it is handed to a site panel's Restart (panelRestart waits for its answer).
+        expect(src.match(/confirmTray\(/g) ?? []).toHaveLength(1);
     });
 
     it('the quit counts what waits on the host’s clock, from genie-host’s summary (Tynn #953, 2g-2)', () => {

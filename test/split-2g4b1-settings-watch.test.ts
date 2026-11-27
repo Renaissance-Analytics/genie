@@ -273,6 +273,8 @@ describe('the window registry’s Deck wiring is dead: main reads only its agent
 
     it('PINNED: an error main caught never goes through the registry (the tray count it fed went with the client tray, L5)', () => {
         expect(main).not.toMatch(/refreshTrayWaiting/);
+        // Directly: the window's own features said again at once (the in-app Deck), never the registry.
+        expect(main).toMatch(/mainErrors\.onChange\(\(\) => \{ requestFeaturePush\(\); \}\);/);
         expect(main).not.toMatch(/mainErrors\.onChange\(\(\) => registry/);
     });
 });

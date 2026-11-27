@@ -718,7 +718,10 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
     const openTray = trayId ?? ownTray;
     // Whether a row may open windows (Tynn #706: never Genie's own row, only workspaces this window may open), and its shell
     // opener: one for the windows column and the tray's `Terminal →` (Tynn #851, #857).
-    const opensWindows = (row: AgentRow) => row.id !== genie?.id && windowEntriesFor(row.workspaceId, scopeWorkspaceId).length > 0;
+    // GENIE'S OWN ROW opens Genie's own scratch terminal (the home folder: Tynn #1058 L5 gave it this home when the client's
+    // tray went), and no Files: Genie's own workspace has no folder of the person's to show.
+    const isGenieRow = (row: AgentRow) => row.id === genie?.id;
+    const opensWindows = (row: AgentRow) => windowEntriesFor(row.workspaceId, scopeWorkspaceId).length > 0 && (!isGenieRow(row) || onOpenTerminalWindow !== undefined);
     const terminalOpenerFor = (row: AgentRow) => opensWindows(row) && onOpenTerminalWindow ? () => onOpenTerminalWindow(row.workspaceId) : undefined;
     const go = (route: string) => { if (onNavigate) onNavigate(route); else if (route.startsWith('genie://agent/')) onOpenAgent(route.slice('genie://agent/'.length)); };
     const visibleIds = shown.map((row) => row.id);
@@ -872,7 +875,7 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
             </div>
             <div data-dashboard-list="">
                 {shown.map((row) => <Fragment key={row.id}>
-                    <AgentRowView waiting={groups.byAgent.has(row.id) ? { badges: waitingBadges(groups.byAgent.get(row.id)!), open: isOpen(row.id), onToggle: () => toggleOpen(row.id) } : undefined} row={row} workspaceName={nameOf(row)} workspaceColor={workspaceOf(row)?.color} workspaceFault={faults?.[row.workspaceId]} workspacePulsed={pulsing?.has(row.workspaceId)} onLocateRepo={onLocateRepo} onLocateFolder={onLocateFolder} onOpenWorkspace={row.id === genie?.id ? undefined : onOpenWorkspace} emoji={rowEmoji?.[row.id]} switchOffer={(() => { const offer = onSwitchAccount ? accounts?.offers.find((o) => o.provider === row.provider) : undefined; return offer && onSwitchAccount ? { offer, onSwitch: onSwitchAccount } : undefined; })()} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} onReveal={setOwnReveal} onArc={arcHandlers} windows={opensWindows(row) ? { onTerminal: terminalOpenerFor(row), onFiles: onOpenFilesWindow ? () => onOpenFilesWindow(row.workspaceId) : undefined } : undefined} />
+                    <AgentRowView waiting={groups.byAgent.has(row.id) ? { badges: waitingBadges(groups.byAgent.get(row.id)!), open: isOpen(row.id), onToggle: () => toggleOpen(row.id) } : undefined} row={row} workspaceName={nameOf(row)} workspaceColor={workspaceOf(row)?.color} workspaceFault={faults?.[row.workspaceId]} workspacePulsed={pulsing?.has(row.workspaceId)} onLocateRepo={onLocateRepo} onLocateFolder={onLocateFolder} onOpenWorkspace={row.id === genie?.id ? undefined : onOpenWorkspace} emoji={rowEmoji?.[row.id]} switchOffer={(() => { const offer = onSwitchAccount ? accounts?.offers.find((o) => o.provider === row.provider) : undefined; return offer && onSwitchAccount ? { offer, onSwitch: onSwitchAccount } : undefined; })()} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} onReveal={setOwnReveal} onArc={arcHandlers} windows={opensWindows(row) ? { onTerminal: terminalOpenerFor(row), onFiles: !isGenieRow(row) && onOpenFilesWindow ? () => onOpenFilesWindow(row.workspaceId) : undefined } : undefined} />
                     {openTray === row.id ? <RowTrayView row={row} onNavigate={go} onTerminal={terminalOpenerFor(row)} /> : null}
                     {rowProps && groups.byAgent.has(row.id) && isOpen(row.id) ? <WaitingItems owner={row.id} items={groups.byAgent.get(row.id)!} row={rowProps} /> : null}
                 </Fragment>)}

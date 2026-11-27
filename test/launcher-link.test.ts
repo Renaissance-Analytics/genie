@@ -63,3 +63,15 @@ describe('where Genie finds the launcher\'s Windows modes (detach, job, pipe-own
         expect(winLauncherPath({ platform: 'win32', launcher: 'C:\\gone\\Genie.exe', resources: [], devRoot: 'C:\\dev', exists: () => false })).toBeNull();
     });
 });
+
+describe('launcherShowRoute (Tynn #1058 L5)', () => {
+    it('takes only the routes the launcher\'s tray offers, the last --show winning', async () => {
+        const { launcherShowRoute, LAUNCHER_SHOW_ROUTES } = await import('../src/core/launcher-link.js');
+        expect(LAUNCHER_SHOW_ROUTES).toEqual(['genie://dashboard', 'genie://settings', 'genie://hosting?tab=processes']);
+        expect(launcherShowRoute(['x', '--show', 'genie://settings'])).toBe('genie://settings');
+        expect(launcherShowRoute(['x', '--show', 'genie://settings', '--show', 'genie://dashboard'])).toBe('genie://dashboard');
+        expect(launcherShowRoute(['x', '--show', 'https://example.com'])).toBeNull();
+        expect(launcherShowRoute(['x', '--show'])).toBeNull();
+        expect(launcherShowRoute(['x', '--open-window'])).toBeNull();
+    });
+});
