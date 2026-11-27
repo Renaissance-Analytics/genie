@@ -26,3 +26,12 @@ describe('the held line says WHEN it resumes, with the day when it is not today'
         expect(limitWords({ state: 'retrying', nextTryAtMs: at, attempt: 1, message: null }, NOW)).toBe(`rate limit · next try ${shortDateTime(at)}`);
     });
 });
+
+describe('the Agent view\'s pill says the day too', () => {
+    it('a weekly hold: "Paused · rate limit · resumes <day>, <time>"', async () => {
+        const { statePill } = await import('../src/core/agent-view.js');
+        const at = new Date(2026, 11, 3, 19, 15).getTime();
+        const session = { running: true, turnState: 'idle', startedAt: 1, pendingApproval: null, failure: null, contextUsed: null, contextSize: null, lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null, limit: paused(at) } as never;
+        expect(statePill(session, () => NOW).word).toBe(`Paused · rate limit · resumes ${shortDateTime(at)}`);
+    });
+});
