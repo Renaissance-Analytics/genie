@@ -27,21 +27,41 @@ const ps1 = () => code(read('scripts', 'vm-windows-update.ps1'), /^\s*#/);
 const sh = () => code(read('scripts', 'vm-host-update-linux.sh'), /^\s*#/);
 const both = () => [['windows', ps1()], ['linux', sh()]] as const;
 
-describe('registered as a row, last, after client-only-update', () => {
-    it('linux.sh: host-update last, client-only-update just before it, its own timeout under its ceiling, leftovers reaped', () => {
-        expect(linuxRows.slice(-2)).toEqual(['client-only-update', 'host-update']);
-        expect(linuxRow('host-update')).toBe('row_host-update() { need_install && need_electron && need_display && timeout 2300 bash scripts/vm-host-update-linux.sh; }');
-        expect(linuxSh).toMatch(/\n\s*host-update\) echo 2400 ;;/);
-        expect(/case " ([^"\n]*) " in\n\s*\*" \$name "\*\) reap_leftovers "\$name" ;;/.exec(linuxSh)?.[1]?.split(' ')).toContain('host-update');
+describe('registered as a row: the launcher’s since L6 (Tynn #1058), with its rollback', () => {
+    /*
+     * The spec's "What the CI rows become": host-update keeps its name (drain, swap, restore once), from the launcher, plus
+     * host-update-rollback (the new host exits at boot: the old one is back and every agent restored once). The
+     * electron-updater scripts below stay on disk for the bridge release (L9), and no row runs them.
+     */
+    it('linux.sh: host-update then its rollback, after client-only-update, run by launcher-updates-row.mjs', () => {
+        expect(linuxRows.slice(-4)).toEqual(['client-only-update', 'host-update', 'host-update-rollback', 'launcher-self-update']);
+        expect(linuxRow('host-update')).toBe('row_host-update() { need_build && need_tracks && need_display && on_display timeout 1320 env LAUNCHER_ROW_OUT="$OUT/host-update" LAUNCHER_ROW_KEY_DIR="$SETUP" CDP_PORT=9416 LAUNCHER_ROW_DEADLINE_MS=1200000 node scripts/launcher-updates-row.mjs --row host-update; }');
+        expect(linuxRow('host-update-rollback')).toBe('row_host-update-rollback() { need_build && need_tracks && need_display && on_display timeout 1320 env LAUNCHER_ROW_OUT="$OUT/host-update-rollback" LAUNCHER_ROW_KEY_DIR="$SETUP" CDP_PORT=9417 LAUNCHER_ROW_DEADLINE_MS=1200000 node scripts/launcher-updates-row.mjs --row host-update-rollback; }');
+        expect(linuxSh).toMatch(/\n\s*client-only-update\|host-update\|host-update-rollback\) echo 1500 ;;/);
+        const reaped = /case " ([^"\n]*) " in\n\s*\*" \$name "\*\) reap_leftovers "\$name" ;;/.exec(linuxSh)?.[1]?.split(' ');
+        expect(reaped).toContain('host-update');
+        expect(reaped).toContain('host-update-rollback');
+        expect(linuxSh).not.toContain('vm-host-update-linux.sh');
     });
 
-    it('windows.ps1: host-update last, client-only-update just before it, its function, its ceiling', () => {
-        expect(windowsRows.slice(-2)).toEqual(['client-only-update', 'host-update']);
-        expect(windowsFunction('Row-host-update')).toBe("function Row-host-update { Need-Install; Need-Electron; Need-TestMachine; Run 'vm-windows-update' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-windows-update.ps1 } }");
-        expect(windowsPs1).toMatch(/\n\s*'host-update' \{ return 2400 \}/);
+    it('windows.ps1: the same order, their functions, their ceiling; the old script is run by no row', () => {
+        expect(windowsRows.slice(-4)).toEqual(['client-only-update', 'host-update', 'host-update-rollback', 'launcher-self-update']);
+        expect(windowsPs1).toContain("function Row-host-update {\n    Need-Build; Need-Tracks; Need-TestMachine\n    Invoke-LauncherUpdatesRow 'host-update' @{ LAUNCHER_ROW_OUT = (Join-Path $Out 'host-update'); LAUNCHER_ROW_KEY_DIR = $Setup; CDP_PORT = '9416'; LAUNCHER_ROW_DEADLINE_MS = '1620000' }\n}");
+        expect(windowsPs1).toContain("function Row-host-update-rollback {\n    Need-Build; Need-Tracks; Need-TestMachine\n    Invoke-LauncherUpdatesRow 'host-update-rollback' @{ LAUNCHER_ROW_OUT = (Join-Path $Out 'host-update-rollback'); LAUNCHER_ROW_KEY_DIR = $Setup; CDP_PORT = '9417'; LAUNCHER_ROW_DEADLINE_MS = '1620000' }\n}");
+        expect(windowsPs1).toMatch(/\n\s*\{ \$_ -in 'client-only-update', 'host-update', 'host-update-rollback' \} \{ return 1800 \}/);
+        expect(windowsPs1).not.toContain('vm-windows-update.ps1');
+    });
+
+    it('the launcher’s row proves restore-once as the old rows did: providers by pid and start time, sampled while it runs', () => {
+        const row = code(read('scripts', 'launcher-updates-row.mjs'), /^\s*(\/\/|\*|\/\*)/);
+        expect(row).toMatch(/check\(now\.length === AGENTS, /);
+        expect(row).toMatch(/check\(fresh\.length === AGENTS, /);
+        expect(row).toMatch(/check\(spent === true, /);
+        expect(row).toMatch(/so Genie went back to \$\{OLD\}/);
     });
 });
 
+/* THE BRIDGE RELEASE'S SCRIPTS (L9): what follows proves the electron-updater scripts, kept for the bridge, as they were. */
 describe('the update carries another genie-host', () => {
     it('the build mark is a define of the main bundle, from GENIE_TEST_HOST_MARK, empty unless a row sets it', () => {
         expect(read('vite.main.config.ts')).toMatch(/__GENIE_TEST_HOST_MARK__: JSON\.stringify\(process\.env\.GENIE_TEST_HOST_MARK \?\? ''\)/);

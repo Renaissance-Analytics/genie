@@ -64,7 +64,9 @@ $Rows = @(
     'logon',
     'launcher-unit',
     'client-only-update',
-    'host-update'
+    'host-update',
+    'host-update-rollback',
+    'launcher-self-update'
 )
 
 # ROWS ONLY ASKED FOR BY NAME (-Only), never in a full run: they read the real internet and install from it, so a full
@@ -481,20 +483,72 @@ function Row-package-fuse {
 }
 # The packaged app starts genie-host through genie-launch.exe, from its copy, with its supervisor ready. ci.yml's step,
 # command for command, on a home of its own under ci-out.
-# A CLIENT-ONLY UPDATE KEEPS GENIE-HOST AND ITS AGENT STREAMING (Tynn #1036 P6-1): two installers that carry the same host,
-# the base one installed and updated to the other through the real updater while an agent streams; the same host and
-# provider pids after, and every tick streamed while there was no window in the agent's ledger, in order. Everything it
-# starts is ended through scripts/end-own-tree.mjs (Tynn #1031). It builds and packages twice and replaces the install,
-# ~\.genie, release\ and dist\: last in the list, after every row that reads them.
-function Row-client-only-update { Need-Install; Need-Electron; Need-TestMachine; Run 'vm-client-only-update' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-client-only-update.ps1 } }
+# UPDATES FROM THE LAUNCHER (Tynn #1058 L6): scripts/launcher-updates-row.mjs, one script for the four rows, a home of its own
+# each. The package-tracks row's packages are installed by its launcher, NEW ones are repacked from its trees at the next
+# build of the day and signed with the run's throwaway key, and the launcher (a copy at the home's
+# LOCALAPPDATA\Programs\Genie\Genie.exe, where the installer puts it) reads them from a local feed; three ticker agents stream
+# through this tree's Electron while it updates. Screenshots and logs under ci-out\<row>; everything it starts is ended
+# through scripts/end-own-tree.mjs (Tynn #1031).
+#   client-only-update    the client and the browser updated: the same host and provider pids, every tick; the next window
+#                         runs the new client (updates-windows.png, tray-offer-windows.png, next-window-windows.png)
+#   host-update           the tray's "Update the host to ...": the host's own drain, the launcher's swap, every agent
+#                         restored once (host-update-progress-windows.png)
+#   host-update-rollback  the new host exits at boot: Genie goes back to the old build, every agent restored once
+#                         (host-update-rollback-windows.png)
+#   launcher-self-update  a second launcher built at the next build: the endpoint handed over, Genie.exe replaced and
+#                         Genie.exe.old cleared, the host and the providers untouched (tray-after-handover-windows.png)
+# The two first names are the electron-updater rows' they replace (the spec's "What the CI rows become"). Those rows'
+# scripts (vm-client-only-update.ps1, vm-windows-update.ps1) stay on disk for the bridge release (L9), which is still
+# installed by electron-updater; no row runs them now. What a row sets is put back whatever its result, as quit-keeps-host.
+function Invoke-LauncherUpdatesRow([string]$row, [hashtable]$own) {
+    $before = @{}
+    foreach ($k in $own.Keys) { $before[$k] = [Environment]::GetEnvironmentVariable($k, 'Process'); [Environment]::SetEnvironmentVariable($k, $own[$k], 'Process') }
+    try {
+        Run "launcher-updates-row $row" { node scripts/launcher-updates-row.mjs --row $row }
+    } finally {
+        foreach ($k in $own.Keys) { [Environment]::SetEnvironmentVariable($k, $before[$k], 'Process') }
+    }
+}
+function Row-client-only-update {
+    Need-Build; Need-Tracks; Need-TestMachine
+    Invoke-LauncherUpdatesRow 'client-only-update' @{ LAUNCHER_ROW_OUT = (Join-Path $Out 'client-only-update'); LAUNCHER_ROW_KEY_DIR = $Setup; CDP_PORT = '9401'; LAUNCHER_ROW_DEADLINE_MS = '1620000' }
+}
 # LOGON START, READ AT THE OS (Tynn #1036 P6-3): the packaged app (release\win-unpacked, packaged with --dir when this
 # shard did not package) in a home of its own; the HKCU Run value read back with reg query, the setting switched live with
-# no restart, and the four logon cases. HKCU is the machine's: the row takes its value away again. Before
-# client-only-update, which replaces dist\ and release\.
+# no restart, and the four logon cases. HKCU is the machine's: the row takes its value away again.
 # Since Tynn #1058 L5 the LAUNCHER writes the Run value and decides at logon (scripts/vm-logon-launcher-windows.ps1 table).
 function Row-logon { Need-Tracks; Need-TestMachine; Run 'vm-logon-launcher' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-logon-launcher-windows.ps1 -Mode table } }
-# A host update drains and swaps (Tynn #1036 P6-2): last, as it replaces the install, the home and the build once more.
-function Row-host-update { Need-Install; Need-Electron; Need-TestMachine; Run 'vm-windows-update' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-windows-update.ps1 } }
+# A host update drains and swaps (Tynn #1036 P6-2), from the launcher since L6; and its rollback (see client-only-update).
+function Row-host-update {
+    Need-Build; Need-Tracks; Need-TestMachine
+    Invoke-LauncherUpdatesRow 'host-update' @{ LAUNCHER_ROW_OUT = (Join-Path $Out 'host-update'); LAUNCHER_ROW_KEY_DIR = $Setup; CDP_PORT = '9416'; LAUNCHER_ROW_DEADLINE_MS = '1620000' }
+}
+function Row-host-update-rollback {
+    Need-Build; Need-Tracks; Need-TestMachine
+    Invoke-LauncherUpdatesRow 'host-update-rollback' @{ LAUNCHER_ROW_OUT = (Join-Path $Out 'host-update-rollback'); LAUNCHER_ROW_KEY_DIR = $Setup; CDP_PORT = '9417'; LAUNCHER_ROW_DEADLINE_MS = '1620000' }
+}
+# THE LAUNCHER UPDATES ITSELF (see client-only-update): a second launcher, built here as package-tracks builds the first but
+# at the next build (GENIE_TRACK_BUILD) and trusting the same throwaway key, into target-l6 so the first is kept.
+function Row-launcher-self-update {
+    Need-Build; Need-Tracks; Need-Rust; Need-TestMachine
+    $old = (Get-Content -Raw -LiteralPath (Join-Path $Repo 'release\tracks\build.txt')).Trim()
+    if ($old -notmatch '^(\d{4}\.\d{2}\.\d{2})-(\d+)$') { Block "release\tracks\build.txt holds '$old', not a track build" }
+    $next = "$($Matches[1])-$([int]$Matches[2] + 1)"
+    $pubFile = Join-Path $Setup 'THROWAWAY-manifest-public-key.txt'
+    if (-not (Test-Path -LiteralPath $pubFile)) { Block "no throwaway public key in $Setup (see the package-tracks row)" }
+    $pub = (Get-Content -Raw -LiteralPath $pubFile).Trim()
+    Write-Output "--- the second launcher: build $next (this run's packages are $old), trusting the run's throwaway key $pub"
+    $env:GENIE_TRACK_BUILD = $next; $env:GENIE_MANIFEST_PUBLIC_KEYS = $pub
+    Push-Location (Join-Path $Repo 'native\launcher')
+    try {
+        $lockedArgs = @(); if (Test-Path 'Cargo.lock') { $lockedArgs = @('--locked') }
+        Run 'cargo build (the second launcher)' { cargo build @lockedArgs --release --bin genie --target-dir target-l6 }
+    } finally {
+        Pop-Location
+        Remove-Item Env:GENIE_TRACK_BUILD, Env:GENIE_MANIFEST_PUBLIC_KEYS -ErrorAction SilentlyContinue
+    }
+    Invoke-LauncherUpdatesRow 'launcher-self-update' @{ LAUNCHER_ROW_OUT = (Join-Path $Out 'launcher-self-update'); LAUNCHER_ROW_KEY_DIR = $Setup; LAUNCHER_ROW_NEW_LAUNCHER = (Join-Path $Repo 'native\launcher\target-l6\release\genie.exe'); CDP_PORT = '9418'; LAUNCHER_ROW_DEADLINE_MS = '1500000' }
+}
 # THE PACKAGES PER TRACK (Tynn #1058 L3): the client (electron-builder's unpacked app named genie-client, no host bundle),
 # the browser (browser.json, its own track, run on that client build: no second copy of the app), the host (P6-1's copy laid out at build time) and the launcher,
 # each packed with its manifest (scripts/build-track-packages.mjs), signed with a THROWAWAY key made here and deleted with
@@ -655,8 +709,8 @@ function Ceiling([string]$name) {
         'launcher-install' { return 900 }
         'client-no-host' { return 900 }
         'logon' { return 900 }
-        'client-only-update' { return 2400 }
-        'host-update' { return 2400 }
+        { $_ -in 'client-only-update', 'host-update', 'host-update-rollback' } { return 1800 }
+        'launcher-self-update' { return 2400 }
         default { return 600 }
     }
 }
