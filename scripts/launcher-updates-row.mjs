@@ -738,11 +738,13 @@ const skewAgents = [];
  * request goes client -> host), and its provider's reply streamed back INTO this client's ledger (host -> client), from
  * one provider process under the host now running.
  */
-async function skewTurn(session, id, label) {
+async function skewTurn(session, id, label, tag) {
     const snap = await session.cdp.evaluate('window.genieTest.snapshot()', 15_000);
     const workspaceId = snap.workspaces?.[0]?.id ?? null;
     if (!check(typeof workspaceId === 'string', `${id}.1 ${label}: this client reads the host's workspaces`, JSON.stringify(snap.workspaces ?? null).slice(0, 200))) return;
-    const name = `skew-${label}-${process.pid}`;
+    // An agent's name: a letter, then lower-case letters, digits and dashes, at most 40 (the host refuses any other; the
+    // gate's first run, 1127-205532-3c9e94, used the label with its builds in it, which is 47).
+    const name = `skew-${tag}-${process.pid}`;
     step(`${id}.2`, `${label}: adding the agent ${name} from this client`);
     const added = await session.cdp.evaluate(`(window.genieTest ?? window.genie).addAgent(${JSON.stringify(workspaceId)}, { name: ${JSON.stringify(name)}, purpose: 'Streams ticks for the version-skew row.', provider: 'codex' })`, 30_000);
     if (!check(added?.ok === true, `${id}.2 ${label}: the host took the new agent from this client`, added?.ok ? added.id : added?.reason)) return;
@@ -789,7 +791,7 @@ async function versionSkew() {
     check(under(executableOf(newOld.app.pid), join(CODE_ROOT, 'client', NEW)), `12d. the client is the INSTALLED ${NEW}, run from its own folder`, executableOf(newOld.app.pid));
     const oldHostCmd = commandLine(hostPid);
     check(hostRecord()?.build === OLD && (oldHostCmd.includes(join(CODE_ROOT, 'host', OLD)) || (WIN && oldHostCmd.toLowerCase().includes(join(CODE_ROOT, 'host', OLD).toLowerCase()))), `12e. against the INSTALLED host ${OLD}, run from its own folder`, oldHostCmd.slice(0, 240));
-    await skewTurn(newOld, '12', `client-${NEW}-host-${OLD}`);
+    await skewTurn(newOld, '12', `client-${NEW}-host-${OLD}`, 'newclient');
     await ledgersStreamedThrough(newOld, '12t', `into the client ${NEW} from the host ${OLD}`);
     shot(`version-skew-client-new-host-old-${OS}.png`);
 
@@ -820,7 +822,7 @@ async function versionSkew() {
     check(under(executableOf(oldNew.app.pid), join(CODE_ROOT, 'client', OLD)), `14d. the client is the INSTALLED ${OLD}, run from its own folder`, executableOf(oldNew.app.pid));
     const hostCmd = Number.isInteger(rec?.pid) ? commandLine(rec.pid) : '';
     check(hostCmd.includes(join(CODE_ROOT, 'host', NEW)) || (WIN && hostCmd.toLowerCase().includes(join(CODE_ROOT, 'host', NEW).toLowerCase())), `14e. against the INSTALLED host ${NEW}, run from its own folder`, hostCmd.slice(0, 240));
-    await skewTurn(oldNew, '14', `client-${OLD}-host-${NEW}`);
+    await skewTurn(oldNew, '14', `client-${OLD}-host-${NEW}`, 'oldclient');
     for (const ag of agents) {
         const t = await until(async () => { const x = await ticksOf(oldNew.cdp, ag.id).catch(() => null); return x && x.running && x.pids.some((p) => p !== ag.pid) ? x : null; }, 90_000);
         check(t !== null, `14t. ${ag.name}, restored under the host ${NEW}, streams into the client ${OLD}`, t ? `pids ${JSON.stringify(t.pids)}` : 'no new provider in its ledger');
