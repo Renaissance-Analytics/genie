@@ -26,7 +26,7 @@ let target = null;
 for (let i = 0; i < 240 && !target; i++) {
     try {
         const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-        target = list.find((t) => t.type === 'page' && /host-directory\.html/.test(t.url ?? '')) ?? null;
+        target = list.find((t) => t.type === 'page' && (t.url ?? '').includes('host-directory.html')) ?? null;
     } catch { /* not up yet */ }
     if (!target) await sleep(500);
 }
