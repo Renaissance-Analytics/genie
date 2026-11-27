@@ -439,3 +439,37 @@ fn a_new_launcher_that_does_not_take_the_pipe_is_ended_and_the_old_one_kept() {
         assert_eq!(link, r.code.join("launcher").join(OLD).join("genie"), "the link points at the old build again");
     }
 }
+
+#[test]
+fn a_host_update_opens_genie_again_when_a_window_was_open_on_the_new_client() {
+    // Under the launcher a window leaves when the host installs (src/core/quit.ts installQuit): the launcher swaps the
+    // host, then opens Genie again, on the client the host came with (the owner: "drain and swap the host, then refresh
+    // the UI"). The fake client stays attached until it is ended here, as the real one exits on the install.
+    let _one = one_at_a_time();
+    let (_base, r, _key, _feed, _l, mut w, _old) = host_update_ready("u-host-window", &[], None);
+    std::fs::write(r.data.join("fake-client-mode.txt"), "stay").unwrap();
+    let window = ok(&w.call("launcher.openWindow", json!([])))["pid"].as_u64().unwrap() as u32;
+    wait_for("the window attached", 15, || ok(&w.call("launcher.status", json!([])))["clients"].as_array().map_or(false, |c| c.iter().any(|p| p == window)));
+    std::fs::write(r.data.join("fake-client-mode.txt"), "").unwrap();
+    ok(&w.call("launcher.apply", json!([{"track": "host"}])));
+    kill(window);
+    wait_for("the new host runs", 60, || host_build(&r).as_deref() == Some(NEW));
+    wait_for("Genie was opened again", 30, || std::fs::read_to_string(r.data.join("client-env.txt")).map(|t| t.lines().count() >= 2).unwrap_or(false));
+    let env = std::fs::read_to_string(r.data.join("client-env.txt")).unwrap();
+    let last = env.lines().last().unwrap();
+    assert!(last.starts_with("--open-window"), "{last}");
+    let new_dir = r.code.join("client").join(NEW).display().to_string();
+    assert!(last.contains(&new_dir), "on the client the host came with ({new_dir}): {last}");
+    assert!(last.contains(&format!("hostBuild={NEW}")), "linked to the new host: {last}");
+}
+
+#[test]
+fn a_host_update_with_no_window_open_opens_none() {
+    let _one = one_at_a_time();
+    let (_base, r, _key, _feed, _l, mut w, _old) = host_update_ready("u-host-nowindow", &[], None);
+    ok(&w.call("launcher.apply", json!([{"track": "host"}])));
+    wait_for("the new host runs", 60, || host_build(&r).as_deref() == Some(NEW));
+    wait_for("the swap said it is done", 20, || ok(&w.call("launcher.updates", json!([])))["hostUpdate"]["phase"] == "done");
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(!r.data.join("client-args.txt").exists(), "nobody had Genie open, so it is not opened");
+}
