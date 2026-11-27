@@ -63,6 +63,13 @@ describe('the notes Genie carries', () => {
         expect(versions).toContain('2.0.0-beta.30');
         expect(versions.length).toBeGreaterThanOrEqual(26);
         expect(whatsNewSection(RELEASE_NOTES['2.0.0-beta.30']!)).not.toBeNull();
+        // EVERY one, not a sample (beta.66.1's notes said "## Fixes": a first run showed nothing and the ui-lag row failed).
+        expect(versions.filter((v) => whatsNewSection(RELEASE_NOTES[v]!) === null)).toEqual([]);
+    });
+
+    it('the version being built has its notes, so a person upgrading to it is told what changed', () => {
+        const { version } = JSON.parse(readFileSync('package.json', 'utf8')) as { version: string };
+        expect(whatsNewFor(version, '', RELEASE_NOTES)?.version).toBe(version);
     });
 });
 
