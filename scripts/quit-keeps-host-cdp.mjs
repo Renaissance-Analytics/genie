@@ -1,6 +1,17 @@
 #!/usr/bin/env node
 /**
- * QUIT KEEPS THE HOST (the host split P1b, genie#1451) — measured on the REAL app with a REAL process table.
+ * QUIT KEEPS THE HOST (the host split P1b, genie#1451; THE LAUNCHER'S since Tynn #1058 L5) — measured on the REAL app with a
+ * REAL process table.
+ *
+ * L5: the launcher owns the tray and the quit's answers. The row installs the package-tracks row's signed packages into a
+ * code root of its own, runs that launcher (`serve`, with GENIE_LAUNCHER_TRAY_PROBE=1) and starts the host through it; the
+ * client is this tree's Electron, told the launcher's environment (GENIE_LAUNCHER_EXE, GENIE_LAUNCHER_HOST_BUILD) as the
+ * launcher tells the client it starts, so it adopts that host and attaches to that launcher. Then: "Just close the UI" ends
+ * the CLIENT process while the launcher, the host and the providers keep their pids; the tray's menu (photographed) says
+ * the host runs the agents; a new client finds every tick; the tray's Close Genie ends it; the tray's Shut down everything
+ * ASKS in the launcher's own window (photographed) and Escape cancels; the client's "Shut down everything" makes the
+ * launcher stop the host on its own progress (Tynn #1079: no kill, its clean-exit marker, no crash record), then exit; and
+ * the host started again reads no crash. What follows is the P1b text this grew from.
  *
  *   node scripts/quit-keeps-host-cdp.mjs
  *
@@ -50,7 +61,7 @@
 import { mainWindow } from './cdp-main-window.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
@@ -113,6 +124,37 @@ const HOST_RECORD = join(GENIE_HOME, 'runtime', 'host.json');
 const LIFECYCLE = join(GENIE_HOME, 'runtime', 'lifecycle.log');
 const HOST_LOG = join(GENIE_HOME, 'logs', 'genie-host.log');
 const OUT = process.env.QUIT_CDP_OUT ? resolve(process.env.QUIT_CDP_OUT) : join(process.cwd(), 'smoke-out');
+// THE LAUNCHER (L5): the package-tracks row's, installing into a code root of this run's home.
+const LAUNCHER_SRC = resolve('release', 'tracks', 'trees', 'launcher', WIN ? 'Genie.exe' : 'genie');
+const PACKAGES = resolve('release', 'tracks', 'packages');
+const CODE_ROOT = join(dirname(GENIE_HOME), 'genie-code');
+const LAUNCHER_LOG = join(OUT, 'launcher.log');
+const STUB = join(process.cwd(), 'scripts', 'stub-codex.mjs');
+// Everything this run starts (the launcher, the host it starts, the client) reads the same roots and the same stub provider.
+Object.assign(process.env, { GENIE_HOME, GENIE_CODE_ROOT: CODE_ROOT, GENIE2_CODEX_BINARY: process.env.GENIE2_CODEX_BINARY || STUB, GENIE_TEST_MACHINE: '1' });
+let launcherPid = null;
+let launcherHostBuild = null;
+const launcherRecord = () => { try { return JSON.parse(readFileSync(join(GENIE_HOME, 'runtime', 'launcher.json'), 'utf8')); } catch { return null; } };
+/** One launcher command, bounded: its exit code and what it said. */
+function launcherCli(args, ms = 30_000) {
+    const r = spawnSync(LAUNCHER_SRC, args, { encoding: 'utf8', timeout: ms, env: process.env, windowsHide: true });
+    return { code: r.status, out: `${r.stdout ?? ''}${r.stderr ?? ''}`.trim() };
+}
+/** The whole screen, as the person sees it: grim on Linux, the desktop's own copy on Windows (scripts/ci/screenshot.ps1). */
+function shot(name) {
+    mkdirSync(OUT, { recursive: true });
+    const file = join(OUT, name);
+    if (WIN) spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', resolve('scripts', 'ci', 'screenshot.ps1'), '-Out', file], { timeout: SYNC_MS, windowsHide: true });
+    else spawnSync('grim', [file], { timeout: SYNC_MS });
+    console.log(existsSync(file) ? `SCREENSHOT ${file}` : `  no screenshot could be taken: ${file}`);
+}
+/** A key, as the person's keyboard sends it to the window in front (wtype on Wayland; SendKeys on Windows). */
+function pressKey(key) {
+    if (WIN) spawnSync('powershell', ['-NoProfile', '-Command', `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${key === 'Escape' ? '{ESC}' : key}')`], { timeout: SYNC_MS, windowsHide: true });
+    else spawnSync('wtype', ['-k', key], { timeout: SYNC_MS });
+}
+/** How many crash records the host's runtime holds. */
+const crashRecords = () => { try { return readdirSync(join(GENIE_HOME, 'runtime', 'crash')).length; } catch { return 0; } };
 /**
  * THE AGENTS' SHUTDOWN DRAIN (src/core/agent-shutdown-drain.ts AGENT_DRAIN_WAIT_MS; test/quit-keeps-host-row-1036.test.ts
  * holds the two equal): "Shut down everything" lets a mid-turn agent reach a safe point for this long before it stops it.
@@ -277,7 +319,7 @@ function launch(label) {
     const out = openSync(log, 'a');
     const argv = [`--inspect=${INSPECT}`, '.', `--remote-debugging-port=${PORT}`, ...launchArgs()];
     // GENIE_TRAY_PROBE=1: main.ts's read-only tray probe exists only in a launch that asks for it (this proof's).
-    const child = spawn(electronBinary(), argv, { detached: !WIN, stdio: ['ignore', out, out], windowsHide: false, env: { ...process.env, GENIE2_CODEX_BINARY: process.env.GENIE2_CODEX_BINARY || join(process.cwd(), 'scripts', 'stub-codex.mjs'), GENIE_TRAY_PROBE: '1', GENIE_PAGE_PROBE: '1' } });
+    const child = spawn(electronBinary(), argv, { detached: !WIN, stdio: ['ignore', out, out], windowsHide: false, env: { ...process.env, GENIE_LAUNCHER_EXE: LAUNCHER_SRC, ...(launcherHostBuild ? { GENIE_LAUNCHER_HOST_BUILD: launcherHostBuild } : {}), GENIE_PAGE_PROBE: '1' } });
     let gone = false;
     const exited = new Promise((r) => {
         child.once('exit', (code, signal) => { gone = true; r({ code, signal }); });
@@ -366,25 +408,12 @@ function whyStillRunning(app, ms) {
         : `${after} (no debugger hold in its log: the product did not exit)`;
 }
 
-// ---------------------------------------------------------------- the tray-only Genie, read over the main process's inspector
+// ---------------------------------------------------------------- the client, read over the main process's inspector
 /** How many windows the window process has now. */
 const windowsIn = (inspector) => inspector.evaluate(`(() => {
     const require = process.getBuiltinModule('node:module').createRequire(process.execPath);
     return require('electron').BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).length;
 })()`, 10_000);
-/** The tray, as main.ts's read-only probe says it (Electron's Tray cannot be asked): present, tooltip, menu labels. */
-const trayState = (inspector) => inspector.evaluate(`(() => {
-    const t = globalThis[Symbol.for('genie.tray')];
-    return t ? { present: t.present(), tooltip: t.tooltip(), labels: t.labels() } : null;
-})()`, 10_000).catch(() => null);
-/** A tray menu item's own click, after `delayMs` (so an inspector session can let go first). 'ok' when the item is there. */
-const trayClick = (inspector, label, delayMs) => inspector.evaluate(`(() => {
-    const t = globalThis[Symbol.for('genie.tray')];
-    if (!t) return 'no tray probe in this build';
-    if (!t.labels().includes(${JSON.stringify(label)})) return 'the tray offers no ' + ${JSON.stringify(label)} + ': ' + JSON.stringify(t.labels());
-    setTimeout(() => t.click(${JSON.stringify(label)}), ${delayMs});
-    return 'ok';
-})()`, 10_000).catch((e) => String(e?.message ?? e));
 /**
  * The person's answer to the NEXT native question (the tray's "always ask"), and nothing else: the dialog answers `index`
  * and writes down what it asked, then puts itself back. No quit is started here — the tray item's own handler does that.
@@ -450,6 +479,7 @@ const contiguous = (ticks, from, to) => { for (let n = from; n <= to; n++) if (!
 // ---------------------------------------------------------------- cleanup: bounded, whatever ended the run
 let a = null;
 let b = null;
+let c = null;
 const agents = [];
 let hostPid = null;
 /** The terminal this run opened, and its second launch: what the Windows cleanup is given beside the app and the host. */
@@ -472,11 +502,13 @@ async function cleanup(why) {
             break;
         }
     }
-    for (const s of [a, b]) {
+    for (const s of [a, b, c]) {
         if (!s) continue;
         s.cdp?.close(); s.inspector?.close();
         if (!WIN) s.app.kill();
     }
+    // The launcher this run started, whatever happened (it holds no state; the host is handled below).
+    if (alive(launcherPid)) { try { if (WIN) execFileSync('taskkill', ['/F', '/PID', String(launcherPid)], { stdio: 'ignore', timeout: SYNC_MS }); else process.kill(launcherPid, 'SIGKILL'); } catch { /* gone */ } }
     if (WIN) {
         // THE WINDOWS CLEANUP (Tynn #1031): the app's tree, the host in this run's own record, the providers, the terminal and
         // the second launch, by the helper every row that starts its own Genie uses: the process table read before anything
@@ -485,7 +517,7 @@ async function cleanup(why) {
         let endOwnRun = null;
         try { ({ endOwnRun } = await import('./end-own-tree.mjs')); } catch (error) { check(false, 'the Windows cleanup: scripts/end-own-tree.mjs (Tynn #1031) is not in this tree', String(error?.message ?? error).slice(0, 160)); }
         if (endOwnRun) {
-            const others = [...agents.map((ag) => ag.pid), terminalPid, secondPid].filter((pid) => Number.isInteger(pid) && pid > 0);
+            const others = [...agents.map((ag) => ag.pid), terminalPid, secondPid, launcherPid].filter((pid) => Number.isInteger(pid) && pid > 0);
             const ended = await endOwnRun({ app: a?.app ?? null, hostPid: Number.isInteger(hostPid) ? hostPid : (hostRecord()?.pid ?? null), others, since: T0, log: (line) => { console.log(`  ${line}`); } });
             check(ended.ok, 'nothing of this run is left running by its own cleanup', ended.ok ? '' : `LEFT RUNNING by this run's own cleanup: ${ended.words}`);
         } else {
@@ -527,7 +559,7 @@ function finish() {
         }
         process.exit(1);
     }
-    console.log(`\n[${since()}] QUIT KEEPS THE HOST — measured: the UI closed and opened again over the same host and providers, every tick kept; "Shut down everything" ended them.`);
+    console.log(`\n[${since()}] QUIT KEEPS THE HOST — measured: "Just close the UI" ended the client and kept the launcher, the host and the providers; a new client found every tick; the launcher's tray asked before it stopped anything; "Shut down everything" stopped the host on its own progress and the launcher exited; the next boot read no crash.`);
     process.exit(0);
 }
 function refuse(why) {
@@ -569,6 +601,27 @@ INSPECT = await freePort(INSPECT, 'inspector', '0.5');
 
 console.log(`\nQUIT KEEPS THE HOST — "Just close the UI" with agents streaming, then open Genie again (deadline ${Math.round(DEADLINE_MS / 1000)} s)\n`);
 gaugeFrom = readOr(LIFECYCLE).length;
+step('0.7', `the launcher (${LAUNCHER_SRC}) installs the signed packages into ${CODE_ROOT}`);
+if (!existsSync(LAUNCHER_SRC) || !existsSync(PACKAGES)) refuse(`no launcher or packages from the package-tracks row (${LAUNCHER_SRC}, ${PACKAGES})`);
+const installed = launcherCli(['install', '--profile', 'both', '--from', PACKAGES, '--yes'], 300_000);
+if (installed.code !== 0) refuse(`the launcher did not install the packages: ${installed.out.slice(0, 400)}`);
+console.log(`  ${installed.out.split(/\r?\n/).join(' | ')}`);
+step('0.8', 'the launcher started (serve, with its tray probe) (≤ 30 s)');
+mkdirSync(OUT, { recursive: true });
+{
+    const log = openSync(LAUNCHER_LOG, 'a');
+    const child = spawn(LAUNCHER_SRC, ['serve'], { detached: !WIN, stdio: ['ignore', log, log], windowsHide: false, env: { ...process.env, GENIE_LAUNCHER_TRAY_PROBE: '1' } });
+    child.unref();
+}
+const record = await until(() => { const r = launcherRecord(); return r && alive(r.pid) ? r : null; }, 30_000);
+if (!record) refuse(`the launcher did not start: ${readOr(LAUNCHER_LOG).slice(-400)}`);
+launcherPid = record.pid;
+console.log(`  launcher pid ${launcherPid} on ${record.endpoint}`);
+step('0.9', 'the host, started through the launcher (≤ 90 s)');
+const ensured = launcherCli(['ensure-host'], 90_000);
+try { launcherHostBuild = JSON.parse(ensured.out.split(/\r?\n/).filter((l) => l.startsWith('{')).pop() ?? 'null')?.build ?? null; } catch { /* said below */ }
+if (ensured.code !== 0 || !launcherHostBuild) refuse(`the launcher did not start the host: ${ensured.out.slice(0, 400)}`);
+console.log(`  ${ensured.out}`);
 step('0.6', `the ticker marker, holding this script's pid ${process.pid}`);
 writeFileSync(TICKER, String(process.pid));
 let cannot = null;
@@ -642,100 +695,115 @@ try {
     terminalPid = Number.isInteger(terminal?.pid) ? terminal.pid : null;
     check(alive(terminal?.pid), '9t. CONTROL: a terminal is open, its pid alive', JSON.stringify(terminal));
 
-    // -------------------------------------------------------------------------------- "Just close the UI": the tray stays
-    // The logs are read from HERE on: an older line must not answer for this run.
+    // -------------------------------------------------------------------------------- "Just close the UI": the CLIENT ends
+    // (Tynn #1058 L5) The launcher owns the tray: the answer is launcher.closeUi, every client window closes and the client
+    // PROCESS ends; the launcher, the host and the providers keep their pids.
     let lifecycleAt = readOr(LIFECYCLE).length;
+    const launcherLogAt = readOr(LAUNCHER_LOG).length;
     step('10', 'answering the quit "Just close the UI" (button 1)');
     const took = await answerTheQuit(a.inspector, 1);
     check(took === 'ok', '10. the quit is answered by button 1 (the person\'s click, substituted)', String(took));
-    // The window process stays (the tray): a new inspector session on the same process.
-    a.inspector = await Cdp.connect((await targetOn(INSPECT, 'node', 15_000)).webSocketDebuggerUrl, 'first inspector (tray)');
-    step('11', 'waiting for every window to close while the window process lives (≤ 30 s)');
-    const closed = await until(async () => (await windowsIn(a.inspector)) === 0 ? true : null, 30_000);
-    check(closed === true && !a.app.gone && alive(a.windowPid), '11. the UI closed: no window, and the window process ALIVE (Genie stays in the tray)', `windows ${await windowsIn(a.inspector).catch(() => '?')}, process ${a.windowPid} ${alive(a.windowPid) ? 'alive' : 'GONE'}`);
+    a.inspector = null;
+    step('11', 'waiting for the client process to end (≤ 30 s)');
+    const clientExit = await exitWithin(a.app, 30_000);
+    check(clientExit !== null && !alive(a.windowPid), '11. "Just close the UI" ENDED the client process', clientExit ? `code ${clientExit.code}` : whyStillRunning(a.app, 30_000));
     const q = asked();
     check(JSON.stringify(q?.buttons) === JSON.stringify(['Cancel', 'Just close the UI', 'Shut down everything']), '12. the quit ASKED the two answers, and button 1 was "Just close the UI"', JSON.stringify(q));
-    const t1 = await trayState(a.inspector);
-    // At least this run's agents (an earlier smoke step may have left its own agent running too).
-    const runningSaid = Number(/host running: (\d+) agents?/.exec(t1?.tooltip ?? '')?.[1] ?? 0);
-    check(t1?.present === true && runningSaid >= AGENTS && ['Open Genie', 'Restart', 'Shut down everything'].every((l) => t1.labels.includes(l)) && !t1.labels.includes('Just close the UI'),
-        '13. the TRAY is there, says the host runs the agents, and offers Open Genie, Restart, Shut down everything (no "Just close the UI")', JSON.stringify(t1));
+    check(alive(launcherPid) && launcherRecord()?.pid === launcherPid, '12l. the LAUNCHER keeps running, the same pid', `pid ${launcherPid}`);
+    check(/the client ends \(the quit’s answer: Just close the UI\)/.test(readOr(LIFECYCLE).slice(lifecycleAt)), '12c. the client said why it ended (lifecycle log)');
+    check(existsSync(join(GENIE_HOME, 'runtime', 'left-running')), '12m. the host is marked left running (it comes back at logon, P6)');
     a.cdp.close();
 
-    // -------------------------------------------------------------------------------- tray only
-    step('14', `tray only: waiting ${Math.round(CLOSED_MS / 1000)} s`);
+    // -------------------------------------------------------------------------------- no client: the tray is the launcher's
+    step('14', `no client: waiting ${Math.round(CLOSED_MS / 1000)} s`);
     await sleep(CLOSED_MS);
-    check(alive(hostPid), `14. with NO window for ${Math.round(CLOSED_MS / 1000)} s, the host is alive`, `pid ${hostPid}`);
-    for (const ag of agents) check(alive(ag.pid), `15. with no window, ${ag.name}'s provider is alive`, `pid ${ag.pid}`);
-    check(/ui closed \(the quit’s answer\): Genie stays in the tray/.test(readOr(LIFECYCLE).slice(lifecycleAt)), '16. the window process said so (lifecycle log)', LIFECYCLE);
-    check(!(await pageOn(PORT)), '17. no page on the debugger port while tray-only (the window really went)');
+    check(alive(hostPid) && hostRecord()?.pid === hostPid, `14. with NO client for ${Math.round(CLOSED_MS / 1000)} s, the SAME host is alive`, `pid ${hostPid}`);
+    for (const ag of agents) check(alive(ag.pid), `15. with no client, ${ag.name}'s provider is alive`, `pid ${ag.pid}`);
+    check(alive(launcherPid), '16. the launcher (the tray) is alive', `pid ${launcherPid}`);
+    check(!(await pageOn(PORT)), '17. no page on the debugger port (the client really went)');
+    step('13', 'the launcher\'s tray: its menu, as words, and shown (Windows) for the screenshot');
+    const menu = launcherCli(['tray-menu']);
+    let items = [];
+    try { items = JSON.parse(menu.out).items ?? []; } catch { /* said below */ }
+    const header = items.find((i) => i.startsWith('[This computer’s host · running')) ?? '';
+    const said = Number(/· (\d+) agents?\]/.exec(header)?.[1] ?? 0);
+    check(menu.code === 0 && said >= AGENTS && items.includes('Open Genie') && items.includes('Stop this computer’s host') && items.includes('Shut down everything') && items.includes('Close Genie (agents keep running) (unavailable)'),
+        '13. the TRAY (the launcher\'s) says the host runs the agents, offers Open Genie, Stop this computer\'s host and Shut down everything; Close Genie is unavailable with no window', menu.out.slice(0, 400));
+    await sleep(1_500);
+    shot(`tray-menu-${WIN ? 'windows' : 'linux'}.png`);
+    if (WIN) pressKey('Escape');
 
-    // -------------------------------------------------------------------------------- Open Genie, from the tray
+    // -------------------------------------------------------------------------------- Genie opened again
     lifecycleAt = readOr(LIFECYCLE).length;
-    step('18', 'Open Genie from the tray: the window built again in the SAME process (≤ 60 s)');
-    check(await trayClick(a.inspector, 'Open Genie', 0) === 'ok', '18a. the tray\'s Open Genie was clicked (its own handler)');
-    b = await reopened(a, 'second', 18);
-    check(b.windowPid === a.windowPid, '18. the window came back in the SAME window process (no second Genie)', `${a.windowPid} → ${b.windowPid}`);
+    step('18', 'Genie opened again: a NEW client process links to the SAME host (≤ 90 s)');
+    b = await open('second', 18);
+    check(b.windowPid !== a.windowPid, '18. a NEW client process (the first one ended)', `${a.windowPid} → ${b.windowPid}`);
     check(hostRecord()?.pid === hostPid, '19. the SAME host pid (host.json)', `${hostPid} → ${hostRecord()?.pid}`);
-    check(/window built again \(tray: Open\): the same host/.test(readOr(LIFECYCLE).slice(lifecycleAt)), '19b. the window process built it again for the tray\'s Open (lifecycle log)');
     for (const ag of agents) {
         step('20', `${ag.name} after the reopen: its ledger past tick ${ag.before.max} (≤ 30 s)`);
         const after = await until(async () => { const x = await ticksOf(b.cdp, ag.id); return x.max > ag.before.max ? x : null; }, 30_000) ?? await ticksOf(b.cdp, ag.id);
         check(after.running === true, `20. ${ag.name} is still running`, String(after.running));
         check(after.pids.length === 1 && after.pids[0] === ag.pid && alive(ag.pid), `21. ${ag.name}: the SAME provider pid, alive`, `${ag.pid} → ${JSON.stringify(after.pids)}`);
         const closedTicks = Math.floor(CLOSED_MS / 250 / 2);
-        check(after.max - ag.before.max >= closedTicks && after.size > ag.before.size, `22. ${ag.name}'s ledger GREW across the close`, `ticks ${ag.before.max} → ${after.max} (≥ ${closedTicks} wanted), ${ag.before.size} → ${after.size} bytes`);
+        check(after.max - ag.before.max >= closedTicks && after.size > ag.before.size, `22. ${ag.name}'s ledger GREW while no client ran`, `ticks ${ag.before.max} → ${after.max} (≥ ${closedTicks} wanted), ${ag.before.size} → ${after.size} bytes`);
         const gap = contiguous(after.ticks, ag.before.max + 1, after.max);
-        check(gap === null, `23. ${ag.name}: every tick streamed while no window was open is in the ledger, in order`, gap === null ? `${ag.before.max + 1}..${after.max}` : `tick ${gap} missing`);
+        check(gap === null, `23. ${ag.name}: every tick streamed while no client ran is in the ledger, in order`, gap === null ? `${ag.before.max + 1}..${after.max}` : `tick ${gap} missing`);
     }
-
     step('23t', 'the terminal after the reopen');
     const terminalsAfter = await b.cdp.evaluate(`window.genieTest.terminals.list(${JSON.stringify(workspaceId)}).then((l) => l.map((t) => ({ id: t.id, pid: t.pid })))`, 15_000);
     check(alive(terminal.pid) && terminalsAfter.some((t) => t.id === terminal.id && t.pid === terminal.pid), '23t. "Just close the UI" keeps the terminal: the same id and pid after the reopen', JSON.stringify(terminalsAfter));
 
-    // -------------------------------------------------------------------------------- tray-only again, then a SECOND LAUNCH
-    step('24', 'Just close the UI from the tray, then launch Genie again: the window comes back in the same process (≤ 60 s)');
-    check(await trayClick(b.inspector, 'Just close the UI', 0) === 'ok', '24a. the tray\'s Just close the UI was clicked');
-    const closedAgain = await until(async () => (await windowsIn(b.inspector)) === 0 ? true : null, 30_000);
-    check(closedAgain === true && alive(a.windowPid), '24. the UI closed again from the tray; the window process alive');
+    // -------------------------------------------------------------------------------- the tray's Close Genie
+    step('24', 'the tray\'s Close Genie (launcher.closeUi): the client ends, nothing else (≤ 30 s)');
+    await sleep(2_000); // the client attaches to the launcher as it comes up
+    const attachedNow = launcherCli(['status', '--json']);
+    const closeTray = launcherCli(['tray-act', 'closeUi']);
+    check(closeTray.code === 0, '24a. the tray\'s Close Genie was chosen', closeTray.out.slice(0, 200));
+    b.inspector?.close?.();
+    b.inspector = null;
+    const bExit = await exitWithin(b.app, 30_000);
+    check(bExit !== null && !alive(b.windowPid), '24. the tray\'s Close Genie ENDED the client process', bExit ? `code ${bExit.code}` : whyStillRunning(b.app, 30_000));
+    check(alive(hostPid) && alive(launcherPid) && agents.every((ag) => alive(ag.pid)), '25. and only it: the launcher, the host and every provider alive', attachedNow.out.slice(0, 200));
     b.cdp.close();
-    lifecycleAt = readOr(LIFECYCLE).length;
-    const second = launchSecond();
-    const secondExit = await Promise.race([second, sleep(30_000).then(() => null)]);
-    check(secondExit !== null, '25a. the second launch handed over and exited (the single-instance lock)', JSON.stringify(secondExit));
-    const c = await reopened(a, 'third', 25);
-    check(c.windowPid === a.windowPid, '25. a second launch built the window again in the SAME process', `${a.windowPid} → ${c.windowPid}`);
-    check(/window built again \(second launch\): the same host/.test(readOr(LIFECYCLE).slice(lifecycleAt)), '25b. for the second launch (lifecycle log)');
-    c.cdp.close();
     b.cdp = null;
 
-    // -------------------------------------------------------------------------------- Shut down everything, from the tray
-    // ALWAYS ASK (the owner, 2026-11-02): the tray's Shut down everything confirms first. Cancel first — nothing may stop.
-    step('26c', 'the tray\'s Shut down everything ASKS; Cancel (button 0) does nothing');
-    check(await answerNextDialog(c.inspector, 0) === 'ok', '26c. the next dialog will be answered Cancel');
-    check(await trayClick(c.inspector, 'Shut down everything', 0) === 'ok', '26d. the tray\'s Shut down everything was clicked');
-    const cancelAsked = await until(() => asked(), 10_000);
-    check(JSON.stringify(cancelAsked?.buttons) === JSON.stringify(['Cancel', 'Shut down everything']) && agents.every((ag) => (cancelAsked?.message ?? '').includes(ag.name)),
-        '26e. it ASKED, naming what would stop (this run\'s agents among them), with Cancel and "Shut down everything"', JSON.stringify(cancelAsked));
-    if (!cancelAsked) {
-        // A real modal dialog blocks the window's main thread: an inspector call then doesn't answer.
-        const answers = await c.inspector.evaluate('1', 5_000).then(() => 'answers', (e) => `does not answer in 5 s (${String(e?.message ?? e).slice(0, 80)}): a real dialog may be open`);
-        console.log(`  26e: the window's main thread ${answers}`);
-        console.log(`  26e: dialog calls the window made since 26c:\n${readOr(CALLS) || '    none'}`);
-    }
-    await sleep(3_000);
-    check(!a.app.gone && alive(a.windowPid) && alive(hostPid) && agents.every((ag) => alive(ag.pid)), '26f. Cancel stopped NOTHING: the window process, the host and the providers all alive');
-    step('26', `Shut down everything from the tray, confirmed (button 1); then wait for the window process to exit (≤ ${Math.round((AGENT_DRAIN_WAIT_MS + 60_000) / 1000)} s: the agents' drain, then 60 s)`);
-    check(await answerNextDialog(c.inspector, 1) === 'ok', '26g. the next dialog will be answered Shut down everything');
-    check(await trayClick(c.inspector, 'Shut down everything', 1_000) === 'ok', '26a. the tray\'s Shut down everything was clicked');
-    // The inspector session lets go before the quit (batch M: an attached session holds a quitting Node process).
-    await c.inspector.closed(5_000);
-    a.inspector = null; b.inspector = null;
-    const exit = await exitWithin(a.app, AGENT_DRAIN_WAIT_MS + 60_000);
-    check(exit !== null, '26. the window process EXITED', exit ? `code ${exit.code}` : whyStillRunning(a.app, AGENT_DRAIN_WAIT_MS + 60_000));
-    step('27', `waiting for the host pid ${hostPid} to end (≤ 30 s)`);
-    const hostGone = await until(() => !alive(hostPid), 30_000);
+    // -------------------------------------------------------------------------------- the tray's Shut down everything ASKS
+    // ALWAYS ASK (the owner, 2026-11-02), in the launcher's own window (direction C). Cancel: nothing stops.
+    step('26c', 'the tray\'s Shut down everything ASKS in the launcher\'s window; Escape cancels it');
+    const askAt = readOr(LAUNCHER_LOG).length;
+    const askTray = launcherCli(['tray-act', 'shutDown']);
+    check(askTray.code === 0, '26c. the tray\'s Shut down everything was chosen', askTray.out.slice(0, 200));
+    const asking = await until(() => /genie: asking: Shut down everything\?/.test(readOr(LAUNCHER_LOG).slice(askAt)) ? true : null, 20_000);
+    check(asking === true, '26d. the launcher ASKED "Shut down everything?" in its own window', readOr(LAUNCHER_LOG).slice(askAt).slice(-300));
+    await sleep(2_000);
+    shot(`quit-prompt-${WIN ? 'windows' : 'linux'}.png`);
+    pressKey('Escape');
+    const cancelled = await until(() => /genie: Shut down everything\?: cancelled/.test(readOr(LAUNCHER_LOG).slice(askAt)) ? true : null, 15_000);
+    check(cancelled === true, '26e. Escape CANCELLED it (the launcher said so)', readOr(LAUNCHER_LOG).slice(askAt).slice(-300));
+    await sleep(2_000);
+    check(alive(launcherPid) && alive(hostPid) && agents.every((ag) => alive(ag.pid)), '26f. Cancel stopped NOTHING: the launcher, the host and the providers all alive');
+
+    // -------------------------------------------------------------------------------- Shut down everything, from the quit
+    c = await open('third', 26);
+    lifecycleAt = readOr(LIFECYCLE).length;
+    const hostLogAt = readOr(HOST_LOG).length;
+    const crashBefore = crashRecords();
+    step('26', `Shut down everything from the client's quit (button 2): the client ends, the launcher stops the host on its own progress, then exits (≤ ${Math.round((AGENT_DRAIN_WAIT_MS + 120_000) / 1000)} s)`);
+    const tookShut = await answerTheQuit(c.inspector, 2);
+    check(tookShut === 'ok', '26a. the quit is answered by button 2, "Shut down everything"', String(tookShut));
+    c.inspector = null;
+    const cExit = await exitWithin(c.app, AGENT_DRAIN_WAIT_MS + 60_000);
+    check(cExit !== null, '26b. the client process EXITED', cExit ? `code ${cExit.code}` : whyStillRunning(c.app, AGENT_DRAIN_WAIT_MS + 60_000));
+    step('27', `waiting for the host pid ${hostPid}, then the launcher pid ${launcherPid}, to end (≤ 180 s)`);
+    const hostGone = await until(() => !alive(hostPid), 180_000);
     check(hostGone === true, '27. "Shut down everything" ENDED the host', `pid ${hostPid}`);
+    const launcherGone = await until(() => !alive(launcherPid), 60_000);
+    check(launcherGone === true, '27l. then the LAUNCHER exited', `pid ${launcherPid}`);
+    const launcherSaid = readOr(LAUNCHER_LOG).slice(launcherLogAt);
+    check(/shut down everything: the host stopped/.test(launcherSaid) && !/made no progress|was still stopping/.test(launcherSaid), '27g. GRACEFULLY: the launcher waited for the host\'s own stop and never ended it (Tynn #1079)', (launcherSaid.match(/shut down everything: .*/) ?? ['(nothing said)'])[0].slice(0, 200));
+    check(existsSync(join(GENIE_HOME, 'runtime', 'clean-exit.json')), '27c. the host wrote its clean-exit marker: its next boot reads no crash', join(GENIE_HOME, 'runtime', 'clean-exit.json'));
+    check(/shutting down: /.test(readOr(HOST_LOG).slice(hostLogAt)), '27h. the host ran its own shutdown (its log)');
+    check(crashRecords() === crashBefore, '27r. no crash record was written', `${crashBefore} → ${crashRecords()}`);
     for (const ag of agents) {
         step('28', `waiting for ${ag.name}'s provider pid ${ag.pid} to end (≤ 30 s)`);
         const gone = await until(() => !alive(ag.pid), 30_000);
@@ -744,7 +812,23 @@ try {
     step('28t', `waiting for the terminal's pid ${terminal.pid} to end (≤ 30 s)`);
     const terminalGone = await until(() => !alive(terminal.pid), 30_000);
     check(terminalGone === true, '28t. "Shut down everything" ends the terminal (genie#1508)', `pid ${terminal.pid}`);
+    check(!existsSync(join(GENIE_HOME, 'runtime', 'left-running')), '28m. everything shut down: the host is not left running');
     shutDownProven = hostGone === true;
+
+    // -------------------------------------------------------------------------------- the next boot reads no crash
+    step('29', 'the host started again: its boot reads a clean end (no safe mode)');
+    const bootAt = readOr(LIFECYCLE).length + readOr(HOST_LOG).length;
+    const again = launcherCli(['ensure-host'], 90_000);
+    let againPid = null;
+    try { againPid = JSON.parse(again.out.split(/\r?\n/).filter((l) => l.startsWith('{')).pop() ?? 'null')?.pid ?? null; } catch { /* said below */ }
+    check(again.code === 0 && alive(againPid), '29a. the host starts again', again.out.slice(0, 200));
+    await sleep(5_000);
+    const bootSaid = `${readOr(LIFECYCLE)}${readOr(HOST_LOG)}`.slice(bootAt);
+    check(!/safe mode: the last run did not end cleanly/.test(`${readOr(LIFECYCLE)}\n${readOr(HOST_LOG)}`.slice(-20_000)), '29. its boot did NOT read a crash (no safe mode): the slow, clean stop was a clean stop', bootSaid.split(/\r?\n/).filter((l) => /safe mode|clean/.test(l)).slice(0, 3).join(' | ') || 'no safe-mode line');
+    if (alive(againPid)) {
+        const stopped = launcherCli(['stop-host'], 200_000);
+        check(stopped.code === 0, '29b. and it stops gracefully again (genie stop-host)', stopped.out.slice(0, 200));
+    }
 } catch (error) {
     if (cannot === null) check(false, `the run stopped in step ${current}`, String(error?.message ?? error));
 }

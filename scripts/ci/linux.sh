@@ -42,10 +42,10 @@ ROWS=(
     deps electron-binary
     typecheck unit build bundles sounds
     seed no-pty smoke layout local-door-break local-door host-late-ready files-watch chat-drafts gapp-open artboard ui-lag plan-popover
-    trust-step accounts-popover claude-accounts sound-picker sound-cues esc-unsend question-maximize site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash quit-keeps-host rebuilt-machine cli-drain
+    trust-step accounts-popover claude-accounts sound-picker sound-cues esc-unsend question-maximize site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash rebuilt-machine cli-drain
     flows zip64 host-plain-node mailpit launcher-unit
     package package-fuse
-    package-tracks packed-tree-client packed-tree-browser packed-tree-host track-manifest launcher-install client-no-host
+    package-tracks packed-tree-client packed-tree-browser packed-tree-host track-manifest launcher-install client-no-host quit-keeps-host
     logon
     toolchain
     client-only-update
@@ -569,7 +569,8 @@ row_cli-drain() { need_build && need_display && on_display timeout 1500 env CLI_
 # genie-host pid, the same provider pid per agent, every tick streamed while no window was open in its ledger, in order;
 # "Shut down everything" ends window, host and providers. Its Genie has a home, a lock and ports of its own beside the
 # shared app (QUIT_CDP_OWN_HOME), its logs under ci-out/quit-keeps-host; its own watchdog (360 s) and cleanup end first.
-row_quit-keeps-host() { need_build && need_display && on_display timeout 450 env QUIT_CDP_OWN_HOME=1 QUIT_CDP_OUT="$OUT/quit-keeps-host" CDP_PORT=9414 QUIT_CDP_INSPECT=9415 QUIT_CDP_DEADLINE_MS=360000 node scripts/quit-keeps-host-cdp.mjs; }
+# Since Tynn #1058 L5 through the launcher (the package-tracks row's signed packages): after package-tracks in ROWS.
+row_quit-keeps-host() { need_build && need_tracks && need_display && on_display timeout 600 env QUIT_CDP_OWN_HOME=1 QUIT_CDP_OUT="$OUT/quit-keeps-host" CDP_PORT=9414 QUIT_CDP_INSPECT=9415 QUIT_CDP_DEADLINE_MS=540000 node scripts/quit-keeps-host-cdp.mjs; }
 # A data root attached to a rebuilt machine (host split P7.3, Tynn #419): a real genie-host on a real Secret Service, no window.
 row_rebuilt-machine() { need_install && need_keyring && timeout 420 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/rebuilt-machine.mjs; }
 
@@ -797,7 +798,7 @@ ceiling() {
         host-late-ready) echo 240 ;;
         browser-process) echo 320 ;;
         safe-mode|hang) echo 600 ;;
-        quit-keeps-host) echo 510 ;;
+        quit-keeps-host) echo 660 ;;
         cli-drain) echo 1560 ;;
         flows|zip64) echo 1200 ;;
         package) echo 1500 ;;
