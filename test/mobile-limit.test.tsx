@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { AgentDetail } from '../src/renderer/bridge.js';
 import { MobileAgent } from '../src/renderer/components/MobileShell.js';
 import { control } from './helpers/control-markup.js';
@@ -21,6 +21,10 @@ const detail = (limit: unknown): AgentDetail => ({
     refusal: null,
 });
 const render = (d: AgentDetail) => renderToStaticMarkup(<MobileAgent detail={d} sending={false} onBack={() => {}} onSend={() => {}} onStart={() => {}} onResumeLimit={() => {}} />);
+
+// THE FIXTURES' DAY (Tynn #1089): a resume on another day says the day, so "the same day" is pinned to this one.
+beforeAll(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(RESUMES - 3_600_000); });
+afterAll(() => { vi.useRealTimers(); });
 
 describe('the phone’s agent page, held by the rate limit', () => {
     it('says it is paused and until when, with Resume now', () => {
