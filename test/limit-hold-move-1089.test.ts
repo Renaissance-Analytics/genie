@@ -178,10 +178,9 @@ describe('an agent held on a spent week while another account is active', () => 
         await vi.waitFor(() => expect(w.drivers).toHaveLength(2));
         await flush();
         // POSITIVE CONTROL of the setup: the new run took the notice first, so the owed message waits behind its turn.
-        expect(w.drivers[1]!.prompts.map((p) => JSON.stringify(p)).join('
-')).toContain('AgentInbox delivery');
-        expect(w.drivers[1]!.prompts.map((p) => JSON.stringify(p)).join('
-')).not.toContain('still there?');
+        const sentToNewRun = (): string => w.drivers[1]!.prompts.map((p) => JSON.stringify(p)).join(' | ');
+        expect(sentToNewRun()).toContain('AgentInbox delivery');
+        expect(sentToNewRun()).not.toContain('still there?');
         // Waiting: what the chat draws as queued (`queued`, or `carried` across the move) — never "undelivered".
         expect(['queued', 'carried']).toContain(await w.state(id));
         expect(await w.statuses(id)).not.toContain('undelivered');
