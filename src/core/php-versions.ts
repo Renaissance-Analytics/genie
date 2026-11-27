@@ -16,8 +16,10 @@ import { join } from 'node:path';
  * - the **pin is honoured, or the start fails saying why**. An unpinned site runs the PHP on this machine's PATH, as it
  *   does today (installed and repaired by T1/T2); a pinned one runs a Genie-managed version, and only one.
  *
- * The pick-list is STATIC, as Genie 1's was ("a box that accepts any string is a box that mostly produces failed
- * downloads, and an index resolver is a network dependency in the middle of a settings page"). Genie 1's was Windows
+ * The pick-list is php.net's LIVE release data (Tynn #1066, core/php-releases.ts): the newest patch of each supported
+ * line, read at run time with a cache and a timeout, so a security release never waits for a Genie release. PHP_RECIPES
+ * below is the baked minimum it falls back to offline — still not "a box that accepts any string" (Genie 1's reason for
+ * a static list): only a version php.net lists, with its published checksum, is installed. Genie 1's was Windows
  * only ("macOS/Linux ship no relocatable official build"). Genie 2 BUILDS it on Linux from php.net's own source (plan
  * TC5; the owner's decision 2: no third-party builds), the same versions, every extension Genie's php.ini enables
  * compiled in. macOS has no recipe yet (no macOS test machine): the system PHP is detected and listed, nothing installed.
@@ -33,7 +35,9 @@ export interface PhpRecipe {
 }
 
 /**
- * The versions this release installs: the newest of each supported line, as windows.php.net's own `sha256sum.txt`
+ * THE BAKED MINIMUM (Tynn #1066): what Genie offers when php.net cannot be read; with php.net's live data the newest patch
+ * of each line is offered instead (core/php-releases.ts), never one below these. As first baked: the newest of each
+ * supported line, as windows.php.net's own `sha256sum.txt`
  * listed them on 2026-10-22 (`php-8.5.12-nts-Win32-vs17-x64.zip`, `php-8.4.27-nts-Win32-vs17-x64.zip`,
  * `php-8.3.36-nts-Win32-vs16-x64.zip`, `php-8.2.35-nts-Win32-vs16-x64.zip`) — the PHP2Shell releases of 2026-10-21,
  * each the first of its line that is not vulnerable to CVE-2026-109618 / CVE-2026-109619 (core/php-advisories.ts; the
@@ -64,6 +68,40 @@ export function phpZipName(recipe: PhpRecipe): string {
  */
 export function phpBuildUrls(file: string): string[] {
     return ['https://windows.php.net/downloads/releases/', 'https://windows.php.net/downloads/releases/archives/'].map((base) => `${base}${file}`);
+}
+
+/**
+ * THE VISUAL C++ RUNTIME A WINDOWS BUILD NEEDS, by the toolset in its file name (Tynn #1066). Measured on a fresh Windows
+ * VM, 2026-11-26: php-8.6.0-nts-Win32-vs18-x64 unpacked, and php-cgi said "VCRUNTIME140.dll 14.44 is not compatible with
+ * this PHP build linked with 14.51". VS 2019 (vs16) links 14.2x, VS 2022 (vs17) 14.3x–14.4x, VS 2026 (vs18) 14.5x: the
+ * runtime must be at least the toolset's first.
+ */
+export const VC_RUNTIME_FOR_TOOLSET: Readonly<Record<string, string>> = { vs16: '14.20', vs17: '14.30', vs18: '14.50' };
+
+/** The runtime a build's zip needs (`php-8.6.0-nts-Win32-vs18-x64.zip` → `14.50`), or `null` for a toolset Genie does not know. */
+export function vcRuntimeFor(file: string): string | null {
+    const vs = /-(vs[0-9]+)-x64[.]zip$/.exec(file)?.[1];
+    return vs ? VC_RUNTIME_FOR_TOOLSET[vs] ?? null : null;
+}
+
+/** Is a runtime version (`14.44.35211.0`) at least `min` (`14.50`)? Numeric per segment. */
+export function vcRuntimeAtLeast(version: string, min: string): boolean {
+    return compareVersionsDesc(version, min) <= 0;
+}
+
+/**
+ * WHAT THE RUNTIME BUTTON CAME TO, in the words the card shows (Tynn #1066: a click on "Install it (asks for
+ * administrator)" showed nothing on a test VM). Declined, no answer and failed keep the button (toolchain-view
+ * plainRefusal), to try again; a restart needs none.
+ */
+export function vcRuntimeOutcomeText(version: string, result: { readonly ok: false; readonly outcome: string; readonly reason: string }): string {
+    const lead = 'The Microsoft Visual C++ runtime was not installed';
+    switch (result.outcome) {
+        case 'declined': return `${lead}: administrator approval was declined.`;
+        case 'no-answer': return `${lead}: no administrator approval came.`;
+        case 'restart': return `The Microsoft Visual C++ runtime is installed. Restart Windows, then install PHP ${version}.`;
+        default: return `${lead}: ${result.reason.replace(/[.\s]+$/, '')}.`;
+    }
 }
 
 /** windows.php.net's own index of its CURRENT builds: per line, each build's zip with its sha256. */
@@ -169,9 +207,19 @@ export function satisfiesPin(version: string, pin: string): boolean {
     return version === pin || version.startsWith(`${pin}.`);
 }
 
-/** The managed install a pin runs on — the newest that satisfies it — or `null`. */
+/**
+ * The managed install a pin runs on — the newest that satisfies it — or `null`. A pin to a PATCH (`8.4.27`) keeps its LINE
+ * (Tynn #1066: "every installed or pinned PHP is kept on the newest patch of its major.minor"): it runs the newest
+ * installed patch of 8.4 at or above 8.4.27 — so a security patch Genie installs reaches it — and never a patch below it
+ * or another line.
+ */
 export function pickPinned(managed: readonly ManagedPhp[], pin: string): ManagedPhp | null {
-    return [...managed].sort((a, b) => compareVersionsDesc(a.version, b.version)).find((m) => satisfiesPin(m.version, pin)) ?? null;
+    const sorted = [...managed].sort((a, b) => compareVersionsDesc(a.version, b.version));
+    if (FULL_VERSION.test(pin)) {
+        const line = pin.split('.').slice(0, 2).join('.');
+        return sorted.find((m) => satisfiesPin(m.version, line) && compareVersionsDesc(m.version, pin) <= 0) ?? null;
+    }
+    return sorted.find((m) => satisfiesPin(m.version, pin)) ?? null;
 }
 
 export const PHP_VERSIONS_WHERE = 'Toolchain → PHP versions';

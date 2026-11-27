@@ -17,6 +17,7 @@ import type { FlowAdding, FlowSaved, KnowledgeAdded, KnowledgeAdding, ServiceAdd
 import type { ToolStatus } from '../core/toolchain.js';
 import type { RepairReport } from '../core/toolchain-repair.js';
 import type { ToolchainActivity } from '../core/toolchain-risk.js';
+import type { CliDrainResult } from '../core/cli-update-drain.js';
 import type { InstallOutcome } from './toolchain-ops.js';
 import type { DockerStartOutcome } from './docker-engine.js';
 import type { Elevate } from '../core/elevation.js';
@@ -141,6 +142,11 @@ export interface FeaturePorts {
         /** `version`: the version the button named (genie#1306); `progress`: the row's step while it runs. */
         /** `elevate` (Tynn #973): the host's elevation for the client that clicked; absent = an elevated plan is refused. */
         update(tool: string, version?: string, progress?: (step: string | null) => void, elevate?: Elevate): Promise<RepairOutcome | { kind: 'refused'; reason: string }>;
+        /**
+         * Tynn #1067: a provider CLI's update with agents on it, DRAINED (core/cli-update-drain.ts): its running agents asked to
+         * finish their turn and stopped, `update` run, each started again. Absent = such an update is refused, as before.
+         */
+        cliDrain?(provider: string, label: string, progress: (step: string) => void, update: () => Promise<RepairOutcome | { kind: 'refused'; reason: string }>): Promise<CliDrainResult<RepairOutcome | { kind: 'refused'; reason: string }>>;
         /** Push the row's in-progress state (genie#1306): the update and its step, `null` when it is over. */
         updating?(row: { readonly tool: string; readonly version?: string; readonly step: string } | null): void;
         now(): number;
@@ -166,6 +172,14 @@ export interface FeaturePorts {
             list(pins: readonly SitePin[]): Promise<PhpVersionsView>;
             install(version: string, consent: boolean): Promise<PhpInstallOutcome>;
             remove(version: string, pins: readonly SitePin[]): PhpRemoveOutcome;
+            /**
+             * Tynn #1066: install the php.net SECURITY patches due in each installed line (never another line), move the
+             * default and restart the line's running sites onto them, and tell the person and the sites' agents. Never
+             * rejects; offline it does nothing. main/php-patch-keeper.ts.
+             */
+            /** Tynn #1066: install the Visual C++ runtime PHP `version`'s build needs — Microsoft's signed redistributable, elevated. */
+            installVcRuntime?(version: string): Promise<{ ok: true } | { ok: false; reason: string; outcome?: 'declined' | 'no-answer' | 'restart' | 'failed' | 'not-ready' }>;
+            applyDue?(progress: (step: string | null) => void): Promise<{ updated: string[]; failed: Array<{ version: string; reason: string }> }>;
         };
         /** Genie's own Node (main/node-versions.ts): nodejs.org zips, checksum-verified, under its toolchain directory. */
         node?: {

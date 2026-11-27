@@ -16,20 +16,35 @@ import { installRubyVersion, listRubyVersions, managedRuby, removeRubyVersion, r
 import { installPlaywrightBrowsers, listPlaywrightBrowsers, nodePlaywrightFs, type PlaywrightBrowsersPorts } from './playwright-browsers.js';
 import { installJavaVersion, javaVersionsRoot, listJavaVersions, managedJava, removeJavaVersion, type JavaVersionsPorts } from './java-versions.js';
 import { installNodeVersion, listNodeVersions, managedNode, nodeVersionsRoot, removeNodeVersion, type NodeVersionsPorts } from './node-versions.js';
-import { httpFetchOver, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, phpVersionsRoot, refreshAllManagedInis, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCaPort, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
+import { httpFetchOver, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, phpVersionsRoot, refreshAllManagedInis, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCaPort, type PhpCgiPorts, type PhpVersionsPorts, type PhpVersionsView } from './php-versions.js';
 import { availableParallelism, userInfo } from 'node:os';
 import { dockerAccount, probeDockerHealth, startDocker, withDockerHealth } from './docker-engine.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import { userHome } from './paths.js';
 import { join } from 'node:path';
-import { statSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { PhpReleaseFeed } from './php-release-feed.js';
+import { catalogLine, currentPhpCatalog } from '../core/php-releases.js';
+import { VC_RUNTIME_FOR_TOOLSET } from '../core/php-versions.js';
+import { dllVersion, ensureVcRuntimeAtLeast } from './vc-runtime.js';
+import { applyDuePhpUpdates, PhpPatchNotices, type PhpPatchSite } from './php-patch-keeper.js';
 import type { FeaturePorts } from './feature-ipc.js';
 import type { ProviderHealthBook } from './provider-health.js';
 import type { ToolchainActivity } from '../core/toolchain-risk.js';
 
 /** Real native planners moved from the window. Stores and service graphs are supplied by genie-host. */
 export function nativeFeatureToolchain(deps: { home: string; providerHealth: ProviderHealthBook;
-    activity(): Promise<ToolchainActivity>; busy(step: string | null): void; download(url: string): Promise<Response> }): NonNullable<FeaturePorts['toolchain']> {
+    activity(): Promise<ToolchainActivity>; busy(step: string | null): void; download(url: string): Promise<Response>;
+    /** Tynn #1067: genie-host's drain of a provider's running agents around its CLI's update. Absent = such an update is refused. */
+    cliDrain?: NonNullable<FeaturePorts['toolchain']>['cliDrain'];
+
+    /**
+     * PHP security patches within a line (Tynn #1066, main/php-patch-keeper.ts): the php sites, their restart, the
+     * person's Deck items and the agents' mail. Absent = a pass installs and moves the default, and tells nobody.
+     */
+    phpPatch?: { sites(): readonly PhpPatchSite[]; restartSite?(siteId: string): Promise<void>; notices: PhpPatchNotices; tellAgents(workspaceId: string, subject: string, text: string): Promise<void>; log?(line: string): void;
+        /** The PHP list after a pass changed it (a patch installed, php.net's catalog moved): every window's Toolchain shows it. */
+        changed?(view: PhpVersionsView): void } }): NonNullable<FeaturePorts['toolchain']> {
     const { providerHealth } = deps;
     // Tynn #970: Docker on Linux is a HEALTH beside its version, read as the user Genie runs as.
     const linuxUser = () => userInfo().username;
@@ -63,6 +78,30 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
         // Tynn #970: the account Docker's install adds to the docker group.
         dockerAccount: () => dockerAccount(execFileRunner, linuxUser()),
     });
+    // PHP'S LIVE RELEASE DATA (Tynn #1066): php.net's versions and security releases, cached, stored for an offline start.
+    const silentNotices = new PhpPatchNotices(Date.now);
+    const phpReleasesFile = () => join(toolchainDataDir(), 'php-releases.json');
+    const phpFeed = new PhpReleaseFeed({
+        platform: process.platform as PhpVersionsPorts['platform'],
+        fetchText: httpFetch.text,
+        now: Date.now,
+        ...(deps.phpPatch?.log ? { log: deps.phpPatch.log } : {}),
+        store: {
+            read: () => { try { return readFileSync(phpReleasesFile(), 'utf8'); } catch { return null; } },
+            write: (text) => { mkdirSync(toolchainDataDir(), { recursive: true }); writeFileSync(phpReleasesFile(), text, 'utf8'); },
+        },
+    });
+    // THE VISUAL C++ RUNTIME (Tynn #1066): Microsoft's signed redistributable, never winget. A PHP install only fetches and
+    // checks it; the refusal's own button runs it, elevated (php.installVcRuntime below).
+    const vcRuntimePorts = () => ({
+        // Five minutes, not the build's thirty: an installer waiting on an approval nobody gives ends, and the card says so.
+        run: ((binary, args, options) => execFileRunner(binary, args, { timeoutMs: 5 * 60_000, ...(options?.env ? { env: options.env } : {}) })) as CommandRunner,
+        systemRoot: process.env.SystemRoot ?? 'C:/Windows',
+        progress: (step: string) => deps.busy(step),
+        tempDir: toolchainDataDir(),
+        download: httpFetch.bytes,
+        writeFile: (path: string, bytes: Uint8Array) => { mkdirSync(toolchainDataDir(), { recursive: true }); writeFileSync(path, bytes); },
+    });
     const phpVersionsPorts = (): PhpVersionsPorts => ({
         ...phpVersionsBase(),
         run: longRunner,
@@ -70,11 +109,15 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
         fetchText: httpFetch.text,
         cpus: availableParallelism(),
         // The VC++ runtime through T1's own consented install (winget); the click on Install PHP is the consent.
-        ensureVcRuntime: async () => {
+        ensureVcRuntime: async (min) => {
             const r = await installTool('vcredist', true, toolchainOps());
-            return r.kind === 'installed' || r.kind === 'already-installed' ? { ok: true } : { ok: false, reason: r.reason };
+            if (r.kind !== 'installed' && r.kind !== 'already-installed') return { ok: false, reason: r.reason };
+            // Tynn #1066: present is not enough — the build's toolset needs at least `min` (vs18: 14.50).
+            return min ? ensureVcRuntimeAtLeast(min, vcRuntimePorts(), { install: false }) : { ok: true };
         },
         progress: (step) => deps.busy(step),
+        // Tynn #1066: the card offers the newest PHP this machine's Visual C++ runtime can run.
+        ...(process.platform === 'win32' ? { vcRuntimeVersion: () => dllVersion((binary, args) => execFileRunner(binary, args, { timeoutMs: 30_000 }), process.env.SystemRoot ?? 'C:/Windows') } : {}),
     });
     const nodeVersionsPorts = (): NodeVersionsPorts => ({
         platform: process.platform as NodeVersionsPorts['platform'],
@@ -172,7 +215,7 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
         const progress = (step: string | null) => { busyLine(step); if (step) row?.(step); };
         return {
             install: async (tool, version) => {
-                if (tool === 'php') return installPhpVersion(version, true, { ...phpVersionsPorts(), progress });
+                if (tool === 'php') { await phpFeed.refresh(); return installPhpVersion(version, true, { ...phpVersionsPorts(), progress }); }
                 if (tool === 'go') return installGoVersion(version, true, { ...goVersionsPorts(), progress });
                 if (tool === 'python') return installPythonVersion(version, true, { ...pythonVersionsPorts(), progress });
                 const outcome = await installNodeVersion(version, true, { ...nodeVersionsPorts(), progress });
@@ -214,6 +257,7 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
             // THE UPDATE GUARD's input, read at the moment of the click: running sessions with their provider, Genie-run
             // processes with their command, running service engines by name.
             activity: () => deps.activity(),
+            ...(deps.cliDrain ? { cliDrain: deps.cliDrain } : {}),
             // Tynn #973: `elevate` is the host's, bound to the client that clicked (genie-host's effectsFor).
             install: (tool, consent, elevate) => installTool(tool, consent, { ...toolchainOps(), ...(elevate ? { elevate } : {}) }),
             // Tynn #970: Docker's Start, one elevated batch for the client that clicked, judged by `docker info` after.
@@ -232,9 +276,46 @@ export function nativeFeatureToolchain(deps: { home: string; providerHealth: Pro
             },
             // T4: managed PHP versions (main/php-versions.ts) — the installer's progress is the same pushed busy line.
             php: {
-                list: (pins) => listPhpVersions(phpVersionsPorts(), pins),
-                install: (version, consent) => installPhpVersion(version, consent, phpVersionsPorts()),
+                // The list waits on php.net at most 5 s (the feed caches for 6 h): past that it shows the catalog in use.
+                list: async (pins) => {
+                    let timer: ReturnType<typeof setTimeout> | undefined;
+                    await Promise.race([phpFeed.refresh(), new Promise((resolve) => { timer = setTimeout(resolve, 5_000); })]);
+                    if (timer !== undefined) clearTimeout(timer);
+                    return listPhpVersions(phpVersionsPorts(), pins);
+                },
+                install: async (version, consent) => { await phpFeed.refresh(); return installPhpVersion(version, consent, phpVersionsPorts()); },
                 remove: (version, pins) => removePhpVersion(version, pins, phpVersionsBase()),
+                // Tynn #1066: the runtime a version's build needs, installed by the person's click (asks for administrator).
+                installVcRuntime: async (version) => {
+                    const toolset = catalogLine(currentPhpCatalog(), version.split('.').slice(0, 2).join('.'))?.toolset;
+                    const min = toolset ? VC_RUNTIME_FOR_TOOLSET[toolset] : undefined;
+                    if (!min) return { ok: false, outcome: 'failed' as const, reason: `Genie does not know which Visual C++ runtime PHP ${version} needs` };
+                    try { return await ensureVcRuntimeAtLeast(min, vcRuntimePorts(), { install: true }); } finally { deps.busy(null); }
+                },
+                // Tynn #1066: the security patches due in each installed line, installed, the default and sites moved, told.
+                applyDue: async (progress) => {
+                    const catalogBefore = phpFeed.catalog();
+                    const linkPorts = { platform: process.platform as Platform, toolchainDir: toolchainDataDir(), fs: nodeLinkFs(process.platform as Platform) };
+                    const p = deps.phpPatch;
+                    const result = await applyDuePhpUpdates({
+                        refresh: () => phpFeed.refresh(),
+                        managed: () => managedPhp(phpVersionsBase()),
+                        install: (version, step) => installPhpVersion(version, true, { ...phpVersionsPorts(), progress: (s) => { busyLine(s); step(s); } }),
+                        defaultVersion: () => listDefaults(linkPorts).php,
+                        setDefault: (version) => setLanguageDefault('php', version),
+                        sites: () => p?.sites() ?? [],
+                        ...(p?.restartSite ? { restartSite: p.restartSite } : {}),
+                        notices: p?.notices ?? silentNotices,
+                        tellAgents: (workspaceId, subject, text) => p?.tellAgents(workspaceId, subject, text) ?? Promise.resolve(),
+                        ...(p?.log ? { log: p.log } : {}),
+                    }, progress);
+                    // What the Toolchain shows moves with it: a patch installed, or php.net's catalog read anew.
+                    if (p?.changed && (result.updated.length > 0 || phpFeed.catalog() !== catalogBefore)) {
+                        const pins = (p.sites()).flatMap((s) => (s.pin ? [{ host: s.host, pin: s.pin }] : []));
+                        try { p.changed(await listPhpVersions(phpVersionsPorts(), pins)); } catch { /* the next scan shows it */ }
+                    }
+                    return result;
+                },
             },
             // Genie's own Node (main/node-versions.ts) — same busy line.
             node: {

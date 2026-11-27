@@ -17,7 +17,7 @@ import { mobilePageUrl } from '../../core/mobile.js';
 import { PairGuide } from './PairGuide.js';
 import { toneLabel, type ToolStatus } from '../../core/toolchain.js';
 import { DOCKER_DAEMON_WORDS } from '../../core/docker-engine.js';
-import { INSTALL_KIND, REMOVE_KIND, cardKeyOfTool, cardOfAction, formatElapsed, installNote, langView, plainRefusal, nextFix, nextInFlight, patchFor, toolchainActivity, toolchainCards, toolchainProblems, toolchainTally, type InFlight, type LangKey, type ToolCard, type ToolchainProblem } from '../toolchain-view.js';
+import { INSTALL_KIND, REMOVE_KIND, cardKeyOfTool, cardOfAction, formatElapsed, installNote, langView, plainRefusal, unpinnedSitesLine, nextFix, nextInFlight, patchFor, toolchainActivity, toolchainCards, toolchainProblems, toolchainTally, type InFlight, type LangKey, type ToolCard, type ToolchainProblem } from '../toolchain-view.js';
 import { ToolLogo } from './ToolLogo.js';
 import { NAV_GROUPS, NEW_PROJECT_DEFAULTS, sectionOf, type SectionId } from '../../core/settings-nav.js';
 import { SETTINGS, searchSettings, type SettingDef } from '../../core/settings.js';
@@ -1200,7 +1200,7 @@ export function ToolchainCheckBar({ tc, busy, onAction }: { tc: ToolchainData | 
     const at = tc?.checkedAt ?? null;
     return (
         <>
-            <span data-toolchain-checked={at ?? ''} className="ml-auto hidden whitespace-nowrap text-xs text-[var(--fg-3)] @min-[440px]:inline" {...(at !== null ? { title: new Date(at).toLocaleString() } : {})}>
+            <span data-toolchain-checked={at ?? ''} className="ml-auto hidden w-28 truncate whitespace-nowrap text-right text-xs text-[var(--fg-3)] @min-[700px]:inline" {...(at !== null ? { title: new Date(at).toLocaleString() } : {})}>
                 {at === null ? 'Not checked yet' : `Checked ${agoText(at, Date.now())}`}
             </span>
             {running ? (
@@ -1301,15 +1301,19 @@ export function ToolchainSurface({ data, onAction: act, selected: initial }: Sur
         <div data-surface="toolchain" className="@container flex h-full min-h-0 flex-1 flex-col">
             <div data-toolchain-toolbar="" className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-2 border-b border-[var(--border-1)] px-4 py-2.5 @min-[440px]:gap-x-3 @min-[440px]:px-6">
                 {tc !== null ? <ToolchainTallies tally={tally} /> : null}
-                <ToolchainCheckBar tc={tc} busy={busy !== null} onAction={onAction} />
-                <Button size="xs" type="button" labelClassName="contents" className="shrink-0 gap-1.5 whitespace-nowrap" aria-label="Check and repair" title="Check and repair" disabled={busy !== null} onClick={() => onAction({ kind: 'toolchain.repair' })}>
-                    <Icon name="stethoscope" size="xs" /><span className="hidden @min-[440px]:inline">Check and repair</span>
-                </Button>
-                {fixable.length > 0 ? (
-                    <Button size="sm" type="button" color="blue" labelClassName="contents" className="shrink-0 gap-1.5 whitespace-nowrap" data-action="toolchain-fix-all" disabled={running || fix !== null} loading={fix !== null} onClick={() => setFix({ queue: fixable, waiting: false, refusals: refusals.length })}>
-                        <Icon name="wrench" size="xs" />Fix {fixable.length} {fixable.length === 1 ? 'problem' : 'problems'}
+                {/* ONE GROUP, KEPT TOGETHER ON THE RIGHT (Tynn #1066): "Checked just now" growing into "Checked 8m ago" wrapped
+                    "Fix 2 problems" under the counts on one page and not the next. The group never wraps inside itself. */}
+                <div data-toolchain-actions="" className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-x-2 gap-y-2 @min-[700px]:flex-nowrap @min-[440px]:gap-x-3">
+                    <ToolchainCheckBar tc={tc} busy={busy !== null} onAction={onAction} />
+                    <Button size="xs" type="button" labelClassName="contents" className="shrink-0 gap-1.5 whitespace-nowrap" aria-label="Check and repair" title="Check and repair" disabled={busy !== null} onClick={() => onAction({ kind: 'toolchain.repair' })}>
+                        <Icon name="stethoscope" size="xs" /><span className="hidden @min-[440px]:inline">Check and repair</span>
                     </Button>
-                ) : null}
+                    {fixable.length > 0 ? (
+                        <Button size="sm" type="button" color="blue" labelClassName="contents" className="shrink-0 gap-1.5 whitespace-nowrap" data-action="toolchain-fix-all" disabled={running || fix !== null} loading={fix !== null} title={`Fixes: ${problems.filter((p) => p.action !== null).map((p) => p.title).join('; ')}`} onClick={() => setFix({ queue: fixable, waiting: false, refusals: refusals.length })}>
+                            <Icon name="wrench" size="xs" />Fix {fixable.length} {fixable.length === 1 ? 'problem' : 'problems'}
+                        </Button>
+                    ) : null}
+                </div>
             </div>
             {tc === null ? (
                 <Skeletons rows={6} />
@@ -1355,6 +1359,8 @@ export function ToolchainSurface({ data, onAction: act, selected: initial }: Sur
                     </div>
                     {selectedCard ? (
                         <aside data-toolchain-aside="" className="flex min-h-0 w-full flex-col overflow-y-auto bg-[var(--bg-1)] @min-[860px]:w-[340px] @min-[860px]:shrink-0 @min-[860px]:border-l @min-[860px]:border-[var(--border-1)]">
+                            {/* Tynn #1066: where the cards are hidden by the panel, what "need you" counts is still named here. */}
+                            {problems.length > 0 ? <div data-toolchain-aside-problems="" className="pb-1 @min-[860px]:hidden"><ProblemsStrip problems={problems} busy={running} onAction={onAction} onOpen={setChosen} /></div> : null}
                             <ToolPanel card={selectedCard} tc={tc} busy={busy !== null} check={selectedCard.lang ? checkRows[selectedCard.lang] : undefined} onAction={onAction} onClose={() => setChosen(null)} />
                         </aside>
                     ) : null}
@@ -1422,13 +1428,16 @@ export function ProblemsStrip({ problems, busy, onAction, onOpen }: { problems: 
  * A REFUSAL, SAID IN PLAIN WORDS (Tynn #1062): a short line (toolchain-view plainRefusal), the version to install instead
  * as a button when there is one, and the engine's own sentence only under "Details".
  */
-function RefusalLine({ reason, attrs, className = '', busy = false, onInstall }: { reason: string; attrs: Record<string, string>; className?: string; busy?: boolean; onInstall?: ((version: string) => void) | undefined }) {
+function RefusalLine({ reason, attrs, className = '', busy = false, onInstall, onVcRuntime }: { reason: string; attrs: Record<string, string>; className?: string; busy?: boolean; onInstall?: ((version: string) => void) | undefined; onVcRuntime?: (() => void) | undefined }) {
     const r = plainRefusal(reason);
     return (
         <div {...attrs} className={`flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[var(--danger)] ${className}`}>
             {r.text}
             {r.install && onInstall ? (
                 <Button size="xs" type="button" color="blue" data-refusal-install={r.install} disabled={busy} onClick={() => onInstall(r.install!)}>{`Install ${r.install}`}</Button>
+            ) : null}
+            {r.vcRuntime && onVcRuntime ? (
+                <Button size="xs" type="button" color="blue" data-refusal-vcruntime="" disabled={busy} onClick={onVcRuntime}>Install it (asks for administrator)</Button>
             ) : null}
             {r.details ? (
                 <details className="w-full text-[var(--fg-3)]">
@@ -1681,6 +1690,13 @@ function ToolPanel({ card, tc, busy, check, onAction, onClose }: { card: ToolCar
                     ) : null}
                 </div>
             </div>
+            {/* WHAT IS RUNNING NOW, in the panel the person is looking at (Tynn #1066: a click on "Install it (asks for
+                administrator)" showed nothing while Windows waited for approval). */}
+            {tc.busy ? (
+                <p data-panel-busy={card.key} role="status" className="flex items-center gap-2 border-b border-[var(--border-1)] px-5 py-2 text-xs text-[var(--fg-2)]">
+                    <Icon name="loader-circle" size="xs" className="shrink-0 animate-spin" />{tc.busy}
+                </p>
+            ) : null}
             {card.lang && view ? (
                 <LanguagePanel lang={card.lang} view={view} current={current} busy={busy} check={check} onAction={onAction} refusals={(tc.refusals ?? []).filter((r) => r.tool === card.lang && r.version !== undefined)} />
             ) : card.key === 'playwright' && tc.playwright ? (
@@ -1715,7 +1731,7 @@ function LanguagePanel({ lang, view, current, busy, check, onAction, refusals }:
                 {check ? <CheckStateMark tool={lang} check={check} /> : null}
             </h4>
             {refusals.map((r) => (
-                <RefusalLine key={r.version} reason={r.reason} attrs={attr('refusal', r.version ?? '')} busy={busy} onInstall={(version) => onAction({ kind: INSTALL_KIND[lang], version, consent: true } as FeatureAction)} />
+                <RefusalLine key={r.version} reason={r.reason} attrs={attr('refusal', r.version ?? '')} busy={busy} onInstall={(version) => onAction({ kind: INSTALL_KIND[lang], version, consent: true } as FeatureAction)} {...(lang === 'php' && r.version ? { onVcRuntime: () => onAction({ kind: 'toolchain.installVcRuntime', version: r.version! }) } : {})} />
             ))}
             <ul role="radiogroup" aria-label={`${copy.name}: the default`} className="flex flex-col gap-1.5">
                 {view.managed.map((m) => {
@@ -1742,6 +1758,8 @@ function LanguagePanel({ lang, view, current, busy, check, onAction, refusals }:
                         </li>
                     );
                 })}
+                {/* No system PHP, no row to choose (Tynn #1066: "System · none on this machine" looked selectable). PHP only: the other languages keep Use system's, which clears Genie's default. */}
+                {view.system || lang !== 'php' ? (
                 <li {...attr('system-row', '')} className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--border-1)] bg-[var(--bg-2)] px-2.5 py-2 text-sm">
                     {current === null ? (
                         <span role="radio" aria-checked="true" data-system-default={lang} title="The default" className="grid size-4 shrink-0 place-items-center rounded-full border-2 border-[var(--primary)]"><span className="size-1.5 rounded-full bg-[var(--primary)]" /></span>
@@ -1754,10 +1772,11 @@ function LanguagePanel({ lang, view, current, busy, check, onAction, refusals }:
                     <Badge variant="soft" size="sm" color="zinc" className="inline-flex items-center gap-1"><Icon name="monitor" size="xs" />System</Badge>
                     {view.system ? null : <span className="text-[11px] text-[var(--fg-3)]">none on this machine</span>}
                 </li>
+                ) : null}
             </ul>
             {lang === 'php' ? (
                 <p {...attr('system', '')} className="text-xs text-[var(--fg-3)]">
-                    {view.system ? `Sites with no version chosen run PHP ${view.system.version}, the system's.` : "Sites with no version chosen cannot start until PHP is installed: there is no system PHP."}
+                    {unpinnedSitesLine(current, view.system?.version ?? null, view.managed.length > 0)}
                 </p>
             ) : (
                 <p {...attr('system', '')} className="text-xs text-[var(--fg-3)]">{view.system ? `The ${copy.binary} on your PATH is ${view.system.version}.` : `No ${copy.binary} on your PATH.`}</p>

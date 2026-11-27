@@ -128,6 +128,7 @@ export const DATA_ROOT_RULES: readonly DataRootRule[] = [
     machine('app-inbox-endpoint.json', 'the app inbox’s port'),
     machine('runtime/genie.pid', 'the window’s pid', { live: true }),
     machine('runtime/doctor-hold.json', 'that the doctor holds Genie stopped', { live: true }),
+    machine('runtime/startup-updates.json', 'what the host is updating before it starts, for a window waiting for it (Tynn #1067); removed once it is done'),
     machine('runtime/host-proxy.json', 'the proxy routes the OS last gave'),
     machine('runtime/provider-programs.json', 'where each provider’s program is on this machine'),
     machine('runtime/mobile-tls/', 'this machine’s tailnet certificate', { names: ['cert.pem', 'key.pem'] }),
@@ -149,7 +150,7 @@ export const DATA_ROOT_RULES: readonly DataRootRule[] = [
 
     // --- MACHINE: installed, downloaded or generated; made again when it is missing -----------------------------------
     machine('host/', 'the host’s own copy of its runtime and its code, made from the install', { live: true }),
-    machine('genie2-toolchain/', 'the runtimes and browsers Genie installed', { names: ['sets.json', 'toolchain-env.json', 'cacert.pem', 'zz-genie-ca.ini'] }),
+    machine('genie2-toolchain/', 'the runtimes and browsers Genie installed', { names: ['sets.json', 'toolchain-env.json', 'cacert.pem', 'zz-genie-ca.ini', 'php-releases.json'] }),
     machine('runtime/caddy-bin/', 'the front door’s program, copied from the install'),
     machine('runtime/caddy/', 'the front door’s configuration and its own storage'),
     machine('runtime/prism-supervisor/', 'an older supervisor build'),

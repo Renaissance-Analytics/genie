@@ -53,20 +53,29 @@ describe('the installer never offers or installs a version under the floor', () 
         for (const r of PHP_RECIPES) expect({ version: r.version, ...phpVersionRisk(r.version) }).toMatchObject({ risk: 'safe' });
     });
 
-    it('a version asked for under the floor is refused naming the CVEs, before anything is fetched', async () => {
-        let fetched = 0;
-        const fs: PhpVersionsFs = { exists: () => false, list: () => [], mkdirp: () => {}, writeBytes: () => {}, writeText: () => {}, rename: () => {}, removeTree: () => {} };
-        const ports: PhpVersionsPorts = {
-            platform: 'win32', root: 'C:\\genie2-toolchain\\php-versions', fs,
-            run: async () => ({ stdout: '', exitCode: 0 }),
-            fetchBytes: async () => { fetched += 1; return { ok: false, error: 'not reached' }; },
-            fetchText: async () => { fetched += 1; return { ok: false, error: 'not reached' }; },
-        };
-        const out = await installPhpVersion(OLD, true, ports);
+    const refusingPorts = (asked: string[]): PhpVersionsPorts => ({
+        platform: 'win32', root: 'C:\\genie2-toolchain\\php-versions',
+        fs: { exists: () => false, list: () => [], mkdirp: () => {}, writeBytes: () => {}, writeText: () => {}, rename: () => {}, removeTree: () => {} },
+        run: async () => ({ stdout: '', exitCode: 0 }),
+        fetchBytes: async (url) => { asked.push(url); return { ok: false, error: 'not reached' }; },
+        fetchText: async (url) => { asked.push(url); return { ok: false, error: 'not reached' }; },
+    });
+
+    it('a version of an UNSUPPORTED line is refused naming the CVEs, before anything is fetched', async () => {
+        const asked: string[] = [];
+        const out = await installPhpVersion('8.1.34', true, refusingPorts(asked));
         expect(out.kind).toBe('refused');
         expect(out.kind === 'refused' && out.reason).toMatch(/CVE-2026-109618/);
-        expect(out.kind === 'refused' && out.reason).toMatch(/8\.4\.27/);
-        expect(fetched).toBe(0);
+        expect(asked).toEqual([]);
+    });
+
+    it('a patch under the floor is never installed: its line’s newest patch is installed instead (Tynn #1066 — never a refusal of a stale patch)', async () => {
+        const progress: string[] = [];
+        const out = await installPhpVersion(OLD, true, { ...refusingPorts([]), progress: (s) => { if (s) progress.push(s); } });
+        expect(progress[0]).toBe('PHP 8.4.24 is not php.net\'s newest 8.4: installing PHP 8.4.27');
+        // These ports reach no network, so the 8.4.27 install stops at the checksum list — and nothing names 8.4.24 as installed.
+        expect(out.kind).toBe('not-installed');
+        expect(JSON.stringify(out)).not.toMatch(/8\.4\.24/);
     });
 });
 

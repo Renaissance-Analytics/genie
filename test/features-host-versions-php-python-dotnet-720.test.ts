@@ -34,7 +34,8 @@ describe('host PHP, Python and .NET versions use their real managers without a w
                 expect(f.fs.readText?.(join(f.roots.php, f.versions.php, 'php.ini'))).toBe(phpIniContents(join(f.roots.php, f.versions.php), 'win32'));
                 expect(f.versionCommands).toContainEqual({ binary: f.binary('php'), args: ['-c', join(f.roots.php, f.versions.php, 'php.ini'), '-v'] });
                 expect(f.versionCommands).toContainEqual({ binary: join(f.roots.php, f.versions.php, 'php.exe'), args: ['-c', join(f.roots.php, f.versions.php, 'php.ini'), '-m'] });
-                expect(f.vcCalls()).toBe(1);
+                // Twice (Tynn #1066): present before anything is fetched, then at least the build's toolset once releases.json names it.
+                expect(f.vcCalls()).toBe(2);
             } else if (lang === 'python') {
                 expect(f.versionCommands).toContainEqual({ binary: f.binary('python'), args: f.pipArgs() });
                 expect(f.versionCommands).toContainEqual({ binary: f.binary('python'), args: PYTHON_PROOF_ARGS });
@@ -163,5 +164,54 @@ describe('independent controls for the version manager fixture (Tynn #720)', () 
             expect(data.toolchain?.[row.lang]?.managed).toEqual([{ version: f.versions[row.lang], dir: join(f.roots[row.lang], f.versions[row.lang]), ...(row.lang === 'php' ? { usedBy: [] } : {}) }]);
             expect(data.toolchain?.[row.lang]?.available).toContainEqual(expect.objectContaining({ version: f.versions[row.lang], installed: true }));
         }
+    });
+});
+
+describe('the first PHP Genie installs on a machine with no PHP becomes the default (Tynn #1066)', () => {
+    // A fresh Windows VM, 2026-11-26: four PHPs installed and the panel still chose "System · none on this machine",
+    // saying sites could not start, while the card's header named 8.5.13.
+    it('no system PHP and no default: the installed version is made the default', async () => {
+        f.faults.noSystemPhp = true;
+        await scan();
+        const data = await act({ kind: 'toolchain.installPhp', version: f.versions.php, consent: true });
+        expect(f.defaultTarget('php')).toBe(join(f.roots.php, f.versions.php));
+        expect(data.toolchain?.defaults?.php).toBe(f.versions.php);
+    });
+    it('control: with a system PHP, installing one does not take over what php means', async () => {
+        await scan();
+        await act({ kind: 'toolchain.installPhp', version: f.versions.php, consent: true });
+        expect(f.defaultTarget('php')).toBeUndefined();
+    });
+});
+
+describe('a PHP whose build needs a newer Visual C++ runtime: a plain refusal, and its own button (Tynn #1066)', () => {
+    it('refused in words a person reads; the button installs the runtime and then the PHP', async () => {
+        await scan();
+        f.faults.vcTooOld = "this machine's vcruntime140.dll is 14.44.35211.0";
+        const refused = await act({ kind: 'toolchain.installPhp', version: f.versions.php, consent: true });
+        const line = f.versions.php.split('.').slice(0, 2).join('.');
+        const reason = refused.toolchain?.refusals?.find((r) => r.version === f.versions.php)?.reason ?? '';
+        expect(reason.startsWith(`PHP ${line} needs a newer Microsoft Visual C++ runtime`)).toBe(true);
+        expect(refused.toolchain?.php?.managed).toEqual([]);
+        const after = await act({ kind: 'toolchain.installVcRuntime', version: f.versions.php });
+        expect(f.vcRuntimeInstalls).toEqual([f.versions.php]);
+        expect(after.toolchain?.php?.managed.map((m) => m.version)).toEqual([f.versions.php]);
+        expect(after.toolchain?.refusals ?? []).toEqual([]);
+    });
+});
+
+describe('Genie-installed PHPs and no default (seeded, upgraded from an older Genie): the newest becomes the default (Tynn #1066)', () => {
+    // A test VM, 2026-11-26: 8.4.27 installed, its radio empty, and the line said sites "cannot start until PHP is installed".
+    it('no system PHP, no default, a Genie PHP on disk: a scan makes the newest the default', async () => {
+        f.faults.noSystemPhp = true;
+        f.seed('php');
+        const data = await scan();
+        expect(data.toolchain?.defaults?.php).toBe(f.versions.php);
+        expect(f.defaultTarget('php')).toBe(join(f.roots.php, f.versions.php));
+    });
+    it('control: with a system PHP, nothing is chosen for the person', async () => {
+        f.seed('php');
+        await scan();
+        expect(f.defaultTarget('php')).toBeUndefined();
     });
 });

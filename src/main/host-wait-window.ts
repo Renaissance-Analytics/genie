@@ -9,6 +9,8 @@
  * Restart ends that host and starts a new one (engine-launch.ts linkToHost), and the same wait goes on. Quit is the
  * window's close.
  */
+import type { StartupProgress } from '../core/startup-updates.js';
+
 export const HOST_WAIT_SHOW_AFTER_MS = 1_500;
 export const HOST_WAIT_ACTIONS_AFTER_MS = 60_000;
 
@@ -22,9 +24,19 @@ export interface HostWaitView {
     readonly actions: boolean;
     readonly busy: HostWaitAction | null;
     readonly outcome: { readonly ok: boolean; readonly text: string } | null;
+    /** The host is applying the start's due updates (Tynn #1067): the step, said in `detail`. Absent otherwise. */
+    readonly updates?: { readonly step: string };
 }
 
-export function hostWaitWords(elapsedMs: number): { readonly title: string; readonly detail: string } {
+/**
+ * The words. While the host applies the start's due updates (Tynn #1067; startup-updates-file.ts), they say which one, how
+ * long so far, what waits for it and the limit.
+ */
+export function hostWaitWords(elapsedMs: number, startup: StartupProgress | null = null): { readonly title: string; readonly detail: string } {
+    if (startup) {
+        const limit = startup.limitMs % 60_000 === 0 ? `${startup.limitMs / 60_000} min` : `${Math.round(startup.limitMs / 1000)} s`;
+        return { title: 'Updating Genie’s tools before it starts…', detail: `${startup.step}. ${Math.floor(elapsedMs / 1000)} s so far. Agents, sites and processes start when it is done (at most ${limit}).` };
+    }
     return { title: 'Starting Genie’s host…', detail: `The first start can take a minute. ${Math.floor(elapsedMs / 1000)} s so far.` };
 }
 
@@ -53,15 +65,19 @@ export class HostWait {
     #offered = false;
     #busy: HostWaitAction | null = null;
     #outcome: HostWaitView['outcome'] = null;
+    readonly #startup: (() => StartupProgress | null) | undefined;
+    #updates: StartupProgress | null = null;
 
-    constructor(ports: HostWaitPorts, actions?: HostWaitActions, options: { readonly showAfterMs?: number } = {}) {
+    /** `startup`: what the host says it is updating before it starts (Tynn #1067), read at each tick; absent = never. */
+    constructor(ports: HostWaitPorts, actions?: HostWaitActions, options: { readonly showAfterMs?: number; readonly startup?: () => StartupProgress | null } = {}) {
         this.#ports = ports;
         this.#actions = actions;
         this.#showAfterMs = options.showAfterMs ?? HOST_WAIT_SHOW_AFTER_MS;
+        this.#startup = options.startup;
     }
 
     #view(): HostWaitView {
-        return { ...hostWaitWords(this.#elapsedMs), actions: this.#offered, busy: this.#busy, outcome: this.#outcome };
+        return { ...hostWaitWords(this.#elapsedMs, this.#updates), actions: this.#offered, busy: this.#busy, outcome: this.#outcome, ...(this.#updates ? { updates: { step: this.#updates.step } } : {}) };
     }
 
     #draw(): void {
@@ -80,6 +96,7 @@ export class HostWait {
     progress(elapsedMs: number): void {
         if (this.#done) return;
         this.#elapsedMs = elapsedMs;
+        try { this.#updates = this.#startup?.() ?? null; } catch { this.#updates = null; }
         if (!this.#shown && elapsedMs < this.#showAfterMs) return;
         if (this.#actions && elapsedMs >= HOST_WAIT_ACTIONS_AFTER_MS) this.#offered = true;
         this.#draw();

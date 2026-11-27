@@ -6,6 +6,7 @@ import type { FeatureAction, ToolchainRefusal, ToolchainSection } from '../rende
 import type { FeaturePorts, FeatureState } from './feature-ipc.js';
 import { sitePins, type HostingFeatureServices } from './feature-hosting.js';
 import type { SitePin } from './php-versions.js';
+import { vcRuntimeOutcomeText } from '../core/php-versions.js';
 import { shouldCheckUpdates } from './toolchain-prober.js';
 import type { InstallOutcome } from './toolchain-ops.js';
 
@@ -72,9 +73,27 @@ export function toolchainStateFrom(section: ToolchainSection | null): Partial<Fe
 
 type ToolchainPort = NonNullable<FeaturePorts['toolchain']>;
 
+/**
+ * THE FIRST PHP ON A MACHINE WITH NONE IS THE DEFAULT (Tynn #1066). A fresh Windows VM: four PHPs installed, and the
+ * panel still chose "System · none on this machine" and said sites could not start. When there is no default and no
+ * system PHP, the version just installed becomes what `php` means; a person's own PHP on PATH is never taken over.
+ */
+async function phpDefaultWhenNone(next: FeatureState, tc: ToolchainPort, version: string): Promise<void> {
+    if (!tc.defaults || next.toolchainPhp?.system !== null) return;
+    if ((tc.defaults.list()['php'] ?? null) !== null) return;
+    const set = tc.defaults.set('php', version);
+    if (set.kind !== 'refused') next.toolchainDefaults = tc.defaults.list();
+}
+
 /** Re-probe every tool (the snapshot shows the MEASURED state, never a command's word) and how each missing one would install. */
 export async function rescanToolchain(next: FeatureState, tc: ToolchainPort, pins: readonly SitePin[] = []): Promise<void> {
-    if (tc.php) next.toolchainPhp = await tc.php.list(pins);
+    if (tc.php) {
+        next.toolchainPhp = await tc.php.list(pins);
+        // Genie's PHPs on disk and no default (a seeded machine, an older Genie's installs): the newest is the default —
+        // the first-install rule (Tynn #1066), so a listed PHP is never "not installed" to the sites.
+        const newest = next.toolchainPhp.managed[0]?.version;
+        if (newest) await phpDefaultWhenNone(next, tc, newest);
+    }
     if (tc.node) next.toolchainNode = await tc.node.list();
     if (tc.go) next.toolchainGo = await tc.go.list();
     if (tc.python) next.toolchainPython = await tc.python.list();
@@ -110,7 +129,9 @@ export function refuse(next: FeatureState, tool: string, reason: string, version
     next.toolchainRefusals = [...(next.toolchainRefusals ?? []), { tool, reason, ...(version !== undefined ? { version } : {}), ...(retry !== undefined ? { retry } : {}) }];
 }
 
-const LABELS: Readonly<Record<string, string>> = { php: 'PHP', node: 'Node', python: 'Python', go: 'Go' };
+const LABELS: Readonly<Record<string, string>> = { php: 'PHP', node: 'Node', python: 'Python', go: 'Go', 'claude-code': 'Claude Code', codex: 'Codex' };
+/** The provider whose agents run each agent CLI (Tynn #1067's drain). */
+const CLI_PROVIDER: Readonly<Record<string, string>> = { 'claude-code': 'claude', codex: 'codex' };
 
 /**
  * AFTER AN UPDATE (genie#1306; Genie 1 told the person what keeps the old version until it restarts — toolchain-page.ts
@@ -297,8 +318,10 @@ export async function applyToolchainCoreFeatureAction(services: ToolchainFeature
             const known = (state.toolStatuses ?? []).find((t) => t.tool === action.tool);
             const activity = await tc.activity();
             const risk = updateRisk(action.tool, activity, { installed: known ? known.installed !== null : true });
-            if (risk.risk === 'blocked') {
-                refuse(next, action.tool, risk.reason);
+            // Tynn #1067: agents on this CLI are drained around the update; with no drain wired it is refused, as before.
+            const drain = risk.risk === 'drain' ? tc.cliDrain : undefined;
+            if (risk.risk === 'blocked' || (risk.risk === 'drain' && !drain)) {
+                refuse(next, action.tool, risk.risk === 'drain' ? `${risk.reason.replace(/ Genie asks.*$/, '')} Genie cannot stop agents here: stop ${risk.affected.length === 1 ? 'it' : 'them'} first, then update.` : risk.reason);
                 break;
             }
             if (risk.risk === 'warn' && action.confirmed !== true) {
@@ -310,9 +333,23 @@ export async function applyToolchainCoreFeatureAction(services: ToolchainFeature
             const onOld = risk.risk === 'warn' ? activity.processes.filter((p) => p.id !== undefined && risk.affected.includes(p.label)) : [];
             const row = (step: string) => tc.updating?.({ tool: action.tool, ...(action.version ? { version: action.version } : {}), step });
             let outcome: Awaited<ReturnType<typeof tc.update>>;
+            let drained: { restarted: readonly string[]; notRestarted: readonly { name: string; reason: string }[] } | null = null;
             try {
                 row('Starting');
-                outcome = await tc.update(action.tool, action.version, (step) => { if (step) row(step); });
+                const runUpdate = () => tc.update(action.tool, action.version, (step) => { if (step) row(step); });
+                if (drain) {
+                    const result = await drain(CLI_PROVIDER[action.tool] ?? action.tool, LABELS[action.tool] ?? action.tool, row, runUpdate);
+                    if (result.kind === 'refused') {
+                        const back = result.restarted.length > 0 ? ` Started again: ${result.restarted.join(', ')}.` : '';
+                        const notBack = result.notRestarted.length > 0 ? ` Not started again: ${result.notRestarted.map((n) => `${n.name} (${n.reason})`).join(', ')}.` : '';
+                        refuse(next, action.tool, `${result.reason}.${back}${notBack}`);
+                        break;
+                    }
+                    outcome = result.outcome;
+                    drained = result;
+                } else {
+                    outcome = await runUpdate();
+                }
                 if (outcome.kind === 'repaired' && onOld.length > 0 && action.restart !== false) row('Restarting');
             } finally {
                 tc.updating?.(null);
@@ -337,6 +374,8 @@ export async function applyToolchainCoreFeatureAction(services: ToolchainFeature
                     notes.push(`Restart to use it: ${onOld.map((p) => p.label).join(', ')}.`);
                 }
                 if (sessions.length > 0) notes.push(`${sessions.join(', ')} ${sessions.length === 1 ? 'picks' : 'pick'} it up when next started.`);
+                if (drained && drained.restarted.length > 0) notes.push(`Stopped and started again: ${drained.restarted.join(', ')}.`);
+                if (drained && drained.notRestarted.length > 0) notes.push(`Not started again: ${drained.notRestarted.map((n) => `${n.name} (${n.reason})`).join(', ')}.`);
                 next.toolchainResult = `${label} ${outcome.from ?? ''}${outcome.from ? ' → ' : ''}${outcome.to}.${notes.length > 0 ? ` ${notes.join(' ')}` : ''}${outcome.note ? ` (${outcome.note})` : ''}`;
             }
             // The snapshot shows the RE-PROBE, never the command's word; and the cache is dropped.
@@ -549,6 +588,30 @@ export async function applyToolchainCoreFeatureAction(services: ToolchainFeature
                 : outcome.kind === 'already-installed' ? `PHP ${outcome.version} was already installed; nothing was downloaded.`
                 : `PHP ${action.version} was not installed: ${outcome.reason}.`;
             next.toolchainPhp = await tc.php.list(sitePins(services));
+            if (outcome.kind === 'installed') await phpDefaultWhenNone(next, tc, outcome.version);
+            break;
+        }
+        case 'toolchain.installVcRuntime': {
+            // Tynn #1066: the refusal's button — the runtime PHP `version` needs (Microsoft's signed redistributable, asks
+            // for administrator), then that PHP, so one click ends with it installed.
+            clearRefusal(next, 'php', action.version);
+            const tc = ports.toolchain;
+            if (!tc?.php?.installVcRuntime) {
+                refuse(next, 'php', 'Genie cannot install the Microsoft Visual C++ runtime here', action.version);
+                break;
+            }
+            const vc = await tc.php.installVcRuntime(action.version);
+            if (!vc.ok) {
+                // Every ending is said on the card (Tynn #1066): declined, no answer, failed with why, restart needed.
+                refuse(next, 'php', vcRuntimeOutcomeText(action.version, { ok: false, outcome: vc.outcome ?? 'failed', reason: vc.reason }), action.version);
+                next.toolchainPhp = await tc.php.list(sitePins(services));
+                break;
+            }
+            const outcome = await tc.php.install(action.version, true);
+            if (outcome.kind === 'refused' || outcome.kind === 'not-installed') refuse(next, 'php', outcome.reason, action.version);
+            else next.toolchainResult = `The Microsoft Visual C++ runtime is up to date, and PHP ${outcome.version} is installed.`;
+            next.toolchainPhp = await tc.php.list(sitePins(services));
+            if (outcome.kind === 'installed') await phpDefaultWhenNone(next, tc, outcome.version);
             break;
         }
         case 'toolchain.removePhp': {

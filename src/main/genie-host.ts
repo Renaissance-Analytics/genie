@@ -6,6 +6,7 @@ import { featureDownload } from './feature-download.js';
 import { HostFeatures } from './features-host.js';
 import { FeatureCallers } from './feature-callers.js';
 import { nativeFeatureToolchain, adoptFeatureEnvironment } from './feature-native-toolchain.js';
+import { applyStartupUpdates } from './startup-updates-host.js';
 import { featureWorkspaceFiles } from './feature-workspace-files.js';
 import { syncWorkspaceFiles } from './host-workspace-files.js';
 import { AgentFilesHealth } from '../core/agent-files-health.js';
@@ -110,6 +111,8 @@ import { spawnBrowserProcess, spawnGenieWindow, spawnUpdaterProcess, windowExitO
 import { clearUpdateFailed, helperLaunch, hostDrainAgents, hostInstallDir, hostRunsFromCopy, readUpdateFailed, relaunchSpec, remoteUpdatesPort, updaterDefaultLaunch, updaterHelperEnv, UpdatesService, writeUpdateFailed } from './updates-host.js';
 import { shareLinksOver } from './tynn-share-links.js';
 import { AgentShutdownDrain } from '../core/agent-shutdown-drain.js';
+import { drainedCliUpdate, resumeAfterCliUpdate } from '../core/cli-update-drain.js';
+import type { FeaturePorts } from './feature-ipc.js';
 import { killProcessAsync, listProcessesAsync, tcpSocketsOwnedByAsync } from './process-list.js';
 import { windowReleased } from './window-release.js';
 import { channelFrom } from '../core/update-channel.js';
@@ -201,6 +204,8 @@ import { machineKeyOf, readMachineId } from './machine-key.js';
 import { execFileRunner, execFileText } from './toolchain-runner.js';
 import { PlaywrightHost, osConnections } from './playwright-host.js';
 import { PlaywrightInstaller, playwrightToolPort } from './playwright-auto.js';
+import { PhpPatchNotices } from './php-patch-keeper.js';
+import { appSenderId, appSenderLabel, type AppMessageMeta, type AppSource } from '../core/app-inbox.js';
 import { installPlaywrightBrowsers, nodePlaywrightFs, readyOnDisk } from './playwright-browsers.js';
 import { PLAYWRIGHT_AUTO_INSTALL_ENV, autoInstallEnabled } from '../core/playwright-managed.js';
 import { applyPlaywrightEnv, nodeToolchainFs, processEnv } from './toolchain-ops.js';
@@ -495,6 +500,48 @@ async function main(): Promise<void> {
     missingWorkspaces.onChange(() => { phoneRegistryNow?.touch(); });
     void missingWorkspaces.start();
     bootStep('registry', stepAt);
+    /*
+     * THE START'S DUE UPDATES, BEFORE ANYTHING STARTS (Tynn #1067; the owner: "the genie should be handling cli upgrades
+     * automatically on startup before any other processes start happening"). Here, before hosting is composed (its sites
+     * start), before the process book and the flows open (kept processes, schedules) and before this host serves a window
+     * (which starts agents): no agent runs yet, so a provider CLI is replaced with nothing in use. The toolchain's own
+     * Update (the program the agents run) and PHP's patch source when this build has it, within a limit: past it the host
+     * starts as usual and the log says so. A waiting window shows each step (startup-updates-file.ts).
+     */
+    // Opened here, before the start's updates (Tynn #1067), so their downloads take the OS's proxy routes like every other.
+    const proxyMemory = ProxyMemory.open(join(runtime, 'host-proxy.json'), say);
+    // PHP SECURITY PATCHES (Tynn #1066): what Genie installed by itself, or could not, as the person's Deck items. Made
+    // before the start's updates, so a security patch installed there is on the Deck too (no site runs yet: none restarts,
+    // no agent is mailed).
+    const phpPatchNotices = new PhpPatchNotices(() => Date.now());
+    {
+        const startupHealth = new ProviderHealthBook(async (provider) => {
+            if (!isAcpProvider(provider)) throw new Error('Unknown provider account');
+            return checkProviderHealth(provider, realProviderHealthPorts(execFileRunner), accounts.activeFor(provider));
+        });
+        // The host's own HTTPS (host-https-fetch.ts: the OS's roots and proxy routes), never Node's plain fetch.
+        const startupMemory = await proxyMemory;
+        const startupRoutes = (url: string) => startupMemory?.routesFor(url) ?? [{ kind: 'direct' as const }];
+        const startupToolchain = nativeFeatureToolchain({ home, providerHealth: startupHealth, busy: () => {},
+            download: featureDownload({ proxyRoutes: startupRoutes }),
+            phpPatch: { sites: () => [], notices: phpPatchNotices, tellAgents: async () => {}, log: (line) => { say(line); lifecycleLog(line); } },
+            activity: async () => ({ sessions: [], processes: [], engines: [] }) });
+        const startupSend = hostHttpsFetch({ proxyRoutes: startupRoutes, log: say });
+        await applyStartupUpdates({
+            runtime,
+            toolchain: startupToolchain,
+            check: (provider) => startupHealth.refresh(provider),
+            fetchJson: async (url) => {
+                const res = await startupSend(url, { method: 'GET', headers: { Accept: 'application/json', 'User-Agent': 'Genie' }, credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(15_000) });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                return JSON.parse(await res.text()) as unknown;
+            },
+            log: (line) => { say(line); lifecycleLog(line); },
+            env: process.env,
+            safeMode: safeNow(),
+        }).catch((error: unknown) => { const line = `startup updates: stopped: ${error instanceof Error ? error.message : String(error)}`; say(line); lifecycleLog(line); });
+    }
+    bootStep('startup updates', stepAt);
     const hiddenWorkspaces = () => hostRegistry.workspaceStates().filter((w) => w.asleep === true).map((w) => w.id);
     own.knowledge.setHiddenWorkspaces(hiddenWorkspaces);
     own.inbox.setVisibility((message) => hostRegistry.mailParticipantVisible(message.from) && hostRegistry.mailParticipantVisible(message.to), () => hostRegistry.mailVisibilityVersion());
@@ -800,7 +847,6 @@ async function main(): Promise<void> {
     /** What tells the host summary (below) to read again: the relay host's role, and the Tynn account (Tynn #954, 2g-3a). */
     const summaryPokes = new Set<() => void>();
     const pokeSummary = (): void => { for (const l of [...summaryPokes]) l(); };
-    const proxyMemory = ProxyMemory.open(join(runtime, 'host-proxy.json'), say);
     const tynnOpening = proxyMemory.then((memory) => TynnAccount.open(hostTynnPorts({
         file: join(home, 'credentials', 'tynn.json'),
         host: () => TYNN_HOST,
@@ -2049,13 +2095,15 @@ async function main(): Promise<void> {
         // What its hosting asks, and what waits for a window to ask it in (WindowElevation): before the split a window read the
         // latter from the hosting replica's dump; genie-host's own Deck says it now, to deck.watch and every client (2g-4d E2b).
         trust: [...(hostingStack?.trustDeckItems() ?? []), ...hostingElevation.deckItems()],
-        notices: [...attachHost.items(), ...limitNotices.items(Date.now()), ...playwrightInstaller.items(), ...stalledTurns.items()],
+        notices: [...attachHost.items(), ...limitNotices.items(Date.now()), ...playwrightInstaller.items(), ...phpPatchNotices.items(), ...stalledTurns.items()],
         attention: own.attention,
         inbox: own.inbox,
         agents: phoneAgents(), workspaceColor: path => workspaceColors.colorOf(path),
         asker: askerLiveFrom({ known: () => true, engine: () => host, takeOvers: () => takeOverHost }),
     });
     phoneRegistry.setDeckSource(featureDeckItems);
+    // A PHP security patch Genie installed by itself (Tynn #1066) is on the Deck at once, not at the next estate change.
+    phpPatchNotices.onChange(() => phoneRegistry.touch());
     // What this host can measure itself: mail agents have not collected, the OS agent working, and GitHub blocking (its own
     // GitHub account, Tynn #959). Flows in flight are the window's to say (Tynn #551 notes it); with no window they read none.
     phoneRegistry.setSignals(() => ({
@@ -2129,13 +2177,85 @@ async function main(): Promise<void> {
     const tailscaleNow = tailscaleLive({ probe: () => getTailscaleStatus(), install: () => installTailscale({ download: url => downloadFeature(url) }),
         up: () => tailscaleUp(), online: () => remoteSwitch.apply(), changed: () => featureChanged(), say });
     void tailscaleNow.refresh();
-    const featureNative = nativeFeatureToolchain({ home, providerHealth, download: downloadFeature, busy: step => hostFeatures?.busy(step),
+    /*
+     * A PROVIDER CLI'S UPDATE DRAINS ITS AGENTS (Tynn #1067; the owner: "when updating cli it should send a stop command to all
+     * running agents like genie upgrade process"). The host update's drain (P6-2, AgentShutdownDrain), for that provider's
+     * running agents only: told, given up to 120 seconds to reach a safe point (a thumbsUp "shutdown" ends the wait early),
+     * stopped and waited for; the CLI updated; each started again on its conversation, the ones cut mid-turn told to carry on.
+     */
+    const cliDrains = new Set<AgentShutdownDrain>();
+    const hostCliDrain: NonNullable<NonNullable<FeaturePorts['toolchain']>['cliDrain']> = (provider, label, progress, update) => drainedCliUpdate(provider, label, {
+        agents: () => hostRegistry.listAgents().map((a) => {
+            const session = host.probe(a.id);
+            return { id: a.id, name: a.name, provider: a.provider, running: session?.running === true, inTurn: session?.inTurn === true };
+        }),
+        waitForSafe: async (ids) => {
+            const scoped = new AgentShutdownDrain({
+                agents: () => hostRegistry.listAgents().filter((a) => ids.includes(a.id)).map(({ id, name }) => {
+                    const session = host.probe(id as AgentId);
+                    return { id, name, running: session?.running === true, inTurn: session?.inTurn === true };
+                }),
+                notify: (id) => { host.handOff(id as AgentId, `Genie is about to update ${label}, which this session runs on. Finish your current turn at a safe point; do not start new work. If you are ready sooner, call thumbsUp with reason "shutdown". Genie waits up to 120 seconds, then stops this session, updates ${label} and starts it again on this conversation.`, 'genie', { retold: true }); },
+            });
+            cliDrains.add(scoped);
+            try {
+                const outcome = await scoped.begin('upgrade', () => {});
+                return { interrupted: outcome.interrupted.map((a) => a.id) };
+            } finally {
+                cliDrains.delete(scoped);
+            }
+        },
+        stop: async (id) => {
+            host.stop(id as AgentId);
+            const verdict = await host.ended(id as AgentId);
+            return verdict && !verdict.verified && verdict.survivors.length > 0 ? { ok: false, reason: verdict.reason } : { ok: true };
+        },
+        start: async (id, resume) => {
+            const record = hostRegistry.find(id);
+            if (!record) return { ok: false, reason: 'it is no longer registered here' };
+            const started = await host.start(record, phoneCwd(record));
+            if (!started.ok) return started;
+            await host.deliverOwed(record.id, resume ? { text: resumeAfterCliUpdate(label), by: 'genie' } : undefined);
+            return { ok: true };
+        },
+        progress,
+        log: (line) => { say(line); lifecycleLog(line); },
+    }, update, (outcome) => (outcome.kind === 'repaired' ? null : outcome.reason));
+    const featureNative = nativeFeatureToolchain({ home, cliDrain: hostCliDrain, providerHealth, download: downloadFeature, busy: step => hostFeatures?.busy(step),
+        // PHP security patches within a line (Tynn #1066): the php sites, a restart onto the new patch, the person's Deck
+        // and the agents of each workspace with a site on it, told by Genie (an app's message, read as data).
+        phpPatch: {
+            sites: () => (hostingStack?.sites.list() ?? []).filter(site => site.serve?.mode === 'php').map(site => ({
+                id: site.id, name: site.name, host: site.host, workspaceId: site.workspaceId,
+                pin: site.serve?.mode === 'php' && site.serve.version ? site.serve.version : null,
+                running: site.state === 'running' || site.state === 'starting' || site.state === 'restarting',
+            })),
+            ...(hostingStack ? { restartSite: async (siteId: string) => { await hostingStack.envelopeSites.restart(siteId); } } : {}),
+            notices: phpPatchNotices,
+            tellAgents: async (workspaceId, subject, text) => {
+                const source: AppSource = { kind: 'genie', id: 'php-updates', name: 'PHP updates', workspaceId };
+                const app: AppMessageMeta = { source, label: appSenderLabel(source, hostRegistry.workspaceSlugs().get(workspaceId) ?? workspaceId), subject, level: 'info' };
+                for (const agent of hostRegistry.listAgents().filter(a => a.workspaceId === workspaceId)) {
+                    await own.inbox.send({ from: appSenderId(source), to: agent.id as AgentId, text, app });
+                }
+            },
+            log: (line) => { say(line); lifecycleLog(line); },
+            changed: (view) => { hostFeatures?.setToolchainPhp(view); },
+        },
         activity: async () => ({
             sessions: hostRegistry.listAgents().filter(a => host.probe(a.id)?.running === true).map(a => ({ label: a.name, provider: a.provider })),
             processes: processSupervisor.list().filter(p => p.state === 'running' || p.state === 'restarting').map(p => ({ id: p.id, label: p.name, command: processSupervisor.command(p.id) ?? '' })),
             engines: (await hostingStack?.engineStatuses() ?? []).filter(e => e.status === 'running').map(e => e.instance.containerName ?? `${e.instance.engine} ${e.instance.version}`),
         }),
     });
+    // PHP STAYS ON THE NEWEST PATCH OF ITS LINE (Tynn #1066): php.net read and the security patches due applied a minute
+    // after start (the sites are up by then, so they are restarted onto it), then every six hours. Never rejects.
+    const phpPatchPass = () => { void featureNative.php?.applyDue?.(() => {}); };
+    // GENIE_PHP_PATCH_FIRST_MS: a test row photographs the panel BEFORE the pass (php-live-shots); default a minute.
+    const phpPatchFirst = setTimeout(phpPatchPass, Number(process.env.GENIE_PHP_PATCH_FIRST_MS) > 0 ? Number(process.env.GENIE_PHP_PATCH_FIRST_MS) : 60_000);
+    phpPatchFirst.unref();
+    const phpPatchEvery = setInterval(phpPatchPass, 6 * 3_600_000);
+    phpPatchEvery.unref();
     // A WORKSPACE'S STORAGE (Tynn #697): measured off this thread (main/dir-size.ts), pushed when done; every Move, Restore
     // and Empty re-validated by the host module and followed by a fresh measure, so the tab shows what is on disk now.
     // A Move or Empty runs on its own with its progress in the view, ends with a result naming each failure, and every
@@ -2196,7 +2316,7 @@ async function main(): Promise<void> {
         featureChanges.add(listener);
         const offs = [featureTynn.onEvent(listener), featureGithub.onEvent(listener), featureKeyring.onEvent(listener),
             pluginsService.onEvent(listener), catalogService.onEvent(listener), remoteAccessHost.onChange(listener),
-            own.attention.onChange(listener), limitNotices.onChange(listener), playwrightInstaller.onChange(listener), stalledTurns.onChange(listener), attachHost.onChange(listener), approvals.onChange(listener), stores.onEvent(listener)];
+            own.attention.onChange(listener), limitNotices.onChange(listener), playwrightInstaller.onChange(listener), phpPatchNotices.onChange(listener), stalledTurns.onChange(listener), attachHost.onChange(listener), approvals.onChange(listener), stores.onEvent(listener)];
         return () => { featureChanges.delete(listener); for (const off of offs) off(); };
     };
     hostFeatures = new HostFeatures({ lifecycleLog, signIn: (provider, context) => signIns.loginFor(provider, context), elevation: hostElevation, slowPart: { ms: 1_000, log: (part, ms) => lifecycleLog(`features slow part=${part} ms=${ms}`) }, settings, knowledge: own.knowledge, inbox: own.inbox, attention: own.attention, flows: hostFlows,
@@ -2231,6 +2351,7 @@ async function main(): Promise<void> {
             limitNotices,
             attach: attachHost,
             playwrightNotices: { retry: (id) => playwrightInstaller.retry(id), dismiss: (id) => playwrightInstaller.dismiss(id) },
+            phpPatchNotices: { dismiss: (id) => phpPatchNotices.dismiss(id) },
             // A stalled turn's Stop / Restart / Dismiss (Tynn #855): on this host's session host; Restart is the one Restart.
             stalledTurns: { act: async (agentId, action) => {
                 if (!stalledTurns.has(agentId)) return false;
@@ -2754,7 +2875,7 @@ async function main(): Promise<void> {
         openFileLater: (call) => engine.callback({ name: 'openFileForUser', call }),
         capabilities,
         signal: (signal) => {
-            if (signal.kind === 'action' && signal.action === 'thumbsup' && signal.reason?.trim().toLowerCase() === 'shutdown') agentShutdown.acknowledge(signal.agentId);
+            if (signal.kind === 'action' && signal.action === 'thumbsup' && signal.reason?.trim().toLowerCase() === 'shutdown') { agentShutdown.acknowledge(signal.agentId); for (const d of cliDrains) d.acknowledge(signal.agentId); }
             engine.callback({ name: 'toolSignal', signal });
         },
         // `checkIssues` and imDone's count line (Tynn #934 task #1474): this host's own IssueWatch, a window open or not.

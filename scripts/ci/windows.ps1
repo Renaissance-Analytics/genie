@@ -57,7 +57,7 @@ $Rows = @(
     'unit-build', 'unit',
     'build', 'seed', 'no-pty', 'smoke', 'layout', 'app-stopped',
     'local-door-break', 'local-door', 'host-late-ready', 'files-watch', 'chat-drafts', 'gapp-open', 'artboard', 'ui-lag', 'plan-popover',
-    'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash', 'quit-keeps-host', 'rebuilt-machine',
+    'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash', 'quit-keeps-host', 'rebuilt-machine', 'cli-drain',
     'package', 'sign-plan', 'packed-tree', 'update-metadata', 'package-fuse', 'packaged-launcher',
     'package-tracks', 'sign-plan-client', 'sign-plan-browser', 'sign-plan-host', 'sign-plan-launcher',
     'packed-tree-client', 'packed-tree-browser', 'packed-tree-host', 'track-manifest', 'launcher-install', 'client-no-host',
@@ -66,6 +66,12 @@ $Rows = @(
     'client-only-update',
     'host-update'
 )
+
+# ROWS ONLY ASKED FOR BY NAME (-Only), never in a full run: they read the real internet and install from it, so a full
+# gate would be as green as php.net is reachable. php-live-shots (Tynn #1066): PHP 8.4.27 on disk, Genie's own pass
+# installs php.net's newest 8.4 security patch by itself, the Toolchain's PHP panel photographed before and after.
+# php-card-shots: a fresh machine installs PHP from the card, then every other supported line from the panel.
+$OptInRows = @('php-live-shots', 'php-card-shots')
 
 if ($List) { $Rows | ForEach-Object { Write-Output $_ }; exit 0 }
 
@@ -82,8 +88,8 @@ if (-not $Only -and -not $From -and (Test-Path $argsFile)) {
 $selected = @()
 if ($Only) {
     $asked = $Only -split ','
-    foreach ($r in $asked) { if ($Rows -notcontains $r) { Write-Output "no such row: $r (see -List)"; exit 64 } }
-    $selected = @($Rows | Where-Object { $asked -contains $_ })
+    foreach ($r in $asked) { if ($Rows -notcontains $r -and $OptInRows -notcontains $r) { Write-Output "no such row: $r (see -List)"; exit 64 } }
+    $selected = @(($Rows + $OptInRows) | Where-Object { $asked -contains $_ })
 } elseif ($From) {
     if ($Rows -notcontains $From) { Write-Output "no such row: $From (see -List)"; exit 64 }
     $selected = @($Rows[([array]::IndexOf($Rows, $From))..($Rows.Count - 1)])
@@ -408,6 +414,8 @@ function Row-gapp-open { Need-Build; Need-TestMachine; Run 'gapp-open-cdp' { nod
 function Row-artboard { Need-Build; Need-TestMachine; Run 'artboard-cdp' { node scripts/artboard-cdp.mjs --trace-main } }
 function Row-ui-lag { Need-Build; Need-TestMachine; Run 'ui-lag-cdp' { node scripts/ui-lag-cdp.mjs --budget } }
 function Row-plan-popover { Need-Build; Need-TestMachine; Run 'plan-popover-cdp' { node scripts/plan-popover-cdp.mjs } }
+function Row-php-live-shots { Need-Build; Need-TestMachine; Run 'php-live-shots-cdp' { node scripts/php-live-shots-cdp.mjs } }
+function Row-php-card-shots { Need-Build; Need-TestMachine; Run 'php-card-shots-cdp' { node scripts/php-live-shots-cdp.mjs --card } }
 function Row-trust-step { Need-Build; Need-TestMachine; Run 'trust-step-cdp' { node scripts/trust-step-cdp.mjs } }
 function Row-accounts-popover { Need-Build; Need-TestMachine; Run 'accounts-popover-cdp' { node scripts/accounts-popover-cdp.mjs } }
 function Row-claude-accounts { Need-Build; Need-TestMachine; Run 'claude-accounts-cdp' { node scripts/claude-accounts-cdp.mjs } }
@@ -428,6 +436,9 @@ function Row-spawn-host {
 function Row-safe-mode { Need-Build; Need-TestMachine; Run 'safe-mode-cdp' { node scripts/safe-mode-cdp.mjs } }
 function Row-hang { Need-Build; Need-TestMachine; Run 'hang-cdp' { node scripts/hang-cdp.mjs } }
 function Row-renderer-crash { Need-Build; Need-TestMachine; Run 'renderer-crash-cdp' { node scripts/renderer-crash-cdp.mjs } }
+# CLI UPDATES IN THE REAL APP (Tynn #1067): at start an older Claude Code is updated before anything starts; then a manual
+# Update with an agent running drains it around the update and starts it again (scripts/cli-drain-real-cdp.mjs).
+function Row-cli-drain { Need-Build; Need-TestMachine; $env:CLI_DRAIN_CDP_PORT = '9471'; $env:CLI_DRAIN_INSPECT = '9472'; Run 'cli-drain-real-cdp' { node scripts/cli-drain-real-cdp.mjs } }
 # QUIT KEEPS THE HOST (Tynn #1036, the host split's promise): three agents stream, the REAL window is closed ("Just close the
 # UI") and built again from the tray, then by a second launch, and every agent keeps streaming through it: the same
 # genie-host pid, the same provider pid per agent, every tick streamed while no window was open in its ledger, in order;
@@ -621,6 +632,8 @@ function Ceiling([string]$name) {
         { $_ -in 'no-pty', 'smoke', 'layout', 'local-door-break', 'local-door', 'gapp-open', 'trust-step' } { return 360 }
         'accounts-popover' { return 300 }
         'plan-popover' { return 480 }
+        'php-live-shots' { return 1200 }
+        'php-card-shots' { return 3000 }
         'claude-accounts' { return 300 }
         'sound-picker' { return 300 }
         'question-maximize' { return 300 }
@@ -630,6 +643,7 @@ function Ceiling([string]$name) {
         { $_ -in 'ui-lag', 'renderer-crash' } { return 480 }
         { $_ -in 'safe-mode', 'hang' } { return 600 }
         'quit-keeps-host' { return 660 }
+        'cli-drain' { return 1560 }
         'package' { return 1500 }
         'package-tracks' { return 2400 }
         { $_ -in 'sign-plan-client', 'sign-plan-browser', 'sign-plan-host', 'sign-plan-launcher', 'packed-tree-client', 'packed-tree-browser', 'packed-tree-host', 'track-manifest' } { return 300 }

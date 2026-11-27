@@ -162,10 +162,16 @@ describe('building one on Linux', () => {
         }
     });
 
-    it('the floor still comes first: a version under it is refused by name before anything runs', async () => {
+    it('the floor still comes first: a version of an unsupported line is refused by name before anything runs', async () => {
         const a = ports();
-        expect(await installPhpVersion('8.4.24', true, a.p)).toMatchObject({ kind: 'refused' });
+        expect(await installPhpVersion('8.1.34', true, a.p)).toMatchObject({ kind: 'refused' });
         expect(a.ran).toEqual([]);
+    });
+
+    it('a patch under the floor is never built: its line’s newest is built instead (Tynn #1066)', async () => {
+        const a = ports();
+        await installPhpVersion('8.4.24', true, a.p);
+        expect(JSON.stringify(a.ran)).not.toContain('8.4.24');
     });
 });
 
