@@ -400,19 +400,20 @@ const electronBinary = () => createRequire(import.meta.url)('electron');
 /**
  * This tree's Electron as a Genie client, told the launcher's environment as the launcher tells the client it starts
  * (GENIE_LAUNCHER_EXE, GENIE_LAUNCHER_HOST_BUILD), so it adopts that host and attaches to that launcher; its page on the
- * debugger port, its window.genie loaded. Every wait is bounded and named by the caller's step.
+ * debugger port, its window.genie loaded. Every wait is bounded and named by the caller's step. With `program` (Tynn #1058
+ * L8, version-skew), an INSTALLED client build is run instead, from its own folder: the real program of that build.
  */
-export async function openClient({ label, id, port, launcherExe, hostBuild }) {
-    step(`${id}a`, `launching Genie (this tree's Electron, ${label}), linked to the host ${hostBuild}`);
+export async function openClient({ label, id, port, launcherExe, hostBuild, program = null }) {
+    step(`${id}a`, `launching Genie (${program ? `the installed ${program}` : "this tree's Electron"}, ${label}), linked to the host ${hostBuild}`);
     mkdirSync(run.out, { recursive: true });
     const log = join(run.out, `client-${label}.log`);
     const out = openSync(log, 'a');
-    const argv = ['.', `--remote-debugging-port=${port}`, ...launchArgs()];
-    const child = spawn(electronBinary(), argv, { detached: !WIN, stdio: ['ignore', out, out], windowsHide: false, env: { ...process.env, GENIE_LAUNCHER_EXE: launcherExe, GENIE_LAUNCHER_HOST_BUILD: hostBuild, GENIE_PAGE_PROBE: '1' } });
+    const argv = [...(program ? [] : ['.']), `--remote-debugging-port=${port}`, ...launchArgs()];
+    const child = spawn(program ?? electronBinary(), argv, { detached: !WIN, stdio: ['ignore', out, out], windowsHide: false, env: { ...process.env, GENIE_LAUNCHER_EXE: launcherExe, GENIE_LAUNCHER_HOST_BUILD: hostBuild, GENIE_PAGE_PROBE: '1' } });
     let gone = false;
     child.once('exit', () => { gone = true; });
     child.once('error', () => { gone = true; });
-    console.log(`  launched (${label}) pid ${child.pid}: electron ${argv.join(' ')}  → ${log}`);
+    console.log(`  launched (${label}) pid ${child.pid}: ${program ?? 'electron'} ${argv.join(' ')}  → ${log}`);
     const app = {
         log, pid: child.pid ?? null,
         get gone() { return gone; },

@@ -1,4 +1,4 @@
-//! THE KEYS A MANIFEST IS CHECKED WITH. The public keys built into the launcher (GENIE_MANIFEST_PUBLIC_KEYS at build
+//! THE KEYS A MANIFEST IS CHECKED WITH. Genie's release key (RELEASE_PUBLIC_KEY, always), the public keys built into the launcher (GENIE_MANIFEST_PUBLIC_KEYS at build
 //! time, comma-separated, from the protected release environment), plus every `nextKey` a trusted manifest has named
 //! (rotation without a launcher update), kept in `<code root>/trusted-keys.json`. Under the `test-keys` feature only
 //! (cargo test), GENIE_LAUNCHER_TEST_PUBLIC_KEY adds a throwaway key; a release build never reads it.
@@ -8,6 +8,12 @@ use crate::manifest::{parse_public_key, Manifest};
 use ed25519_dalek::VerifyingKey;
 
 pub const TRUSTED_KEYS_FILE: &str = "trusted-keys.json";
+
+/// Genie's release key (Tynn #1058 L8): the public half of the `release` environment's GENIE_MANIFEST_SIGNING_KEY on
+/// Renaissance-Analytics/genie, which the owner made on 2026-11-27 (its variable GENIE_MANIFEST_PUBLIC_KEY). Every launcher
+/// trusts it, whoever built it, so the stable (and dev) releases verify everywhere; release.yml refuses to sign with any
+/// other key. Test runs add a throwaway key of their own through GENIE_MANIFEST_PUBLIC_KEYS; a rotation is a `nextKey`.
+pub const RELEASE_PUBLIC_KEY: &str = "ydpbhCd7vI9op9SIft6OaN3A8n9aMXjETzBjXRG/49s=";
 
 const BUILT_IN: Option<&str> = option_env!("GENIE_MANIFEST_PUBLIC_KEYS");
 
@@ -19,7 +25,8 @@ fn learned(roots: &Roots) -> Vec<String> {
 }
 
 pub fn trusted_keys(roots: &Roots) -> Vec<VerifyingKey> {
-    let mut texts: Vec<String> = BUILT_IN.unwrap_or("").split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect();
+    let mut texts: Vec<String> = vec![RELEASE_PUBLIC_KEY.to_string()];
+    texts.extend(BUILT_IN.unwrap_or("").split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string));
     texts.extend(learned(roots));
     #[cfg(feature = "test-keys")]
     {
@@ -51,4 +58,24 @@ pub fn learn_next_key(roots: &Roots, manifest: &Manifest) -> Result<(), String> 
     let tmp = roots.code.join(format!(".{TRUSTED_KEYS_FILE}.{}.tmp", std::process::id()));
     let bytes = serde_json::to_vec_pretty(&all).map_err(|e| e.to_string())?;
     std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, &file)).map_err(|e| format!("{} could not be written: {e}", file.display()))
+}
+
+#[cfg(test)]
+mod release_key_tests {
+    use super::{trusted_keys, RELEASE_PUBLIC_KEY};
+    use crate::layout::Roots;
+    use crate::manifest::parse_public_key;
+
+    /// The owner's release key (the `release` environment's GENIE_MANIFEST_PUBLIC_KEY, 2026-11-27), pinned: a launcher built
+    /// anywhere, with or without GENIE_MANIFEST_PUBLIC_KEYS, trusts what the release job signs.
+    #[test]
+    fn the_release_key_is_built_in_and_trusted_with_nothing_else_given() {
+        assert_eq!(RELEASE_PUBLIC_KEY, "ydpbhCd7vI9op9SIft6OaN3A8n9aMXjETzBjXRG/49s=");
+        let release = parse_public_key(RELEASE_PUBLIC_KEY).expect("a 32-byte Ed25519 key");
+        let dir = std::env::temp_dir().join(format!("genie-keys-{}", std::process::id()));
+        let roots = Roots { code: dir.join("code"), data: dir.join("data") };
+        let keys = trusted_keys(&roots);
+        assert_eq!(keys.first(), Some(&release), "the release key comes first: {}", keys.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { expectedReleaseAssets, releaseDraftProblems, type ReleaseView } from '../src/core/release-check.js';
+import { expectedReleaseAssets, expectedTrackAssets, releaseDraftProblems, releaseProblems, trackDraftProblems, type ReleaseView } from '../src/core/release-check.js';
 
 /**
  * NO RELEASE IS PUBLIC WITHOUT ITS NOTES (the owner, 2026-10-22, on beta.38's update window saying "No release notes were
@@ -166,5 +166,194 @@ describe('releaseDraftProblems — what verify refuses', () => {
 
     it('refuses a release for a different tag', () => {
         expect(releaseDraftProblems(good({ tagName: 'v2.0.0-beta.38' }), `v${v}`)).toEqual([expect.stringMatching(/tag/)]);
+    });
+});
+
+/**
+ * EACH TRACK IS ITS OWN DRAFT (Tynn #1058 L8). A round tag (`tracks-v<build>`, `tracks-dev-v<build>`) builds every track;
+ * the tracks that changed (src/core/track-release-plan.ts) each get a DRAFT named by its own tag (`client-v<build>`, ...),
+ * made at the round's commit, which the launcher's feed cannot see until the owner publishes it. The Windows programs are
+ * Authenticode-signed first and the packages packed from those signed bytes; then, in ONE protected job, the manifests are
+ * signed with the release environment's key and uploaded. Nothing un-drafts, a track's draft never gets another track's
+ * files, and with no key the run stops before anything is signed or uploaded, saying so.
+ */
+describe('the release workflow publishes each TRACK as its own draft', () => {
+    const lines = (j: string) => j.split('\n');
+    const at = (j: string, re: RegExp) => lines(j).findIndex((l) => re.test(l));
+
+    it('the app jobs run for a v* tag only, the track jobs for a round tag only', () => {
+        expect(job('guard')).toMatch(/^\s*if:\s*startsWith\(github\.ref_name, 'v'\)\s*$/m);
+        expect(job('tracks-guard')).toMatch(/^\s*if:\s*startsWith\(github\.ref_name, 'tracks-'\)\s*$/m);
+        // Every other track job hangs off the round's guard, so a round never builds the app and a v* tag never a track.
+        for (const id of ['tracks-linux', 'tracks-windows', 'tracks-sign', 'tracks-verify']) {
+            expect(job(id), id).toMatch(/needs:\s*\[?[^\n]*tracks-guard/);
+            expect(job(id), id).not.toMatch(/^\s*if:[^\n]*always/m);
+        }
+    });
+
+    it('tracks-guard plans the round: only the changed tracks, each needing its own notes, refusing a public release', () => {
+        const g = job('tracks-guard');
+        expect(g).toMatch(/contents:\s*write/);
+        expect(g).not.toMatch(/environment:/);
+        expect(g).toMatch(/scripts\/track-release-plan\.ts plan/);
+        // The notes per track: docs/releases/<track>-v<build>.md, refused by name when missing.
+        expect(g).toMatch(/docs\/releases\/\$tag\.md/);
+        expect(g).toMatch(/::error::[^\n]*docs\/releases\//);
+        expect(g).toMatch(/::error::[^\n]*already public/);
+        // Each changed track's draft, at the round's commit; the track's tag itself is made only when the owner publishes.
+        expect(g).toMatch(/gh release create "\$tag" --draft --target "\$GITHUB_SHA"[^\n]*--notes-file "docs\/releases\/\$tag\.md"/);
+        expect(g).toMatch(/outputs:\s*\n\s+tracks:/);
+    });
+
+    it('Authenticode comes first: the launcher and the client are signed and verified BEFORE their packages are packed', () => {
+        const w = job('tracks-windows');
+        expect(w).toMatch(/environment:\s*release/);
+        expect(w).toContain('windows-latest');
+        expect(w).toMatch(/azure\/login@v2/);
+        const signLauncher = at(w, /scripts\/sign-windows-files\.mjs/);
+        const pack = at(w, /scripts\/build-track-packages\.mjs packages[^\n]*--signed/);
+        const verify = at(w, /scripts\/verify-track-signatures\.ps1/);
+        expect(signLauncher).toBeGreaterThan(-1);
+        expect(pack).toBeGreaterThan(signLauncher);
+        expect(verify).toBeGreaterThan(pack);
+        // It hands on packages and their UNSIGNED manifests, and uploads nothing to a release itself.
+        expect(w).toMatch(/actions\/upload-artifact@v4/);
+        expect(w).not.toMatch(/gh release (upload|create|edit)/);
+    });
+
+    it('the Linux packages are built with no secret and upload nothing to a release', () => {
+        const l = job('tracks-linux');
+        expect(l).toContain('ubuntu-latest');
+        expect(l).not.toMatch(/secrets\./);
+        expect(l).toMatch(/scripts\/build-track-packages\.mjs packages/);
+        expect(l).toMatch(/actions\/upload-artifact@v4/);
+        expect(l).not.toMatch(/gh release (upload|create|edit)/);
+    });
+
+    it('every launcher is built trusting the release environment\'s public key, and refuses to build with none', () => {
+        for (const id of ['tracks-linux', 'tracks-windows']) {
+            const j = job(id);
+            expect(j, id).toMatch(/environment:\s*release/);
+            expect(j, id).toMatch(/GENIE_MANIFEST_PUBLIC_KEYS:\s*\$\{\{\s*vars\.GENIE_MANIFEST_PUBLIC_KEY\s*\}\}/);
+            expect(j, id).toMatch(/::error::[^\n]*GENIE_MANIFEST_PUBLIC_KEY/);
+            expect(j, id).toMatch(/GENIE_TRACK_BUILD:/);
+        }
+    });
+
+    it('the manifest is signed ONLY in the protected job: one job names the key, and it is tracks-sign', () => {
+        const jobs = [...code().matchAll(/\n {2}([a-z][a-z0-9_-]*):\n/g)].map((m) => m[1]!);
+        expect(jobs).toEqual(expect.arrayContaining(['guard', 'publish', 'publish-windows', 'verify', 'tracks-guard', 'tracks-linux', 'tracks-windows', 'tracks-sign', 'tracks-verify']));
+        const naming = jobs.filter((id) => /GENIE_MANIFEST_SIGNING_KEY/.test(job(id)));
+        expect(naming).toEqual(['tracks-sign']);
+        const signers = jobs.filter((id) => /sign-manifest\.mjs/.test(job(id)));
+        expect(signers).toEqual(['tracks-sign']);
+        const s = job('tracks-sign');
+        expect(s).toMatch(/environment:\s*release/);
+        expect(s).toMatch(/needs:\s*\[tracks-guard, tracks-linux, tracks-windows\]/);
+        expect(s).toMatch(/GENIE_MANIFEST_SIGNING_KEY:\s*\$\{\{\s*secrets\.GENIE_MANIFEST_SIGNING_KEY\s*\}\}/);
+        expect(s).toMatch(/GENIE_MANIFEST_PUBLIC_KEY:\s*\$\{\{\s*vars\.GENIE_MANIFEST_PUBLIC_KEY\s*\}\}/);
+        // The key's VALUE is never echoed and never written to a file (the refusals name the secret, never print it).
+        expect(s).not.toMatch(/(echo|printf|cat)[^\n]*\$\{?GENIE_MANIFEST_SIGNING_KEY/);
+        expect(s).not.toMatch(/\$\{?GENIE_MANIFEST_SIGNING_KEY\}?"?\s*>/);
+    });
+
+    it('with no key or no public key, tracks-sign stops before it signs or uploads anything, and says so plainly', () => {
+        const s = job('tracks-sign');
+        const refuse = at(s, /::error::[^\n]*GENIE_MANIFEST_SIGNING_KEY[^\n]*nothing was signed or uploaded/);
+        const refusePub = at(s, /::error::[^\n]*GENIE_MANIFEST_PUBLIC_KEY[^\n]*nothing was signed or uploaded/);
+        const sign = at(s, /node scripts\/sign-manifest\.mjs/);
+        const upload = at(s, /gh release upload/);
+        expect(refuse).toBeGreaterThan(-1);
+        expect(refusePub).toBeGreaterThan(-1);
+        expect(sign).toBeGreaterThan(Math.max(refuse, refusePub));
+        expect(upload).toBeGreaterThan(sign);
+    });
+
+    it('tracks-sign uploads each planned track into ITS draft only, after checking it is still a draft', () => {
+        const s = job('tracks-sign');
+        expect(s).toMatch(/needs\.tracks-guard\.outputs\.tracks/);
+        expect(s).toMatch(/--json isDraft[\s\S]*::error::[^\n]*not a draft[\s\S]*gh release upload "\$tag"/);
+        // Its own track's files, by the stem <track>-<build>-: never a glob over every package.
+        expect(s).toMatch(/"\$\{track\}-\$\{build\}-/);
+        expect(s).not.toMatch(/gh release upload[^\n]*packages\/\*/);
+    });
+
+    it('tracks-verify writes each track\'s notes, then checks its draft by release-check, after the upload', () => {
+        const v = job('tracks-verify');
+        expect(v).toMatch(/needs:\s*\[tracks-guard, tracks-sign\]/);
+        expect(v).not.toMatch(/^\s*if:/m);
+        expect(v).toMatch(/gh release edit "\$tag" --repo "\$\{\{ github\.repository \}\}" --notes-file "docs\/releases\/\$tag\.md"/);
+        expect(v).toMatch(/scripts\/verify-release-draft\.ts "\$tag" release\.json --channel "\$channel"/);
+        expect(v.indexOf('--notes-file')).toBeLessThan(v.indexOf('verify-release-draft.ts'));
+    });
+});
+
+describe('trackDraftProblems — what tracks-verify refuses', () => {
+    const b = '2026.11.28-1';
+    const notes = `# Genie client ${b}\n\n## What's new\n\n- something\n`;
+    type T = 'client' | 'browser' | 'host' | 'launcher';
+    const good = (track: T = 'client', over: Partial<ReleaseView> = {}): ReleaseView => ({
+        tagName: `${track}-v${b}`,
+        isDraft: true,
+        isPrerelease: false,
+        body: notes,
+        assets: expectedTrackAssets(track, b).map((name) => ({ name })),
+        ...over,
+    });
+
+    it('names each platform\'s package, its manifest and its signature, and the fingerprint', () => {
+        expect(expectedTrackAssets('host', b)).toEqual([
+            `host-${b}-win32-x64.zip`,
+            `host-${b}-win32-x64.manifest.json`,
+            `host-${b}-win32-x64.manifest.json.sig`,
+            `host-${b}-linux-x64.tar.zst`,
+            `host-${b}-linux-x64.manifest.json`,
+            `host-${b}-linux-x64.manifest.json.sig`,
+            `host-${b}.fingerprint.json`,
+        ]);
+    });
+
+    it('a complete draft of each track passes (POSITIVE CONTROL), stable and dev', () => {
+        for (const t of ['client', 'browser', 'host', 'launcher'] as const) {
+            expect(trackDraftProblems(good(t), `${t}-v${b}`, 'stable'), t).toEqual([]);
+            expect(trackDraftProblems(good(t, { isPrerelease: true }), `${t}-v${b}`, 'dev'), t).toEqual([]);
+        }
+    });
+
+    it('refuses a public release, empty notes, notes with no "What\'s new", another tag', () => {
+        expect(trackDraftProblems(good('client', { isDraft: false }), `client-v${b}`, 'stable')).toEqual([expect.stringMatching(/not a draft/)]);
+        expect(trackDraftProblems(good('client', { body: '' }), `client-v${b}`, 'stable')).toEqual([expect.stringMatching(/notes are empty/)]);
+        expect(trackDraftProblems(good('client', { body: '# x\n' }), `client-v${b}`, 'stable')).toEqual([expect.stringMatching(/What's new/)]);
+        expect(trackDraftProblems(good('client', { tagName: `host-v${b}` }), `client-v${b}`, 'stable')).toEqual([expect.stringMatching(/tag/)]);
+    });
+
+    it('names every missing file: an unsigned manifest is a missing signature', () => {
+        const unsigned = good('host', { assets: expectedTrackAssets('host', b).filter((n) => !n.endsWith('.sig')).map((name) => ({ name })) });
+        const p = trackDraftProblems(unsigned, `host-v${b}`, 'stable');
+        expect(p).toHaveLength(2);
+        expect(p.every((x) => /missing asset host-\S*\.manifest\.json\.sig/.test(x))).toBe(true);
+    });
+
+    it('refuses a file that is not this track\'s: another track\'s package, or a stray build file', () => {
+        const extra = good('client', { assets: [...expectedTrackAssets('client', b), `host-${b}-linux-x64.tar.zst`, 'asar-files.json'].map((name) => ({ name })) });
+        expect(trackDraftProblems(extra, `client-v${b}`, 'stable')).toEqual([
+            expect.stringMatching(/host-\S+ is not this track's/),
+            expect.stringMatching(/asar-files\.json is not this track's/),
+        ]);
+    });
+
+    it('the prerelease flag follows the channel: dev is a prerelease, stable is not', () => {
+        expect(trackDraftProblems(good('client', { isPrerelease: true }), `client-v${b}`, 'stable')).toEqual([expect.stringMatching(/prerelease/)]);
+        expect(trackDraftProblems(good('client'), `client-v${b}`, 'dev')).toEqual([expect.stringMatching(/prerelease/)]);
+    });
+
+    it('releaseProblems reads the tag: a track tag by its track, a v* tag as the app (every kind of draft through one door)', () => {
+        expect(releaseProblems(good('launcher'), `launcher-v${b}`, 'stable')).toEqual([]);
+        const v = '2.0.0';
+        const app: ReleaseView = { tagName: `v${v}`, isDraft: true, isPrerelease: false, body: notes, assets: expectedReleaseAssets(v).map((name) => ({ name })) };
+        expect(releaseProblems(app, `v${v}`)).toEqual([]);
+        // A track tag with no channel is refused, not guessed; a round tag is no release at all.
+        expect(releaseProblems(good('launcher'), `launcher-v${b}`)).toEqual([expect.stringMatching(/channel/)]);
+        expect(releaseProblems(good('launcher'), 'tracks-v2026.11.28-1', 'stable')).toEqual([expect.stringMatching(/not a release tag/)]);
     });
 });

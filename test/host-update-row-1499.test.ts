@@ -34,7 +34,7 @@ describe('registered as a row: the launcher’s since L6 (Tynn #1058), with its 
      * electron-updater scripts below stay on disk for the bridge release (L9), and no row runs them.
      */
     it('linux.sh: host-update then its rollback, after client-only-update, run by launcher-updates-row.mjs', () => {
-        expect(linuxRows.slice(-4)).toEqual(['client-only-update', 'host-update', 'host-update-rollback', 'launcher-self-update']);
+        expect(linuxRows.slice(-5)).toEqual(['client-only-update', 'host-update', 'host-update-rollback', 'launcher-self-update', 'version-skew']);
         expect(linuxRow('host-update')).toBe('row_host-update() { need_build && need_tracks && need_display && on_display timeout 1320 env LAUNCHER_ROW_OUT="$OUT/host-update" LAUNCHER_ROW_KEY_DIR="$SETUP" CDP_PORT=9416 LAUNCHER_ROW_DEADLINE_MS=1200000 node scripts/launcher-updates-row.mjs --row host-update; }');
         expect(linuxRow('host-update-rollback')).toBe('row_host-update-rollback() { need_build && need_tracks && need_display && on_display timeout 1320 env LAUNCHER_ROW_OUT="$OUT/host-update-rollback" LAUNCHER_ROW_KEY_DIR="$SETUP" CDP_PORT=9417 LAUNCHER_ROW_DEADLINE_MS=1200000 node scripts/launcher-updates-row.mjs --row host-update-rollback; }');
         expect(linuxSh).toMatch(/\n\s*client-only-update\|host-update\|host-update-rollback\) echo 1500 ;;/);
@@ -45,7 +45,7 @@ describe('registered as a row: the launcher’s since L6 (Tynn #1058), with its 
     });
 
     it('windows.ps1: the same order, their functions, their ceiling; the old script is run by no row', () => {
-        expect(windowsRows.slice(-4)).toEqual(['client-only-update', 'host-update', 'host-update-rollback', 'launcher-self-update']);
+        expect(windowsRows.slice(-5)).toEqual(['client-only-update', 'host-update', 'host-update-rollback', 'launcher-self-update', 'version-skew']);
         expect(windowsPs1).toContain("function Row-host-update {\n    Need-Build; Need-Tracks; Need-TestMachine\n    Invoke-LauncherUpdatesRow 'host-update' @{ LAUNCHER_ROW_OUT = (Join-Path $Out 'host-update'); LAUNCHER_ROW_KEY_DIR = $Setup; CDP_PORT = '9416'; LAUNCHER_ROW_DEADLINE_MS = '1620000' }\n}");
         expect(windowsPs1).toContain("function Row-host-update-rollback {\n    Need-Build; Need-Tracks; Need-TestMachine\n    Invoke-LauncherUpdatesRow 'host-update-rollback' @{ LAUNCHER_ROW_OUT = (Join-Path $Out 'host-update-rollback'); LAUNCHER_ROW_KEY_DIR = $Setup; CDP_PORT = '9417'; LAUNCHER_ROW_DEADLINE_MS = '1620000' }\n}");
         expect(windowsPs1).toMatch(/\n\s*\{ \$_ -in 'client-only-update', 'host-update', 'host-update-rollback' \} \{ return 1800 \}/);

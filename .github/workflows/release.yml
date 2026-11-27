@@ -44,11 +44,39 @@ name: release
 # and dev update channels"): `v2.0.0-beta.20` is a prerelease, which only the dev channel sees; a
 # plain `v2.0.0` is a full release, which stable (and dev) see. test/update-channels.test.ts holds
 # the `case` in guard to `releaseTypeForTag`.
+#
+# EACH TRACK ITS OWN DRAFT (Tynn #1058 L8; the envelope's .ai/plans/genie-2-host-split-2026-10-31.md, slice 8; docs/track-releases.md).
+# The launcher reads the client, browser, host and launcher each from its own release, `<track>-v<build>`. One approved
+# ROUND tag builds them all: `tracks-v<build>` for the stable channel, `tracks-dev-v<build>` for dev (prereleases). The
+# app jobs above run for `v*` only (their guard's `if`), the track jobs below for a round only (theirs), and every other
+# job hangs off one of the two guards.
+#
+#   1. tracks-guard    builds dist/ and fingerprints each track (scripts/track-release-plan.ts, src/core/track-release-plan.ts);
+#                      a track is drafted only when its fingerprint differs from its last PUBLISHED release's (a host brings
+#                      its client, a client its browser). Each such track needs docs/releases/<track>-v<build>.md with
+#                      "## What's new"; then its draft is made at this commit (the track's tag is made when the owner publishes).
+#   2. tracks-linux    the Linux packages (scripts/build-track-packages.mjs) and launcher, no secret; artifacts only.
+#      tracks-windows  Authenticode FIRST: the launcher signed (scripts/sign-windows-files.mjs), the client built --signed, the
+#                      trees verified (scripts/verify-track-signatures.ps1), and only then are those bytes in the packages.
+#                      Both build the launcher trusting the release environment's GENIE_MANIFEST_PUBLIC_KEY (beside the
+#                      release key native/launcher/src/keys.rs builds in), and refuse to build with none.
+#   3. tracks-sign     THE ONLY JOB THAT SEES GENIE_MANIFEST_SIGNING_KEY (environment `release`): it refuses, before it signs
+#                      or uploads anything, when the key or the public key is missing or the public key is not the one
+#                      built into the launcher; then signs each planned track's manifests (scripts/sign-manifest.mjs) and
+#                      uploads that track's own files into that track's draft, after checking it is still a draft.
+#   4. tracks-verify   each draft's notes written again and the draft read back (release-check: still a draft, notes, every
+#                      package with its manifest and signature, nothing else, prerelease as the channel says).
+#
+# Nothing here un-drafts a track's release either: each is published by the owner, after his approval of that round, with
+#     gh release edit <track>-v<build> -R Renaissance-Analytics/genie --draft=false
+# (the host's after its client's: the launcher refuses a host whose client is not in the feed).
 
 on:
   push:
     tags:
       - 'v*'
+      - 'tracks-v*'
+      - 'tracks-dev-v*'
 
 permissions:
   contents: read
@@ -56,6 +84,7 @@ permissions:
 jobs:
   guard:
     name: the tag names the version in package.json, and its draft exists
+    if: startsWith(github.ref_name, 'v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -236,3 +265,257 @@ jobs:
         run: |
           gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" --json tagName,isDraft,isPrerelease,body,assets > release.json
           npx --yes tsx@4.23.15 scripts/verify-release-draft.ts "${{ github.ref_name }}" release.json
+
+  # ── EACH TRACK ITS OWN DRAFT (Tynn #1058 L8): see the header. ─────────────────────────────────────────────────────
+  tracks-guard:
+    name: the round's tracks that changed, their notes, and their drafts
+    if: startsWith(github.ref_name, 'tracks-')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tracks: ${{ steps.plan.outputs.tracks }}
+      build: ${{ steps.plan.outputs.build }}
+      channel: ${{ steps.plan.outputs.channel }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      # Which tracks changed since their last PUBLISHED release (src/core/track-release-plan.ts). The round's tag must be a
+      # track build (tracks-v2026.11.28-1); the plan refuses anything else.
+      - name: plan the round
+        id: plan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release list --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,isPrerelease --limit 1000 > releases.json
+          npx tsx scripts/track-release-plan.ts fingerprints --out fingerprints.json
+          npx tsx scripts/track-release-plan.ts plan --tag "$GITHUB_REF_NAME" --fingerprints fingerprints.json --releases releases.json --github-output "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tracks-plan
+          path: plan.json
+      # No notes, no release, per track: each changed track's docs/releases/<track>-v<build>.md, with its "## What's new"
+      # (the update window shows it). Every file is checked before any draft is made.
+      - name: the notes of every changed track
+        env:
+          tracks: ${{ steps.plan.outputs.tracks }}
+          build: ${{ steps.plan.outputs.build }}
+        run: |
+          missing=0
+          for track in $tracks; do
+            tag="${track}-v${build}"
+            if [ ! -s "docs/releases/$tag.md" ]; then
+              echo "::error::docs/releases/$tag.md is missing or empty — the $track changed, so write its release notes (what is in, known limitations, how it was verified) before tagging the round"
+              missing=1
+            elif ! grep -q "^## What's new" "docs/releases/$tag.md"; then
+              echo "::error::docs/releases/$tag.md has no \"## What's new\" section — the update window would show nothing"
+              missing=1
+            fi
+          done
+          exit $missing
+      # One draft per changed track, at this commit. Made here, once, before any build, as the app's guard does.
+      - name: create the drafts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          tracks: ${{ steps.plan.outputs.tracks }}
+          build: ${{ steps.plan.outputs.build }}
+          channel: ${{ steps.plan.outputs.channel }}
+        run: |
+          case "$channel" in dev) prerelease=--prerelease ;; *) prerelease= ;; esac
+          for track in $tracks; do
+            tag="${track}-v${build}"
+            existing="$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null || true)"
+            if [ "$existing" = "false" ]; then
+              echo "::error::$tag already has a release and it is already public — this workflow only builds drafts; nothing was changed"
+              exit 1
+            elif [ "$existing" = "true" ]; then
+              echo "reusing the draft for $tag (a previous run made it)"
+              gh release edit "$tag" --notes-file "docs/releases/$tag.md"
+            else
+              gh release create "$tag" --draft --target "$GITHUB_SHA" $prerelease --title "Genie $track $build" --notes-file "docs/releases/$tag.md"
+            fi
+          done
+
+  tracks-linux:
+    name: the Linux packages of the round (no secret)
+    needs: tracks-guard
+    if: needs.tracks-guard.outputs.tracks != ''
+    runs-on: ubuntu-latest
+    # For the release environment's public key only (a variable, not a secret): the launcher is built trusting it.
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: fetch the pinned Caddy runtime
+        run: npx tsx scripts/fetch-caddy.ts
+      - name: build the launcher
+        env:
+          GENIE_TRACK_BUILD: ${{ needs.tracks-guard.outputs.build }}
+          GENIE_MANIFEST_PUBLIC_KEYS: ${{ vars.GENIE_MANIFEST_PUBLIC_KEY }}
+        run: |
+          if [ -z "$GENIE_MANIFEST_PUBLIC_KEYS" ]; then
+            echo "::error::the release environment has no variable GENIE_MANIFEST_PUBLIC_KEY — the launcher would be built without the round's key; nothing was built"
+            exit 1
+          fi
+          sudo apt-get update -q && sudo apt-get install -y -q libwebkit2gtk-4.1-dev libgtk-3-dev
+          cd native/launcher && cargo build --locked --release --bin genie
+      - name: the packages and their unsigned manifests
+        run: node scripts/build-track-packages.mjs packages --build "${{ needs.tracks-guard.outputs.build }}" --channel "${{ needs.tracks-guard.outputs.channel }}" --launcher native/launcher/target/release/genie
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tracks-linux
+          path: |
+            release/tracks/packages/*.tar.zst
+            release/tracks/packages/*.manifest.json
+          if-no-files-found: error
+
+  tracks-windows:
+    name: sign, verify and pack the Windows packages of the round
+    needs: tracks-guard
+    if: needs.tracks-guard.outputs.tracks != ''
+    runs-on: windows-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: fetch the pinned Caddy runtime
+        run: npx tsx scripts/fetch-caddy.ts
+      - uses: azure/login@v2
+        env:
+          AZURE_CORE_OUTPUT: none
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: build the launcher
+        shell: bash
+        env:
+          GENIE_TRACK_BUILD: ${{ needs.tracks-guard.outputs.build }}
+          GENIE_MANIFEST_PUBLIC_KEYS: ${{ vars.GENIE_MANIFEST_PUBLIC_KEY }}
+        run: |
+          if [ -z "$GENIE_MANIFEST_PUBLIC_KEYS" ]; then
+            echo "::error::the release environment has no variable GENIE_MANIFEST_PUBLIC_KEY — the launcher would be built without the round's key; nothing was built"
+            exit 1
+          fi
+          cd native/launcher && cargo build --locked --release --bin genie
+      # AUTHENTICODE FIRST: the launcher before it is packed; the client (and the host made from it) as electron-builder
+      # builds it (--signed). The packages and their manifests are made from these signed bytes.
+      - name: sign the launcher
+        run: node scripts/sign-windows-files.mjs native/launcher/target/release/genie.exe
+      - name: the packages, from signed programs, and their unsigned manifests
+        run: node scripts/build-track-packages.mjs packages --build "${{ needs.tracks-guard.outputs.build }}" --channel "${{ needs.tracks-guard.outputs.channel }}" --launcher native/launcher/target/release/genie.exe --signed
+      - name: verify every Windows signature in the packages
+        shell: pwsh
+        run: ./scripts/verify-track-signatures.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tracks-windows
+          path: |
+            release/tracks/packages/*.zip
+            release/tracks/packages/*.manifest.json
+            release/signature-evidence/track-signatures.json
+          if-no-files-found: error
+
+  tracks-sign:
+    name: sign the manifests and upload each track into its draft (the only job with the signing key)
+    needs: [tracks-guard, tracks-linux, tracks-windows]
+    if: needs.tracks-guard.outputs.tracks != ''
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          path: packages
+          merge-multiple: true
+      - name: sign and upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GENIE_MANIFEST_SIGNING_KEY: ${{ secrets.GENIE_MANIFEST_SIGNING_KEY }}
+          GENIE_MANIFEST_PUBLIC_KEY: ${{ vars.GENIE_MANIFEST_PUBLIC_KEY }}
+          tracks: ${{ needs.tracks-guard.outputs.tracks }}
+          build: ${{ needs.tracks-guard.outputs.build }}
+        run: |
+          if [ -z "$GENIE_MANIFEST_SIGNING_KEY" ]; then
+            echo "::error::the release environment has no secret GENIE_MANIFEST_SIGNING_KEY — the owner adds it (docs/track-releases.md); nothing was signed or uploaded"
+            exit 1
+          fi
+          if [ -z "$GENIE_MANIFEST_PUBLIC_KEY" ]; then
+            echo "::error::the release environment has no variable GENIE_MANIFEST_PUBLIC_KEY — the owner adds it (docs/track-releases.md); nothing was signed or uploaded"
+            exit 1
+          fi
+          # RELEASE_PUBLIC_KEY as native/launcher/src/keys.rs builds it in: the job signs only with the key every launcher trusts.
+          built_in="$(sed -n 's/^pub const RELEASE_PUBLIC_KEY: &str = "\(.*\)";$/\1/p' native/launcher/src/keys.rs)"
+          if [ "$GENIE_MANIFEST_PUBLIC_KEY" != "$built_in" ]; then
+            echo "::error::GENIE_MANIFEST_PUBLIC_KEY is not the key built into the launcher (RELEASE_PUBLIC_KEY in native/launcher/src/keys.rs) — no launcher would trust what this job signs; nothing was signed or uploaded"
+            exit 1
+          fi
+          files=()
+          for track in $tracks; do
+            for m in packages/"${track}-${build}-"*.manifest.json; do files+=("$m"); done
+          done
+          node scripts/sign-manifest.mjs "${files[@]}"
+          for track in $tracks; do
+            tag="${track}-v${build}"
+            node -e 'const p=require("./packages/plan.json");const [t,b]=process.argv.slice(1);process.stdout.write(JSON.stringify({track:t,build:b,fingerprint:p.fingerprints[t],commit:process.env.GITHUB_SHA})+"\n")' "$track" "$build" > "packages/${track}-${build}.fingerprint.json"
+            # Recheck before the upload: nothing goes into a release that someone published meanwhile.
+            if [ "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" != true ]; then
+              echo "::error::$tag is not a draft any more — nothing more was uploaded into it"
+              exit 1
+            fi
+            echo "uploading $track $build into its draft"
+            gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber "packages/${track}-${build}-"* "packages/${track}-${build}.fingerprint.json"
+          done
+
+  tracks-verify:
+    name: write each track's notes and verify its draft (each stays a draft)
+    needs: [tracks-guard, tracks-sign]
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: notes, assets and flags, per track
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          tracks: ${{ needs.tracks-guard.outputs.tracks }}
+          build: ${{ needs.tracks-guard.outputs.build }}
+          channel: ${{ needs.tracks-guard.outputs.channel }}
+        run: |
+          bad=0
+          for track in $tracks; do
+            tag="${track}-v${build}"
+            gh release edit "$tag" --repo "${{ github.repository }}" --notes-file "docs/releases/$tag.md"
+            gh release view "$tag" --repo "${{ github.repository }}" --json tagName,isDraft,isPrerelease,body,assets > release.json
+            npx tsx scripts/verify-release-draft.ts "$tag" release.json --channel "$channel" || bad=1
+          done
+          exit $bad

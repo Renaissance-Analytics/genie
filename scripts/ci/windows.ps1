@@ -66,7 +66,8 @@ $Rows = @(
     'client-only-update',
     'host-update',
     'host-update-rollback',
-    'launcher-self-update'
+    'launcher-self-update',
+    'version-skew'
 )
 
 # ROWS ONLY ASKED FOR BY NAME (-Only), never in a full run: they read the real internet and install from it, so a full
@@ -529,6 +530,12 @@ function Row-host-update-rollback {
     Need-Build; Need-Tracks; Need-TestMachine
     Invoke-LauncherUpdatesRow 'host-update-rollback' @{ LAUNCHER_ROW_OUT = (Join-Path $Out 'host-update-rollback'); LAUNCHER_ROW_KEY_DIR = $Setup; CDP_PORT = '9417'; LAUNCHER_ROW_DEADLINE_MS = '1620000' }
 }
+# VERSION SKEW (Tynn #1058 L8): the INSTALLED client NEW against the host OLD, then the client OLD against the host NEW,
+# each a real program from its own build folder, a turn streamed both ways in each (scripts/launcher-updates-row.mjs).
+function Row-version-skew {
+    Need-Build; Need-Tracks; Need-TestMachine
+    Invoke-LauncherUpdatesRow 'version-skew' @{ LAUNCHER_ROW_OUT = (Join-Path $Out 'version-skew'); LAUNCHER_ROW_KEY_DIR = $Setup; CDP_PORT = '9419'; LAUNCHER_ROW_DEADLINE_MS = '1800000' }
+}
 # THE LAUNCHER UPDATES ITSELF (see client-only-update): a second launcher, built here as package-tracks builds the first but
 # at the next build (GENIE_TRACK_BUILD) and trusting the same throwaway key, into target-l6 so the first is kept.
 function Row-launcher-self-update {
@@ -714,6 +721,7 @@ function Ceiling([string]$name) {
         'logon' { return 900 }
         { $_ -in 'client-only-update', 'host-update', 'host-update-rollback' } { return 1800 }
         'launcher-self-update' { return 2400 }
+        'version-skew' { return 2100 }
         default { return 600 }
     }
 }
