@@ -813,10 +813,15 @@ mod tests {
         let l = labels(&m);
         let stop = l.iter().position(|x| x == "Stop host").expect("the host's item");
         assert_eq!(l[stop + 1], "Updates (4)", "under the host's item, as the mockup: {l:?}");
-        assert_eq!(l[stop + 2], "Update host to 2026.11.26-1", "the offer: {l:?}");
+        // Short enough for Waybar's menu (it cut labels at about 23 characters, run 1127-163420-eeac7a): the build the
+        // offer installs is in the tooltip, which keeps the full words.
+        assert_eq!(l[stop + 2], "Update host", "the offer: {l:?}");
+        assert!(l[stop + 2].chars().count() <= 23, "the offer fits Waybar's menu: {l:?}");
         assert!(m.iter().any(|i| matches!(i, Item::Do { action: Action::Updates, enabled: true, .. })));
         assert!(m.iter().any(|i| matches!(i, Item::Do { action: Action::InstallHostUpdate, enabled: true, .. })));
-        assert_eq!(tooltip(&v), "Genie · 4 updates ready · This computer’s host · running · 3 agents");
+        assert_eq!(tooltip(&v), "Genie · 4 updates ready (host 2026.11.26-1) · This computer’s host · running · 3 agents");
+        // Ready updates with no host offer: the count alone.
+        assert_eq!(tooltip(&View { host_update: None, ..v.clone() }), "Genie · 4 updates ready · This computer’s host · running · 3 agents");
         assert_eq!(Action::parse("updates"), Some(Action::Updates));
         assert_eq!(Action::parse("installHostUpdate"), Some(Action::InstallHostUpdate));
         assert_eq!(Action::from_id(Action::InstallHostUpdate.id()), Some(Action::InstallHostUpdate));
