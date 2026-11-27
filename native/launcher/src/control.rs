@@ -77,6 +77,8 @@ pub struct Connection {
     pub shut_down: bool,
     /// `launcher.restart` was answered: once the answer is sent, Genie restarts.
     pub restart: bool,
+    /// `launcher.trayAct` (the VM rows' probe): the tray's item, run once the answer is sent.
+    pub tray_act: Option<crate::tray::Action>,
 }
 
 /// The event every attached client closes its UI on.
@@ -311,6 +313,13 @@ pub fn handle_line(ctx: &Context, conn: &mut Connection, line: &str) -> Vec<Valu
         "launcher.closeUi" => close_ui(ctx),
         // What the tray offers now, as words, and (GENIE_LAUNCHER_TRAY_PROBE=1, a VM row's screenshot) the menu shown as a
         // click on the icon shows it. Never in a person's launcher: the probe's variable is the row's.
+        "launcher.trayAct" if crate::tray::probe_enabled() => match args.first().and_then(|a| a["action"].as_str()).and_then(crate::tray::Action::parse) {
+            Some(action) => {
+                conn.tray_act = Some(action);
+                Ok(json!({"acting": format!("{action:?}")}))
+            }
+            None => Err("launcher.trayAct needs {action}".to_string()),
+        },
         "launcher.trayMenu" if crate::tray::probe_enabled() => {
             let v = crate::tray::view(ctx);
             Ok(json!({"items": crate::tray::menu_text(&crate::tray::menu(&v)), "tooltip": crate::tray::tooltip(&v), "shown": crate::tray::show_menu()}))
@@ -429,7 +438,7 @@ fn new_token() -> Result<String, String> {
     Ok(b.iter().map(|x| format!("{x:02x}")).collect())
 }
 
-fn serve_connection(ctx: &Context, stream: LocalStream) {
+fn serve_connection(ctx: &Arc<Context>, stream: LocalStream) {
     let Ok(mut out) = stream.try_clone() else { return };
     let mut reader = BufReader::new(stream);
     let mut conn = Connection::default();
@@ -457,6 +466,9 @@ fn serve_connection(ctx: &Context, stream: LocalStream) {
         if conn.restart {
             conn.restart = false;
             restart(ctx);
+        }
+        if let Some(action) = conn.tray_act.take() {
+            crate::tray::act(Arc::clone(ctx), action);
         }
         // An attached client's link is kept for the launcher's events and no longer read: on Windows a pipe handle opened
         // for synchronous I/O serializes its reads and writes, so a read waiting here would hold every event back.

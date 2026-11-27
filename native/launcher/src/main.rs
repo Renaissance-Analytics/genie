@@ -18,6 +18,11 @@
 //!   genie status [--json]         what is installed and running
 //!   genie ensure-host             adopt the running host or start the current one
 //!   genie stop-host               the graceful stop
+//!   genie close-ui                "Just close the UI": every client window closes; the host and the launcher keep running
+//!   genie shut-down               "Shut down everything": the host's graceful stop, then the launcher exits (waited for)
+//!   genie logon-settings on|off on|off   start on logon, start minimised: what the client says; the entry follows
+//!   genie tray-menu | tray-act <action>  the tray's menu as words, and one of its items (GENIE_LAUNCHER_TRAY_PROBE=1 only:
+//!                                 the VM rows' screenshots)
 //!   genie version                 this launcher's build
 //!   genie detach|job|pipe-owner-only ...   genie-launch.exe's modes (Windows), same contracts
 
@@ -112,6 +117,41 @@ fn main() -> ExitCode {
                 ExitCode::SUCCESS
             }
             Err(why) => fail(&why),
+        },
+        Some("close-ui") => print_call(&roots, "launcher.closeUi", serde_json::json!([])),
+        Some("shut-down") => cmd_shut_down(&roots),
+        Some("logon-settings") => {
+            let on = |v: Option<&String>| match v.map(String::as_str) {
+                Some("on") => Some(true),
+                Some("off") => Some(false),
+                _ => None,
+            };
+            let (Some(setting), Some(start_minimized)) = (on(text.get(1)), on(text.get(2))) else {
+                return fail("logon-settings <start on logon: on|off> <start minimised: on|off>");
+            };
+            let args = serde_json::json!([{"setting": setting, "startMinimized": start_minimized}]);
+            match control::call_running(&roots, "launcher.logon", args) {
+                Ok(Some(v)) => {
+                    println!("{v}");
+                    ExitCode::SUCCESS
+                }
+                Ok(None) => {
+                    use genie_launcher::logon;
+                    match logon::write_settings(&roots, logon::LogonSettings { setting, start_minimized }).and_then(|_| control::launcher_exe()).and_then(|exe| logon::apply(&roots, &logon::place(), &exe)) {
+                        Ok(said) => {
+                            println!("{said}");
+                            ExitCode::SUCCESS
+                        }
+                        Err(why) => fail(&why),
+                    }
+                }
+                Err(why) => fail(&why),
+            }
+        }
+        Some("tray-menu") => print_call(&roots, "launcher.trayMenu", serde_json::json!([])),
+        Some("tray-act") => match text.get(1) {
+            Some(a) => print_call(&roots, "launcher.trayAct", serde_json::json!([{"action": a}])),
+            None => fail("tray-act <openGenie|openBrowser|startHost|stopHost|closeUi|shutDown>"),
         },
         Some("version") | Some("--version") => {
             println!("{}", LAUNCHER_BUILD);
@@ -297,6 +337,40 @@ fn end_running_launcher(roots: &Roots) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("Genie's launcher (pid {pid}) did not end, so its programs could not be removed."))
+    }
+}
+
+/// One call to the running launcher, its answer printed.
+fn print_call(roots: &Roots, method: &str, args: serde_json::Value) -> ExitCode {
+    match control::call_running(roots, method, args) {
+        Ok(Some(v)) => {
+            println!("{v}");
+            ExitCode::SUCCESS
+        }
+        Ok(None) => fail("Genie's launcher is not running."),
+        Err(why) => fail(&why),
+    }
+}
+
+/// "Shut down everything" from outside (an uninstaller, a script): asked of the running launcher, then waited for until it
+/// has exited (it exits only after the host's graceful stop).
+fn cmd_shut_down(roots: &Roots) -> ExitCode {
+    let pid = std::fs::read_to_string(roots.runtime_dir().join("launcher.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v["pid"].as_u64())
+        .map(|p| p as u32);
+    match control::call_running(roots, "launcher.shutDown", serde_json::json!([])) {
+        Ok(Some(_)) => {}
+        Ok(None) => return fail("Genie's launcher is not running."),
+        Err(why) => return fail(&why),
+    }
+    let Some(pid) = pid else { return ExitCode::SUCCESS };
+    if genie_launcher::spawn::wait_gone(pid, std::time::Duration::from_secs(16 * 60)) {
+        println!("shut down: the launcher (pid {pid}) has exited");
+        ExitCode::SUCCESS
+    } else {
+        fail(&format!("the launcher (pid {pid}) is still running"))
     }
 }
 

@@ -38,6 +38,18 @@ impl Action {
     pub fn id(self) -> u32 {
         Action::ALL.iter().position(|a| *a == self).unwrap_or(0) as u32 + 100
     }
+    /// The name `launcher.trayAct` takes: openGenie, openBrowser, startHost, stopHost, closeUi, shutDown.
+    pub fn parse(name: &str) -> Option<Action> {
+        match name {
+            "openGenie" => Some(Action::OpenGenie),
+            "openBrowser" => Some(Action::OpenBrowser),
+            "startHost" => Some(Action::StartHost),
+            "stopHost" => Some(Action::StopHost),
+            "closeUi" => Some(Action::CloseUi),
+            "shutDown" => Some(Action::ShutDown),
+            _ => None,
+        }
+    }
     pub fn from_id(id: u32) -> Option<Action> {
         id.checked_sub(100).and_then(|i| Action::ALL.get(i as usize).copied())
     }
