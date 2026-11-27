@@ -136,7 +136,9 @@ export class ActiveOutService {
     }
 
     #say(provider: string, out: ActiveOut | null): void {
-        const key = out === null ? '' : JSON.stringify(out);
+        // WHAT IS SAID, not the figures under it: another account's share moves with every reading, and each change would
+        // say the line again in every held agent's stream.
+        const key = out === null || out.kind === 'fine' ? '' : `${out.kind}|${out.active.id}|${'other' in out ? out.other.id : ''}|${out.resetsAtMs ?? ''}`;
         if ((this.#told.get(provider) ?? '') === key) return;
         this.#told.set(provider, key);
         this.#ports.tell(provider, out);

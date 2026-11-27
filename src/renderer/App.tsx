@@ -2030,7 +2030,11 @@ function DesktopApp({ bridge }: AppProps) {
             }
             return { ok: false, reason: 'This message is no longer in the chat.' };
         };
-        void sendAll(items, one, (state) => setSendAllState({ agentId, state }));
+        void sendAll(items, one, (state) => {
+            setSendAllState({ agentId, state });
+            // The results stay at the bar for a while, then go; a newer Send all replaces them at once.
+            if (!state.running) setTimeout(() => setSendAllState((now) => (now?.state === state ? null : now)), 30_000);
+        });
     };
     // Derived when its inputs change, not on every render of the window (the owner, 2026-10-20: "severe UI lag"): the
     // thread reads every row of the subject's ledger.
