@@ -130,3 +130,21 @@ describe('ActiveOutService: the setting, acted on while an agent is held on the 
         expect(w.told.filter((t) => t !== null)).toEqual([]);
     });
 });
+
+describe('ActiveOutService: said once, not on every reading', () => {
+    it('another account\'s share moving (a reading a minute) does not say the line again in the held agents\' streams', async () => {
+        const told: Array<ActiveOut | null> = [];
+        let roomyLeft = 70;
+        const s = new ActiveOutService({
+            providers: () => ['claude'], known: () => known, activeId: () => 'acct_a',
+            room: (id) => (id === 'acct_a' ? { state: 'spent', resetsAtMs: RESET } : id === 'acct_c' ? { state: 'room', leftPct: roomyLeft } : { state: 'unknown' }),
+            choice: () => 'ask', heldOnActive: () => true, switchTo: async () => ({ ok: true }), tell: (_p, out) => { told.push(out); },
+        });
+        await s.check();
+        roomyLeft = 68;
+        await s.check();
+        roomyLeft = 66;
+        await s.check();
+        expect(told).toHaveLength(1);
+    });
+});
