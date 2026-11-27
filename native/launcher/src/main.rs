@@ -206,9 +206,15 @@ fn cmd_open(roots: Roots) -> ExitCode {
 }
 
 /// The NSIS uninstaller's (and Linux's) way out: the host stopped gracefully, then the running launcher ended (on Windows
-/// it serves from the Genie.exe the uninstaller removes next), then the programs folder removed. The data root
+/// it serves from the Genie.exe the uninstaller removes next), then what the launcher installed removed and nothing else
+/// (uninstall.rs; the programs folder itself only when that leaves it empty). The data root
 /// (`~/.genie`) is kept, as it always was (`deleteAppDataOnUninstall: false`).
 fn cmd_uninstall(roots: &Roots) -> ExitCode {
+    // NOTHING BUT WHAT THE LAUNCHER OWNS (Tynn #1058 L4): a code root that is a drive root, or is or holds the home folder
+    // or the data root, is refused before anything is stopped or removed.
+    if let Some(why) = genie_launcher::uninstall::refusal(&roots.code, &roots.data, genie_launcher::uninstall::home_from_env().as_deref()) {
+        return fail(&why);
+    }
     if let Err(why) = host::stop_host(roots) {
         return fail(&why);
     }
@@ -217,10 +223,16 @@ fn cmd_uninstall(roots: &Roots) -> ExitCode {
     }
     #[cfg(unix)]
     genie_launcher::desktop::remove_entries(roots);
-    if roots.code.exists() {
-        if let Err(e) = std::fs::remove_dir_all(&roots.code) {
-            return fail(&format!("the programs folder {} could not be removed: {e}", roots.code.display()));
+    match genie_launcher::uninstall::remove_owned(roots) {
+        Ok(removed) => {
+            for path in &removed {
+                println!("removed {}", path.display());
+            }
         }
+        Err(why) => return fail(&format!("the programs folder {} was not fully removed: {why}", roots.code.display())),
+    }
+    if roots.code.exists() {
+        println!("kept {}: it holds files Genie did not install", roots.code.display());
     }
     println!("uninstalled: {}", roots.code.display());
     ExitCode::SUCCESS
