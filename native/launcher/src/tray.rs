@@ -39,7 +39,7 @@ pub enum Action {
     OpenTaskManager,
     /// L6: the launcher's Updates window (every track, the host's update with its agents).
     Updates,
-    /// L6: the tray's offer, "Update host to <build>": the host's update, through its own drain.
+    /// L6: the tray's offer, "Update host" (its build in the tooltip): the host's update, through its own drain.
     InstallHostUpdate,
 }
 
@@ -142,8 +142,10 @@ pub fn tooltip(v: &View) -> String {
         parts.push(format!("Needs you: {}", v.needs_you));
     }
     // L6: what is ready, said where the person looks first.
+    // The host update's build is said here: the menu's offer is "Update host" alone, short enough for Waybar.
     if v.updates > 0 {
-        parts.push(format!("{} {} ready", v.updates, if v.updates == 1 { "update" } else { "updates" }));
+        let host = v.host_update.as_deref().filter(|_| v.host != HostView::NotHere).map(|b| format!(" (host {b})")).unwrap_or_default();
+        parts.push(format!("{} {} ready{host}", v.updates, if v.updates == 1 { "update" } else { "updates" }));
     }
     parts.push(host_line(v));
     parts.join(" · ")
@@ -191,8 +193,9 @@ pub fn menu(v: &View) -> Vec<Item> {
     // no host is never offered one.
     let label = if v.updates > 0 { format!("Updates ({})", v.updates) } else { "Updates".to_string() };
     items.push(Item::Do { action: Action::Updates, label, enabled: true });
-    if let (Some(build), false) = (&v.host_update, v.host == HostView::NotHere) {
-        items.push(Item::Do { action: Action::InstallHostUpdate, label: format!("Update host to {build}"), enabled: true });
+    if let (Some(_), false) = (&v.host_update, v.host == HostView::NotHere) {
+        // The build is in the tooltip: Waybar's menu cut labels at about 23 characters (run 1127-163420-eeac7a).
+        items.push(Item::Do { action: Action::InstallHostUpdate, label: "Update host".to_string(), enabled: true });
     }
     items.push(Item::Separator);
     let keep = matches!(v.host, HostView::Running { .. });

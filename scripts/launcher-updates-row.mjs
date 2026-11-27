@@ -23,14 +23,14 @@
  * the client and the host speak to it (launcher-row-lib.mjs `wireCall`).
  *
  * client-only-update  The feed offers client, browser and host NEW. launcher.check makes all three READY and applies none;
- *   the tray offers "Updates (N)" and "Update host to NEW" (tray-offer-<os>.png) and its Updates opens the launcher's
+ *   the tray offers "Updates (N)" and "Update host" (NEW in its tooltip) (tray-offer-<os>.png) and its Updates opens the launcher's
  *   Updates window (updates-<os>.png). The client, then the browser, are applied (launcher.apply); the open window is left
  *   on its build and the launcher's attached links are told launcher.updateReady; the SAME host pid, the SAME provider pid
  *   per agent, and every tick streamed meanwhile in each ledger, in order; state.json points client and browser at NEW and
  *   leaves the host at OLD. The host is offered but NEVER applied here. Then the next window (launcher.openWindow) runs from
  *   <code root>/client/<NEW> and comes up (the launcher takes it off trial); next-window-<os>.png.
  *
- * host-update  The feed offers host and client NEW. The tray's offer "Update host to NEW" (launcher.trayAct
+ * host-update  The feed offers host and client NEW. The tray's offer "Update host" (NEW in its tooltip) (launcher.trayAct
  *   installHostUpdate) asks the running host to install through its own drain; while the launcher's hostUpdate phase is
  *   draining, stopping, swapping or starting the Updates window shows "Updating the host" (host-update-progress-<os>.png).
  *   Then: the phase is done; the old host pid is gone; a new host runs at NEW from <code root>/host/<NEW>; state.json host
@@ -368,7 +368,7 @@ try {
     if (ROW === 'client-only-update') {
         await offer('client', await newPackage('client'));
         await offer('browser', await newPackage('browser'));
-        // The host is offered too, for the tray's "Update host to NEW" in its screenshot; this row never applies it.
+        // The host is offered too, for the tray's "Update host" (NEW in its tooltip) in its screenshot; this row never applies it.
         await offer('host', await newPackage('host'));
     } else if (ROW === 'host-update') {
         await offer('client', await newPackage('client'));
@@ -517,12 +517,12 @@ async function clientOnlyUpdate() {
     check(state().client?.current === OLD && state().host?.current === OLD, '10d. a check applies nothing: state.json still points client and host at OLD', JSON.stringify(state()));
     check(feed.hits().assets.length > 0, '10e. the launcher downloaded the packages from the feed', JSON.stringify(feed.hits()));
 
-    step('11', 'the tray offers the updates: "Updates (N)" and "Update host to NEW" (photographed)');
+    step('11', 'the tray offers the updates: "Updates (N)" and "Update host", the build NEW in its tooltip (photographed)');
     const menu = await trayShot(`tray-offer-${OS}.png`);
     const items = menu.value?.items ?? [];
     const count = Number(/^Updates \((\d+)\)$/.exec(items.find((i) => /^Updates \(\d+\)$/.test(i)) ?? '')?.[1] ?? 0);
-    check(menu.ok && count >= 3 && items.includes(`Update host to ${NEW}`), `11. the TRAY says "Updates (${count})" (client, browser, host) and offers "Update host to ${NEW}"`, items.join(' | '));
-    check(/\d+ updates? ready/.test(menu.value?.tooltip ?? ''), '11t. its tooltip says the updates are ready', menu.value?.tooltip ?? '');
+    check(menu.ok && count >= 3 && items.includes('Update host'), `11. the TRAY says "Updates (${count})" (client, browser, host) and offers "Update host"`, items.join(' | '));
+    check(/\d+ updates? ready/.test(menu.value?.tooltip ?? '') && (menu.value?.tooltip ?? '').includes(`(host ${NEW})`), `11t. its tooltip says the updates are ready and names the host build ${NEW}`, menu.value?.tooltip ?? '');
 
     step('12', "the tray's Updates: the launcher's Updates window (photographed)");
     const logAt = readOr(LAUNCHER_LOG).length;
@@ -616,7 +616,7 @@ async function hostUpdate(broken) {
     check(state().host?.current === OLD && state().client?.current === OLD, '10b. a check applies nothing: state.json still points host and client at OLD', JSON.stringify(state()));
     const menu = await wireCall(RUNTIME, 'launcher.trayMenu', [], 15_000);
     pressKey('Escape');
-    check((menu.value?.items ?? []).includes(`Update host to ${NEW}`), `10c. the tray offers "Update host to ${NEW}"`, (menu.value?.items ?? []).join(' | '));
+    check((menu.value?.items ?? []).includes('Update host') && (menu.value?.tooltip ?? '').includes(`(host ${NEW})`), `10c. the tray offers "Update host", ${NEW} in its tooltip`, `${(menu.value?.items ?? []).join(' | ')} / ${menu.value?.tooltip ?? ''}`);
 
     step('11', 'before the update: the providers under the old host, read from the OS');
     const map = parents();
@@ -627,7 +627,7 @@ async function hostUpdate(broken) {
     const beforeKeys = new Set(everyBefore.map((p) => p.key));
     check(before.length === AGENTS && agents.every((ag) => before.some((p) => p.pid === ag.pid)), `11. CONTROL: the OS shows ${AGENTS} stub-codex providers under the host ${hostPid}, the agents' own`, JSON.stringify(before));
 
-    step('12', `the tray's "Update host to ${NEW}": the host drains itself, the launcher swaps it`);
+    step('12', `the tray's "Update host" (${NEW}): the host drains itself, the launcher swaps it`);
     const watch = watchUpdate();
     const logAt = readOr(LAUNCHER_LOG).length;
     const act = await wireCall(RUNTIME, 'launcher.trayAct', [{ action: 'installHostUpdate' }], 15_000);
