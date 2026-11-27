@@ -133,7 +133,7 @@ describe('a workspace dashboard agent click', () => {
         });
 
         it(`${how}: an agent whose question is STALE — the same`, () => {
-            expectAgentTab(activateLane('a_kai', [question({ stale: 'session-ended' })], how), 'a_kai');
+            expectAgentTab(activateLane('a_kai', [question({ stale: 'agent-gone' })], how), 'a_kai');
         });
     }
 

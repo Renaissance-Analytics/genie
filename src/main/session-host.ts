@@ -90,6 +90,16 @@ export interface SessionLifecycle {
     readingFailed?(agentId: AgentId, run: number, pids: readonly number[]): void;
     /** How far a start has come (Tynn #558). */
     phase?(agentId: AgentId, run: number, phase: AgentStartPhase): void;
+    /** A run begins, and why (Tynn #1085): once per run, before its first phase. */
+    starting?(agentId: AgentId, run: number, why: StartWhy): void;
+}
+
+/** How a start is made: on which account, quietly, as a move — and why it was asked (Tynn #1085; `start` when not said). */
+export interface StartHow {
+    readonly account?: AccountRecord;
+    readonly quiet?: boolean;
+    readonly movedFrom?: AccountRecord;
+    readonly why?: StartWhy;
 }
 
 /** How long a start may go unanswered before the person is told (Tynn #558). A normal start takes about a second. */
@@ -141,6 +151,7 @@ import { promptDeliveries, type PromptAction, type PromptDelivery } from '../cor
 import { isProviderCommand, slashCommandOf, unsupportedSlashCommand } from '../core/provider-commands.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
 import { sessionsDir, userHome } from './paths.js';
+import type { StartWhy } from '../core/start-why.js';
 
 /**
  * THE RUNNING AGENTS — one place that owns sessions, and counts them.
@@ -624,7 +635,7 @@ export class SessionHost {
     readonly #threadInAccount: (threadId: string, configDir: string | null) => 'present' | 'absent' | 'indeterminate';
     readonly #launchBlocked: ((account: AccountRecord) => string | null) | undefined;
     /** Starts a sign-in in their account's folder refused (Tynn #1011), as they were asked: started when the sign-in is over (`launchUnblocked`). */
-    readonly #blockedStarts = new Map<AgentId, { readonly record: AgentRecord; readonly cwd: string; readonly how: { readonly account?: AccountRecord; readonly quiet?: boolean; readonly movedFrom?: AccountRecord }; readonly reason: string }>();
+    readonly #blockedStarts = new Map<AgentId, { readonly record: AgentRecord; readonly cwd: string; readonly how: StartHow; readonly reason: string }>();
     /** The Claude folder of each run that is stopping, or that a stop could not end: its process is in that folder until it has ended. */
     readonly #stoppingIn = new Map<AgentId, string>();
     /** Agents being moved to the active account now (Tynn #1011): one move at a time per agent. */
@@ -1163,7 +1174,7 @@ export class SessionHost {
         for (const [id, entry] of this.#running) { entry.session.releaseWork(); this.#emit(id); }
     }
 
-    start(record: AgentRecord, cwd: string, how: { readonly account?: AccountRecord; readonly quiet?: boolean; readonly movedFrom?: AccountRecord } = {}): { ok: true } | { ok: false; reason: string } {
+    start(record: AgentRecord, cwd: string, how: StartHow = {}): { ok: true } | { ok: false; reason: string } {
         const existing = this.#running.get(record.id);
         // This start is the newest word on the agent: one a sign-in refused earlier no longer waits to be started.
         this.#blockedStarts.delete(record.id);
@@ -1473,6 +1484,7 @@ export class SessionHost {
 
         entry.session = session;
         this.#running.set(record.id, entry);
+        this.#lifecycle?.starting?.(record.id, entry.run, how.why ?? 'start');
 
         /**
          * A provider can fail to spawn SYNCHRONOUSLY, and that path reaches none of the
@@ -1691,7 +1703,7 @@ export class SessionHost {
             this.stop(agentId, { graceful: false });
             const verdict = await this.ended(agentId);
             if (verdict && !verdict.verified && verdict.survivors.length > 0) return;
-            const started = this.start(runRecord, cwd, { account: active, quiet: true, movedFrom: from });
+            const started = this.start(runRecord, cwd, { account: active, quiet: true, movedFrom: from, why: 'account-move' });
             if (!started.ok) { this.#moveBack(runRecord, cwd, from, active); return; }
             this.#toldStayed.delete(agentId);
             await this.deliverOwed(agentId);
@@ -1706,7 +1718,7 @@ export class SessionHost {
         setTimeout(() => {
             void (async () => {
                 if (this.#running.get(id)) { this.stop(id, { graceful: false }); await this.ended(id); }
-                const again = this.start(this.#currentRecord?.(id) ?? record, cwd, { account: from, quiet: true });
+                const again = this.start(this.#currentRecord?.(id) ?? record, cwd, { account: from, quiet: true, why: 'account-move-back' });
                 if (again.ok && to) this.#tellStayed(id, from, to, `it could not start on ${to.label}`, true);
             })().catch(() => { /* the refusal is on the agent's row (start says why) */ });
         }, 0);
@@ -2236,7 +2248,7 @@ export class SessionHost {
                 this.stop(id, { graceful: false });
                 const verdict = await this.ended(id);
                 if (verdict && !verdict.verified && verdict.survivors.length > 0) return;
-                const started = this.start(this.#currentRecord?.(id) ?? record, cwd);
+                const started = this.start(this.#currentRecord?.(id) ?? record, cwd, { why: 'provider-reload' });
                 if (!started.ok) return;
                 // The new session has had no turn of its own: the plan keepalive weighs it (Tynn #754).
                 this.#onTurnEnd?.(id, 'restarted');
@@ -2260,7 +2272,7 @@ export class SessionHost {
                 this.stop(id, { graceful: false });
                 const verdict = await this.ended(id);
                 if (verdict && !verdict.verified && verdict.survivors.length > 0) return;
-                const started = this.start(this.#currentRecord?.(id) ?? record, cwd);
+                const started = this.start(this.#currentRecord?.(id) ?? record, cwd, { why: 'overload-reload' });
                 if (!started.ok) return;
                 this.#onTurnEnd?.(id, 'restarted');
                 const session = this.#running.get(id)?.session;

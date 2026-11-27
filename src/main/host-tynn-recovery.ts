@@ -31,7 +31,7 @@ export interface HostTynnRecoveryPorts {
         notice(id: AgentId, text: string): boolean;
         stop(id: AgentId): boolean;
         ended(id: AgentId): Promise<StopVerdict | null>;
-        start(record: AgentRecord, cwd: string): { ok: true } | { ok: false; reason: string } | Promise<{ ok: true } | { ok: false; reason: string }>;
+        start(record: AgentRecord, cwd: string, how?: { readonly why?: 'tynn-recovery' }): { ok: true } | { ok: false; reason: string } | Promise<{ ok: true } | { ok: false; reason: string }>;
         deliverOwed(id: AgentId): Promise<number>;
     };
     record(id: string): AgentRecord | null;
@@ -87,7 +87,7 @@ export function hostTynnRecovery(ports: HostTynnRecoveryPorts) {
             log(`tynn recovery: ${record.name}'s previous run did not end, so it was not started again: ${verdict.reason}`);
             return;
         }
-        const started = await ports.host.start(record, ports.cwdFor(record));
+        const started = await ports.host.start(record, ports.cwdFor(record), { why: 'tynn-recovery' });
         if (!started.ok) { log(`tynn recovery: ${record.name} could not start again: ${started.reason}`); return; }
         // In the new run's chat, where it is seen, and only once it is true.
         ports.host.notice(agent, BACK_NOTICE);

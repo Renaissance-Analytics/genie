@@ -106,8 +106,8 @@ describe('a re-ask brings a put-off question back to the window', () => {
     });
 });
 
-describe('a re-asked question is judged live from its LATEST ask', () => {
-    it('first asked by an earlier run, asked again by the run now: live (and its age stays the first ask’s)', async () => {
+describe('a re-asked question stays live (Tynn #1085: a later run never makes it stale)', () => {
+    it('first asked by an earlier run: live (its answer is mailed, Tynn #1085); asked again by the run now: still live, and its age stays the first ask’s', async () => {
         const dir = await mkdtemp(join(tmpdir(), 'genie2-reask-live-'));
         try {
             let clock = Date.parse('2026-10-15T09:00:00.000Z');
@@ -119,8 +119,8 @@ describe('a re-asked question is judged live from its LATEST ask', () => {
             // The agent's session restarts at 09:05 and asks the same question at 09:06.
             const startedAt = Date.parse('2026-10-15T09:05:00.000Z');
             const judge = () => deckItemsFrom({ questions: store.pending(), userList: [], unreadDms: [], agents: { [agent]: { name: 'kai', workspaceId: 'ws_shop' } }, asker: () => ({ running: true, startedAt }) })[0]!;
-            // Control: before the re-ask it IS stale — asked by the earlier run.
-            expect(judge().stale).toBe('earlier-run');
+            // Asked by the earlier run: still live — the restarted agent gets the answer in its inbox.
+            expect(judge().stale).toBeUndefined();
             clock = Date.parse('2026-10-15T09:06:00.000Z');
             await store.ask({ agentId: agent, agentName: 'kai', workspaceId: 'ws_shop', questions }, { userActive: true });
             expect(judge().stale).toBeUndefined();

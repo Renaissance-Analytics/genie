@@ -60,9 +60,11 @@ export interface QuestionFormProps {
     readonly wide?: boolean;
     /** Every change to the draft (an option picked or cleared, a note written), as the whole draft. */
     readonly onDraft?: ((draft: QuestionDraft) => void) | undefined;
+    /** The answer button's words: "Answer anyway" for a question whose agent no longer waits (Tynn #1085). */
+    readonly submitLabel?: string;
 }
 
-export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel = 'Cancel', cancelKey, onDismiss, refusal = null, initial, showHeaders = true, onDraft, wide = false }: QuestionFormProps) {
+export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel = 'Cancel', cancelKey, onDismiss, refusal = null, initial, showHeaders = true, onDraft, wide = false, submitLabel = 'Answer' }: QuestionFormProps) {
     const questions = item.answer.kind === 'form' ? (item.answer.questions ?? null) : null;
     const count = questions?.length ?? 0;
     const [selections, setSelections] = useState<string[][]>(() => Array.from({ length: count }, (_, i) => [...(initial?.selections[i] ?? [])]));
@@ -172,7 +174,7 @@ export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel 
                 </fieldset>
             ))}
             <div className="flex flex-wrap items-center gap-2">
-                <Button size="xs" type="submit" data-action="deck-submit" loading={sending} disabled={sending || remaining > 0} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-3 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)] disabled:cursor-not-allowed disabled:opacity-60">Answer</Button>
+                <Button size="xs" type="submit" data-action="deck-submit" loading={sending} disabled={sending || remaining > 0} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-3 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)] disabled:cursor-not-allowed disabled:opacity-60">{submitLabel}</Button>
                 {onCancel ? <Button size="xs" type="button" data-action="question-cancel" onClick={onCancel} {...(cancelKey ? { title: `${cancelLabel} (${cancelKey})`, 'aria-keyshortcuts': cancelKey === 'Esc' ? 'Escape' : cancelKey } : {})} className="rounded-lg border border-[var(--border-1)] px-3 py-1 text-[12px]">{cancelLabel}</Button> : null}
                 {onDismiss ? (
                     <Button size="xs" type="button" data-action="question-dismiss" data-deck-dismiss={item.id} disabled={sending} onClick={() => onDismiss([...notes])} title="Put this question aside without an answer; the agent is told, with any note you wrote" className="rounded-lg border border-[var(--border-1)] px-3 py-1 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)] disabled:opacity-60">Dismiss</Button>

@@ -1847,7 +1847,7 @@ async function boot(): Promise<void> {
             const engine = host;
             // A refused start (Genie shutting down, a previous run still stopping) did not start: the agent stays saved for
             // the next launch (Tynn #754), and a mid-turn one's prompt is still kept as owed for its Restart (genie#1238).
-            const started = await engine.start(record, cwdFor(record));
+            const started = await engine.start(record, cwdFor(record), { why: 'boot-restore' });
             if (!started.ok) {
                 if (resume) await engine.recordOwed(record.id, RESUME_AFTER_RESTART, 'genie');
                 throw new Error(started.reason);
