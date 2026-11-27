@@ -326,6 +326,9 @@ function onTheClockNow(): { armedFlows: number; scheduledTasks: number } {
     return { armedFlows: hostSummaryNow.armedFlows.length, scheduledTasks: hostSummaryNow.scheduledTasks.length };
 }
 
+/** The person closed the main window (its `close`, which a `destroy()` never emits): what may end the client. */
+let mainClosedByPerson = false;
+
 /** The launcher's control wire, as this client calls it (Tynn #1058 L4/L5). */
 const launcherCall = (method: string, args: readonly unknown[] = []) => callLauncher(launcherWire(runtimeDir(genieRoot()), 'client'), method, args);
 
@@ -347,6 +350,10 @@ function endClient(reason: string): void {
  */
 function endClientOnLastWindow(reason: string): void {
     if (quit.quitting) return;
+    // ONLY THE PERSON'S CLOSE: a window Genie destroys itself (the "Starting Genie's host…" window before the main window
+    // exists, the page's recovery building the window again) is never the last window closing (the first L5 gate: every
+    // window row's client ended itself at boot).
+    if (!mainClosedByPerson) return;
     if (BrowserWindow.getAllWindows().some((w) => !w.isDestroyed() && w.isVisible())) return;
     const settings = mainWindowDeps?.settings ?? null;
     if (launcherLink(process.env) !== null && settings && settings.snapshot().tray_notice_shown !== true && Notification.isSupported()) {
@@ -2099,6 +2106,8 @@ function mountMainWindow(show: boolean, reason = 'launch'): void {
     window = createWindow(show);
     // CLOSING THE WINDOW IS REAL (Tynn #1058 L5): no hide to a tray of the client's own. The last window closed ends the
     // client process; the host keeps everything and the launcher's tray stays.
+    mainClosedByPerson = false;
+    window.on('close', () => { mainClosedByPerson = true; });
     window.on('closed', () => { setImmediate(() => { endClientOnLastWindow('the main window closed'); }); });
     // Windows ends a session (shutdown, restart, sign-out) WITHOUT a before-quit (Electron documents it): quit on the
     // way out so the shutdown runs, without a question nothing could answer.

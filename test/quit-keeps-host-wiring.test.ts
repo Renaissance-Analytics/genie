@@ -53,6 +53,11 @@ describe('main.ts', () => {
         expect(end).toMatch(/quit\.choose\('exit-window'\);\s*\n\s*app\.quit\(\);/);
         const last = block(src, 'function endClientOnLastWindow(', '\n}\n');
         expect(last).toMatch(/BrowserWindow\.getAllWindows\(\)\.some\(\(w\) => !w\.isDestroyed\(\) && w\.isVisible\(\)\)/);
+        // Only the person's close of the main window ends it: a window Genie destroys (the host-wait window at boot, the
+        // page's recovery) never does (the first L5 gate: every window row's client ended itself at boot).
+        expect(last).toMatch(/if \(!mainClosedByPerson\) return;/);
+        const mount = block(src, 'function mountMainWindow(', '\n}\n');
+        expect(mount).toMatch(/mainClosedByPerson = false;\s*\n\s*window\.on\('close', \(\) => \{ mainClosedByPerson = true; \}\);/);
         // TRAY_NOTICE once, and only for a client a launcher started (it is the launcher's tray that stays).
         expect(last).toMatch(/launcherLink\(process\.env\) !== null && settings && settings\.snapshot\(\)\.tray_notice_shown !== true/);
     });
