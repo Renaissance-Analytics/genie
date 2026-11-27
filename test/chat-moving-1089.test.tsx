@@ -64,3 +64,14 @@ describe('carried while no run is up (the moment of a move, or a restart startin
         expect(html).toContain('Not delivered');
     });
 });
+
+describe('queued with no run up, its delivery row not here yet (the window in the moment of a move)', () => {
+    it('waits — the next start delivers it — never "Not delivered"', () => {
+        const d = { ...detail({}), session: null } as unknown as AgentDetail;
+        const thread = chatThreadFrom(d, 'a1', [], () => T0);
+        expect(thread.messages.find((x) => x.promptId === 'p1')).toMatchObject({ queued: true, delivered: false, queuedForReturn: true });
+        const html = renderToStaticMarkup(<ChatFlyout thread={thread} onSend={() => {}} onClose={() => {}} onRestartAndSend={() => {}} />);
+        expect(html).toContain('Waiting · sent when tynn is back');
+        expect(html).not.toContain('Not delivered');
+    });
+});
