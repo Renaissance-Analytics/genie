@@ -226,7 +226,7 @@ describe('the switch offer\'s numbers are the bars\', and its words read', () =>
         expect(service.offers()[0]).toMatchObject({ leftPct: 2, over: false });
     });
 
-    it('the words, the provider's own: "N% used in the 5-hour window", "spent this week"; a target with its own window; one never read is said so', () => {
+    it('the words, the provider’s own: "N% used in the 5-hour window", "spent this week"; a target with its own window; one never read is said so', () => {
         const offer = (window: string, leftPct: number, over: boolean): SwitchOffer => ({ id: 'o', provider: 'claude', accountId: A.id, label: 'Account 1', window, leftPct, over, resetsAtMs: NOW + HOUR, targets: [] });
         expect(offerWords(offer('5h', 0, false))).toBe('Account 1: 100% used in the 5-hour window.');
         expect(offerWords(offer('7d', 0, true))).toBe('Account 1: spent this week.');
@@ -263,7 +263,7 @@ describe('the Accounts popover draws each account\'s own windows', () => {
     });
 });
 
-describe('ONE meaning of a figure, said on screen, the provider's own: the share USED (Tynn #1070 review; Claude's page says "95% used")', () => {
+describe('ONE meaning of a figure, said on screen, the provider’s own: the share USED (Tynn #1070 review; Claude’s page says "95% used")', () => {
     const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
     let el: HTMLDivElement;
     let root: Root;
