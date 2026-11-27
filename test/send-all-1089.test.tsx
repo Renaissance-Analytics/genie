@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { sendAll, sendAllWords, type SendAllState } from '../src/core/send-all.js';
 import { ChatQueueBar } from '../src/renderer/components/ChatQueueBar.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * "SEND ALL NOW" SENDS, AND SAYS SO (Tynn #1089; the owner, 2026-11-27: "clicking the send all now button does nothing at
@@ -50,7 +51,8 @@ describe('the queue bar while and after it sends', () => {
         const html = renderToStaticMarkup(<ChatQueueBar agentName="atlas" waiting={0} undelivered={2} onSendAll={() => {}} sending={{ done: 0, of: 2, running: true, results: [] }} />);
         expect(html).toContain('data-send-all-progress');
         expect(html).toContain('Sending 1 of 2…');
-        expect(html).toMatch(/data-action="send-all"[^>]*disabled/);
+        // The button's own opening tag, in whatever order its attributes come.
+        expect(control(html, 'data-action="send-all"')?.open).toMatch(/\sdisabled(=|\s|>)/);
     });
 
     it('after: the result of EACH message, at the bar — even once nothing is left "not delivered"', () => {

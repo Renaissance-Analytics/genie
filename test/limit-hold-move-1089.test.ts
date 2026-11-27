@@ -54,7 +54,7 @@ describe('an agent held on a spent week while another account is active', () => 
         await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
     });
 
-    function world() {
+    function world(onStart?: (n: number) => void) {
         let active: AccountRecord = A;
         const drivers: Driver[] = [];
         let processes: ProcessInfo[] = [{ pid: process.pid, ppid: 1, started: 1, name: 'genie-test' }];
@@ -68,7 +68,7 @@ describe('an agent held on a spent week while another account is active', () => 
             const d: Driver = { prompts: [], events, account: extras?.account, killed: false };
             drivers.push(d);
             const driver: SessionDriver = {
-                start: () => { running = true; processes.push({ pid, ppid: process.pid, started: 3, name: 'claude-fixture' }); },
+                start: () => { running = true; processes.push({ pid, ppid: process.pid, started: 3, name: 'claude-fixture' }); onStart?.(drivers.length); },
                 prompt: (content) => { d.prompts.push(content); },
                 cancel: () => Promise.resolve(),
                 kill: () => { d.killed = true; running = false; processes = processes.filter((p) => p.pid !== pid); },
@@ -160,7 +160,11 @@ describe('an agent held on a spent week while another account is active', () => 
     });
 
     it('a message the new run holds behind its turn is recorded as WAITING, not "undelivered"', async () => {
-        const w = world();
+        // The new run is busy BEFORE what is owed reaches it (the owner's: an inbox notice's turn came first): a prompt handed to
+        // it the moment it starts, ahead of the host's read of what it owes.
+        let busy: (() => void) | null = null;
+        const w = world((n) => { if (n === 2) queueMicrotask(() => busy?.()); });
+        busy = () => { w.host.prompt(w.record.id, 'AgentInbox delivery: 1 message', 'genie'); };
         w.host.start(w.record, dir);
         await vi.waitFor(() => expect(w.drivers).toHaveLength(1));
         w.host.prompt(w.record.id, 'work', 'you');
@@ -172,9 +176,12 @@ describe('an agent held on a spent week while another account is active', () => 
         const id = (await w.messageId('still there?'))!;
         w.switchTo(B);
         await vi.waitFor(() => expect(w.drivers).toHaveLength(2));
-        // The new run is busy before what is owed reaches it (the owner's: an inbox notice's turn came first).
-        w.host.prompt(w.record.id, 'AgentInbox delivery: 1 message', 'genie');
         await flush();
+        // POSITIVE CONTROL of the setup: the new run took the notice first, so the owed message waits behind its turn.
+        expect(w.drivers[1]!.prompts.map((p) => JSON.stringify(p)).join('
+')).toContain('AgentInbox delivery');
+        expect(w.drivers[1]!.prompts.map((p) => JSON.stringify(p)).join('
+')).not.toContain('still there?');
         // Waiting: what the chat draws as queued (`queued`, or `carried` across the move) — never "undelivered".
         expect(['queued', 'carried']).toContain(await w.state(id));
         expect(await w.statuses(id)).not.toContain('undelivered');
