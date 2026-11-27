@@ -66,14 +66,37 @@ describe('paired hosts', () => {
         expect(view.hosts).toHaveLength(2);
     });
 
-    it('opening one needs this computer\'s own sign-in (step 4): said in words, never a button that does nothing', () => {
+    it('opening one needs this computer\'s own sign-in (step 4): one short line, the rest for its info tooltip, never a button that does nothing', () => {
         const [row] = hostDirectory({ ...none, paired: [paired[0]!] }).hosts;
         expect(row?.action).toBeNull();
-        expect(row?.detail).toMatch(/sign/i);
+        expect(row?.detail).toBe('Open from a computer with a host until sign-in arrives');
+        expect(row?.more).toMatch(/own Genie sign-in/);
+    });
+
+    it('each row says what it is by its icon: this computer, a host at an address, a Tynn relay host', () => {
+        const view = hostDirectory({ profile: 'both', local: { kind: 'stopped', build: null }, paired: ['wss://studio.example:7443', 'relay:ws_01'], launcher: true });
+        expect(view.hosts.map((h) => h.icon)).toEqual(['monitor', 'server', 'cloud']);
+    });
+});
+
+describe('the status dot', () => {
+    it('green running, amber stopped or needing an update, red could not start, grey when not known', () => {
+        const dot = (local: HostDirectoryInput['local']) => hostDirectory({ profile: 'both', local, paired: [], launcher: true }).hosts[0]?.dot;
+        expect(dot({ kind: 'running', build: '2026.11.27-1' })).toBe('green');
+        expect(dot({ kind: 'stopped', build: null })).toBe('amber');
+        expect(dot({ kind: 'incompatible', protocol: 1, mine: 2 })).toBe('amber');
+        expect(dot({ kind: 'failed', reason: 'x' })).toBe('red');
+        expect(hostDirectory({ ...none, paired: ['ws://10.0.0.5:7443'] }).hosts[0]?.dot).toBe('grey');
+    });
+
+    it('running: the local host Start started, said while its window opens, with nothing left to press', () => {
+        const [row] = hostDirectory({ profile: 'both', local: { kind: 'running', build: '2026.11.27-1' }, paired: [], launcher: true }).hosts;
+        expect(row).toMatchObject({ state: 'running', action: null });
+        expect(row?.detail).toMatch(/running/i);
     });
 
     it('a duplicate or something that is not a host address is not listed', () => {
-        const view = hostDirectory({ ...none, paired: [paired[0]!, paired[0]!, 'file:///etc/passwd', ''] });
-        expect(view.hosts.map((h) => h.id)).toEqual([paired[0]]);
+        const view = hostDirectory({ ...none, paired: ['wss://studio.example:7443', 'wss://studio.example:7443', 'file:///etc/passwd', ''] });
+        expect(view.hosts.map((h) => h.id)).toEqual(['wss://studio.example:7443']);
     });
 });

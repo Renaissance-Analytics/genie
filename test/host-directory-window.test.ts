@@ -25,6 +25,8 @@ describe('Start', () => {
         expect(r.asked()).toBe(1);
         expect(r.pushed[0]?.busy).toBe('local');
         expect(r.pushed.at(-1)).toMatchObject({ busy: null, notice: { ok: true } });
+        // The result on the row itself: running (green), with nothing left to press, while its window opens.
+        expect(r.pushed.at(-1)?.view.hosts[0]).toMatchObject({ id: 'local', state: 'running', dot: 'green', action: null });
         await Promise.resolve();
         expect(linked).toBe(true);
     });

@@ -40,6 +40,53 @@ describe('the screen', () => {
     });
 });
 
+/** The opening tag of the element carrying `attr`. */
+const tag = (html: string, attr: string) => html.match(new RegExp(`<[a-z]+[^>]*${attr}[^>]*>`))?.[0] ?? '';
+
+describe('it looks like Genie (the coordinator\'s review, 2026-11-27)', () => {
+    const stopped = hostDirectory({ profile: 'both', local: { kind: 'stopped', build: '2026.11.27-1' }, paired: ['wss://studio.example:7443'], launcher: true });
+
+    it('sits in Genie\'s window chrome: the title bar with the Genie mark and name, a drag region, nothing under the native buttons', () => {
+        const html = draw(stopped);
+        const bar = html.slice(html.indexOf('data-host-directory-titlebar'), html.indexOf('</header>'));
+        expect(bar).toContain('Genie');
+        expect(bar).toMatch(/<svg/);
+        expect(tag(html, 'data-host-directory-titlebar')).toMatch(/-webkit-app-region:drag/);
+    });
+
+    it('each row: its icon, a status dot (not a text pill), the name in bold', () => {
+        const html = draw(stopped);
+        expect(tag(html, 'data-host-row="local"')).toBeTruthy();
+        expect(html).toMatch(/data-host-icon="monitor"/);
+        expect(html).toMatch(/data-host-icon="server"/);
+        expect(tag(html, 'data-status-dot="amber"')).toMatch(/rounded-full/);
+        expect(tag(html, 'data-status-dot="grey"')).toMatch(/rounded-full/);
+        expect(tag(html, 'data-host-name="local"')).toMatch(/font-semibold/);
+        expect(html).not.toMatch(/>Stopped<|>Paired</);
+    });
+
+    it('a paired row: one short muted line, and the rest behind an info icon', () => {
+        const html = draw(stopped);
+        expect(html).toContain('Open from a computer with a host until sign-in arrives');
+        expect(html).toMatch(/data-host-more="wss:\/\/studio\.example:7443"/);
+        expect(html).not.toContain('which is coming. Open it from a computer');
+    });
+
+    it('Add a host and Start are the primary actions; Start says Starting… while the launcher starts the host', () => {
+        expect(tag(draw(stopped), 'data-action="add-host"')).toMatch(/data-primary=""/);
+        expect(tag(draw(stopped), 'data-action="start"')).toMatch(/data-primary=""/);
+        expect(draw(stopped, 'local')).toContain('Starting…');
+        expect(draw(stopped)).not.toContain('Starting…');
+    });
+
+    it('the result on the row: running, a green dot, nothing to press', () => {
+        const running = hostDirectory({ profile: 'both', local: { kind: 'running', build: '2026.11.27-1' }, paired: [], launcher: true });
+        const html = draw(running);
+        expect(html).toMatch(/data-status-dot="green"/);
+        expect(html).not.toMatch(/data-action="start"/);
+    });
+});
+
 describe('its page', () => {
     it('is a window page of its own, built from host-directory.html, loading the screen\'s entry', () => {
         expect(WINDOW_PAGES).toContain('host-directory');
