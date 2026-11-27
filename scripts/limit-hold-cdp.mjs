@@ -94,6 +94,8 @@ try {
     demand(atlas, 'the seeded claude agent');
     const created = new Date(Date.now() - 86_400_000).toISOString();
     writeFileSync(join(runtime, 'accounts.json'), JSON.stringify({ version: 1, active: { claude: SPENT }, accounts: [
+        // The machine-default Claude login the book always has (no reading of its own: its room is unknown, never offered).
+        { id: 'account_legacy_claude', provider: 'claude', legacy: true, label: 'Default', labelEdited: true, home: join(root, '.claude'), identity: { name: null, email: null, plan: null }, createdAt: created },
         { id: 'account_legacy_codex', provider: 'codex', legacy: true, label: 'Account 1', labelEdited: false, home: join(root, '.codex'), identity: { name: null, email: null, plan: null }, createdAt: created },
         { id: SPENT, provider: 'claude', legacy: false, label: 'Spent', labelEdited: true, home: join(root, '.claude'), identity: { name: null, email: 'spent@example.invalid', plan: 'max' }, createdAt: created, configDir: spentDir, method: 'subscription' },
         { id: ROOMY, provider: 'claude', legacy: false, label: 'Roomy', labelEdited: true, home: join(root, '.claude'), identity: { name: null, email: 'roomy@example.invalid', plan: 'max' }, createdAt: created, configDir: roomyDir, method: 'subscription' },
