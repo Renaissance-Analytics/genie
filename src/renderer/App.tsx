@@ -2333,7 +2333,7 @@ function DesktopApp({ bridge }: AppProps) {
             onRestartAndSend={restartAndSend}
             onSendAllKept={sendAllKept}
             sendAll={chatThread && sendAllState?.agentId === chatThread.agentId ? sendAllState.state : null}
-            onSwitchAccount={(accountId) => { void accountsAct({ kind: 'switch', id: accountId }).then((r) => { if (!r.ok) showAlert({ title: 'Switch account', body: r.reason }); }, () => {}); }}
+            onSwitchToAccount={(accountId) => { void accountsAct({ kind: 'switch', id: accountId }).then((r) => { if (!r.ok) showAlert({ title: 'Switch account', body: r.reason }); }, () => {}); }}
             onDiscardDraft={discardDraft}
             // Withdraw / Edit a queued message (Tynn #843): the host takes it back, here and from a Pilot window alike.
             onResolveQueued={chatThread && resolvedBridge ? (promptId, action) => resolvedBridge.resolvePrompt(chatThread.agentId, promptId, action) : undefined}

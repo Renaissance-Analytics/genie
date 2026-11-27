@@ -53,7 +53,6 @@ export function sendAllWords(state: SendAllState): string {
 
 /** One message's result, in words. */
 export function sendAllResultWords(result: SendAllResult): string {
-    if (result.outcome === 'sent') return 'Sent';
-    if (result.outcome === 'waiting') return 'Waiting behind the current turn';
+    if (result.outcome !== 'failed') return result.outcome === 'sent' ? 'Sent' : 'Waiting behind the current turn';
     return `Not sent: ${result.reason}`;
 }

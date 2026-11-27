@@ -67,7 +67,7 @@ describe('the Accounts chip', () => {
 
     it('CONTROL: nothing out, no line', () => {
         const view = accountsView(KNOWN, [], { claude: A }, {})[0]!;
-        act(() => root.render(<AccountsChip view={view} offer={null} now={NOW} onSwitch={() => {}} onAccountsAct={vi.fn(async () => ({ ok: true }))} />));
+        act(() => root.render(<AccountsChip view={view} offer={null} now={NOW} onSwitch={() => {}} onAccountsAct={vi.fn(async () => ({ ok: true as const }))} />));
         expect(host.querySelector('[data-accounts-active-out]')).toBeNull();
     });
 });

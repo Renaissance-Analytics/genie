@@ -303,7 +303,7 @@ export interface ShellProps {
     /** Tynn #1089: Send all with a result each, how far it is, and the active-out line's `Switch to`. */
     onSendAllKept?: ((items: readonly import('../core/send-all.js').SendAllItem[]) => void) | undefined;
     sendAll?: import('../core/send-all.js').SendAllState | null | undefined;
-    onSwitchAccount?: ((accountId: string) => void) | undefined;
+    onSwitchToAccount?: ((accountId: string) => void) | undefined;
     /** Start an agent that is not running (the Agent view's Start). */
     onStartAgent?: ((agentId: string) => void) | undefined;
     /** The safe-mode banner's Start for an agent (Tynn #386): the one Restart, with its answer, so the banner says it. */
@@ -475,7 +475,7 @@ export function Shell({
     onMoveNow,
     onSendAllKept,
     sendAll,
-    onSwitchAccount,
+    onSwitchToAccount,
     onStartAgent,
     onSafeModeStartAgent,
     onOpenPalette,
@@ -1258,7 +1258,7 @@ export function Shell({
                         onMoveNow={chatThread && onMoveNow && !scoped && chatSession?.account?.movesTo ? () => onMoveNow(chatThread.agentId) : undefined}
                         onSendAllKept={readOnly ? undefined : onSendAllKept}
                         sending={sendAll ?? null}
-                        onSwitchAccount={scoped || readOnly ? undefined : onSwitchAccount}
+                        onSwitchAccount={scoped || readOnly ? undefined : onSwitchToAccount}
                     />
                     </ErrorBoundary>
                 </div>

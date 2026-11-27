@@ -1866,7 +1866,7 @@ async function main(): Promise<void> {
     const activeOut = new ActiveOutService({
         providers: () => ['claude'],
         known: () => accounts.list().map((a) => ({ id: a.id, provider: a.provider, label: a.label })),
-        activeId: (provider) => accounts.activeFor(provider).id,
+        activeId: (provider) => accounts.activeFor(provider as (typeof ACP_PROVIDERS)[number]).id,
         room: roomOf,
         choice: () => (settings.snapshot()[ACTIVE_OUT_SETTING] === 'switch' ? 'switch' : 'ask'),
         heldOnActive: (provider) => host.heldOnActive(provider),

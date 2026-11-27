@@ -89,7 +89,7 @@ describe('the setting', () => {
     it('"When the active account runs out": Ask me (default) or Switch to the account with the most room', () => {
         const s = SETTINGS.find((x) => x.key === ACTIVE_OUT_SETTING);
         expect(s).toMatchObject({ label: 'When the active account runs out', type: 'enum', options: ['ask', 'switch'], default: 'ask', scope: 'host' });
-        expect(s?.optionLabels).toEqual({ ask: 'Ask me', switch: 'Switch to the account with the most room' });
+        expect((s as { optionLabels?: unknown } | undefined)?.optionLabels).toEqual({ ask: 'Ask me', switch: 'Switch to the account with the most room' });
     });
 });
 

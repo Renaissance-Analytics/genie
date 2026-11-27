@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { AgentDetail } from '../src/core/agent-detail.js';
+import type { AgentDetail } from '../src/renderer/bridge.js';
 import { chatThreadFrom } from '../src/core/chat-view.js';
 import { ChatFlyout } from '../src/renderer/components/ChatFlyout.js';
 
