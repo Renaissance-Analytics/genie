@@ -148,3 +148,14 @@ describe('ActiveOutService: said once, not on every reading', () => {
         expect(told).toHaveLength(1);
     });
 });
+
+describe('accountRoom: the provider\'s own refusal counts', () => {
+    it('a login the provider refuses until its reset is spent, whatever its last reading said', () => {
+        expect(accountRoom(room(35, RESET), NOW, RESET)).toEqual({ state: 'spent', resetsAtMs: RESET });
+        expect(accountRoom(null, NOW, RESET)).toEqual({ state: 'spent', resetsAtMs: RESET });
+    });
+
+    it('CONTROL: no refusal, the reading decides as before', () => {
+        expect(accountRoom(room(35, RESET), NOW, null)).toEqual({ state: 'room', leftPct: 35 });
+    });
+});

@@ -69,3 +69,18 @@ describe('the queue bar while and after it sends', () => {
         expect(renderToStaticMarkup(<ChatQueueBar agentName="atlas" waiting={0} undelivered={0} />)).toBe('');
     });
 });
+
+describe('the results say what the chat says now', () => {
+    it('a message reported sent but waiting in the run (held on the limit) reads Waiting; one delivered reads Sent', async () => {
+        const { ChatFlyout } = await import('../src/renderer/components/ChatFlyout.js');
+        const thread = { agentId: 'a1', name: 'atlas', fidelity: 'declared' as const, unread: null, messages: [
+            { id: 'm1', who: 'you' as const, from: 'you', text: 'first kept', delivered: false, queued: true, promptId: 'p1', at: 1 },
+            { id: 'm2', who: 'you' as const, from: 'you', text: 'second kept', delivered: true, promptId: 'p2', at: 2 },
+        ] };
+        const html = renderToStaticMarkup(<ChatFlyout thread={thread} onSend={() => {}} onClose={() => {}} sending={{ done: 2, of: 2, running: false, results: [
+            { id: 'm1', text: 'first kept', outcome: 'sent' }, { id: 'm2', text: 'second kept', outcome: 'sent' },
+        ] }} />);
+        expect(html).toMatch(/data-send-all-result="m1" data-outcome="waiting"/);
+        expect(html).toMatch(/data-send-all-result="m2" data-outcome="sent"/);
+    });
+});

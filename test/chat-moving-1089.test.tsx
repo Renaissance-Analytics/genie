@@ -47,3 +47,20 @@ describe('a message held for a move', () => {
         expect(m?.movingTo).toBeUndefined();
     });
 });
+
+describe('carried while no run is up (the moment of a move, or a restart starting)', () => {
+    it('waits, "sent when tynn is back" — never "Not delivered"', () => {
+        const d = { ...detail({}, 'carried'), session: null } as unknown as AgentDetail;
+        const thread = chatThreadFrom(d, 'a1', [], () => T0);
+        expect(thread.messages.find((x) => x.promptId === 'p1')).toMatchObject({ queued: true, delivered: false });
+        const html = renderToStaticMarkup(<ChatFlyout thread={thread} onSend={() => {}} onClose={() => {}} onRestartAndSend={() => {}} />);
+        expect(html).toContain('Waiting · sent when tynn is back');
+        expect(html).not.toContain('Not delivered');
+    });
+
+    it('CONTROL: undelivered with no run up is still "Not delivered", with Send all now', () => {
+        const d = { ...detail({}, 'undelivered'), session: null } as unknown as AgentDetail;
+        const html = renderToStaticMarkup(<ChatFlyout thread={chatThreadFrom(d, 'a1', [], () => T0)} onSend={() => {}} onClose={() => {}} onRestartAndSend={() => {}} />);
+        expect(html).toContain('Not delivered');
+    });
+});

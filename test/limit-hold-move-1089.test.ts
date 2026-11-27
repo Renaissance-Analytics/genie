@@ -205,3 +205,53 @@ describe('an agent held on a spent week while another account is active', () => 
         await expect(w.host.resolvePrompt(w.record.id, id, 'send')).resolves.toEqual({ ok: true, waiting: true });
     });
 });
+
+describe('a message a restart hands to a run that cannot send it yet', () => {
+    let dir: string;
+    const hosts: SessionHost[] = [];
+    beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie-1089-restart-')); });
+    afterEach(async () => {
+        for (const h of hosts.splice(0)) { h.stopAll(); await h.drained(0); await h.settled(); }
+        await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
+    });
+
+    it('is recorded WAITING in the new run (the owner\'s "Not delivered. Kept for you to send again." while it waited), then sent', async () => {
+        const drivers: Driver[] = [];
+        let processes: ProcessInfo[] = [{ pid: process.pid, ppid: 1, started: 1, name: 'genie-test' }];
+        const tree: ProcessTree = { snapshot: () => [...processes], killTree: (t) => { const ids = new Set(t.map((p) => p.pid)); processes = processes.filter((p) => !ids.has(p.pid)); return { killed: t.length, refused: false }; } };
+        const driverFor: DriverFor = (_a, _c, _r, extras) => ({ events }) => {
+            const pid = process.pid + 5_000_000 + drivers.length + 1;
+            let running = false;
+            const d: Driver = { prompts: [], events, account: extras?.account, killed: false };
+            drivers.push(d);
+            return { start: () => { running = true; processes.push({ pid, ppid: process.pid, started: 3, name: 'claude-fixture' }); }, prompt: (c) => { d.prompts.push(c); }, cancel: () => Promise.resolve(), kill: () => { d.killed = true; running = false; processes = processes.filter((p) => p.pid !== pid); }, get running() { return running; }, get cliSessionId() { return THREAD; } } as SessionDriver;
+        };
+        const store = openDurableStore(sessionsDir(dir));
+        const host = new SessionHost({ userData: dir, driverFor, processTree: tree, stopGraceMs: 0, activeAccount: () => A, threadInAccount: () => 'present', store: () => store });
+        hosts.push(host);
+        const record: AgentRecord = { ...agentRecord({ id: mintAgentId(), workspaceId: 'workspace', provider: 'claude', name: 'atlas' }), threadId: THREAD };
+        const flush = async () => { for (let i = 0; i < 8; i += 1) await new Promise((r) => setTimeout(r, 0)); };
+        const state = async (id: string) => { await host.settled(); return promptDeliveries((await readPromptRows(store, record.id)).rows).get(id); };
+        host.start(record, dir);
+        await vi.waitFor(() => expect(drivers).toHaveLength(1));
+        host.prompt(record.id, 'work', 'you');
+        drivers[0]!.events.onUpdate?.(weekSpent(Date.now()));
+        drivers[0]!.events.onTurnEnd?.(endOnLimit);
+        await flush();
+        host.prompt(record.id, 'first kept', 'you');
+        await flush();
+        await host.settled();
+        const id = (await readPromptRows(store, record.id)).rows.flatMap(({ event: e }) => (e.kind === 'message' && e.text === 'first kept' && e.pending ? [e.pending.id] : []))[0]!;
+        // The person stops it: what waited is kept "undelivered" (theirs to send again).
+        host.stop(record.id, { graceful: false });
+        await host.ended(record.id);
+        expect(await state(id)).toBe('undelivered');
+        // Started again (the one Restart, or Send all's), still held on the limit: what is owed is handed to the new run, and waits.
+        expect(host.start(record, dir)).toEqual({ ok: true });
+        await vi.waitFor(() => expect(drivers).toHaveLength(2));
+        await host.deliverOwed(record.id);
+        expect(host.probe(record.id)?.limit).toMatchObject({ state: 'paused' });
+        expect(drivers[1]!.prompts.map((p) => JSON.stringify(p)).join(' | ')).not.toContain('first kept');
+        expect(await state(id)).toBe('carried');
+    });
+});
