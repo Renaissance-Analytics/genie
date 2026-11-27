@@ -271,10 +271,8 @@ describe('the window registry’s Deck wiring is dead: main reads only its agent
         expect(main).not.toMatch(/composed\.(signals|deckItems|attention|approvals\.onChange|flows\.onChange)\b|composed\.onFrontDoorChange\(\(\) => registry/);
     });
 
-    it('PINNED: an error main caught reaches the tray’s waiting count directly, not through the registry', () => {
-        expect(main).toMatch(/mainErrors\.onChange\(\(\) => \{ refreshTrayWaiting\(\); \}\);/);
-        expect(main.indexOf('mainErrors.onChange(() => { refreshTrayWaiting(); });')).toBeGreaterThan(main.indexOf('const refreshTrayWaiting = (): void => {'));
-        expect(main).toMatch(/needsYouCount\(\[\.\.\.mainErrors\.deckItems\(\), \.\.\.hostDeckNow\]\)/);
+    it('PINNED: an error main caught never goes through the registry (the tray count it fed went with the client tray, L5)', () => {
+        expect(main).not.toMatch(/refreshTrayWaiting/);
         expect(main).not.toMatch(/mainErrors\.onChange\(\(\) => registry/);
     });
 });
@@ -284,7 +282,8 @@ describe('wired: main’s settings are the watch’s; genie-host feeds it', () =
         const main = code(src('src/main/main.ts'));
         expect(main).toMatch(/const settingsNow = windowSettings\(ownProtocol\);/);
         expect(main).toMatch(/tunnelDoor\(ownProtocol\.door, tunnelLinkOf\(agentEngineLink\.client\), \{ own: true \}\);\s*settingsNow\.start\(\);/);
-        expect(main.indexOf('await settingsNow.ready(SETTINGS_BOOT_DEADLINE_MS);')).toBeLessThan(main.indexOf('mountMainWindow(showOnBoot({ startMinimized: settingsNow.snapshot().start_minimized === true'));
+        expect(main.indexOf('await settingsNow.ready(SETTINGS_BOOT_DEADLINE_MS);')).toBeLessThan(main.indexOf('mountMainWindow(true);'));
+        expect(main.indexOf('mountMainWindow(true);')).toBeGreaterThan(-1);
         expect(main).not.toMatch(/(services\??|composed)\.settings\b/);
         expect(main).not.toMatch(/update_channel/);
         // CONTROL: genie-host follows the update channel itself.

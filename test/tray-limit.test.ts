@@ -85,14 +85,11 @@ describe('which logins are held — the host answers', () => {
     });
 });
 
-describe('main keeps the tray current', () => {
+describe('main, since the launcher owns the tray (Tynn #1058 L5)', () => {
     const src = readFileSync('src/main/main.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
-    it('Resume now from the tray resumes the provider’s login; the tray is redrawn only when what is held CHANGES', () => {
-        expect(src).toMatch(/onResumeLimit: \(provider\) => \{ host\?\.resumeLimit\(provider\); refreshTray\(\); \}/);
-        expect(src).toMatch(/function refreshTray\(\): void \{/);
-        expect(src).toMatch(/const held = \(host\?\.heldLogins\(\) \?\? \[\]\)\.flatMap\(\(l\) => \{ const words = limitWords\(l\.view\); return words \? \[\{ provider: l\.provider, words \}\] : \[\]; \}\);/);
-        expect(src).toMatch(/if \(key === trayHeldKey\) return;/);
-        // Every host change may hold or free a login.
-        expect(src).toMatch(/host\.subscribe\(\(agentId\) => \{\n\s*refreshTray\(\);/);
+    it('the client has no tray to redraw; every host change still reads the paused-account alert', () => {
+        expect(src).not.toMatch(/function refreshTray\(|onResumeLimit:|trayHeldKey/);
+        expect(src).toMatch(/function refreshAlerts\(\): void \{\s*\n\s*const paused = host\?\.pausedProviders\(\) \?\? \[\];\s*\n\s*for \(const provider of pauseAlerts\.update\(paused\)\) alertAccountPaused\(provider\);/);
+        expect(src).toMatch(/host\.subscribe\(\(agentId\) => \{\n\s*refreshAlerts\(\);/);
     });
 });

@@ -2,10 +2,10 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 /**
- * TRAY-RESIDENT GENIE — main.ts wires it. Source guards, comments stripped by line (CRLF-safe), so prose cannot
- * satisfy them; the behaviour behind each wire is driven in tray-residence.test.ts, quit-sequence.test.ts and
- * tray-resident.test.ts. On origin/main every one of these is red: window-all-closed quit, the window always
- * showed, the close was never intercepted, a second launch only focused, and the OS ending a session ran no shutdown.
+ * THE CLIENT'S WINDOW AND ITS QUIT — main.ts wires it. Source guards, comments stripped by line (CRLF-safe), so prose
+ * cannot satisfy them; the behaviour behind each wire is driven in quit-sequence.test.ts and launcher-quit-l5.test.ts.
+ * Since Tynn #1058 L5 the tray, start minimised and the logon entry are the LAUNCHER's: the client has no tray, its last
+ * window closing ends the client process (not a quit), and a client that runs shows its window.
  */
 
 describe('main.ts wiring', () => {
@@ -14,30 +14,27 @@ describe('main.ts wiring', () => {
     /** From `start` to the end of its statement: the first `end` after it (a top-level `});` by default). */
     const block = (src: string, start: string, end = '\n});') => { const i = src.indexOf(start); expect(i).toBeGreaterThan(-1); const j = src.indexOf(end, i); expect(j).toBeGreaterThan(i); return src.slice(i, j); };
 
-    it('window-all-closed no longer quits — Genie stays in the tray', () => {
+    it('window-all-closed ends the client process (exit-window: not a quit, nothing of the host stops)', () => {
         const handler = main().match(/app\.on\('window-all-closed', \(\) => \{([^}]*)\}\);/);
         expect(handler).not.toBeNull();
-        expect(handler![1]).not.toMatch(/app\.quit\(/);
+        expect(handler![1]).toMatch(/endClientOnLastWindow\('every window closed'\);/);
     });
 
-    it('the main window boots by showOnBoot (start minimised) and its close goes through wireCloseToTray with the quit sequence', () => {
+    it('the main window boots shown (the launcher decides whether a client starts at all), and its close is real', () => {
         const src = main();
-        // Built by mountMainWindow (P1b: built again after "Just close the UI"), shown at boot by showOnBoot.
-        // As genie-host says it: its settings first (Tynn #998, 2g-4b1).
-        expect(src).toMatch(/await settingsNow\.ready\(SETTINGS_BOOT_DEADLINE_MS\);\s*mountMainWindow\(showOnBoot\(\{ startMinimized: settingsNow\.snapshot\(\)\.start_minimized === true, argv: process\.argv \}\)\);/);
+        // As genie-host says it: its settings first (Tynn #998, 2g-4b1), then the window, always shown.
+        expect(src).toMatch(/await settingsNow\.ready\(SETTINGS_BOOT_DEADLINE_MS\);[\s\S]{0,400}?mountMainWindow\(true\);/);
+        expect(src).not.toMatch(/showOnBoot\(/);
         expect(src).toMatch(/window = createWindow\(show\);/);
         // Shown ACTIVE: this is the launch the person made (genie#1235: only a gesture may take focus).
         expect(src).toMatch(/if \(show\) onceShowable\(win, process\.platform, \(\) => showWhenReady\(win, \{ activation: 'user-gesture'/);
-        expect(src).toMatch(/wireCloseToTray\(window, \{[\s\S]*?quitting: \(\) => quit\.quitting,/);
+        expect(src).not.toMatch(/wireCloseToTray\(/);
     });
 
-    it('the tray’s Open and a second launch SHOW the window (focus alone does nothing to a hidden one)', () => {
+    it('a second launch SHOWS the window (focus alone does nothing to a hidden one); the app menu\u2019s Quit is the one quit entry', () => {
         const src = main();
-        // bringUp's user-gesture path shows, restores and focuses (core/window-activation.ts, window-activation.test.ts).
         expect(block(src, 'function revealMainWindow', '\n}\n')).toMatch(/bringUp\(window, \{ activation: 'user-gesture'/);
         expect(block(src, "app.on('second-instance'")).toMatch(/reveal: \(\) => \{ revealMainWindow\('second launch'\); \},/);
-        expect(src).toMatch(/onOpen: \(\) => \{ revealMainWindow\('tray: Open'\); \},/);
-        // The tray's Quit is the one quit entry `Genie --quit` also runs (quit-flag below).
         expect(src).toMatch(/onQuit: requestQuit,/);
     });
 
@@ -68,7 +65,7 @@ describe('main.ts wiring', () => {
         // is created (P1b: also when the person opens Genie again from the tray, a reveal only a booted Genie can make).
         expect(src).toMatch(/if \(launch\.kind === 'boot'\) \{\s*\n\s*app\.whenReady\(\)\.then\(boot\)/);
         expect(src.match(/app\.whenReady\(\)\.then\(boot\)/g)).toHaveLength(1);
-        expect(block(src, 'async function boot', '\n}\n')).toMatch(/mountMainWindow\(showOnBoot\(/);
+        expect(block(src, 'async function boot', '\n}\n')).toMatch(/mountMainWindow\(true\);/);
         expect(src.match(/window = createWindow\(/g)).toHaveLength(1);
         expect(block(src, 'function mountMainWindow(', '\n}\n')).toMatch(/window = createWindow\(show\);/);
         // And a launch that never booted owns nothing to shut down.
@@ -91,7 +88,11 @@ describe('main.ts wiring', () => {
         expect(block(src, "powerMonitor.on('shutdown'")).toMatch(/quit\.force\(\);\s*\n\s*app\.quit\(\);/);
     });
 
-    it('launch at sign-in is wired at boot with the installed exe', () => {
-        expect(main()).toMatch(/void wireLoginItem\(settingsNow, loginItemPort, \{[\s\S]*?packaged: app\.isPackaged,[\s\S]*?execPath: process\.execPath,/);
+    it('start on logon: the client says its two settings to the launcher (which writes the entry), at boot and on change', () => {
+        const src = main();
+        expect(src).not.toMatch(/wireLoginItem\(/);
+        expect(src).toMatch(/void launcherCall\('launcher\.logon', \[\{ setting: v\.launch_at_login === true, startMinimized: v\.start_minimized === true \}\]\)/);
+        expect(src).toMatch(/sayLogon\('at boot'\);/);
+        expect(src).toMatch(/settingsNow\.onChange\(\(key, _value, workspaceId\) => \{ if \(workspaceId === undefined && \(key === 'launch_at_login' \|\| key === 'start_minimized'\)\) sayLogon\('the setting changed'\); \}\);/);
     });
 });

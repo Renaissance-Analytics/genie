@@ -39,7 +39,8 @@ describe('main.ts wires the error policy', () => {
         const src = main();
         // On the Deck through this window's own features (mainErrors.deckItems below), and at once on the tray's count: since
         // Tynn #998 (2g-4b1) not through the window registry's Deck, which nothing read.
-        expect(src).toMatch(/mainErrors\.onChange\(\(\) => \{ refreshTrayWaiting\(\); \}\);/);
+        // The tray's waiting count went with the client's tray (Tynn #1058 L5): nothing of main counts them for a tray.
+        expect(src).not.toMatch(/refreshTrayWaiting|trayWaiting/);
         expect(src).not.toMatch(/registry\.setDeckSource\(/);
         const ports = src.slice(src.indexOf('const ownFeatureUi = featureWindow(localDoor, {'), src.indexOf('featureEffectNow = ownFeatureUi;'));
         expect(src).toContain('featureEffectNow = ownFeatureUi;');
