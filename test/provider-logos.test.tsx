@@ -109,13 +109,13 @@ describe('every place Genie shows a provider wears its logo, not its name', () =
         expect(visible(a2)).not.toMatch(/\bcodex\b/i);
     });
 
-    it('the rate-limit pills: one logo per provider, then its share left and window', () => {
+    it('the rate-limit pills: one logo per provider, then its share used and window (Tynn #1070: the provider’s own words)', () => {
         const h = (leftPct: number, window: string): Headroom => ({ plan: null, window, leftPct, resetsAtMs: 60_000, over: false, windows: [{ window, usedPct: 100 - leftPct, leftPct, resetsAtMs: 60_000, over: false }] });
         // The injected clock (0) is before every reset, so no window reads Refreshed.
         const html = renderToStaticMarkup(<RateLimitPills limits={{ claude: h(80, '5h'), codex: h(97, '7d') }} now={0} />);
         expect(html).toMatch(/data-rate-limit="claude"[\s\S]*?data-provider-logo="claude"/);
         expect(html).toMatch(/data-rate-limit="codex"[\s\S]*?data-provider-logo="codex"/);
-        expect(visible(html)).toBe('80% 5h 97% 7d');
+        expect(visible(html)).toBe('20% used 5h 3% used 7d');
     });
 
     const agent = { id: 'a1', name: 'atlas', provider: 'claude', fidelity: 'declared' as const, cwd: '/w/tynn' };
