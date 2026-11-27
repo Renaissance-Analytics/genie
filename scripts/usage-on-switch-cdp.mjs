@@ -10,7 +10,7 @@
  * two Claude accounts, Main (the default home, as his is) and Aux (a folder of its own, active), and the agent atlas. Then:
  *   U1 atlas, busy on Aux, its stream's limit line names Aux
  *   U2 Switch to Main in the popover → at once Main says "Reading usage…" (shot 01), and the panel says 1 agent is still on Aux
- *   U3 a few seconds later Main shows ITS OWN 7d window (shot 02); the probe ran in the default home, haiku, no history
+ *   U3 a few seconds later Main shows ITS OWN 7d window (shot 02); the probe ran in the default home, its own default model, no history
  *   U4 atlas's header and chat say "On Aux · moves to Main at next idle" with Restart on Main now (shot 03)
  *   U5 "Check usage now" on Aux reads Aux at once (shot 04)
  *   U6 Restart on Main now moves atlas to Main, on its thread: the banner goes, the header says On Main (shot 05)
@@ -156,7 +156,7 @@ try {
     const windows = await maybe('Main\'s own windows', () => page.evaluate(`(() => { const s = document.querySelector(${q(`${POP} [data-account="${MAIN}"]`)}); const w = s ? [...s.querySelectorAll('[data-account-window]')] : []; return w.length > 0 ? { windows: w.map((x) => x.getAttribute('data-account-window')), text: s.textContent } : null; })()`), 30_000);
     check('U3a', windows?.windows?.includes('7d') && /12% used/.test(windows.text) && !/not read yet|Reading usage/.test(windows.text), 'a few seconds later Main shows its OWN 7d window (12% used), not Aux\'s 33%', windows);
     const mainProbe = calls().find((c) => c.probe && c.dir === null);
-    check('U3b', Boolean(mainProbe) && mainProbe.args[mainProbe.args.indexOf('--model') + 1] === 'haiku' && mainProbe.args.includes('--max-turns') && mainProbe.args[mainProbe.args.indexOf('--tools') + 1] === '', 'the probe ran in the default home, on haiku, one turn, no tools, nothing kept', mainProbe?.args.join(' '));
+    check('U3b', Boolean(mainProbe) && !mainProbe.args.includes('--model') && mainProbe.args.includes('--max-turns') && mainProbe.args.includes('--no-session-persistence') && mainProbe.args[mainProbe.args.indexOf('--tools') + 1] === '', 'the probe ran in the default home, on its own default model, one turn, no tools, nothing kept', mainProbe?.args.join(' '));
     await shot('02-a-few-seconds-later');
 
     // U4: atlas says where it is.
@@ -184,7 +184,12 @@ try {
     const moved = await maybe('atlas on Main', () => page.evaluate(`!document.querySelector(${q(`${POP} [data-accounts-still-on]`)}) && Boolean(document.querySelector('[data-agent-runs-on="${MAIN}"]'))`), 60_000);
     const onMain = await text(`[data-agent-runs-on="${MAIN}"]`);
     check('U6b', moved && /^On Main$/.test((onMain ?? '').trim()), 'atlas moved to Main: the banner is gone and the header says On Main', onMain);
-    // Genie also runs Claude Code for other things after a switch (its model list): the agent's own relaunch is the one resuming its thread.
+    // A moved agent with nothing owed comes back QUIET: its process starts with its next work, on Main, on its own thread. A
+    // message is that work. (Genie also runs Claude Code for other things after a switch: the agent's own launch resumes its thread.)
+    await page.evaluate(`(() => { const f = document.querySelector(${q(FIELD)}); f?.focus(); return document.activeElement === f; })()`);
+    await page.send('Input.insertText', { text: 'U1084 carry on' });
+    await page.evaluate(`(() => { const b = document.querySelector(${q(`${BOX} [data-react-fancy-prompt-input-send]`)}); if (!b || b.disabled) return false; b.click(); return true; })()`);
+    await maybe('atlas relaunched', async () => calls().some((c) => !c.probe && c.args.includes('--resume')), 60_000);
     const relaunch = calls().find((c) => !c.probe && c.args.includes('--resume') && c.args[c.args.indexOf('--resume') + 1] === SESSION);
     check('U6c', relaunch !== undefined && relaunch.dir === null, 'on its own thread (--resume), in the default home', relaunch ? `${relaunch.dir} ${relaunch.args.join(' ')}` : JSON.stringify(calls().filter((c) => !c.probe).map((c) => [c.dir, c.args.slice(0, 6).join(' ')])));
     await shot('05-after-restart-on-main');

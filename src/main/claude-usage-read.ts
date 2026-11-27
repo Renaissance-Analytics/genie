@@ -2,8 +2,6 @@ import { mkdirSync } from 'node:fs';
 import { ClaudeDriver } from '@particle-academy/prism-acp';
 import { RATE_LIMIT_META, headroomFromMeta, type Headroom } from '../core/headroom.js';
 
-/** The model the usage probe asks with (Tynn #1084): the cheapest. */
-export const USAGE_PROBE_MODEL = 'haiku';
 /** What it asks: one word back, so the turn costs as little as a turn can. */
 export const USAGE_PROBE_PROMPT = 'Reply with the single word OK.';
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -24,7 +22,8 @@ export interface ClaudeUsageReadOptions {
  * READ A CLAUDE ACCOUNT'S USAGE WITH NO AGENT (Tynn #1084). Claude Code reports an account's limits only in a turn (its
  * `rate_limit_event`, which prism-acp hands on as the rate-limit `_meta` every agent reading already comes from), and
  * prism-acp 0.48.0's ClaudeDriver has no turn-free read. So this is one tiny turn in THAT account's folder:
- *  - the cheapest model, one turn, a one-word prompt;
+ *  - the account's own default model (Genie names no model, Tynn #608: there is no list to pick a cheaper one from without
+ *    naming it), one turn, a one-word prompt;
  *  - no tools (`--tools ""`), no MCP (strict, with none), no user/project settings (so no hooks or plugins);
  *  - nothing kept in the session history (`--no-session-persistence`), run from an empty folder of its own;
  *  - it is not an agent: no record, no ledger, no row anywhere.
@@ -53,7 +52,6 @@ export function readClaudeUsage(options: ClaudeUsageReadOptions): Promise<Headro
             driver = new ClaudeDriver({
                 cwd: options.cwd,
                 configDir: options.configDir,
-                model: USAGE_PROBE_MODEL,
                 strictMcpConfig: true,
                 settingSources: [],
                 ...(options.binary !== undefined ? { binary: options.binary } : {}),
