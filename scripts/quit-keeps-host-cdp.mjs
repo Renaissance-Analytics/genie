@@ -867,7 +867,7 @@ try {
     const menu = launcherCli(['tray-menu']);
     let items = [];
     try { items = JSON.parse(menu.out).items ?? []; } catch { /* said below */ }
-    const header = items.find((i) => i.startsWith('[This computer’s host · running')) ?? '';
+    const header = items.find((i) => i.startsWith('[Host: running')) ?? '';
     const said = Number(/· (\d+) agents?\]/.exec(header)?.[1] ?? 0);
     check(menu.code === 0 && said >= AGENTS && items.includes('Open Genie') && items.includes('Stop host') && items.includes('Shut down everything') && items.includes('Close Genie window (unavailable)'),
         '17m. the TRAY (the launcher\'s) says the host runs the agents, offers Open Genie, Stop this computer\'s host and Shut down everything; Close Genie is unavailable with no window', menu.out.slice(0, 400));

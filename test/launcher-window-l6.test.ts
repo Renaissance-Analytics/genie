@@ -15,7 +15,8 @@ import { UpdateHost } from '../src/main/updater.js';
  *     drain. Under the launcher the window leaves as soon as the host starts installing (the launcher's card says how it
  *     goes, and Genie is opened again after the swap), and never draws that screen.
  */
-const src = (file: string) => readFileSync(file, 'utf8');
+/** A source file with LF line ends (a tree checked out on Windows has CRLF, and the queue ships it as it is). */
+const src = (file: string) => readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
 const AVAILABLE = { phase: 'available' as const, version: '2026.11.27-2', percent: null };
 
 describe('the title bar’s update pill', () => {
@@ -68,6 +69,22 @@ describe('the window while the host installs, under the launcher', () => {
         before.onInstalling((scope) => { late.push(scope ?? 'none'); });
         before.rebase(INSTALLING);
         expect(late).toHaveLength(0);
+    });
+
+    it('a QUIT is not an install: the window is never told early for "Shut down everything"’s own drain', () => {
+        // The full gate (1127-174858-edb743, quit-keeps-host step 26): told at the quit drain's start, the window left as for
+        // an install ("exit-window") instead of carrying out the person's "Shut down everything" through the launcher.
+        const told: unknown[] = [];
+        const r = new UpdatesReplica(async () => null, 1);
+        r.tellAtStart();
+        r.onInstalling((scope) => { told.push(scope ?? 'none'); });
+        r.rebase({ ...INSTALLING, installing: { ...INSTALLING.installing, reason: 'quit' as const } });
+        expect(told).toHaveLength(0);
+    });
+
+    it('the window’s own "Quitting Genie…" screen stays under the launcher: only the update’s restart screen goes', () => {
+        const quitting = installScreen({ ...INSTALLING, launcher: { ready: 1 }, installing: { ...INSTALLING.installing, reason: 'quit' as const } }, false);
+        expect(quitting?.title).toBe('Quitting Genie…');
     });
 
     it('main.ts asks for it when a launcher started the window', () => {
