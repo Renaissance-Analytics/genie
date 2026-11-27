@@ -828,7 +828,7 @@ mod tests {
 
     #[test]
     fn with_no_window_open_close_genie_has_nothing_to_close() {
-        let v = View { host: HostView::Running { agents: Some(1) }, windows: 0, browser: false, needs_you: 0 };
+        let v = View { host: HostView::Running { agents: Some(1) }, windows: 0, browser: false, needs_you: 0, ..View::default() };
         let m = labels(&menu(&v));
         assert!(m.contains(&"Close Genie (agents keep running) (unavailable)".to_string()), "{m:?}");
         assert!(m.contains(&"[This computer’s host · running · 1 agent]".to_string()), "{m:?}");
@@ -837,10 +837,10 @@ mod tests {
 
     #[test]
     fn a_stopped_host_offers_start_and_a_client_only_computer_offers_neither() {
-        let stopped = labels(&menu(&View { host: HostView::Stopped, windows: 1, browser: true, needs_you: 0 }));
+        let stopped = labels(&menu(&View { host: HostView::Stopped, windows: 1, browser: true, needs_you: 0, ..View::default() }));
         assert!(stopped.contains(&"Start this computer’s host".to_string()), "{stopped:?}");
         assert!(stopped.contains(&"Close Genie".to_string()), "{stopped:?}");
-        let none = labels(&menu(&View { host: HostView::NotHere, windows: 1, browser: false, needs_you: 0 }));
+        let none = labels(&menu(&View { host: HostView::NotHere, windows: 1, browser: false, needs_you: 0, ..View::default() }));
         assert!(!none.contains(&"Task Manager…".to_string()), "no host: no kept processes to manage: {none:?}");
         assert!(!none.iter().any(|l| l.contains("this computer’s host") && !l.starts_with('[')), "{none:?}");
         assert_eq!(none[0], "[No host on this computer]");
