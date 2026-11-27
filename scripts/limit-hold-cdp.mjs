@@ -206,6 +206,8 @@ try {
     failure = error instanceof Error ? error.message : String(error);
     console.error(`FAIL: ${failure}`);
     try { if (page) { const s = await page.send('Page.captureScreenshot', { format: 'png' }); writeFileSync(join(OUT, 'failure.png'), Buffer.from(s.data, 'base64')); } } catch { /* gone */ }
+    // The host's own log, for the reason (it is in the run's home, which the runner does not bring back).
+    try { const hostLog = root ? join(root, '.genie', 'logs', 'genie-host.log') : null; if (hostLog && existsSync(hostLog)) { copyFileSync(hostLog, join(OUT, 'genie-host.log')); console.log(readFileSync(hostLog, 'utf8').split(/\r?\n/).slice(-40).join('\n')); } } catch { /* gone */ }
 } finally {
     for (const s of sessions) { try { s.socket.close(); } catch { /* gone */ } }
     if (app && app.exitCode === null) { try { if (WIN) execFileSync('taskkill', ['/PID', String(app.pid), '/T', '/F'], { stdio: 'ignore' }); else process.kill(-app.pid, 'SIGTERM'); } catch { /* gone */ } }

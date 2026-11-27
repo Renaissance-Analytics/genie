@@ -1423,6 +1423,8 @@ async function main(): Promise<void> {
     // Switch offers (Tynn #481): made from the rate-limit board, composed with it below.
     let switchOffersNow: SwitchOfferService | null = null;
     let activeOutNow: ActiveOutService | null = null;
+    /** The session host, once made (below): what ActiveOutService reads and tells (Tynn #1089). */
+    let activeOutHost: SessionHost | null = null;
     let headroomFeedNow: HeadroomFeed | null = null;
     let saveBoardNow: (() => void) | null = null;
     let designAuthNow: DesignAuthBook | null = null;
@@ -1869,17 +1871,19 @@ async function main(): Promise<void> {
         activeId: (provider) => accounts.activeFor(provider as (typeof ACP_PROVIDERS)[number]).id,
         room: roomOf,
         choice: () => (settings.snapshot()[ACTIVE_OUT_SETTING] === 'switch' ? 'switch' : 'ask'),
-        heldOnActive: (provider) => host.heldOnActive(provider),
+        // The host is made further down: until then no agent runs, so none is held (and `host` is not read before it exists).
+        heldOnActive: (provider) => activeOutHost?.heldOnActive(provider) ?? false,
         switchTo: (id) => accountsAct({ kind: 'switch', id }),
         tell: (provider, out) => {
             const view = out === null ? null : activeOutView(out, provider);
             if (view === null) activeOutViews.delete(provider); else activeOutViews.set(provider, view);
-            host.setActiveOut(provider, view);
+            activeOutHost?.setActiveOut(provider, view);
             accountsChangedNow?.();
         },
     });
     activeOutNow = activeOut;
-    headroomFeed.subscribe(() => { limitAlerts.check(); switchOffers.check(); void activeOut.check(); });
+    const checkActiveOut = (): void => { void activeOut.check().catch((error: unknown) => say(`when the active account runs out: ${error instanceof Error ? error.message : String(error)}`)); };
+    headroomFeed.subscribe(() => { limitAlerts.check(); switchOffers.check(); checkActiveOut(); });
     bootStep('remote and genie 1 imports', stepAt);
     await lockIdentity;
     bootStep('lock identity', stepAt);
@@ -1914,7 +1918,7 @@ async function main(): Promise<void> {
             engineHostOptions.onAction(agentId, kind);
             if (kind === 'replied') planKeepalive?.turnEnded(agentId, 'replied');
             // A hold (or its end) may change what the active-out line says (Tynn #1089).
-            if (kind === 'limited' || kind === 'replied') void activeOutNow?.check();
+            if ((kind === 'limited' || kind === 'replied') && activeOutNow) void activeOutNow.check().catch((error: unknown) => say(`when the active account runs out: ${error instanceof Error ? error.message : String(error)}`));
         },
         onTurnEnd: (agentId, cause) => { planKeepalive?.turnEnded(agentId, cause); },
         onDesignAuth: (_agentId, event) => designAuth.apply(event),
@@ -1987,6 +1991,9 @@ async function main(): Promise<void> {
     });
     engine.attach(host);
     hostForNotes = host;
+    // Now the host exists: the active-out rule reads its held agents, and looks once at what is already known (Tynn #1089).
+    activeOutHost = host;
+    checkActiveOut();
     sessionsForInbox = host;
     /*
      * A WORKSPACE'S VERDICT CHANGES WHILE ITS AGENT RUNS (genie#1519, trust-verdict.ts), compared here, on the host's own
