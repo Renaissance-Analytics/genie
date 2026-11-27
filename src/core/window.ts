@@ -60,3 +60,14 @@ export function mainWindowOptions(platform: NodeJS.Platform): MainWindowOptions 
     if (platform === 'darwin') return base;
     return { ...base, titleBarOverlay: { height: TITLE_BAR_HEIGHT, color: '#0a0a0c', symbolColor: '#e4e4e7' } };
 }
+
+/**
+ * THE HOST DIRECTORY'S WINDOW (Tynn #1058 L4): Genie's frame, as the main window's (the OS title bar hidden, the native
+ * buttons an overlay the height of Genie's bar), its overlay in the bar's own colours (`--bg-1`) for the page's theme,
+ * which follows the OS (`dark`: Electron's nativeTheme.shouldUseDarkColors).
+ */
+export function hostDirectoryWindowOptions(platform: NodeJS.Platform, dark: boolean): MainWindowOptions {
+    const base = { width: 1100, height: 720, minWidth: 640, minHeight: 480, titleBarStyle: 'hidden' as const };
+    if (platform === 'darwin') return base;
+    return { ...base, titleBarOverlay: dark ? { height: TITLE_BAR_HEIGHT, color: '#15151a', symbolColor: '#e4e4e7' } : { height: TITLE_BAR_HEIGHT, color: '#fafafa', symbolColor: '#18181b' } };
+}

@@ -33,6 +33,8 @@ export class HostDirectory {
     private busy: string | null = null;
     private notice: HostDirectoryState['notice'] = null;
     private failure: string | null = null;
+    /** Start answered: the host runs, and its window is opening. */
+    private started = false;
     private readonly linked: Promise<void>;
     private resolveLinked: () => void = () => {};
 
@@ -43,7 +45,9 @@ export class HostDirectory {
     current(): HostDirectoryState {
         const input = this.ports.input();
         // A Start that failed is this host's state until the next look says otherwise.
-        const local: LocalHostState = this.failure !== null && input.local.kind === 'stopped' ? { kind: 'failed', reason: this.failure } : input.local;
+        let local: LocalHostState = input.local;
+        if (input.local.kind === 'stopped' && this.started) local = { kind: 'running', build: input.local.build };
+        else if (input.local.kind === 'stopped' && this.failure !== null) local = { kind: 'failed', reason: this.failure };
         return { view: hostDirectory({ ...input, local }), busy: this.busy, notice: this.notice };
     }
 
@@ -64,7 +68,7 @@ export class HostDirectory {
                 return;
             }
             const answer = await this.ports.ensureHost();
-            if (answer.ok) { this.failure = null; this.notice = { ok: true, text: 'Genie’s host is running. Opening it…' }; this.resolveLinked(); }
+            if (answer.ok) { this.failure = null; this.started = true; this.notice = { ok: true, text: 'Genie’s host is running. Opening it…' }; this.resolveLinked(); }
             else { this.failure = answer.reason; this.notice = { ok: false, text: answer.reason }; }
         } finally {
             this.busy = null;

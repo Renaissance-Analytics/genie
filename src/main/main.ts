@@ -13,7 +13,7 @@ import { drivablePages } from './page-navigation-electron.js';
 import { livenessOf } from '../core/liveness.js';
 import { CallerBook, sessionCallerOf } from './mcp-callers.js';
 import type { Caller } from './mcp-tools.js';
-import { BrowserWindow, ClipboardItem, Menu, Notification, Tray, app, clipboard, dialog, ipcMain, net, powerMonitor, safeStorage, session, shell, webContents } from 'electron';
+import { BrowserWindow, ClipboardItem, Menu, Notification, Tray, app, clipboard, dialog, ipcMain, nativeTheme, net, powerMonitor, safeStorage, session, shell, webContents } from 'electron';
 import { configureWindowPages, loadWindowPage } from './window-pages.js';
 import { electronClipboardPort, registerClipboardIpc } from './clipboard-ipc.js';
 import { localProtocolDoor } from './local-protocol-door.js';
@@ -98,7 +98,7 @@ import { readV1Settings } from './v1-settings.js';
 import { readV1Catalog } from './v1-import.js';
 import { planV1Import, v1DefaultAgents } from '../core/v1-import.js';
 import { v1Leftovers } from '../core/v1-reap.js';
-import { TITLE_BAR_HEIGHT, mainWindowOptions, overlayColorsOk } from '../core/window.js';
+import { TITLE_BAR_HEIGHT, hostDirectoryWindowOptions, mainWindowOptions, overlayColorsOk } from '../core/window.js';
 import { createTray, loginName, trayImages as buildTrayImages, trayMenuTemplate, trayTooltip, trayUpdate, type TrayHandlers, type TrayItem } from './tray.js';
 import { needsYouCount, type DeckItem } from '../core/deck.js';
 import { limitWords } from '../core/limit-words.js';
@@ -546,7 +546,9 @@ async function openHostDirectory(launchedHostBuild: string | null | undefined, l
     ipcMain.handle('host-directory:act', (_event, action: unknown) => (action === 'start' || action === 'open-log' || action === 'add-host' ? directory.act(action) : undefined));
     const win = new BrowserWindow({
         ...genieWindowIcon(here),
-        width: 960, height: 640, minWidth: 560, minHeight: 420, title: 'Genie', backgroundColor: '#0a0a0c', autoHideMenuBar: true, show: false,
+        // Genie's frame and title bar (the coordinator's review, 2026-11-27): the main window's, its overlay in the page's theme.
+        ...hostDirectoryWindowOptions(process.platform, nativeTheme.shouldUseDarkColors),
+        title: 'Genie', backgroundColor: nativeTheme.shouldUseDarkColors ? '#0a0a0c' : '#ffffff', autoHideMenuBar: true, show: false,
         webPreferences: { preload: join(here, 'host-directory-preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false },
     });
     hostDirectoryWindow = win;
@@ -555,6 +557,8 @@ async function openHostDirectory(launchedHostBuild: string | null | undefined, l
     void loadWindowPage(win.webContents, 'host-directory').catch((error: unknown) => console.error(`[window-pages] ${String(error)}`));
     const closed = new Promise<'closed'>((resolve) => win.on('closed', () => resolve('closed')));
     const outcome = await Promise.race([directory.untilLinked().then(() => 'linked' as const), closed]);
+    // Start's result stays on its row a moment (running, green) before the host's own window takes over.
+    if (outcome === 'linked') await new Promise<void>((resolve) => setTimeout(resolve, 1200));
     ipcMain.removeHandler('host-directory:current');
     ipcMain.removeHandler('host-directory:act');
     hostDirectoryWindow = null;

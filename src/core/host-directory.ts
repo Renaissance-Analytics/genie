@@ -21,6 +21,8 @@ export type InstallProfile = 'both' | 'client';
 export type LocalHostState =
     | { readonly kind: 'none' }
     | { readonly kind: 'stopped'; readonly build: string | null }
+    /** Started by the directory's Start: said on its row while its window opens. */
+    | { readonly kind: 'running'; readonly build: string | null }
     | { readonly kind: 'failed'; readonly reason: string }
     | { readonly kind: 'incompatible'; readonly protocol: number; readonly mine: number };
 
@@ -41,8 +43,15 @@ export interface HostRow {
     readonly local: boolean;
     readonly name: string;
     readonly address: string | null;
-    readonly state: 'stopped' | 'failed' | 'incompatible' | 'paired';
+    readonly state: 'running' | 'stopped' | 'failed' | 'incompatible' | 'paired';
+    /** The status dot: green running, amber stopped or needing an update, red could not start, grey not known. */
+    readonly dot: 'green' | 'amber' | 'red' | 'grey';
+    /** What it is, as an icon: this computer, a host at an address, a Tynn relay host. */
+    readonly icon: 'monitor' | 'server' | 'cloud';
+    /** One short line. */
     readonly detail: string;
+    /** The rest, for an info tooltip; `null` when the line says it all. */
+    readonly more: string | null;
     readonly action: HostAction | null;
 }
 
@@ -54,21 +63,24 @@ export interface HostDirectoryView {
     readonly add: { readonly label: 'Add a host'; readonly detail: string };
 }
 
-const STEP4 = 'Opening it from here needs this computer’s own Genie sign-in, which is coming. Open it from a computer with a host for now.';
+const STEP4_LINE = 'Open from a computer with a host until sign-in arrives';
+const STEP4_MORE = 'Opening another computer’s host from here needs this computer’s own Genie sign-in, which is coming. Until then, open it from a computer that has a host of its own.';
 
 function localRow(local: LocalHostState, launcher: boolean): HostRow | null {
-    const base = { id: 'local', local: true, name: 'This computer', address: null } as const;
+    const base = { id: 'local', local: true, name: 'This computer', address: null, icon: 'monitor', more: null } as const;
     switch (local.kind) {
         case 'none':
             return null;
+        case 'running':
+            return { ...base, state: 'running', dot: 'green', detail: local.build ? `Genie’s host ${local.build} is running. Opening it…` : 'Genie’s host is running. Opening it…', action: null };
         case 'stopped':
             return launcher
-                ? { ...base, state: 'stopped', detail: local.build ? `Genie’s host ${local.build} is stopped.` : 'Genie’s host is stopped.', action: { kind: 'start', label: 'Start' } }
-                : { ...base, state: 'stopped', detail: 'Genie’s host is stopped, and Genie’s launcher is not running to start it. Open Genie from its Start menu entry or desktop entry.', action: null };
+                ? { ...base, state: 'stopped', dot: 'amber', detail: local.build ? `Genie’s host ${local.build} is stopped.` : 'Genie’s host is stopped.', action: { kind: 'start', label: 'Start' } }
+                : { ...base, state: 'stopped', dot: 'amber', detail: 'Genie’s host is stopped, and Genie’s launcher is not running to start it. Open Genie from its Start menu entry or desktop entry.', action: null };
         case 'failed':
-            return { ...base, state: 'failed', detail: local.reason, action: { kind: 'open-log', label: 'Open log' } };
+            return { ...base, state: 'failed', dot: 'red', detail: local.reason, action: { kind: 'open-log', label: 'Open log' } };
         case 'incompatible':
-            return { ...base, state: 'incompatible', detail: `This computer’s host speaks engine protocol ${local.protocol} and this Genie speaks ${local.mine}. Update Genie to use it.`, action: null };
+            return { ...base, state: 'incompatible', dot: 'amber', detail: `This computer’s host speaks engine protocol ${local.protocol} and this Genie speaks ${local.mine}. Update Genie to use it.`, action: null };
     }
 }
 
@@ -89,7 +101,7 @@ export function hostDirectory(input: HostDirectoryInput): HostDirectoryView {
         // Only what a host window would take (ws://, wss://, relay:<id>); each once.
         if (remoteFromSearch(`?${new URLSearchParams({ remote: address }).toString()}`) !== address || seen.has(address)) continue;
         seen.add(address);
-        hosts.push({ id: address, local: false, name: nameOf(address), address, state: 'paired', detail: STEP4, action: null });
+        hosts.push({ id: address, local: false, name: nameOf(address), address, state: 'paired', dot: 'grey', icon: address.startsWith('relay:') ? 'cloud' : 'server', detail: STEP4_LINE, more: STEP4_MORE, action: null });
     }
     return {
         title: 'Hosts',
