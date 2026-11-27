@@ -173,14 +173,19 @@ probe "mark-is-not-genie-1s-entry" src/main/tray-residence.ts \
     "launch_at_login !== true && leftRunning?.now() !== true && v1LoginItemPresent(port, env)" "launch_at_login !== true && v1LoginItemPresent(port, env)" \
     test/tray-residence.test.ts "is not Genie 1"
 
-probe "tray-probe-is-gated" src/main/main.ts \
-    "    if (trayProbeEnabled(process.env)) {" "    if (true) {" \
-    test/quit-keeps-host-wiring.test.ts "ABSENT without GENIE_TRAY_PROBE=1"
+# THE LAUNCHER OWNS THE TRAY (Tynn #1058 L5): the client attaches to it, and its last window ends it.
+probe "client-attaches-to-the-launcher" src/main/main.ts \
+    "    void attachLauncher(launcherWire(" "    void Promise.resolve(null) && attachLauncher(launcherWire(" \
+    test/quit-keeps-host-wiring.test.ts "attaches to the launcher and ends when the launcher closes the UI"
 
-# ALWAYS ASK (the owner, 2026-11-02): the tray's Restart and Shut down everything confirm first
-probe "tray-always-asks" src/main/main.ts \
-    "onShutDown: () => { void confirmTray('shut-down').then((ok) => { if (ok) { leftRunning.set(false); requestQuit('shut-down'); } }); }" "onShutDown: () => { leftRunning.set(false); requestQuit('shut-down'); }" \
-    test/quit-keeps-host-wiring.test.ts "offers the host"
+probe "last-window-ends-the-client" src/main/main.ts \
+    "app.on('window-all-closed', () => { endClientOnLastWindow('every window closed'); });" "app.on('window-all-closed', () => { /* the tray */ });" \
+    test/quit-keeps-host-wiring.test.ts "the last window closing ends the client"
+
+# TYNN #1079: the host says its stop as it goes, and the launcher waits while it moves.
+probe "stop-progress-is-said" src/core/stop-progress.ts \
+    "            if (key === last) return;" "            return;" \
+    test/host-stop-progress.test.ts "each step is written whole"
 
 probe "only-the-confirm-button-goes-on" src/core/tray-confirm.ts \
     "    return button === 1;" "    return button !== 0;" \

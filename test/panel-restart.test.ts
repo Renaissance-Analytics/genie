@@ -36,10 +36,10 @@ describe('wired: every tray question is waited for', () => {
     it('the panel’s Restart goes through panelRestart, with the tray’s own question', () => {
         expect(main).toMatch(/restart: panelRestart\(confirmTray, restartGenie\)/);
     });
-    it('no confirmTray answer is read as a boolean: each call is followed by .then or awaited', () => {
-        const calls = [...main.matchAll(/confirmTray\('[a-z-]+'\)(.{0,6})/g)];
-        expect(calls.length).toBeGreaterThan(0);
-        for (const c of calls) expect(c[1]).toMatch(/^\.then\(/);
+    it('no confirmTray answer is read as a boolean: its only caller is panelRestart, which waits for it', () => {
+        // The client's tray items called it (.then) until Tynn #1058 L5; the launcher's tray asks in its own window now.
+        expect([...main.matchAll(/confirmTray\('[a-z-]+'\)/g)]).toHaveLength(0);
+        expect(main.match(/\bconfirmTray\b/g) ?? []).toHaveLength(2); // its definition, and panelRestart(confirmTray, …)
         expect(main).not.toMatch(/if \(confirmTray\(/);
     });
 });

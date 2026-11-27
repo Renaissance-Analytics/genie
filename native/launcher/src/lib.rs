@@ -10,6 +10,8 @@
 //! - `spawn`: the ONLY place a program is started, and only a `layout::Program` (a path inside the code root).
 //! - `components`: the registry of what the launcher starts (the host, the client, the browser; GApps later).
 //! - `local`, `control`, `host`: the owner-only control wire, and starting and stopping the host.
+//! - `logon`: the logon entry the launcher writes, and what its run does (`logonEntry`'s table, held with the TypeScript).
+//! - `tray`: the launcher's tray (Shell_NotifyIcon, StatusNotifierItem) and what its menu does (L5).
 //! - `ui`: the setup window (direction C) in the platform webview, from assets bundled in `ui/`.
 //! - `win`: genie-launch.exe's three modes (`detach`, `job`, `pipe-owner-only`), folded in (Windows).
 
@@ -25,11 +27,13 @@ pub mod install;
 pub mod keys;
 pub mod layout;
 pub mod local;
+pub mod logon;
 pub mod manifest;
 pub mod negotiate;
 pub mod secure;
 pub mod spawn;
 pub mod state;
+pub mod tray;
 pub mod uninstall;
 pub mod version;
 #[cfg(feature = "ui")]

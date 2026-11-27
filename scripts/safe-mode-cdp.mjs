@@ -27,6 +27,8 @@ import {
     alive, attach, check, cleanQuit, failures, finish, gone, hostLogSince, hostPid, killHard, launch, makeHome,
     readOr, refuseOffTestMachines, running, sleep, step, stubPids, tickerOn, ticksOf, twoStreamingAgents, until, whyOf,
 } from './crash-cdp-lib.mjs';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { freshProviderGauge } from './provider-ticks.mjs';
 import { closeWhatsNew } from './cdp-whats-new.mjs';
 
@@ -49,7 +51,18 @@ const done = finish('SAFE MODE', h, [
 const agentIds = [];
 setTimeout(() => { check(false, 'the run finished within its deadline (480 s)'); void done(1); }, Number(process.env.SAFE_CDP_DEADLINE_MS ?? 480_000)).unref();
 
-const bannerShown = () => session.cdp.evaluate(`Boolean(document.querySelector('[data-safe-mode]'))`, 10_000);
+const SHOTS = 'ci-out/safe-mode';
+const shot = async (name) => {
+    try {
+        const s = await session.cdp.send('Page.captureScreenshot', { format: 'png' }, 15_000);
+        const data = s?.result?.data ?? s?.data;
+        if (!data) { console.log(`  screenshot ${name}: none`); return; }
+        mkdirSync(SHOTS, { recursive: true });
+        writeFileSync(join(SHOTS, `${name}.png`), Buffer.from(data, 'base64'));
+        console.log(`  screenshot: ${SHOTS}/${name}.png`);
+    } catch (error) { console.log(`  screenshot ${name}: none (${String(error?.message ?? error)})`); }
+};
+const bannerShown = () =>session.cdp.evaluate(`Boolean(document.querySelector('[data-safe-mode]'))`, 10_000);
 
 console.log('\nSAFE MODE — what a person sees after Genie did not end cleanly, and what does not start\n');
 try {
@@ -167,13 +180,31 @@ try {
     check(streaming !== null, `E3. ${first.name}'s new provider streams`, streaming ? `pid ${streaming.last} generation ${streaming.generation} tick ${streaming.tick}` : gauge.diagnostics().reason);
     check(await running(session.cdp, second.id) === false, `E4. ${second.name} is still not running: the Start was for that one only`);
 
+    // THE OWNER'S CASE (Tynn #1076): nothing running, so nothing else pushes a snapshot. A streaming agent touches the
+    // window's registry every few seconds, and that push took the banner down here while Leave itself pushed nothing.
+    step('F0', `Stop ${first.name}, and let the estate go quiet`);
+    await session.cdp.evaluate(`(window.genieTest ?? window.genie).stopAgent(${JSON.stringify(first.id)}); true`, 10_000);
+    check(await until(async () => (await running(session.cdp, first.id)) === false, 30_000) === true, `F0. ${first.name} is stopped: nothing runs`);
+    await sleep(8_000);
+    await shot('1076-1-banner');
     step('F1', 'Leave safe mode');
+    const leftAt = Date.now();
     await session.cdp.evaluate(`document.querySelector('[data-action="safe-mode-leave"]').click(); true`, 10_000);
-    check(await until(async () => (await bannerShown()) === false, 30_000) === true, 'F1. the banner goes');
-    await sleep(10_000);
+    await sleep(250);
+    await shot('1076-2-click');
+    check(await until(async () => (await bannerShown()) === false, 10_000) === true, 'F1. the banner goes, with nothing else running to push it (Tynn #1076)', `${Date.now() - leftAt} ms`);
+    await sleep(1_000);
+    await shot('1076-3-after');
+    check(/safe mode: left by the person/.test(hostLogSince(h, 0)), 'F1b. genie-host\'s log says the person left safe mode');
+    await sleep(9_000);
     check(await running(session.cdp, second.id) === false, `F2. nothing else starts by itself: ${second.name} stays stopped`);
     const extra = stubPids().filter((p) => !stubsBefore.has(p) && p !== streaming?.last);
     check(extra.length === 0, 'F3. and no other provider process appeared', extra.join(', ') || 'none');
+    step('F4', `Start ${second.name} the normal way, out of safe mode`);
+    await session.cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(second.id)}, "graceful"); true`, 15_000);
+    const secondRuns = await until(() => running(session.cdp, second.id), 45_000);
+    check(secondRuns === true, `F4. ${second.name} starts normally`, secondRuns === true ? '' : await whyOf(session.cdp, second.id));
+    check(await bannerShown() === false, 'F5. and the banner stays gone');
 } catch (error) {
     check(false, 'the run did not finish', String(error?.message ?? error).slice(0, 300));
 }

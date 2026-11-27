@@ -55,7 +55,7 @@ describe('the entries are wired', () => {
         expect(main).toMatch(/header: \(\) => crashHeader\(app\.getVersion\(\), agentEngineLink\?\.client\.welcome\?\.build \?\? app\.getVersion\(\)\),/);
         expect(main).toMatch(/startHeartbeat\(\{\s*send: \(beat\) => agentEngineLink\?\.client\.heartbeat\(beat\)/);
         // before-quit: after a cancelled quit and "just close the UI" have returned, before the shutdown runs.
-        expect(main).toMatch(/if \(step === 'close-ui'\) \{[^\n]*\}\n\s*crashRecorder\.beforeQuit\(\);/);
+        expect(main).toMatch(/if \(step === 'close-ui'\) \{\n[\s\S]*?\n    \}\n\s*crashRecorder\.beforeQuit\(\);/);
         // A quit that ran to its end is clean: its record is taken back and the host told goodbye.
         expect(main).toMatch(/\.finally\(\(\) => \{ crashRecorder\.cleanQuit\(\); heartbeatNow\?\.bye\(\); app\.quit\(\); \}\);/);
     });

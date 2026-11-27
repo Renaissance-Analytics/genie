@@ -174,8 +174,8 @@ describe('main reads the summary; no terminals or process-book replica, no host-
 
     it('the tray’s count, its Restart/Shut-down list and the quit plan read the summary', () => {
         // After the tray: the keychain turning ready runs the unsealer, GitHub's block redraws the strip (Tynn #959, 2g-3b).
-        expect(main).toMatch(/ownProtocol\.watchSummary\(\(summary\) => \{[\s\S]{0,240}?hostSummaryNow = summary;\s*refreshTray\(\);\s*unsealer\.summary\(before, summary\);\s*\}\)/);
-        expect(main).toMatch(/terminals: hostSummaryNow\.terminals\.length/);
+        expect(main).toMatch(/ownProtocol\.watchSummary\(\(summary\) => \{[\s\S]{0,240}?hostSummaryNow = summary;\s*refreshAlerts\(\);\s*unsealer\.summary\(before, summary\);\s*\}\)/);
+        // The tray's count is genie-host's own since Tynn #1058 L5 (engine.activity); the quit and the question still read the summary.
         expect(main).toMatch(/const terminalsOpen = hostSummaryNow\.terminals\.map\(/);
         expect(main).toMatch(/liveTerminals: hostSummaryNow\.terminals\.length/);
         expect(main).toMatch(/armedFlows: hostSummaryNow\.armedFlows\.length, scheduledTasks: hostSummaryNow\.scheduledTasks\.length/);

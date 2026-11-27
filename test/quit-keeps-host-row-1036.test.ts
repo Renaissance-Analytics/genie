@@ -8,6 +8,10 @@ import { describe, expect, it } from 'vitest';
  * every tick streamed while no window was open in the ledger, in order); "Shut down everything" ends window, host and
  * providers. It was run by hand on a test VM and by no gate: a proof nobody runs is not a proof. It is a row of both CI
  * scripts now, as plan-popover is (the CONTROL: a registered row is found by the same readings), on a home of its own.
+ *
+ * Since Tynn #1058 L5 it runs THROUGH THE LAUNCHER: the package-tracks row's signed packages installed, the launcher's host
+ * and tray, "Just close the UI" ending the client process, the tray's question, and "Shut down everything" stopping the
+ * host on its own progress (#1079). So it needs the packages, and runs after package-tracks.
  */
 const read = (path: string): string => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8').split(/\r?\n/).join('\n');
 const code = (text: string, comment: RegExp): string => text.split('\n').filter((l) => !comment.test(l)).join('\n');
@@ -45,13 +49,14 @@ describe('CONTROL: plan-popover, a registered row, is found by these readings', 
 describe('quit-keeps-host is a row of scripts/ci/linux.sh', () => {
     const fn = /^row_quit-keeps-host\(\) \{ (.*); \}$/m.exec(linux)?.[1] ?? '';
 
-    it('is in ROWS, and its leftovers are reaped before it starts', () => {
+    it('is in ROWS after package-tracks (it needs its packages), and its leftovers are reaped before it starts', () => {
         expect(linuxRows()).toContain('quit-keeps-host');
+        expect(linuxRows().indexOf('quit-keeps-host')).toBeGreaterThan(linuxRows().indexOf('package-tracks'));
         expect(reaped()).toContain('quit-keeps-host');
     });
 
     it('builds, needs the display, and runs the script on it under a timeout, on a home of its own, its ports its own, its proof under ci-out', () => {
-        expect(fn).toMatch(/^need_build && need_display && on_display timeout \d+ env .*node scripts\/quit-keeps-host-cdp\.mjs$/);
+        expect(fn).toMatch(/^need_build && need_tracks && need_display && on_display timeout \d+ env .*node scripts\/quit-keeps-host-cdp\.mjs$/);
         expect(fn).toContain('QUIT_CDP_OWN_HOME=1');
         expect(fn).toContain('QUIT_CDP_OUT="$OUT/quit-keeps-host"');
         // Not the shared app's 9222, nor Node's default inspector port.
@@ -75,7 +80,8 @@ describe('quit-keeps-host is a row of scripts/ci/windows.ps1', () => {
 
     it('is in $Rows, builds, needs a test machine, and runs the script on a home of its own, its ports its own, its proof under ci-out', () => {
         expect(windowsRows()).toContain('quit-keeps-host');
-        expect(body).toMatch(/^\s*Need-Build; Need-TestMachine$/m);
+        expect(windowsRows().indexOf('quit-keeps-host')).toBeGreaterThan(windowsRows().indexOf('package-tracks'));
+        expect(body).toMatch(/^\s*Need-Build; Need-Tracks; Need-TestMachine$/m);
         expect(body).toMatch(/QUIT_CDP_OWN_HOME = '1'/);
         expect(body).toMatch(/QUIT_CDP_OUT = \(Join-Path \$Out 'quit-keeps-host'\)/);
         expect(body).toMatch(/Run 'quit-keeps-host-cdp' \{ node scripts\/quit-keeps-host-cdp\.mjs \}/);
@@ -93,7 +99,36 @@ describe('quit-keeps-host is a row of scripts/ci/windows.ps1', () => {
 describe('scripts/quit-keeps-host-cdp.mjs runs as a CI row', () => {
     it('CONTROL: it is the script that answers the quit "Just close the UI" and counts every tick', () => {
         expect(script).toContain("'Just close the UI'");
-        expect(script).toMatch(/every tick streamed while no window was open is in the ledger, in order/);
+        expect(script).toMatch(/every tick streamed while no client ran is in the ledger, in order/);
+    });
+
+    it('L5: installs the signed packages with the launcher, runs it with its tray probe, and starts the host through it', () => {
+        expect(script).toMatch(/launcherCli\(\['install', '--profile', 'both', '--from', PACKAGES, '--yes'\], 300_000\)/);
+        expect(script).toMatch(/spawn\(LAUNCHER_SRC, \['serve'\], \{[^}]*env: \{ \.\.\.process\.env, GENIE_LAUNCHER_TRAY_PROBE: '1' \} \}\)/);
+        expect(script).toMatch(/launcherCli\(\['ensure-host'\], 90_000\)/);
+        // The client is told what the launcher tells the client it starts, so it adopts that host and attaches to it.
+        expect(script).toMatch(/GENIE_LAUNCHER_EXE: LAUNCHER_SRC, \.\.\.\(launcherHostBuild \? \{ GENIE_LAUNCHER_HOST_BUILD: launcherHostBuild \} : \{\}\)/);
+        expect(script).not.toMatch(/GENIE_TRAY_PROBE/);
+    });
+
+    it('L5: "Just close the UI" ENDS the client; the launcher, the host and the providers keep their pids', () => {
+        expect(script).toMatch(/'11\. "Just close the UI" ENDED the client process'/);
+        expect(script).toMatch(/'12l\. the LAUNCHER keeps running, the same pid'/);
+        expect(script).toMatch(/`14\. with NO client for \$\{Math\.round\(CLOSED_MS \/ 1000\)\} s, the SAME host is alive`/);
+        expect(script).toMatch(/`15\. with no client, \$\{ag\.name\}'s provider is alive`/);
+    });
+
+    it('L5: the tray (the launcher\u2019s) and its question are photographed; Escape cancels and nothing stops', () => {
+        expect(script).toMatch(/shot\(`tray-menu-\$\{WIN \? 'windows' : 'linux'\}\.png`\)/);
+        expect(script).toMatch(/shot\(`quit-prompt-\$\{WIN \? 'windows' : 'linux'\}\.png`\)/);
+        expect(script).toMatch(/'25t\. Cancel stopped NOTHING: the launcher, the host and the providers all alive'/);
+    });
+
+    it('L5 and Tynn #1079: Shut down everything is graceful (never ended), the launcher exits, and the next boot reads no crash', () => {
+        expect(script).toMatch(/27g\. GRACEFULLY: the launcher waited for the host\\'s own stop and never ended it \(Tynn #1079\)/);
+        expect(script).toMatch(/'27c\. the host wrote its clean-exit marker: its next boot reads no crash'/);
+        expect(script).toMatch(/'27l\. then the LAUNCHER exited'/);
+        expect(script).toMatch(/safe mode: the last run did not end cleanly/);
     });
 
     it('takes the harness\'s word for a test machine (GENIE_TEST_MACHINE=1), and still refuses anywhere else', () => {
@@ -118,7 +153,7 @@ describe('scripts/quit-keeps-host-cdp.mjs runs as a CI row', () => {
         const mirrored = Number((/^const AGENT_DRAIN_WAIT_MS = ([\d_]+);/m.exec(script)?.[1] ?? 'NaN').replace(/_/g, ''));
         expect(product).toBeGreaterThan(0);
         expect(mirrored).toBe(product);
-        expect(script).toMatch(/const exit = await exitWithin\(a\.app, AGENT_DRAIN_WAIT_MS \+ 60_000\);/);
+        expect(script).toMatch(/const cExit = await exitWithin\(c\.app, AGENT_DRAIN_WAIT_MS \+ 60_000\);/);
     });
 
     it('attaches to Genie\'s MAIN window (never the host-wait window that opens first), through the shared picker', () => {

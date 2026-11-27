@@ -255,11 +255,9 @@ describe('the window registry’s Deck wiring is dead: main reads only its agent
         expect(reads.length).toBeGreaterThan(5);
         expect([...new Set(reads)].sort()).toEqual(['agents', 'workspaces']);
         // Each listener's own parameter list, read up to its arrow; every subscribe found by the plain pattern is one of them.
+        // Its one listener fed the client tray's count; the tray is the launcher's since Tynn #1058 L5, so none is left.
         const subscribes = [...main.matchAll(/registry[?!]?\.subscribe\(/g)];
-        const listeners = [...main.matchAll(/registry[?!]?\.subscribe\(\s*(\([^)]*\))\s*=>/g)];
-        expect(subscribes.length).toBeGreaterThan(0);
-        expect(listeners).toHaveLength(subscribes.length);
-        for (const l of listeners) expect(l[1], l[0]).toBe('()');
+        expect(subscribes).toHaveLength(0);
         // What main hands the registry to reads no snapshot, or only its workspaces.
         expect(code(src('src/main/mcp-callers.ts'))).not.toMatch(/\.snapshot\(\)/);
         expect(code(src('src/main/registry-refresh.ts'))).not.toMatch(/\.snapshot\(\)/);
@@ -271,10 +269,10 @@ describe('the window registry’s Deck wiring is dead: main reads only its agent
         expect(main).not.toMatch(/composed\.(signals|deckItems|attention|approvals\.onChange|flows\.onChange)\b|composed\.onFrontDoorChange\(\(\) => registry/);
     });
 
-    it('PINNED: an error main caught reaches the tray’s waiting count directly, not through the registry', () => {
-        expect(main).toMatch(/mainErrors\.onChange\(\(\) => \{ refreshTrayWaiting\(\); \}\);/);
-        expect(main.indexOf('mainErrors.onChange(() => { refreshTrayWaiting(); });')).toBeGreaterThan(main.indexOf('const refreshTrayWaiting = (): void => {'));
-        expect(main).toMatch(/needsYouCount\(\[\.\.\.mainErrors\.deckItems\(\), \.\.\.hostDeckNow\]\)/);
+    it('PINNED: an error main caught never goes through the registry (the tray count it fed went with the client tray, L5)', () => {
+        expect(main).not.toMatch(/refreshTrayWaiting/);
+        // Directly: the window's own features said again at once (the in-app Deck), never the registry.
+        expect(main).toMatch(/mainErrors\.onChange\(\(\) => \{ requestFeaturePush\(\); \}\);/);
         expect(main).not.toMatch(/mainErrors\.onChange\(\(\) => registry/);
     });
 });
@@ -284,7 +282,8 @@ describe('wired: main’s settings are the watch’s; genie-host feeds it', () =
         const main = code(src('src/main/main.ts'));
         expect(main).toMatch(/const settingsNow = windowSettings\(ownProtocol\);/);
         expect(main).toMatch(/tunnelDoor\(ownProtocol\.door, tunnelLinkOf\(agentEngineLink\.client\), \{ own: true \}\);\s*settingsNow\.start\(\);/);
-        expect(main.indexOf('await settingsNow.ready(SETTINGS_BOOT_DEADLINE_MS);')).toBeLessThan(main.indexOf('mountMainWindow(showOnBoot({ startMinimized: settingsNow.snapshot().start_minimized === true'));
+        expect(main.indexOf('await settingsNow.ready(SETTINGS_BOOT_DEADLINE_MS);')).toBeLessThan(main.indexOf('mountMainWindow(true);'));
+        expect(main.indexOf('mountMainWindow(true);')).toBeGreaterThan(-1);
         expect(main).not.toMatch(/(services\??|composed)\.settings\b/);
         expect(main).not.toMatch(/update_channel/);
         // CONTROL: genie-host follows the update channel itself.

@@ -48,14 +48,23 @@ export interface HostScratchPorts {
 }
 
 /**
+ * GENIE'S OWN SCRATCH TERMINAL, asked for as null (the tray's, before Tynn #1058 L5) or by Genie's own workspace's id (the
+ * genie row's terminal button in the rail: since L5 the client has no tray, and this is where it lives). Both are the host
+ * owner's, in the home folder.
+ */
+export function isGenieOwnScratch(workspaceId: string | null): boolean {
+    return workspaceId === null || workspaceId === OS_WORKSPACE;
+}
+
+/**
  * `terminals.scratch(workspaceId | null)`, answered by genie-host (Tynn #897, 2c-4): the workspace's throwaway shell, in its
  * folder with its environment, or for null Genie's own in the home folder (the tray's). Who may ask is RemoteHost's.
  */
 export function scratchTerminalFor(ports: HostScratchPorts, workspaceId: string | null, context?: CallContext): ScratchAnswer {
     let opened: { ok: true; terminalId: string } | { ok: false; reason: string };
-    if (workspaceId === null) opened = ports.scratch.open({ workspaceId: OS_WORKSPACE, cwd: ports.home }, context);
+    if (isGenieOwnScratch(workspaceId)) opened = ports.scratch.open({ workspaceId: OS_WORKSPACE, cwd: ports.home }, context);
     else {
-        const workspace = ports.workspace(workspaceId);
+        const workspace = ports.workspace(workspaceId!);
         if (!workspace) return { ok: false, reason: 'That workspace is not open in Genie.' };
         opened = ports.scratch.open({ workspaceId: workspace.id, cwd: workspace.path, env: ports.envFor(workspace.id) }, context);
     }

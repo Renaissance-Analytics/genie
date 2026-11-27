@@ -13,7 +13,7 @@ import { drivablePages } from './page-navigation-electron.js';
 import { livenessOf } from '../core/liveness.js';
 import { CallerBook, sessionCallerOf } from './mcp-callers.js';
 import type { Caller } from './mcp-tools.js';
-import { BrowserWindow, ClipboardItem, Menu, Notification, Tray, app, clipboard, dialog, ipcMain, nativeTheme, net, powerMonitor, safeStorage, session, shell, webContents } from 'electron';
+import { BrowserWindow, ClipboardItem, Menu, Notification, app, clipboard, dialog, ipcMain, nativeTheme, net, powerMonitor, safeStorage, session, shell, webContents } from 'electron';
 import { configureWindowPages, loadWindowPage } from './window-pages.js';
 import { electronClipboardPort, registerClipboardIpc } from './clipboard-ipc.js';
 import { localProtocolDoor } from './local-protocol-door.js';
@@ -39,7 +39,7 @@ import { EMPTY_FRONT_DOOR_WATCH, type FrontDoorWatchView } from '../core/front-d
 import { windowApprovals } from './approvals-gate-protocol.js';
 import { readThingSignal } from '../core/thing-sounds.js';
 import { readIssueWatchSound } from '../core/issue-watch-signal.js';
-import { installQuit, leaveForInstall, quitAnswer, quitPlan, quitSequence, runQuit, type QuitPorts } from '../core/quit.js';
+import { installQuit, leaveForInstall, quitAnswer, quitPlan, quitSequence, runQuit, type QuitPorts, quitThroughLauncher } from '../core/quit.js';
 import { windowLaunchFlags } from '../core/launch-flags.js';
 import { hostHashOf } from '../core/update-kind.js';
 import { QUIT_DATA, answerSecondInstance, asksToQuit, hostAsked, launchDecision, type LaunchDecision } from '../core/quit-flag.js';
@@ -81,9 +81,9 @@ import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './ag
 import { hostBuild, pidAlive } from './engine-launch.js';
 import { legacyHostFinder } from './legacy-host-start.js';
 import { HostDirectory, localHostState, readPairedHosts } from './host-directory-window.js';
-import { callLauncher, launcherReachable, launcherWire } from './launcher-control.js';
+import { attachLauncher, callLauncher, launcherReachable, launcherWire } from './launcher-control.js';
 import { materializeHostRuntime } from './host-runtime.js';
-import { launcherLink } from '../core/launcher-link.js';
+import { launcherLink, launcherShowRoute } from '../core/launcher-link.js';
 import { HostRestart, HostWait } from './host-wait-window.js';
 import { readStartupProgress } from './startup-updates-file.js';
 import { scheduleScratchSweep } from './scratch-area.js';
@@ -99,16 +99,12 @@ import { readV1Catalog } from './v1-import.js';
 import { planV1Import, v1DefaultAgents } from '../core/v1-import.js';
 import { v1Leftovers } from '../core/v1-reap.js';
 import { TITLE_BAR_HEIGHT, hostDirectoryWindowOptions, mainWindowOptions, overlayColorsOk } from '../core/window.js';
-import { createTray, loginName, trayImages as buildTrayImages, trayMenuTemplate, trayTooltip, trayUpdate, type TrayHandlers, type TrayItem } from './tray.js';
+import { loginName } from './tray.js';
 import { needsYouCount, type DeckItem } from '../core/deck.js';
-import { limitWords } from '../core/limit-words.js';
 import { genieWindowIcon } from './app-identity.js';
-import { HIDDEN_ARG, showOnBoot } from '../core/tray-resident.js';
-import { trayOnlyStep, trayProbeEnabled, type HostActivity } from '../core/tray-only.js';
+import { HIDDEN_ARG, TRAY_NOTICE } from '../core/tray-resident.js';
 import { tableWithin, terminalBusy, trayConfirm, trayConfirmed, type Stopping, type TrayAction } from '../core/tray-confirm.js';
 import { panelRestart } from '../core/panel-restart.js';
-import { LeftRunningMark } from './left-running.js';
-import { wireCloseToTray, wireLoginItem, type LoginItemPort } from './tray-residence.js';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { execFileRunner } from './toolchain-runner.js';
 import { latestIndex, type CommandRunner } from './toolchain-prober.js';
@@ -312,55 +308,16 @@ function watchWindowHang(w: BrowserWindow): void {
     w.on('unresponsive', () => { if (!w.isDestroyed()) stallWatchdog.unresponsive(windowNameOf(w.webContents), true); });
     w.on('responsive', () => { if (!w.isDestroyed()) stallWatchdog.unresponsive(windowNameOf(w.webContents), false); });
 }
-/** The tray outlives every window; held so it is not garbage-collected into nothing. */
-let tray: Tray | null = null;
-/** The tray's handlers, kept so a held login (Tynn #794) can redraw its menu; and what it last showed as held. */
-let trayHandlers: TrayHandlers | null = null;
-let trayHeldKey = '';
-/** The tray's two faces (tray.ts trayImages), and how many Deck items wait on the person — the Deck badge's own number. */
-let trayImages: ReturnType<typeof buildTrayImages> | null = null;
-let trayWaiting = 0;
-/** The tray says which provider logins the rate limit holds, with Resume now — redrawn only when that CHANGES. */
 /** One alert per paused login (core/account-pause.ts): the person is told once, however many of its agents stop. */
 const pauseAlerts = new PauseAlerts();
 
-function refreshTray(): void {
-    // A PAUSED ACCOUNT ALERTS, window or no window (the owner, 2026-10-21: a payment failure paused his subscription and
-    // nothing said so). Read here because every agent change refreshes the tray.
+/**
+ * A PAUSED ACCOUNT ALERTS (the owner, 2026-10-21: a payment failure paused his subscription and nothing said so), read on
+ * every agent change. The client's tray went with Tynn #1058 L5: the launcher owns the tray.
+ */
+function refreshAlerts(): void {
     const paused = host?.pausedProviders() ?? [];
     for (const provider of pauseAlerts.update(paused)) alertAccountPaused(provider);
-    if (!tray || !trayHandlers) return;
-    const held = (host?.heldLogins() ?? []).flatMap((l) => { const words = limitWords(l.view); return words ? [{ provider: l.provider, words }] : []; });
-    // An update on offer leads the menu (Tynn #761).
-    const update = trayUpdate(updates?.state() ?? null);
-    // Signed-out logins (#967): named in the tray with their own `Log in to …`.
-    const signedOut = host?.signedOutProviders() ?? [];
-    // Claude Design's login (#1081): per machine, so one line however many agents wait on it.
-    const designLogin = (host?.designLoginAgents().length ?? 0) > 0;
-    // GENIE-HOST RUNNING (P1b): the tray says so, and WHAT it runs — what a person with no window open sees. Whether a
-    // window is open changes the menu ("Just close the UI" only with one).
-    const hostNow = agentEngineLink?.live === true ? hostActivityNow() : null;
-    const uiOpen = window !== null && !window.isDestroyed();
-    const key = JSON.stringify({ held, update, signedOut, paused, designLogin, waiting: trayWaiting, hostNow, uiOpen });
-    if (key === trayHeldKey) return;
-    trayHeldKey = key;
-    trayMenuNow = trayMenuTemplate(trayHandlers, held, update, signedOut, paused, designLogin);
-    tray.setContextMenu(Menu.buildFromTemplate(trayMenuNow));
-    trayTooltipNow = trayTooltip(held, signedOut, paused, designLogin, trayWaiting, hostNow);
-    tray.setToolTip(trayTooltipNow);
-    // THE DECK NEEDS YOU (the owner, 2026-10-26): the mark with a dot while anything waits on the person.
-    if (trayImages) tray.setImage(trayWaiting > 0 ? trayImages.attention : trayImages.plain);
-}
-
-/** What the tray says and offers now (refreshTray): read by the tray probe, as Electron's Tray cannot be asked. */
-let trayTooltipNow = 'Genie';
-let trayMenuNow: TrayItem[] = [];
-
-/** What genie-host runs now, as the tray says it and the tray-only rule counts it (core/tray-only.ts). */
-function hostActivityNow(): HostActivity {
-    const agents = registry && host ? registry.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).length : 0;
-    // The processes and the services are genie-host's, in its summary (Tynn #1045, 2g-4d-C).
-    return { agents, terminals: hostSummaryNow.terminals.length, processes: hostSummaryNow.processes.length, services: hostSummaryNow.services.length, ...onTheClockNow(), browser: browserLinked ? 1 : 0 };
 }
 
 /** What waits on the host's clock, from genie-host's summary (core/tray-only.ts's rule). With no host, nothing outlives the window. */
@@ -369,21 +326,41 @@ function onTheClockNow(): { armedFlows: number; scheduledTasks: number } {
     return { armedFlows: hostSummaryNow.armedFlows.length, scheduledTasks: hostSummaryNow.scheduledTasks.length };
 }
 
+/** The person closed the main window (its `close`, which a `destroy()` never emits): what may end the client. */
+let mainClosedByPerson = false;
+
+/** The launcher's control wire, as this client calls it (Tynn #1058 L4/L5). */
+const launcherCall = (method: string, args: readonly unknown[] = []) => callLauncher(launcherWire(runtimeDir(genieRoot()), 'client'), method, args);
+
 /**
- * JUST CLOSE THE UI (P1b; the owner, 2026-11-02: "Keep the tray up … as long as any genie services are running, that tray
- * should be there so users can shut them down or restart if needed"). Every window closes — the main one and every other
- * (Take Over, files, remote, the Genie browser) — and this process stays as the tray: still the host's window client, so
- * the phone/remote link and the .gen front door keep working. Nothing of the host is touched. Open Genie (or a second
- * launch) builds the window again (revealMainWindow → mountMainWindow); with nothing left running, watchTrayOnly ends it.
+ * THIS CLIENT ENDS (Tynn #1058 L5): its own work closed and its clean end said, nothing of genie-host stopped. What the last
+ * window closing does, what the launcher's "Just close the UI" does (launcher.closeUi on the attached link), and what the
+ * quit's "Just close the UI" ends with. The launcher keeps the tray; the host keeps everything.
  */
-function closeUi(reason: string): void {
-    leftRunning.set(true);
-    for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.destroy();
-    window = null;
-    browserPane = null;
-    trayQuietSince = null;
-    rendererErrorLog?.(`ui closed (${reason}): Genie stays in the tray`);
-    refreshTray();
+function endClient(reason: string): void {
+    if (quit.quitting) return;
+    rendererErrorLog?.(`the client ends (${reason}): the host keeps running`);
+    quit.choose('exit-window');
+    app.quit();
+}
+
+/**
+ * THE LAST WINDOW CLOSED: the client process ends (closing a window is not a quit). The tray is the launcher's; the first
+ * time, Genie says it stays there (TRAY_NOTICE, once: the marker is a setting).
+ */
+function endClientOnLastWindow(reason: string): void {
+    if (quit.quitting) return;
+    // ONLY THE PERSON'S CLOSE: a window Genie destroys itself (the "Starting Genie's host…" window before the main window
+    // exists, the page's recovery building the window again) is never the last window closing (the first L5 gate: every
+    // window row's client ended itself at boot).
+    if (!mainClosedByPerson) return;
+    if (BrowserWindow.getAllWindows().some((w) => !w.isDestroyed() && w.isVisible())) return;
+    const settings = mainWindowDeps?.settings ?? null;
+    if (launcherLink(process.env) !== null && settings && settings.snapshot().tray_notice_shown !== true && Notification.isSupported()) {
+        void settings.set('tray_notice_shown', true).catch(() => undefined);
+        new Notification({ title: TRAY_NOTICE.title, body: TRAY_NOTICE.body }).show();
+    }
+    endClient(reason);
 }
 
 /**
@@ -428,24 +405,16 @@ async function confirmTray(action: TrayAction): Promise<boolean> {
  * back by their own restore and restart policy; terminals end with their shells.
  */
 function restartGenie(): void {
-    rendererErrorLog?.('restart asked for from the tray');
+    rendererErrorLog?.('restart asked for');
+    // UNDER THE LAUNCHER (L5): it closes the clients, stops the host gracefully, starts it again and opens a window.
+    if (launcherLink(process.env) !== null) {
+        void launcherCall('launcher.restart').then((r) => { if (!r.ok) rendererErrorLog?.(`restart: ${r.reason}`); });
+        return;
+    }
     app.relaunch({ args: [...process.argv.slice(1).filter((a) => a !== HIDDEN_ARG), HIDDEN_ARG] });
     requestQuit('shut-down');
 }
 
-/** Since when a tray-only Genie has had nothing running (core/tray-only.ts); null while anything runs or a window is open. */
-let trayQuietSince: number | null = null;
-/** One look, every few seconds while genie-host runs: the tray says what runs, and a tray-only Genie with nothing left ends. */
-function watchTrayOnly(): void {
-    refreshTray();
-    const step = trayOnlyStep({ uiOpen: window !== null && !window.isDestroyed(), activity: hostActivityNow() }, trayQuietSince, Date.now());
-    trayQuietSince = step.quietSince;
-    if (step.exit) {
-        rendererErrorLog?.('tray only: nothing left running for a minute; shutting everything down');
-        leftRunning.set(false);
-        requestQuit('shut-down');
-    }
-}
 
 /** Each provider's rate limit as the Dashboard header shows it, buffered (core/headroom-board.ts). */
 const headroomFeed = new HeadroomFeed(() => headroomBufferMs(settingsNow.snapshot()));
@@ -597,8 +566,6 @@ let updateQuitReady = false;
  * run exactly once. Its `quitting` is what turns the main window's close from a hide into a real close.
  */
 const quit = quitSequence();
-/** That the person left the host running (P6): what brings it back at logon with the setting off. */
-const leftRunning = new LeftRunningMark(runtimeDir(genieRoot()));
 
 /**
  * THE QUIT a person asks for — the tray's Quit, and `Genie --quit` from outside (core/quit-flag.ts), one entry for both.
@@ -773,11 +740,6 @@ async function setWorkspaceColor(rawId: unknown, color: unknown): Promise<{ ok: 
 }
 
 
-/** The tray icon: shipped beside the app as an extra resource; the repo's build/ in a dev run; the embedded mark otherwise. */
-function trayIconPath(): string | null {
-    for (const p of [join(process.resourcesPath, 'tray-icon.png'), join(here, '..', '..', 'build', 'tray-icon.png')]) if (existsSync(p)) return p;
-    return null;
-}
 
 function v1DatabaseFile(): string {
     return join(app.getPath('userData'), 'genie.db');
@@ -972,8 +934,7 @@ const activationLedger = new ActivationLedger();
 function revealMainWindow(reason: string): void {
     // No host linked yet (Tynn #1058 L4): the host directory is this client's window.
     if (hostDirectoryWindow && !hostDirectoryWindow.isDestroyed()) { bringUp(hostDirectoryWindow, { activation: 'user-gesture', reason, ledger: activationLedger, label: 'host-directory' }); return; }
-    leftRunning.set(false);
-    // Tray-only (P1b, "Just close the UI"): the person asked for Genie — the window is built again, the same host.
+    // No window (a client the launcher started for a link, or one closed): the window is built again, the same host.
     if (!window || window.isDestroyed()) { mountMainWindow(true, reason); return; }
     bringUp(window, { activation: 'user-gesture', reason, ledger: activationLedger, label: 'main' });
 }
@@ -1063,15 +1024,6 @@ function openGenieUrl(url: string): void {
 const tynnMessageOf = (data: unknown): string | null => {
     const message = (data as { integrations?: { tynn?: { message?: unknown } } | null } | null)?.integrations?.tynn?.message;
     return typeof message === 'string' && message !== '' ? message : null;
-};
-
-/** The OS side of "launch at sign-in" (main/tray-residence.ts holds the decisions). */
-const loginItemPort: LoginItemPort = {
-    setLoginItemSettings: (s) => app.setLoginItemSettings({ openAtLogin: s.openAtLogin, ...(s.path !== undefined ? { path: s.path } : {}), ...(s.args !== undefined ? { args: [...s.args] } : {}) }),
-    getLoginItemSettings: (o) => app.getLoginItemSettings({ ...(o.path !== undefined ? { path: o.path } : {}), ...(o.args !== undefined ? { args: [...o.args] } : {}) }),
-    exists: (file) => existsSync(file),
-    writeFile: (file, content) => { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, content, 'utf8'); },
-    removeFile: (file) => unlinkSync(file),
 };
 
 /** Where an agent runs: its workspace's path. The OS agent runs in the user's data directory. */
@@ -1543,7 +1495,7 @@ async function boot(): Promise<void> {
         });
         updates = replica;
     }
-    updates.onChange(() => { refreshTray(); });
+    updates.onChange(() => { refreshAlerts(); });
     // Every copy button writes through main (main/clipboard-ipc.ts): in a sandboxed window the page's clipboard can fail silently.
     registerClipboardIpc(ipcMain, electronClipboardPort(clipboard, ClipboardItem));
     // The native window buttons follow the theme (the owner: "not following color theme"): the renderer sends the
@@ -1706,7 +1658,7 @@ async function boot(): Promise<void> {
         const before = hostSummaryNow;
         if (summary.tynnAccountKey !== hostSummaryNow.tynnAccountKey) { hostSummaryNow = summary; closeRelayWindowsOfOtherAccounts(); }
         hostSummaryNow = summary;
-        refreshTray();
+        refreshAlerts();
         // genie-host's keychain can keep secrets now (Tynn #959): what an older Genie sealed is handed over again.
         unsealer.summary(before, summary);
     });
@@ -1977,12 +1929,6 @@ async function boot(): Promise<void> {
     // features.act (main/remote-questions.ts).
     /** genie-host's Deck as it last said (deck.watch, Tynn #941 2f-2); empty until it does. */
     let hostDeckNow: readonly DeckItem[] = [];
-    // The tray follows the Deck: the badge's own count (core/deck.ts needsYouCount) of this window's error notices and the
-    // host's Deck, redrawn only when it changes.
-    const refreshTrayWaiting = (): void => {
-        const waiting = needsYouCount([...mainErrors.deckItems(), ...hostDeckNow]);
-        if (waiting !== trayWaiting) { trayWaiting = waiting; refreshTray(); }
-    };
     const remoteQuestions = new RemoteQuestions({
         send: (sender, request) => {
             const contents = webContents.fromId(sender);
@@ -2029,7 +1975,6 @@ async function boot(): Promise<void> {
     ownProtocol.watchDeck((items) => {
         hostDeckNow = items;
         questionWindow?.changed();
-        refreshTrayWaiting();
     });
     // Do Not Disturb turned OFF, by hand or on its schedule, opens what waited (Tynn #721).
     settingsNow.onChange((key) => { if (key === 'do_not_disturb') questionWindow?.changed(); });
@@ -2042,11 +1987,9 @@ async function boot(): Promise<void> {
         if (b.width === 0 || b.height === 0) browserPane.hide();
         else browserPane.setBounds({ x: Math.round(b.x), y: Math.round(b.y), width: Math.round(b.width), height: Math.round(b.height) });
     });
-    // The tray follows this window's registry (its agents) and the host's Deck as it says.
-    registry.subscribe(() => { refreshTrayWaiting(); });
-    // An error the main process caught and survived (the policy at the top of this file) reaches the tray's waiting count at
-    // once, directly: no longer through the window registry's Deck, which nothing read (Tynn #998, 2g-4b1).
-    mainErrors.onChange(() => { refreshTrayWaiting(); });
+    // AN ERROR MAIN CAUGHT AND SURVIVED reaches the in-app Deck AT ONCE (Tynn #998, 2g-4b1): this window's features are said
+    // again down the tunnel (mainErrors.deckItems), never through the window registry's Deck, which nothing reads.
+    mainErrors.onChange(() => { requestFeaturePush(); });
     let published = '';
     /*
      * A ledger row can change a Dashboard cell — a plan step, a context figure — so the estate-wide snapshot is refreshed
@@ -2058,15 +2001,14 @@ async function boot(): Promise<void> {
     // each session changes — what the workspace Dashboard's lanes draw. Never polled; one small feed per agent.
     activityFeeds = new ActivityFeeds({ host });
     host.subscribe((agentId) => {
-        refreshTray();
+        refreshAlerts();
         // Which agents are started, for doctor mode — rewritten only when that set changes.
         const started = host?.startedIds().sort() ?? [];
         if (started.join(',') !== published) { published = started.join(','); markGenieRunning(genieRoot(), started); }
         estate.request('estate');
     });
 
-    // TRAY-RESIDENT (core/tray-resident.ts): start minimised keeps the window in the tray at boot; closing it hides it
-    // (Windows, Linux) and Genie keeps running — the agents, the terminals, the services. A quit is asked for.
+    // NO TRAY OF THE CLIENT'S OWN (Tynn #1058 L5): the launcher owns it, the logon entry and the quit's answers.
     // S7: each .gen site at its own https origin — the pane's session routes *.gen to the in-app front door and trusts
     // Genie's CA for .gen hosts only (electron-browser-view.ts). Without a CA, .gen pages are refused and the reason logged.
     // THE FRONT DOOR AS IT IS NOW (P5a.2): genie-host's, so it can come back on another port or with another CA. Every
@@ -2094,65 +2036,28 @@ async function boot(): Promise<void> {
     // Start minimized and the login item are read as genie-host says them, not as defaults: its settings first (a host that
     // does not answer is waited for no longer than the deadline, and then the defaults stand).
     await settingsNow.ready(SETTINGS_BOOT_DEADLINE_MS);
-    mountMainWindow(showOnBoot({ startMinimized: settingsNow.snapshot().start_minimized === true, argv: process.argv }));
-    // LAUNCH AT SIGN-IN: adopt Genie 1's entry, apply at boot, follow every change.
-    void wireLoginItem(settingsNow, loginItemPort, {
-        platform: process.platform,
-        packaged: app.isPackaged,
-        execPath: process.execPath,
-        appImage: process.env.APPIMAGE ?? null,
-        configHome: process.env.XDG_CONFIG_HOME && process.env.XDG_CONFIG_HOME.length > 0 ? process.env.XDG_CONFIG_HOME : join(homedir(), '.config'),
-    }, leftRunning);
-    trayHandlers = {
-        onUpdate: () => { revealMainWindow('tray: update'); },
-        onTaskManager: () => { revealMainWindow('tray: Task Manager'); showToPerson({ activation: 'user-gesture', route: 'genie://hosting?tab=processes', reason: 'tray: Task Manager' }); },
-        // New scratch terminal (Tynn #761; the owner, 2026-10-19: in Genie's own workspace): home folder, its own window.
-        // A signed-out login named in the tray (#967): its own login, in a window of its own.
-        // genie-host starts the provider's own login and asks this window to open it (Tynn #896, 2b-2b); Genie never
-        // touches a credential, and closing the window cancels the login there.
-        onProviderLogin: (provider) => {
-            void ownProtocol.call('logins.provider', [provider]).then((r) => { const why = callRefusal(r); if (why) console.error('[genie] provider login:', why); });
-        },
-        // Claude Design's login (#1081): the same login window, running the interactive `claude`.
-        onDesignLogin: () => {
-            void ownProtocol.call('logins.design', []).then((r) => { const why = callRefusal(r); if (why) console.error('[genie] Claude Design login:', why); });
-        },
-        // Genie's own (null): genie-host opens it in the home folder and asks this window process to show it (#897, 2c-4).
-        onScratchTerminal: () => {
-            void ownProtocol.call('terminals.scratch', [null]).then((r) => { const why = callRefusal(r); if (why) console.error('[genie] scratch terminal:', why); });
-        },
-        onOpen: () => { revealMainWindow('tray: Open'); },
-        onSettings: () => { revealMainWindow('Settings'); showToPerson({ activation: 'user-gesture', route: 'genie://settings', reason: 'Settings' }); },
-        onCheckUpdates: () => { void updates?.check(); },
-        onQuit: () => { requestQuit(); },
-        // QUIT KEEPS THE HOST (P1b): with genie-host, the tray offers the quit's two answers instead of Quit.
-        // ALWAYS ASK (the owner, 2026-11-02): Restart and Shut down everything confirm first, every time.
-        ...(agentEngineLink ? { onCloseUi: () => { closeUi('tray'); }, onRestart: () => { void confirmTray('restart').then((ok) => { if (ok) restartGenie(); }); }, onShutDown: () => { void confirmTray('shut-down').then((ok) => { if (ok) { leftRunning.set(false); requestQuit('shut-down'); } }); }, uiOpen: () => window !== null && !window.isDestroyed() } : {}),
-        onResumeLimit: (provider) => { host?.resumeLimit(provider); refreshTray(); },
-        // A paused account named in the tray: Try again brings its agents back.
-        // TRY AGAIN for a paused account (Tynn #896, 2b-3): genie-host's accountRetry, named by an agent the provider stopped.
-        onAccountRetry: (provider) => {
-            const agent = host?.pausedAgents(provider)[0];
-            if (!agent) return;
-            void ownProtocol.call('accountRetry', [agent]).then((r) => { const why = callRefusal(r); if (why) console.error('[genie] account retry:', why); });
-        },
+    // THE LAUNCHER DECIDES WHETHER A WINDOW OPENS (Tynn #1058 L5): at logon with start minimised it starts no client at all,
+    // so a client that runs shows its window. With no tray of its own a hidden client could never be reached.
+    mountMainWindow(true);
+    // THE LAUNCHER'S TRAY ASKED FOR A PLACE (L5: Needs you, Settings…, Task Manager…): `--show <route>`, one it offers.
+    const shownAtBoot = launcherShowRoute(process.argv);
+    if (shownAtBoot) { revealMainWindow('launcher tray'); showToPerson({ activation: 'user-gesture', route: shownAtBoot, reason: 'launcher tray' }); }
+    // START ON LOGON IS THE LAUNCHER'S (Tynn #1058 L5): it writes the entry (the Run value, the autostart file) running
+    // itself with --logon, and decides with the logon table. This client says the person's two settings to it: at boot, on
+    // every change, and when genie-host says its settings whole (late, after the boot's deadline).
+    const sayLogon = (why: string): void => {
+        const v = settingsNow.snapshot();
+        void launcherCall('launcher.logon', [{ setting: v.launch_at_login === true, startMinimized: v.start_minimized === true }]).then((r) => {
+            if (r.ok) console.log(`[genie] start on logon (${why}): ${String((r.value as { said?: unknown } | null)?.said ?? 'said to the launcher')}`);
+            else if (r.code !== 'no-launcher') console.error(`[genie] start on logon (${why}): the launcher did not take it: ${r.reason}`);
+        });
     };
-    trayImages = buildTrayImages(trayIconPath());
-    tray = createTray(trayHandlers, trayWaiting > 0 ? trayImages.attention : trayImages.plain);
-    trayMenuNow = trayMenuTemplate(trayHandlers);
-    // THE TRAY PROBE — ONLY for the VM proof (scripts/quit-keeps-host-cdp.mjs, over the main process's inspector), and ONLY
-    // in a launch with GENIE_TRAY_PROBE=1 (core/tray-only.ts trayProbeEnabled): every real launch has none. Electron's Tray
-    // cannot be asked what it shows, nor clicked from outside: whether it is there, what it says, its menu — and an item's
-    // own click, the very handler the menu runs. On the main process's globalThis, which no renderer (context-isolated,
-    // sandboxed), no IPC handler, remote method or MCP tool reaches; nothing else in src/ names it (a source guard).
-    if (trayProbeEnabled(process.env)) {
-        (globalThis as Record<symbol, unknown>)[Symbol.for('genie.tray')] = {
-            present: () => tray !== null && !tray.isDestroyed(),
-            tooltip: () => trayTooltipNow,
-            labels: () => trayMenuNow.map((i) => i.label ?? '-'),
-            click: (label: string) => { const item = trayMenuNow.find((i) => i.label === label && i.click); item?.click?.(); return item !== undefined; },
-        };
-    }
+    sayLogon('at boot');
+    settingsNow.onChange((key, _value, workspaceId) => { if (workspaceId === undefined && (key === 'launch_at_login' || key === 'start_minimized')) sayLogon('the setting changed'); });
+    settingsNow.onView?.(() => { sayLogon('the settings genie-host said'); });
+    // ATTACHED TO THE LAUNCHER (L5): the tray's "Close Genie" and "Shut down everything" close this client through it.
+    void attachLauncher(launcherWire(runtimeDir(genieRoot()), 'client'), { pid: process.pid, onCloseUi: () => { endClient('the launcher closed the UI'); }, log: (line) => { console.log(`[genie] launcher: ${line}`); } })
+        .then((attached) => { console.log(attached ? '[genie] attached to the launcher' : '[genie] no launcher to attach to'); });
     // GENIE'S APPLICATION MENU (Tynn #759, main/app-menu.ts): without one Electron's default is in force, and its Ctrl+W
     // closes — on this window, hides — Genie from any field. Settings… on Ctrl+, (⌘, on macOS).
     Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate(process.platform, app.getVersion(), {
@@ -2181,40 +2086,29 @@ async function boot(): Promise<void> {
         void agentEngineLink.client.browserCall('publish', [{ launch }]).catch((error: unknown) => { rendererErrorLog?.(`how to start the browser could not be said: ${error instanceof Error ? error.message : String(error)}`); });
     };
     publishBrowserFacts();
-    // TRAY-ONLY (P1b): while genie-host runs, one look every few seconds — what the tray says, and whether a tray-only
-    // Genie with nothing left running ends (core/tray-only.ts).
-    if (agentEngineLink) setInterval(watchTrayOnly, 5_000).unref?.();
 }
 
 /** What a (re)built main window needs from boot: set once the services are composed. */
 /** The front door's port and Genie's CA as the browser sessions use them now (P5a.2); set once the services are composed. */
 let frontDoorNow: FrontDoorWatchView = EMPTY_FRONT_DOOR_WATCH;
-let mainWindowDeps: { readonly frontDoorPort: () => number; readonly caPem: () => string | null; readonly routes: ConstructorParameters<typeof BrowserPane>[1]; readonly settings: Parameters<typeof wireCloseToTray>[1]['settings']; readonly pushFeatures: () => void } | null = null;
+let mainWindowDeps: { readonly frontDoorPort: () => number; readonly caPem: () => string | null; readonly routes: ConstructorParameters<typeof BrowserPane>[1]; readonly settings: { snapshot(): Record<string, unknown>; set(key: string, value: unknown): Promise<void> }; readonly pushFeatures: () => void } | null = null;
 /** The live site panels (once per process); each main window attached as it is built. */
 let livePanels: LiveSitePanels | null = null;
 
 /**
- * THE MAIN WINDOW, BUILT — at boot, and again after "Just close the UI" (P1b) when the person opens Genie from the tray or
- * launches it again. Everything bound to ONE window is bound here, every time: its close (hide to the tray), the OS ending
+ * THE MAIN WINDOW, BUILT — at boot, and again when the person opens Genie while this client runs (a link, a second
+ * launch). Everything bound to ONE window is bound here, every time: its close (the last one ends the client), the OS ending
  * the session, the Genie Browser pane, the site panels. Everything else reads `window` when it runs.
  */
 function mountMainWindow(show: boolean, reason = 'launch'): void {
     const deps = mainWindowDeps;
     if (!deps) return;
     window = createWindow(show);
-    // TRAY-RESIDENT (core/tray-resident.ts): start minimised keeps the window in the tray at boot; closing it hides it
-    // (Windows, Linux) and Genie keeps running — the agents, the terminals, the services. A quit is asked for.
-    wireCloseToTray(window, {
-        platform: process.platform,
-        quitting: () => quit.quitting,
-        settings: deps.settings,
-        notify: (notice) => {
-            if (!Notification.isSupported()) return;
-            const n = new Notification({ title: notice.title, body: notice.body });
-            n.on('click', () => { revealMainWindow('notification click'); });
-            n.show();
-        },
-    });
+    // CLOSING THE WINDOW IS REAL (Tynn #1058 L5): no hide to a tray of the client's own. The last window closed ends the
+    // client process; the host keeps everything and the launcher's tray stays.
+    mainClosedByPerson = false;
+    window.on('close', () => { mainClosedByPerson = true; });
+    window.on('closed', () => { setImmediate(() => { endClientOnLastWindow('the main window closed'); }); });
     // Windows ends a session (shutdown, restart, sign-out) WITHOUT a before-quit (Electron documents it): quit on the
     // way out so the shutdown runs, without a question nothing could answer.
     window.on('session-end', () => { quit.force(); app.quit(); });
@@ -2229,7 +2123,6 @@ function mountMainWindow(show: boolean, reason = 'launch'): void {
     livePanels?.attach(window);
     bringBackItsPage(window);
     if (reason !== 'launch') rendererErrorLog?.(`window built again (${reason}): the same host`);
-    refreshTray();
 }
 
 /**
@@ -2284,7 +2177,7 @@ app.on('browser-window-focus', (_event, focused) => {
 
 app.on('second-instance', (_event, argv, _workingDirectory, additionalData) => {
     // ONE WINDOW PER HOST (Tynn #1058 L4): the launcher's openWindow {host} arrives here as `--host <address>`.
-    answerSecondInstance(argv, additionalData, { quit: requestQuit, reveal: () => { revealMainWindow('second launch'); }, defer: (run) => { setImmediate(run); }, open: openGenieUrl, openHost: (address) => { openRemoteWindow(address); } });
+    answerSecondInstance(argv, additionalData, { quit: requestQuit, reveal: () => { revealMainWindow('second launch'); }, defer: (run) => { setImmediate(run); }, open: openGenieUrl, openHost: (address) => { openRemoteWindow(address); }, show: (route) => { showToPerson({ activation: 'user-gesture', route, reason: 'launcher tray' }); } });
 });
 
 /**
@@ -2334,7 +2227,16 @@ app.on('before-quit', (event) => {
         ask: (plan) => quitAnswer(plan, dialog.showMessageBoxSync({ type: 'question', title: plan.title, message: plan.message, buttons: [...plan.buttons], defaultId: 0, cancelId: 0 })),
     });
     if (step === 'cancel') { event.preventDefault(); return; }
-    if (step === 'close-ui') { event.preventDefault(); closeUi('the quit’s answer'); return; }
+    // JUST CLOSE THE UI (L5): the launcher's — every client window closes (this one too) and the host is marked left
+    // running; with no launcher (a development run) this window just ends. The host is never touched.
+    if (step === 'close-ui') {
+        event.preventDefault();
+        void quitThroughLauncher('close-ui', { call: launcherCall, windowShutDown: () => Promise.resolve() }).then((by) => {
+            if (by.by === 'failed') rendererErrorLog?.(`Just close the UI: the launcher did not take it: ${by.reason}`);
+            endClient('the quit’s answer: Just close the UI');
+        });
+        return;
+    }
     crashRecorder.beforeQuit();
     scratchSweepStop?.();
     scratchSweepStop = null;
@@ -2396,7 +2298,12 @@ const quitPorts: QuitPorts = {
     },
     drained: () => host?.drained(QUIT_EXIT_WAIT_MS) ?? Promise.resolve(),
     // With the agent host (the host split): its sessions' writes drained, then the host itself ended gracefully.
-    shutDownHost: () => agentEngineLink?.shutdown(QUIT_WRITES_MS) ?? Promise.resolve(),
+    // SHUT DOWN EVERYTHING (L5): the launcher stops the host and waits on its own progress (Tynn #1079: never a kill 5 s in,
+    // so a slow, clean stop is never a crash), then exits. Only with no launcher (a development run) does this window
+    // end the host itself, as before.
+    shutDownHost: () => quitThroughLauncher('shut-down', { call: launcherCall, windowShutDown: () => agentEngineLink?.shutdown(QUIT_WRITES_MS) ?? Promise.resolve() }).then((by) => {
+        if (by.by === 'failed') rendererErrorLog?.(`Shut down everything: the launcher did not take it: ${by.reason}`);
+    }),
 };
 
 // THE LINUX PASSWORD STORE (Tynn #846; Genie 1's genie#379/#588): Chromium picks its secret store from the desktop's
@@ -2434,11 +2341,10 @@ if (launch.kind === 'boot') {
 }
 
 /*
- * TRAY-RESIDENT: the last window closing is not a quit. The main window hides instead of closing (Windows, Linux), and
- * macOS keeps an app without windows running by convention — Genie quits from the tray's Quit, the app menu's Quit, or
- * the OS ending the session. A handler that does nothing is what stops Electron's default quit here.
+ * THE LAST WINDOW CLOSING ENDS THE CLIENT (Tynn #1058 L5), and is not a quit: nothing of the host stops. The tray is the
+ * launcher's. Quit (the app menu, `Genie --quit`) still asks its two answers.
  */
-app.on('window-all-closed', () => { /* Genie stays in the tray */ });
+app.on('window-all-closed', () => { endClientOnLastWindow('every window closed'); });
 
 // macOS and Linux announce a shutdown, restart or sign-out: delay it, quit without a question nothing could answer.
 // Waking from sleep: a Genie that shows signed out to Tynn asks again (the network is often what was missing).

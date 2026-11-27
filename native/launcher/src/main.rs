@@ -3,7 +3,10 @@
 //!   genie                         open Genie, as the Start menu and the desktop entry run it: with a launcher already
 //!                                 running, ask it for a window and exit; else run the launcher (one per user), start
 //!                                 the host (profile both) and open a client window
-//!   genie serve | --logon | --hidden   run the launcher alone: its control wire, until it is ended (L5 adds logon)
+//!   genie serve | --hidden        run the launcher alone: its control wire and its tray, until it is ended
+//!   genie --logon                 what the logon entry runs (L5): the logon table decides; with nothing to start it exits
+//!                                 (Genie stays down until it is opened), else the host and, unless start-minimised, a
+//!                                 window, and the launcher stays in the tray
 //!   genie setup --from <folder> [--channel stable|dev]
 //!                                 the setup window (direction C): choose, install with its progress, ready, Open Genie.
 //!                                 `genie` alone does the same on a machine with nothing installed and packages\ beside
@@ -15,6 +18,11 @@
 //!   genie status [--json]         what is installed and running
 //!   genie ensure-host             adopt the running host or start the current one
 //!   genie stop-host               the graceful stop
+//!   genie close-ui                "Just close the UI": every client window closes; the host and the launcher keep running
+//!   genie shut-down               "Shut down everything": the host's graceful stop, then the launcher exits (waited for)
+//!   genie logon-settings on|off on|off   start on logon, start minimised: what the client says; the entry follows
+//!   genie tray-menu | tray-act <action>  the tray's menu as words, and one of its items (GENIE_LAUNCHER_TRAY_PROBE=1 only:
+//!                                 the VM rows' screenshots)
 //!   genie version                 this launcher's build
 //!   genie detach|job|pipe-owner-only ...   genie-launch.exe's modes (Windows), same contracts
 
@@ -70,7 +78,8 @@ fn main() -> ExitCode {
                 Err(why) => fail(&why),
             }
         }
-        Some("serve") | Some("--logon") | Some("--hidden") => {
+        Some("--logon") => cmd_logon(roots),
+        Some("serve") | Some("--hidden") => {
             if let Err(why) = private_code_root(&roots) {
                 return fail(&why);
             }
@@ -108,6 +117,41 @@ fn main() -> ExitCode {
                 ExitCode::SUCCESS
             }
             Err(why) => fail(&why),
+        },
+        Some("close-ui") => print_call(&roots, "launcher.closeUi", serde_json::json!([])),
+        Some("shut-down") => cmd_shut_down(&roots),
+        Some("logon-settings") => {
+            let on = |v: Option<&String>| match v.map(String::as_str) {
+                Some("on") => Some(true),
+                Some("off") => Some(false),
+                _ => None,
+            };
+            let (Some(setting), Some(start_minimized)) = (on(text.get(1)), on(text.get(2))) else {
+                return fail("logon-settings <start on logon: on|off> <start minimised: on|off>");
+            };
+            let args = serde_json::json!([{"setting": setting, "startMinimized": start_minimized}]);
+            match control::call_running(&roots, "launcher.logon", args) {
+                Ok(Some(v)) => {
+                    println!("{v}");
+                    ExitCode::SUCCESS
+                }
+                Ok(None) => {
+                    use genie_launcher::logon;
+                    match logon::write_settings(&roots, logon::LogonSettings { setting, start_minimized }).and_then(|_| logon::entry_exe()).and_then(|exe| logon::apply(&roots, &logon::place(), &exe)) {
+                        Ok(said) => {
+                            println!("{said}");
+                            ExitCode::SUCCESS
+                        }
+                        Err(why) => fail(&why),
+                    }
+                }
+                Err(why) => fail(&why),
+            }
+        }
+        Some("tray-menu") => print_call(&roots, "launcher.trayMenu", serde_json::json!([])),
+        Some("tray-act") => match text.get(1) {
+            Some(a) => print_call(&roots, "launcher.trayAct", serde_json::json!([{"action": a}])),
+            None => fail("tray-act <openGenie|openBrowser|startHost|stopHost|closeUi|shutDown>"),
         },
         Some("version") | Some("--version") => {
             println!("{}", LAUNCHER_BUILD);
@@ -170,6 +214,40 @@ fn hand_over_to_installed(roots: &Roots) -> Result<bool, String> {
     Ok(true)
 }
 
+/// What the logon entry runs (Tynn #1058 L5): `logonEntry`'s table (logon.rs) decides whether the host starts and a window
+/// opens; with neither, the launcher removes a stale entry and exits, so Genie stays down until it is opened.
+fn cmd_logon(roots: Roots) -> ExitCode {
+    use genie_launcher::logon;
+    if let Err(why) = private_code_root(&roots) {
+        return fail(&why);
+    }
+    let input = logon::input(&roots);
+    let plan = logon::at_logon(logon::logon_entry(input));
+    eprintln!("genie: at logon: left running {}, start on logon {}, start minimised {}: {}", input.left_running, input.setting, input.start_minimized,
+        if !plan.start_host { "Genie stays down until it is opened" } else if plan.open_window { "the host starts and a window opens" } else { "the host starts; Genie stays in the tray" });
+    if !plan.start_host && !plan.open_window {
+        logon::apply_here(&roots);
+        return ExitCode::SUCCESS;
+    }
+    let served = control::serve_then(roots, move |roots| {
+        let has_host = genie_launcher::state::read(&roots.state_file()).ok().and_then(|s| s.track("host").and_then(|t| t.current.clone())).is_some();
+        if plan.start_host && has_host {
+            if let Err(why) = host::ensure_host(roots, &keys::trusted_keys(roots)) {
+                eprintln!("genie: {why}");
+            }
+        }
+        if plan.open_window {
+            if let Err(why) = genie_launcher::components::component("client").ok_or_else(|| "no client component".to_string()).and_then(|c| control::start_component(roots, c, vec!["--open-window".to_string()])) {
+                eprintln!("genie: {why}");
+            }
+        }
+    });
+    match served {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(why) => fail(&why),
+    }
+}
+
 fn cmd_open(roots: Roots) -> ExitCode {
     let installed = genie_launcher::state::read(&roots.state_file()).ok().and_then(|s| s.track("client").and_then(|t| t.current.clone())).is_some();
     if !installed {
@@ -189,6 +267,7 @@ fn cmd_open(roots: Roots) -> ExitCode {
         return fail(&why);
     }
     let opened = control::serve_then(roots, |roots| {
+        control::opened(roots);
         let has_host = genie_launcher::state::read(&roots.state_file()).ok().and_then(|s| s.track("host").and_then(|t| t.current.clone())).is_some();
         if has_host {
             if let Err(why) = host::ensure_host(roots, &keys::trusted_keys(roots)) {
@@ -258,6 +337,40 @@ fn end_running_launcher(roots: &Roots) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("Genie's launcher (pid {pid}) did not end, so its programs could not be removed."))
+    }
+}
+
+/// One call to the running launcher, its answer printed.
+fn print_call(roots: &Roots, method: &str, args: serde_json::Value) -> ExitCode {
+    match control::call_running(roots, method, args) {
+        Ok(Some(v)) => {
+            println!("{v}");
+            ExitCode::SUCCESS
+        }
+        Ok(None) => fail("Genie's launcher is not running."),
+        Err(why) => fail(&why),
+    }
+}
+
+/// "Shut down everything" from outside (an uninstaller, a script): asked of the running launcher, then waited for until it
+/// has exited (it exits only after the host's graceful stop).
+fn cmd_shut_down(roots: &Roots) -> ExitCode {
+    let pid = std::fs::read_to_string(roots.runtime_dir().join("launcher.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v["pid"].as_u64())
+        .map(|p| p as u32);
+    match control::call_running(roots, "launcher.shutDown", serde_json::json!([])) {
+        Ok(Some(_)) => {}
+        Ok(None) => return fail("Genie's launcher is not running."),
+        Err(why) => return fail(&why),
+    }
+    let Some(pid) = pid else { return ExitCode::SUCCESS };
+    if genie_launcher::spawn::wait_gone(pid, std::time::Duration::from_secs(16 * 60)) {
+        println!("shut down: the launcher (pid {pid}) has exited");
+        ExitCode::SUCCESS
+    } else {
+        fail(&format!("the launcher (pid {pid}) is still running"))
     }
 }
 

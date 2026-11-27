@@ -15,6 +15,7 @@
  */
 
 import { remoteFromSearch } from './remote-window.js';
+import { launcherShowRoute } from './launcher-link.js';
 import { genieUrlIn } from './tynn-sign-in.js';
 
 export const QUIT_ARG = '--quit';
@@ -89,7 +90,7 @@ export function secondInstanceAction(argv: readonly string[], additionalData: un
 export function answerSecondInstance(
     argv: readonly string[],
     additionalData: unknown,
-    act: { readonly quit: () => void; readonly reveal: () => void; readonly defer: (run: () => void) => void; readonly open?: (url: string) => void; readonly openHost?: (address: string) => void },
+    act: { readonly quit: () => void; readonly reveal: () => void; readonly defer: (run: () => void) => void; readonly open?: (url: string) => void; readonly openHost?: (address: string) => void; readonly show?: (route: string) => void },
 ): 'quit' | 'reveal' | 'ignore' | 'open-host' {
     const action = secondInstanceAction(argv, additionalData);
     if (action === 'quit') act.defer(act.quit);
@@ -107,6 +108,11 @@ export function answerSecondInstance(
         const url = genieUrlIn(argv);
         const open = act.open;
         if (url !== null && open) act.defer(() => { open(url); });
+        // THE LAUNCHER'S TRAY (Tynn #1058 L5): Needs you, Settings…, Task Manager… open Genie THERE (`--show <route>`, only a
+        // route the tray offers), after the handler returns, like the URL.
+        const route = launcherShowRoute(argv);
+        const show = act.show;
+        if (route !== null && show) act.defer(() => { show(route); });
     }
     return action;
 }

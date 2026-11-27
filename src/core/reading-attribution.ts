@@ -33,6 +33,8 @@ export class ReadingAttribution {
 
     /** The stamp to show a reading under now, or `null` when it is held until the read of who is signed in ends. */
     stamp(provider: string, room: Headroom, stamp: ReadingStamp): ReadingStamp | null {
+        // A run in its own account's directory: whoever is signed in by default, the reading is that account's (#1011).
+        if (stamp.pinned) return stamp;
         const r = this.#reading.get(provider);
         if (r) {
             const named = new Set(room.windows.map((w) => w.window));

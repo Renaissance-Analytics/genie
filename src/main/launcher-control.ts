@@ -94,3 +94,44 @@ export async function callLauncher(wire: LauncherWire, method: string, args: rea
 export function launcherWire(runtimeDir: string, track: Track, build: string | null = null): LauncherWire {
     return { runtimeDir, track, build };
 }
+
+/**
+ * A CLIENT ATTACHED TO ITS LAUNCHER (Tynn #1058 L5). The launcher owns the tray, so "Just close the UI" and "Shut down
+ * everything" chosen there must reach every client window: each client holds one link open (`launcher.attach {pid}`), and
+ * the launcher says `{kind: 'event', name: 'launcher.closeUi'}` on it. The client then closes its windows and exits.
+ */
+export interface LauncherAttachment {
+    close(): void;
+}
+
+export async function attachLauncher(wire: LauncherWire, input: { readonly pid: number; readonly onCloseUi: () => void; readonly log?: (line: string) => void }): Promise<LauncherAttachment | null> {
+    const found = find(wire);
+    if (found === null) return null;
+    let transport: LineTransport;
+    try {
+        transport = await (wire.connectTo ?? connectSocket)(found.endpoint);
+    } catch (error) {
+        input.log?.(`the launcher did not answer the attach (${error instanceof Error ? error.message : String(error)})`);
+        return null;
+    }
+    const offs: (() => void)[] = [];
+    let closed = false;
+    const close = (): void => {
+        if (closed) return;
+        closed = true;
+        for (const off of offs) off();
+        transport.close();
+    };
+    offs.push(transport.onClose(() => { if (!closed) input.log?.('the launcher closed its link (it has exited)'); closed = true; }));
+    offs.push(transport.onMessage((text) => {
+        let frame: { kind?: unknown; name?: unknown; id?: unknown; ok?: unknown; reason?: unknown };
+        try { frame = JSON.parse(text) as typeof frame; } catch { return; }
+        if (frame.kind === 'welcome') { transport.trusted(); transport.send(JSON.stringify({ kind: 'call', id: 1, method: 'launcher.attach', args: [{ pid: input.pid }] })); return; }
+        if (frame.kind === 'refused') { input.log?.(`the launcher refused the attach: ${String(frame.reason)}`); close(); return; }
+        if (frame.kind === 'result' && frame.id === 1 && frame.ok !== true) { input.log?.(`the launcher refused the attach: ${String(frame.reason)}`); close(); return; }
+        if (frame.kind === 'event' && frame.name === 'launcher.closeUi') input.onCloseUi();
+    }));
+    const offer = remoteOffer(wire.track, wire.build ?? null, [CAP_LAUNCHER]);
+    transport.send(JSON.stringify({ kind: 'hello', auth: { kind: 'token', token: found.token }, label: `genie ${wire.track}`, track: offer.track, ...(offer.build ? { build: offer.build } : {}), schema: offer.schema, minSchema: offer.minSchema, capabilities: offer.capabilities }));
+    return { close };
+}

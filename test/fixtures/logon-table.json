@@ -1,0 +1,11 @@
+{
+  "about": "THE LOGON TABLE (the host split P6, decision 5 and O4; Tynn #1058 L5). One table read by test/logon-table.test.ts against src/core/logon.ts logonEntry (unchanged) and by native/launcher/tests/logon_table.rs against the launcher's plan (native/launcher/src/logon.rs), so the two languages cannot drift. `entry` is what the launcher writes at the OS (the Run value / the autostart file, running `Genie.exe --logon` / `genie --logon`); `atLogon` is what that run does. The first four rows are the table: left running or shut down, x the setting on or off -> start, start, start, stays down.",
+  "rows": [
+    { "name": "left running, setting on", "leftRunning": true, "setting": true, "startMinimized": false, "entry": { "launchAtLogin": true, "startMinimized": true }, "atLogon": { "startHost": true, "openWindow": false } },
+    { "name": "left running, setting off", "leftRunning": true, "setting": false, "startMinimized": false, "entry": { "launchAtLogin": true, "startMinimized": true }, "atLogon": { "startHost": true, "openWindow": false } },
+    { "name": "shut down, setting on", "leftRunning": false, "setting": true, "startMinimized": false, "entry": { "launchAtLogin": true, "startMinimized": false }, "atLogon": { "startHost": true, "openWindow": true } },
+    { "name": "shut down, setting off: stays down until Genie is opened", "leftRunning": false, "setting": false, "startMinimized": false, "entry": { "launchAtLogin": false, "startMinimized": false }, "atLogon": { "startHost": false, "openWindow": false } },
+    { "name": "shut down, setting on, start minimised", "leftRunning": false, "setting": true, "startMinimized": true, "entry": { "launchAtLogin": true, "startMinimized": true }, "atLogon": { "startHost": true, "openWindow": false } },
+    { "name": "shut down, setting off, start minimised: still down", "leftRunning": false, "setting": false, "startMinimized": true, "entry": { "launchAtLogin": false, "startMinimized": true }, "atLogon": { "startHost": false, "openWindow": false } }
+  ]
+}

@@ -161,7 +161,9 @@ describe('the quit’s shutdown pass (main.ts before-quit)', () => {
         // The stop that precedes the drain is the agents' (quit-sequence.test.ts holds the order).
         expect(count(/stopAgents: \(\) => \{ host\?\.stopAll\(\); \}/g)).toBe(1);
         expect(count(/host\?\.drained\(QUIT_EXIT_WAIT_MS\)/g)).toBe(1);
-        // The host's end is bounded by its own wait (then killed): the quit can never be held by it for ever.
-        expect(count(/shutDownHost: \(\) => agentEngineLink\?\.shutdown\(QUIT_WRITES_MS\) \?\? Promise\.resolve\(\)/g)).toBe(1);
+        // The host's end is the launcher's (Tynn #1058 L5, #1079: waited for on its own progress, never killed 5 s in); only with
+        // no launcher (a development run) is it this window's bounded wait. The quit is never held by it: launcher.shutDown
+        // answers at once.
+        expect(count(/shutDownHost: \(\) => quitThroughLauncher\('shut-down', \{ call: launcherCall, windowShutDown: \(\) => agentEngineLink\?\.shutdown\(QUIT_WRITES_MS\) \?\? Promise\.resolve\(\) \}\)/g)).toBe(1);
     });
 });

@@ -91,8 +91,8 @@ describe('the pill’s accessible name (the detail itself is a popover now: rate
     it('names the provider and its most constrained window, in the sidebar dot’s words', () => {
         const html = renderToStaticMarkup(<RateLimitPills limits={{ claude: headroomFromMeta(claude)!, codex: headroomFromMeta(codex)! }} now={NOW} />);
         // Claude's binding window is the 5h (38% left), but its 7d has 8% left: the tighter one is what a person needs.
-        expect(named(html, 'claude')).toBe('Claude Code rate limits: 8% left this week');
-        expect(named(html, 'codex')).toBe('Codex rate limits: 60% left in the 5-hour window');
+        expect(named(html, 'claude')).toBe('Claude Code rate limits: 92% used this week'); // the share used (Tynn #1070 review)
+        expect(named(html, 'codex')).toBe('Codex rate limits: 40% used in the 5-hour window');
     });
 
     it('a spent window reads as over', () => {
@@ -121,8 +121,8 @@ describe('the sidebar alert', () => {
     it('any window counts, not only the headline one; the worst sets the colour; the label names each low window', () => {
         const a = rateLimitAlert({ claude: headroomFromMeta(claude)!, codex: { ...room(25), plan: 'pro' } })!;
         expect(a.level).toBe('danger');
-        expect(a.label).toContain('Claude Code: 8% left this week');
-        expect(a.label).toContain('Codex: 25% left in the 5-hour window');
+        expect(a.label).toContain('Claude Code: 92% used this week');
+        expect(a.label).toContain('Codex: 75% used in the 5-hour window');
         expect(a.label).not.toContain('opus');
     });
 
@@ -198,7 +198,7 @@ describe('from any page: the Shell lights the dot from the header’s readings',
 
     it('on Settings, Claude at 8% left this week: the red dot on the Dashboard row, named', () => {
         const html = render('genie://settings', { claude: room(8, '7d') });
-        expect(dotIn(railDashboard(html))).toEqual({ color: 'red', words: 'Claude Code: 8% left this week' });
+        expect(dotIn(railDashboard(html))).toEqual({ color: 'red', words: 'Claude Code: 92% used this week' });
     });
 
     it('every window above 30%: no dot', () => {

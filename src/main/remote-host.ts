@@ -1,4 +1,5 @@
 import { LatestPush } from '../core/latest-push.js';
+import { isGenieOwnScratch } from './scratch-terminal.js';
 import { readRegistryRead } from './registry-protocol.js';
 import { randomBytes } from 'node:crypto';
 import { LOCAL_FRAME_LIMIT_BYTES } from '../core/local-frame.js';
@@ -1216,7 +1217,7 @@ export class RemoteHost {
         if (!auth.isOwner && auth.workspaceId === null && (method === 'features.act' || method.startsWith('updates.'))) return refuse(`${method} changes ${this.#hostName} itself; only its owner can`);
         if (!auth.isOwner && OWNER_ONLY.includes(method)) return refuse(`${method} changes ${this.#hostName} itself; only its owner can`);
         // Genie's own scratch terminal (null: the home folder, the tray's) is the host owner's (Tynn #897, 2c-4).
-        if (!auth.isOwner && method === 'terminals.scratch' && (args[0] ?? null) === null) return refuse(`Genie’s own terminal on ${this.#hostName} is its owner’s; open the workspace’s`);
+        if (!auth.isOwner && method === 'terminals.scratch' && isGenieOwnScratch(typeof args[0] === 'string' ? args[0] : null)) return refuse(`Genie’s own terminal on ${this.#hostName} is its owner’s; open the workspace’s`);
         const signIn = this.#signInRefusal(connection, method);
         if (signIn) return refuse(signIn);
         // A guest browses inside what it was given; the owner, the whole disk (Genie 1's approved scope, Tynn #835).

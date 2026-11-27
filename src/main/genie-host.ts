@@ -26,6 +26,10 @@ import { hostname, uptime } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ENGINE_PROTOCOL, hostEndpoint, parseHostRecord, type HostRecord } from '../core/engine-protocol.js';
+import { stopProgress } from '../core/stop-progress.js';
+import { hostActivityOf } from '../core/host-activity.js';
+import { needsYouCount } from '../core/deck.js';
+import { renameOverSync } from '../core/atomic-rename.js';
 import { lineTransport } from '../core/line-transport.js';
 import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
 import { makeServiceExec } from './service-exec.js';
@@ -1713,6 +1717,15 @@ async function main(): Promise<void> {
         timeCall: (method) => hostWatchdog.ipc(method),
         log: say,
         onShutdown: () => void shutdown('a window asked'),
+        // What this host runs now, for the launcher's tray and its questions (Tynn #1058 L5).
+        activity: () => hostActivityOf({
+            running: hostRegistry.listAgents().filter((a) => host.probe(a.id as AgentId)?.running === true),
+            summary: hostSummary.now(),
+            flows: hostFlows.list(),
+            kept: hostBook.kept(),
+            browserUp: browserService.up,
+            needsYou: needsYouCount(featureDeckItems()),
+        }),
         heartbeat: hangWatchdog,
         crash: crashState,
         // Every window shows the banner, and may leave it (safe-mode-host.ts).
@@ -2077,6 +2090,9 @@ async function main(): Promise<void> {
     phoneRegistry.setProbe(withComms((id) => host.probe(id), (id) => own.inbox.involving(id, 2000)));
     phoneRegistry.setHandoffProbe((id) => own.attention.lastHandoff(id));
     phoneRegistry.setSafeMode(() => safeMode.view());
+    // Leaving (or a held item) is pushed at once (Tynn #1076): this registry is read only when touched, so with nothing
+    // running to push a snapshot, Leave safe mode cleared the host and the banner stayed up.
+    safeMode.onChange(() => { phoneRegistry.touch(); });
     phoneRegistry.setHangNotice(() => crashState.view().notice);
     phoneRegistry.setObservedProbe((id) => takeOverHost.probe(id));
     const workspaceColors = new WorkspaceColors({ fs: nodeEnvelopeFs(), writesAssigned: false, mayReadFolder: (path) => hostRegistry.workspaceStates().find((w) => w.path === path)?.asleep !== true, onChanged: () => phoneRegistry.touch() });
@@ -3024,6 +3040,10 @@ async function main(): Promise<void> {
         try {
             hangWatchdog.shuttingDown();
             say(`shutting down: ${why}`);
+            // ITS PROGRESS, SAID AS IT GOES (Tynn #1079): the launcher waits as long as this moves, and ends the host only when
+            // it stands still. Written whole each time (core/stop-progress.ts).
+            const stopping = stopProgress(runtime, { pid: process.pid, now: Date.now, write: (file, text) => { const temp = `${file}.${process.pid}.tmp`; writeFileSync(temp, text); renameOverSync(temp, file); } });
+            stopping.step('agents', host.count);
             if (marketplaceHost) await marketplaceHost.close().catch((error: unknown) => say(`Marketplace shutdown: ${error instanceof Error ? error.message : String(error)}`));
             lifecycleLog(`host shutdown pid=${process.pid} reason=${why}`);
             browserService.quit();
@@ -3032,10 +3052,14 @@ async function main(): Promise<void> {
             const bound = new Promise<void>((r) => setTimeout(r, 10_000).unref());
             // Every session stopped and its stop verified, every write drained — bounded, so a stuck stop never keeps a
             // host nobody wants.
+            const agentsLeft = setInterval(() => stopping.step('agents', host.count), 500);
             await Promise.race([host.stopAll().then(() => host.drained(2_000)), bound]).catch(() => undefined);
+            clearInterval(agentsLeft);
+            stopping.step('terminals', terminalHost.list().length);
             // ITS TERMINALS (§7.1: nothing Genie spawned outlives it; Tynn #953): this host holds them, so it ends them, never
             // a window asking for it first. An upgrade once jammed on 31 orphaned OpenConsole.exe processes.
             terminalHost.closeAll();
+            stopping.step('services');
             files?.close();
             issueWatch.stop();
             await mcp?.stop();
@@ -3045,7 +3069,13 @@ async function main(): Promise<void> {
             // THEN EVERYTHING THIS HOST SUPERVISES (P5a.3): its sites, the front door's Caddy, the kept processes — stopped, then
             // the hosting's own part, then the spawn-host children end. The engines' containers keep running: databases
             // outlive "Shut down everything", and the next host's reconcile finds them (host-shutdown.ts).
+            // The kept processes go one by one (122 of them in Tynn #1079): each one fewer is progress.
+            const processesLeft = (): number => processSupervisor.list().filter((p) => p.state === 'running' || p.state === 'restarting').length;
+            stopping.step('processes', processesLeft());
+            const onStopProgress = setInterval(() => stopping.step('processes', processesLeft()), 250);
             await stopHostedOnce();
+            clearInterval(onStopProgress);
+            stopping.step('hosting');
             await appInboxDoor.close().catch(() => undefined);
             await gappServer?.close().catch(() => undefined);
             server.close();
@@ -3055,6 +3085,7 @@ async function main(): Promise<void> {
                 rmSync(recordFile, { force: true });
                 rmSync(tokenFile, { force: true });
             }
+            stopping.step('exit');
             // THE CLEAN-EXIT MARKER, LAST (Tynn #386): everything above ended; its absence at the next boot is safe mode.
             safeMode.writeCleanExit(why);
             process.exit(0);

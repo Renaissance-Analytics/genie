@@ -4,7 +4,11 @@
 //! schema}` beside `host.json`. The hello carries an offer on track `launcher` and both sides `negotiate`.
 //!
 //! Methods (L2): `launcher.status`, `launcher.ensureHost`, `launcher.stopHost`, `launcher.openWindow {host}`,
-//! `launcher.startBrowser`. `launcher.updates`, `.check`, `.apply` and `.channel` answer `unsupported` until the
+//! `launcher.startBrowser`. L5 (the tray, logon and quit): `launcher.attach {pid}` (a client holds its link open and is
+//! told `{kind: event, name: launcher.closeUi}` on it), `launcher.closeUi` ("Just close the UI": every client closes, the
+//! host and the launcher keep running, the host is marked left running), `launcher.shutDown` ("Shut down everything":
+//! answered at once, then the clients closed, the host's graceful stop waited for on its own progress, and the launcher
+//! exits), `launcher.logon {setting, startMinimized}` (the client's two settings; the launcher writes the entry). `launcher.updates`, `.check`, `.apply` and `.channel` answer `unsupported` until the
 //! launcher's updates exist. Each program is a component of the registry (`components`), run from its own track: the
 //! window is the client's, the browser the browser's (L3). Every one is told where the launcher is (GENIE_LAUNCHER_EXE)
 //! and the host build to link to (GENIE_LAUNCHER_HOST_BUILD): `src/core/launcher-link.ts` reads them.
@@ -21,8 +25,13 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-pub const METHODS: [&str; 9] = [
+pub const METHODS: [&str; 14] = [
     "launcher.status",
+    "launcher.restart",
+    "launcher.attach",
+    "launcher.closeUi",
+    "launcher.shutDown",
+    "launcher.logon",
     "launcher.ensureHost",
     "launcher.stopHost",
     "launcher.openWindow",
@@ -41,6 +50,20 @@ pub struct Context {
     pub token: String,
     /// One host or client operation at a time: two ensureHost calls never start two hosts.
     pub busy: Mutex<()>,
+    /// The clients holding their link open (`launcher.attach`): told when their UI is to close.
+    pub clients: Mutex<Vec<Attached>>,
+}
+
+impl Context {
+    pub fn new(roots: Roots, token: String) -> Context {
+        Context { roots, token, busy: Mutex::new(()), clients: Mutex::new(Vec::new()) }
+    }
+}
+
+/// A client's open link: its pid and the write half of its connection.
+pub struct Attached {
+    pub pid: u32,
+    pub out: LocalStream,
 }
 
 #[derive(Debug, Default)]
@@ -48,6 +71,114 @@ pub struct Connection {
     pub welcomed: bool,
     /// Set when the connection must close after these frames are sent.
     pub closing: bool,
+    /// `launcher.attach`: this connection is now that client's, kept for the launcher's events.
+    pub attach: Option<u32>,
+    /// `launcher.shutDown` was answered: once the answer is sent, everything shuts down.
+    pub shut_down: bool,
+    /// `launcher.restart` was answered: once the answer is sent, Genie restarts.
+    pub restart: bool,
+    /// `launcher.trayAct` (the VM rows' probe): the tray's item, run once the answer is sent.
+    pub tray_act: Option<crate::tray::Action>,
+}
+
+/// The event every attached client closes its UI on.
+pub const CLOSE_UI_EVENT: &str = "launcher.closeUi";
+/// How long the clients have to close after they are told, before the launcher ends them.
+pub const CLIENTS_CLOSE: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// The attached clients still running.
+pub fn attached_pids(ctx: &Context) -> Vec<u32> {
+    let mut clients = ctx.clients.lock().unwrap_or_else(|p| p.into_inner());
+    clients.retain(|c| pid_alive(c.pid));
+    clients.iter().map(|c| c.pid).collect()
+}
+
+/// Every attached client told to close its UI, and waited for; one that has not gone after CLIENTS_CLOSE is ended.
+/// The pids that were told.
+pub fn close_clients(ctx: &Context) -> Vec<u32> {
+    let mut told = Vec::new();
+    {
+        let mut clients = ctx.clients.lock().unwrap_or_else(|p| p.into_inner());
+        for c in clients.iter_mut() {
+            if pid_alive(c.pid) && writeln!(c.out, "{}", json!({"kind": "event", "name": CLOSE_UI_EVENT})).and_then(|_| c.out.flush()).is_ok() {
+                told.push(c.pid);
+            }
+        }
+        clients.clear();
+    }
+    for &pid in &told {
+        if !crate::spawn::wait_gone(pid, CLIENTS_CLOSE) {
+            eprintln!("genie: a client window (pid {pid}) did not close within {} s, so it was ended", CLIENTS_CLOSE.as_secs());
+            crate::spawn::end(pid);
+        }
+    }
+    told
+}
+
+/// "Just close the UI": the host, when it runs, is marked left running (it comes back at logon), and every client closes.
+pub fn close_ui(ctx: &Context) -> Result<Value, String> {
+    let host_running = host::read_record(&ctx.roots).map(|r| pid_alive(r.pid)).unwrap_or(false);
+    if host_running {
+        crate::logon::set_left_running(&ctx.roots, true)?;
+        crate::logon::apply_here(&ctx.roots);
+    }
+    let closed = close_clients(ctx);
+    Ok(json!({"closed": closed, "hostRunning": host_running}))
+}
+
+/// "Shut down everything": nothing left running (the mark cleared, the entry as the setting says), every client closed,
+/// the host's graceful stop waited for on its own progress (Tynn #1079), then this launcher exits. Never returns.
+pub fn shut_down(ctx: &Context) -> ! {
+    let _g = ctx.busy.lock().unwrap_or_else(|p| p.into_inner());
+    if let Err(why) = crate::logon::set_left_running(&ctx.roots, false) {
+        eprintln!("genie: {why}");
+    }
+    crate::logon::apply_here(&ctx.roots);
+    close_clients(ctx);
+    match host::stop_host(&ctx.roots) {
+        Ok(v) => eprintln!("genie: shut down everything: the host stopped ({v})"),
+        Err(why) => eprintln!("genie: shut down everything: {why}"),
+    }
+    exit_launcher(&ctx.roots, 0)
+}
+
+/// RESTART (the client's Restart, a site panel's): every client closed, the host's graceful stop, the host started again
+/// and a window opened. The launcher and its tray stay.
+pub fn restart(ctx: &Context) {
+    let _g = ctx.busy.lock().unwrap_or_else(|p| p.into_inner());
+    close_clients(ctx);
+    if let Err(why) = host::stop_host(&ctx.roots) {
+        eprintln!("genie: restart: {why}");
+    }
+    if let Err(why) = host::ensure_host(&ctx.roots, &keys::trusted_keys(&ctx.roots)) {
+        eprintln!("genie: restart: {why}");
+    }
+    opened(&ctx.roots);
+    if let Err(why) = start_client(&ctx.roots, vec!["--open-window".to_string()]) {
+        eprintln!("genie: restart: {why}");
+    }
+}
+
+/// This launcher ends: its record removed (only its own), its tray taken away, then the process.
+pub fn exit_launcher(roots: &Roots, code: i32) -> ! {
+    let file = roots.runtime_dir().join("launcher.json");
+    let mine = std::fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|v| v["pid"].as_u64()) == Some(std::process::id() as u64);
+    if mine {
+        let _ = std::fs::remove_file(&file);
+        let _ = std::fs::remove_file(roots.runtime_dir().join("launcher.token"));
+    }
+    crate::tray::remove();
+    std::process::exit(code)
+}
+
+/// The person opened Genie: the host is no longer "left running" with the UI closed (P6).
+pub fn opened(roots: &Roots) {
+    if crate::logon::left_running(roots) {
+        if let Err(why) = crate::logon::set_left_running(roots, false) {
+            eprintln!("genie: {why}");
+        }
+        crate::logon::apply_here(roots);
+    }
 }
 
 fn same_token(a: &str, b: &str) -> bool {
@@ -167,7 +298,50 @@ pub fn handle_line(ctx: &Context, conn: &mut Connection, line: &str) -> Vec<Valu
     let roots = &ctx.roots;
     let busy = move || ctx.busy.lock().unwrap_or_else(|p| p.into_inner());
     let answer = match method {
-        "launcher.status" => Ok(status(roots)),
+        "launcher.status" => {
+            let mut v = status(roots);
+            v["clients"] = json!(attached_pids(ctx));
+            Ok(v)
+        }
+        "launcher.attach" => {
+            let Some(pid) = args.first().and_then(|a| a["pid"].as_u64()).and_then(|p| u32::try_from(p).ok()) else {
+                return vec![result(&id, Err("launcher.attach needs {pid}".to_string()))];
+            };
+            conn.attach = Some(pid);
+            Ok(json!({"attached": true, "pid": pid}))
+        }
+        "launcher.closeUi" => close_ui(ctx),
+        // What the tray offers now, as words, and (GENIE_LAUNCHER_TRAY_PROBE=1, a VM row's screenshot) the menu shown as a
+        // click on the icon shows it. Never in a person's launcher: the probe's variable is the row's.
+        "launcher.trayAct" if crate::tray::probe_enabled() => match args.first().and_then(|a| a["action"].as_str()).and_then(crate::tray::Action::parse) {
+            Some(action) => {
+                conn.tray_act = Some(action);
+                Ok(json!({"acting": format!("{action:?}")}))
+            }
+            None => Err("launcher.trayAct needs {action}".to_string()),
+        },
+        "launcher.trayMenu" if crate::tray::probe_enabled() => {
+            let v = crate::tray::view(ctx);
+            Ok(json!({"items": crate::tray::menu_text(&crate::tray::menu(&v)), "tooltip": crate::tray::tooltip(&v), "shown": crate::tray::show_menu()}))
+        }
+        "launcher.shutDown" => {
+            conn.shut_down = true;
+            Ok(json!({"accepted": true}))
+        }
+        "launcher.restart" => {
+            conn.restart = true;
+            Ok(json!({"accepted": true}))
+        }
+        "launcher.logon" => {
+            let a = args.first().cloned().unwrap_or(Value::Null);
+            match (a["setting"].as_bool(), a["startMinimized"].as_bool()) {
+                (Some(setting), Some(start_minimized)) => crate::logon::write_settings(roots, crate::logon::LogonSettings { setting, start_minimized })
+                    .and_then(|_| crate::logon::entry_exe())
+                    .and_then(|exe| crate::logon::apply(roots, &crate::logon::place(), &exe))
+                    .map(|said| json!({"said": said})),
+                _ => Err("launcher.logon needs {setting, startMinimized}".to_string()),
+            }
+        }
         "launcher.ensureHost" => {
             let _g = busy();
             host::ensure_host(roots, &keys::trusted_keys(roots))
@@ -178,6 +352,7 @@ pub fn handle_line(ctx: &Context, conn: &mut Connection, line: &str) -> Vec<Valu
         }
         "launcher.openWindow" => {
             let _g = busy();
+            opened(roots);
             let wanted = args.first().and_then(|a| a["host"].as_str()).map(str::to_string);
             start_client(roots, match wanted {
                 Some(h) => vec!["--host".to_string(), h],
@@ -263,7 +438,7 @@ fn new_token() -> Result<String, String> {
     Ok(b.iter().map(|x| format!("{x:02x}")).collect())
 }
 
-fn serve_connection(ctx: &Context, stream: LocalStream) {
+fn serve_connection(ctx: &Arc<Context>, stream: LocalStream) {
     let Ok(mut out) = stream.try_clone() else { return };
     let mut reader = BufReader::new(stream);
     let mut conn = Connection::default();
@@ -285,6 +460,22 @@ fn serve_connection(ctx: &Context, stream: LocalStream) {
             }
         }
         let _ = out.flush();
+        if conn.shut_down {
+            shut_down(ctx);
+        }
+        if conn.restart {
+            conn.restart = false;
+            restart(ctx);
+        }
+        if let Some(action) = conn.tray_act.take() {
+            crate::tray::act(Arc::clone(ctx), action);
+        }
+        // An attached client's link is kept for the launcher's events and no longer read: on Windows a pipe handle opened
+        // for synchronous I/O serializes its reads and writes, so a read waiting here would hold every event back.
+        if let Some(pid) = conn.attach.take() {
+            ctx.clients.lock().unwrap_or_else(|p| p.into_inner()).push(Attached { pid, out });
+            return;
+        }
         if conn.closing {
             return;
         }
@@ -312,7 +503,12 @@ pub fn serve_then(roots: Roots, ready: impl FnOnce(&Roots) + Send + 'static) -> 
     write_private(&runtime.join("launcher.token"), token.as_bytes())?;
     let record = json!({"pid": std::process::id(), "endpoint": endpoint, "build": LAUNCHER_BUILD, "schema": LAUNCHER_SCHEMA});
     write_private(&runtime.join("launcher.json"), record.to_string().as_bytes())?;
-    let ctx = Arc::new(Context { roots, token, busy: Mutex::new(()) });
+    let ctx = Arc::new(Context::new(roots, token));
+    // The logon entry follows this launcher (it may have moved or been updated), as the inputs on disk say.
+    crate::logon::apply_here(&ctx.roots);
+    if tray_wanted() {
+        crate::tray::start(Arc::clone(&ctx));
+    }
     {
         let ctx = Arc::clone(&ctx);
         std::thread::spawn(move || {
@@ -320,15 +516,42 @@ pub fn serve_then(roots: Roots, ready: impl FnOnce(&Roots) + Send + 'static) -> 
             ready(&ctx.roots);
         });
     }
-    loop {
-        match listener.accept() {
-            Ok(stream) => {
-                let ctx = Arc::clone(&ctx);
-                std::thread::spawn(move || serve_connection(&ctx, stream));
+    let accept = {
+        let ctx = Arc::clone(&ctx);
+        move || loop {
+            match listener.accept() {
+                Ok(stream) => {
+                    let ctx = Arc::clone(&ctx);
+                    std::thread::spawn(move || serve_connection(&ctx, stream));
+                }
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(50)),
             }
-            Err(_) => std::thread::sleep(std::time::Duration::from_millis(50)),
+        }
+    };
+    // THE MAIN THREAD IS THE LAUNCHER'S WINDOWS' (L5): its questions (ui::ask) are asked in a loop that lives as long as
+    // the launcher, so the wire is served on its own thread. With no tray (a test's launcher) or no window here, the main
+    // thread serves the wire itself.
+    #[cfg(feature = "ui")]
+    if tray_wanted() {
+        std::thread::spawn(accept);
+        let data = ctx.roots.data.join("launcher").join("webview");
+        if let Err(why) = crate::ui::run_resident(data) {
+            eprintln!("genie: the launcher cannot show its questions here ({why}): the tray will open Genie instead of asking");
+        }
+        loop {
+            std::thread::park();
         }
     }
+    #[allow(unreachable_code)]
+    {
+        accept();
+        Ok(())
+    }
+}
+
+/// A tray (and the windows its questions need), unless GENIE_LAUNCHER_NO_TRAY=1 (the launcher's own tests make dozens).
+pub fn tray_wanted() -> bool {
+    std::env::var("GENIE_LAUNCHER_NO_TRAY").as_deref() != Ok("1")
 }
 
 /// What is installed and running (`genie status --json`, `launcher.status`): the build, the roots, the profile, each

@@ -85,12 +85,15 @@ describe('every runtime atomic write goes through it (source guard)', () => {
     const walk = (dir: string): void => { for (const name of readdirSync(dir)) { const p = join(dir, name); if (statSync(p).isDirectory()) walk(p); else if (p.endsWith('.ts')) files.push(p); } };
     walk('src/main'); walk('src/core');
     // A temp file renamed over its target, by the names this code base gives one.
-    const BARE = /(?<![.\w])rename(?:Sync)?\(\s*(?:tmp|temp|temporary|fresh|part)\s*,/;
+    // ...or one named in place, `${file}.tmp` (the stop progress's first draft, Tynn #1079: a file the launcher reads).
+    const BARE = /(?<![.\w])rename(?:Sync)?\(\s*(?:tmp|temp|temporary|fresh|part|`[^`]*\.tmp`)\s*,/;
 
     it('finds the helper itself (positive control: the pattern matches its own calls), and no other file renames a temp file over its target', () => {
         const hits = files.filter((f) => BARE.test(readFileSync(f, 'utf8')) || /renameSync\(tmp, file\)/.test(readFileSync(f, 'utf8')));
         expect(BARE.test('await rename(tmp, file);')).toBe(true);
         expect(BARE.test('await renameOver(tmp, file);')).toBe(false);
+        expect(BARE.test('renameSync(`${file}.tmp`, file);')).toBe(true);
+        expect(BARE.test('renameOverSync(`${file}.tmp`, file);')).toBe(false);
         expect(hits.map((f) => f.split(/[\\/]/).join('/'))).toEqual([]);
     });
 });

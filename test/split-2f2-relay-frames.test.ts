@@ -351,7 +351,8 @@ describe('the question window and the tray read genie-host’s Deck (takeOvers g
         const main = code(src('src/main/main.ts'));
         expect(main).toMatch(/ownProtocol\.watchDeck\(\(items\) => \{/);
         expect(main).toMatch(/items: \(\) => \[\.\.\.hostDeckNow, \.\.\.remoteQuestions\.items\(\)\]/);
-        expect(main).toMatch(/needsYouCount\(\[\.\.\.mainErrors\.deckItems\(\), \.\.\.hostDeckNow\]\)/);
+        // The tray's count of it is genie-host's own since Tynn #1058 L5 (engine.activity needsYou, from its Deck).
+        expect(code(src('src/main/genie-host.ts'))).toMatch(/needsYou: needsYouCount\(featureDeckItems\(\)\),/);
         // main's own composed Deck still feeds its own registry (2g, Tynn #913); the question window and the tray do not read it.
         expect(main).not.toMatch(/items: \(\) => \[\.\.\.composed\.deckItems\(\)|composed\.attention\.onChange\(\(\) => questionWindow/);
     });

@@ -213,3 +213,27 @@ export function installQuit(scope: import('./update-kind.js').UpdateScope | unde
 export function leaveForInstall(ports: Pick<QuitPorts, 'closeWindow'>): void {
     ports.closeWindow();
 }
+
+/** One call on the launcher's wire (main/launcher-control.ts callLauncher, bound to this client). */
+export type LauncherCaller = (method: string, args?: readonly unknown[]) => Promise<{ readonly ok: true; readonly value: unknown } | { readonly ok: false; readonly reason: string; readonly code?: string }>;
+
+/** Who carried the answer out: the launcher, this window alone (no launcher: a dev run), or nobody (the launcher failed). */
+export type QuitBy = { readonly by: 'launcher' } | { readonly by: 'window' } | { readonly by: 'failed'; readonly reason: string };
+
+/**
+ * THE QUIT ANSWERS UNDER THE LAUNCHER (Tynn #1058 L5; the spec's "Quit keeps today's two answers"). The launcher owns the
+ * tray, so the answers are the launcher's to carry out:
+ *  - "Just close the UI": `launcher.closeUi`, which closes every client window (this one too) and marks the host left
+ *    running; the host and the tray keep running;
+ *  - "Shut down everything": `launcher.shutDown`, the host's graceful stop waited for on its own progress (Tynn #1079: never
+ *    a 5 s kill), then the launcher exits.
+ * Only with no launcher at all (a development run) does this window shut the host down itself (`windowShutDown`).
+ */
+export async function quitThroughLauncher(answer: 'close-ui' | 'shut-down', ports: { readonly call: LauncherCaller; readonly windowShutDown: () => Promise<unknown> }): Promise<QuitBy> {
+    const reply = await ports.call(answer === 'close-ui' ? 'launcher.closeUi' : 'launcher.shutDown');
+    if (reply.ok) return { by: 'launcher' };
+    if (reply.code !== 'no-launcher') return { by: 'failed', reason: reply.reason };
+    // No launcher (a development run): Just close the UI is this window closing; Shut down everything is the old way.
+    if (answer === 'shut-down') await ports.windowShutDown();
+    return { by: 'window' };
+}

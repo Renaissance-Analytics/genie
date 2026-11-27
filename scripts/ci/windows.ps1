@@ -57,10 +57,10 @@ $Rows = @(
     'unit-build', 'unit',
     'build', 'seed', 'no-pty', 'smoke', 'layout', 'app-stopped',
     'local-door-break', 'local-door', 'host-late-ready', 'files-watch', 'chat-drafts', 'gapp-open', 'artboard', 'ui-lag', 'plan-popover',
-    'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'sound-cues', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash', 'quit-keeps-host', 'rebuilt-machine', 'cli-drain',
+    'trust-step', 'accounts-popover', 'claude-accounts', 'sound-picker', 'sound-cues', 'esc-unsend', 'question-maximize', 'spawn-host', 'safe-mode', 'hang', 'renderer-crash', 'rebuilt-machine', 'cli-drain',
     'package', 'sign-plan', 'packed-tree', 'update-metadata', 'package-fuse', 'packaged-launcher',
     'package-tracks', 'sign-plan-client', 'sign-plan-browser', 'sign-plan-host', 'sign-plan-launcher',
-    'packed-tree-client', 'packed-tree-browser', 'packed-tree-host', 'track-manifest', 'launcher-install', 'client-no-host',
+    'packed-tree-client', 'packed-tree-browser', 'packed-tree-host', 'track-manifest', 'launcher-install', 'client-no-host', 'quit-keeps-host',
     'logon',
     'launcher-unit',
     'client-only-update',
@@ -448,8 +448,9 @@ function Row-cli-drain { Need-Build; Need-TestMachine; $env:CLI_DRAIN_CDP_PORT =
 # under ci-out\quit-keeps-host, and its run ended through scripts/end-own-tree.mjs (Tynn #1031). Its watchdog is longer
 # than on Linux: every process-table read here is a PowerShell call (over 30 s measured on a loaded VM). What it sets is
 # put back whatever the row's result.
+# Since Tynn #1058 L5 through the launcher (the package-tracks row's signed packages): after package-tracks in $Rows.
 function Row-quit-keeps-host {
-    Need-Build; Need-TestMachine
+    Need-Build; Need-Tracks; Need-TestMachine
     $own = @{ QUIT_CDP_OWN_HOME = '1'; QUIT_CDP_OUT = (Join-Path $Out 'quit-keeps-host'); CDP_PORT = '9414'; QUIT_CDP_INSPECT = '9415'; QUIT_CDP_DEADLINE_MS = '540000' }
     $before = @{}
     foreach ($k in $own.Keys) { $before[$k] = [Environment]::GetEnvironmentVariable($k, 'Process'); [Environment]::SetEnvironmentVariable($k, $own[$k], 'Process') }
@@ -490,7 +491,8 @@ function Row-client-only-update { Need-Install; Need-Electron; Need-TestMachine;
 # shard did not package) in a home of its own; the HKCU Run value read back with reg query, the setting switched live with
 # no restart, and the four logon cases. HKCU is the machine's: the row takes its value away again. Before
 # client-only-update, which replaces dist\ and release\.
-function Row-logon { Need-Build; Need-TestMachine; Run 'vm-logon' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-logon-windows.ps1 -Mode table } }
+# Since Tynn #1058 L5 the LAUNCHER writes the Run value and decides at logon (scripts/vm-logon-launcher-windows.ps1 table).
+function Row-logon { Need-Tracks; Need-TestMachine; Run 'vm-logon-launcher' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-logon-launcher-windows.ps1 -Mode table } }
 # A host update drains and swaps (Tynn #1036 P6-2): last, as it replaces the install, the home and the build once more.
 function Row-host-update { Need-Install; Need-Electron; Need-TestMachine; Run 'vm-windows-update' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-windows-update.ps1 } }
 # THE PACKAGES PER TRACK (Tynn #1058 L3): the client (electron-builder's unpacked app named genie-client, no host bundle),
@@ -632,7 +634,7 @@ function Ceiling([string]$name) {
         'unit' { return 1800 }
         { $_ -in 'spawn-host', 'app-stopped' } { return 120 }
         { $_ -in 'no-pty', 'smoke', 'layout', 'local-door-break', 'local-door', 'gapp-open', 'trust-step' } { return 360 }
-        'accounts-popover' { return 300 }
+        'accounts-popover' { return 540 }
         'plan-popover' { return 480 }
         'php-live-shots' { return 1200 }
         'php-card-shots' { return 3000 }
@@ -645,7 +647,7 @@ function Ceiling([string]$name) {
         { $_ -in 'chat-drafts', 'artboard' } { return 420 }
         { $_ -in 'ui-lag', 'renderer-crash' } { return 480 }
         { $_ -in 'safe-mode', 'hang' } { return 600 }
-        'quit-keeps-host' { return 660 }
+        'quit-keeps-host' { return 780 }
         'cli-drain' { return 1560 }
         'package' { return 1500 }
         'package-tracks' { return 2400 }

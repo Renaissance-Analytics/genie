@@ -451,3 +451,211 @@ fn uninstall_stops_the_host_and_the_running_launcher_then_removes_the_programs()
     assert!(!r.code.exists(), "the programs folder is gone");
     assert!(r.data.exists(), "the data root is kept");
 }
+
+// --- L5 (Tynn #1058): quit, logon and the graceful stop -------------------------------------------------------------
+
+fn wait_for(what: &str, secs: u64, mut done: impl FnMut() -> bool) {
+    let t = Instant::now();
+    while !done() {
+        assert!(t.elapsed() < Duration::from_secs(secs), "{what} (waited {secs} s)");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The host and one client that stays (attached to the launcher), started through the wire: (host pid, client pid).
+fn host_and_staying_client(r: &Roots, w: &mut Wire) -> (u32, u32) {
+    std::fs::write(r.data.join("fake-client-mode.txt"), "stay").unwrap();
+    let h = w.call("launcher.ensureHost", json!([]));
+    assert_eq!(h["ok"], true, "{h}");
+    let host = h["value"]["pid"].as_u64().unwrap() as u32;
+    let c = w.call("launcher.openWindow", json!([]));
+    assert_eq!(c["ok"], true, "{c}");
+    let client = c["value"]["pid"].as_u64().unwrap() as u32;
+    wait_for("the client ran", 15, || std::fs::read_to_string(r.data.join("client-args.txt")).map(|t| t.contains("--open-window")).unwrap_or(false));
+    // It has had time to attach (a real client attaches as its window comes up).
+    std::thread::sleep(Duration::from_millis(1500));
+    assert!(pid_alive(client), "the client stays up until it is closed");
+    (host, client)
+}
+
+#[test]
+fn just_close_the_ui_ends_the_client_process_only() {
+    let _one = one_at_a_time();
+    let (base, r, key) = setup("close-ui");
+    install_fakes(&r, &key, &base);
+    let mut l = start(&r, &key);
+    let mut w = Wire::hello(&r);
+    let (host, client) = host_and_staying_client(&r, &mut w);
+    let v = w.call("launcher.closeUi", json!([]));
+    assert_eq!(v["ok"], true, "Just close the UI is the launcher's: {v}");
+    wait_for("the client process ended", 15, || !pid_alive(client));
+    assert!(r.data.join(format!("client-closed-{client}.txt")).exists(), "the client closed because the launcher said so, not ended from outside");
+    // Only the client: the host and the launcher keep running, the host with the same pid.
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(pid_alive(host), "the host keeps running");
+    assert_eq!(genie_launcher::host::read_record(&r).map(|rec| rec.pid), Some(host), "the same host");
+    assert!(matches!(l.child.try_wait(), Ok(None)), "the launcher keeps running (the tray stays)");
+    let s = Wire::hello(&r).call("launcher.status", json!([]));
+    assert_eq!(s["value"]["host"]["running"], true, "{s}");
+    assert_eq!(s["value"]["host"]["pid"].as_u64(), Some(host as u64), "{s}");
+    // P6: the host was left running, so it comes back at logon.
+    assert!(r.runtime_dir().join("left-running").exists(), "Just close the UI marks the host left running");
+}
+
+#[test]
+fn shut_down_everything_stops_the_host_gracefully_then_the_launcher_exits() {
+    let _one = one_at_a_time();
+    let (base, r, key) = setup("shut-down");
+    install_fakes(&r, &key, &base);
+    std::fs::write(r.data.join("fake-host-mode.txt"), "slow-stop").unwrap();
+    let mut l = start(&r, &key);
+    let mut w = Wire::hello(&r);
+    std::fs::write(r.runtime_dir().join("left-running"), "").unwrap();
+    let (host, client) = host_and_staying_client(&r, &mut w);
+    let v = w.call("launcher.shutDown", json!([]));
+    assert_eq!(v["ok"], true, "Shut down everything is the launcher's: {v}");
+    // The launcher exits, and only once the host has gone.
+    let t = Instant::now();
+    let status = loop {
+        if let Ok(Some(status)) = l.child.try_wait() {
+            break status;
+        }
+        assert!(t.elapsed() < Duration::from_secs(60), "the launcher did not exit after Shut down everything");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(status.success(), "the launcher exits cleanly: {status}");
+    assert!(!pid_alive(host), "the host had gone before the launcher exited");
+    // Gracefully: the host ran its own stop to the end (its clean-exit marker), it was not ended from outside.
+    assert!(r.data.join("host-clean-exit.txt").exists(), "the host's own clean exit: a graceful stop, never a crash");
+    let log = std::fs::read_to_string(r.logs_dir().join("genie-host.log")).unwrap_or_default();
+    assert!(log.contains("fake host shut down"), "{log}");
+    assert!(!pid_alive(client), "the client windows closed too");
+    assert!(r.data.join(format!("client-closed-{client}.txt")).exists(), "the client closed because the launcher said so");
+    assert!(!r.runtime_dir().join("left-running").exists(), "everything shut down: the host was not left running");
+}
+
+/// Tynn #1079: "Shut down everything" killed a host 5 s in while it was still stopping 122 processes, so its next boot
+/// read a crash. A stop that keeps making progress is waited for, however long it takes, and never ended.
+#[test]
+fn a_slow_but_clean_stop_is_waited_for_and_never_ended() {
+    let (base, r, key) = setup("slow-stop");
+    install_fakes(&r, &key, &base);
+    std::fs::write(r.data.join("fake-host-mode.txt"), "slow-stop").unwrap();
+    let started = genie_launcher::host::ensure_host(&r, &[verifying(&key)]).expect("the host starts");
+    let pid = started["pid"].as_u64().unwrap() as u32;
+    // A stall bound shorter than the whole stop (~2.5 s): only progress that stops moving may end a host.
+    let bounds = genie_launcher::host::StopBounds { stall: Duration::from_secs(1), max: Duration::from_secs(60) };
+    let answer = genie_launcher::host::stop_host_with(&r, bounds);
+    let clean = r.data.join("host-clean-exit.txt").exists();
+    if pid_alive(pid) {
+        kill(pid);
+    }
+    assert!(answer.is_ok(), "a slow stop that keeps moving is not a failure: {answer:?}");
+    assert_eq!(answer.unwrap()["stopped"], true);
+    assert!(clean, "the host reached its own clean exit: it was not ended, so its next boot reads no crash");
+}
+
+#[test]
+fn a_stop_whose_progress_stands_still_is_ended_and_said() {
+    let (base, r, key) = setup("stall-stop");
+    install_fakes(&r, &key, &base);
+    std::fs::write(r.data.join("fake-host-mode.txt"), "stall-stop").unwrap();
+    let started = genie_launcher::host::ensure_host(&r, &[verifying(&key)]).expect("the host starts");
+    let pid = started["pid"].as_u64().unwrap() as u32;
+    let bounds = genie_launcher::host::StopBounds { stall: Duration::from_secs(1), max: Duration::from_secs(60) };
+    let t = Instant::now();
+    let answer = genie_launcher::host::stop_host_with(&r, bounds);
+    let gone = genie_launcher::spawn::wait_gone(pid, Duration::from_secs(5));
+    if !gone {
+        kill(pid);
+    }
+    let why = answer.expect_err("a host that stopped moving is not a clean stop");
+    assert!(why.contains("made no progress"), "said in words: {why}");
+    assert!(why.contains("hosting"), "the step it stood still in is named: {why}");
+    assert!(gone, "it was ended");
+    assert!(t.elapsed() < Duration::from_secs(20), "not held for the whole bound");
+    assert!(!r.data.join("host-clean-exit.txt").exists());
+}
+
+fn write_logon_inputs(r: &Roots, setting: bool, start_minimized: bool, left_running: bool) {
+    std::fs::create_dir_all(r.runtime_dir()).unwrap();
+    std::fs::write(r.runtime_dir().join("logon.json"), json!({"setting": setting, "startMinimized": start_minimized}).to_string()).unwrap();
+    let mark = r.runtime_dir().join("left-running");
+    if left_running {
+        std::fs::write(&mark, "").unwrap();
+    } else {
+        let _ = std::fs::remove_file(&mark);
+    }
+}
+
+/// `genie --logon` as the entry runs it, its stderr kept.
+fn logon_run(r: &Roots, key: &ed25519_dalek::SigningKey) -> Launcher {
+    let err = std::fs::File::create(r.data.join("logon-stderr.log")).unwrap();
+    let child = genie_in(r, key).arg("--logon").stdin(Stdio::null()).stdout(Stdio::null()).stderr(err).spawn().expect("the launcher starts");
+    Launcher { child, roots: r.clone() }
+}
+
+#[test]
+fn at_logon_shut_down_with_the_setting_off_stays_down() {
+    let _one = one_at_a_time();
+    let (base, r, key) = setup("logon-down");
+    install_fakes(&r, &key, &base);
+    write_logon_inputs(&r, false, false, false);
+    let mut l = logon_run(&r, &key);
+    let t = Instant::now();
+    let status = loop {
+        if let Ok(Some(s)) = l.child.try_wait() {
+            break s;
+        }
+        assert!(t.elapsed() < Duration::from_secs(15), "the launcher stayed up at logon with the setting off and nothing left running");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(status.success(), "{status}: {}", std::fs::read_to_string(r.data.join("logon-stderr.log")).unwrap_or_default());
+    assert!(genie_launcher::host::read_record(&r).is_none(), "no host was started");
+    assert!(!r.data.join("client-args.txt").exists(), "no window was opened");
+}
+
+#[test]
+fn at_logon_with_the_setting_on_the_host_starts_and_a_window_opens() {
+    let _one = one_at_a_time();
+    let (base, r, key) = setup("logon-on");
+    install_fakes(&r, &key, &base);
+    write_logon_inputs(&r, true, false, false);
+    let mut l = logon_run(&r, &key);
+    wait_for("the host started at logon", 30, || genie_launcher::host::read_record(&r).map(|rec| pid_alive(rec.pid)).unwrap_or(false));
+    let args = lines_of(&r.data.join("client-args.txt"), 1);
+    assert_eq!(args.lines().next(), Some("--open-window"), "{args}");
+    assert!(matches!(l.child.try_wait(), Ok(None)), "the launcher stays (the tray)");
+}
+
+#[test]
+fn at_logon_a_host_left_running_comes_back_with_no_window() {
+    let _one = one_at_a_time();
+    let (base, r, key) = setup("logon-left");
+    install_fakes(&r, &key, &base);
+    write_logon_inputs(&r, false, false, true);
+    let mut l = logon_run(&r, &key);
+    wait_for("the host started at logon", 30, || genie_launcher::host::read_record(&r).map(|rec| pid_alive(rec.pid)).unwrap_or(false));
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(!r.data.join("client-args.txt").exists(), "no window: the person had closed the UI");
+    assert!(matches!(l.child.try_wait(), Ok(None)), "the launcher stays (the tray)");
+}
+
+#[test]
+fn the_client_says_the_settings_and_the_launcher_writes_the_logon_entry() {
+    let _one = one_at_a_time();
+    let (base, r, key) = setup("logon-wire");
+    install_fakes(&r, &key, &base);
+    let _l = start(&r, &key);
+    let mut w = Wire::hello(&r);
+    let place = test_logon_place(&r);
+    let v = w.call("launcher.logon", json!([{"setting": true, "startMinimized": true}]));
+    assert_eq!(v["ok"], true, "{v}");
+    assert_eq!(genie_launcher::logon::read_settings(&r), genie_launcher::logon::LogonSettings { setting: true, start_minimized: true });
+    let entry = genie_launcher::logon::read_entry(&place).expect("the setting on: the entry is written");
+    assert!(entry.contains("--logon"), "{entry}");
+    assert!(entry.contains(&std::path::PathBuf::from(env!("CARGO_BIN_EXE_genie")).display().to_string()), "it runs this launcher: {entry}");
+    let v = w.call("launcher.logon", json!([{"setting": false, "startMinimized": true}]));
+    assert_eq!(v["ok"], true, "{v}");
+    assert_eq!(genie_launcher::logon::read_entry(&place), None, "the setting off (nothing left running): removed, live");
+}

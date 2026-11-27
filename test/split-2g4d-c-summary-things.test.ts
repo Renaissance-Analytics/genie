@@ -305,14 +305,16 @@ describe('wired', () => {
     });
 
     it('main’s tray count, its Restart/Shut-down list and its quit plan read the summary, and no replica of compose', () => {
-        const activity = block(main, 'function hostActivityNow(');
-        expect(activity).toMatch(/processes: hostSummaryNow\.processes\.length, services: hostSummaryNow\.services\.length/);
+        // The count of what runs is genie-host's own since Tynn #1058 L5 (engine.activity, for the launcher's tray), from its
+        // summary; the client counts nothing for a tray.
+        expect(main).not.toMatch(/function hostActivityNow\(/);
+        expect(code(src('src/main/genie-host.ts'))).toMatch(/activity: \(\) => hostActivityOf\(\{[\s\S]{0,200}summary: hostSummary\.now\(\),/);
         const stopping = block(main, 'function stoppingNow(');
         expect(stopping).toMatch(/processes: \[\.\.\.hostSummaryNow\.processes\], services: \[\.\.\.hostSummaryNow\.services\], sites: \[\.\.\.hostSummaryNow\.sites\]/);
         const quit = block(main, "app.on('before-quit'", '\n});');
         expect(quit).toMatch(/\{ keptProcesses: hostSummaryNow\.processes\.length, \.\.\.onTheClockNow\(\) \}/);
-        // CONTROL: the three blocks are the ones the scan means (each reads the summary's terminals too).
-        for (const b of [activity, stopping, quit]) { expect(b).toMatch(/hostSummaryNow\.terminals/); expect(b).not.toMatch(/(?<![.\w])services[?!]?\.|composed\./); }
+        // CONTROL: the two blocks left in main are the ones the scan means (each reads the summary's terminals too).
+        for (const b of [stopping, quit]) { expect(b).toMatch(/hostSummaryNow\.terminals/); expect(b).not.toMatch(/(?<![.\w])services[?!]?\.|composed\./); }
         // No read of the supervisor's, the engines' or the routes' replica is left for them anywhere in main.
         expect(main).not.toMatch(/services\?\.(supervisor|engines)\.list\(\)|services\?\.routes\(\)/);
     });

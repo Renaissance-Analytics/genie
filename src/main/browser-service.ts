@@ -142,6 +142,11 @@ export class BrowserService {
         this.#ports.startBrowser(this.#launch);
     }
 
+    /** Whether the Genie Browser's own process is linked now (the launcher's count of what runs, Tynn #1058 L5). */
+    get up(): boolean {
+        return this.#browser !== null;
+    }
+
     onEvent(listener: (event: BrowserEvent) => void): () => void {
         this.#listeners.add(listener);
         return () => { this.#listeners.delete(listener); };

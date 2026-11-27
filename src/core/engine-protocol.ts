@@ -31,6 +31,13 @@ export const ENGINE_PROTOCOL = 4;
  */
 export const WINDOW_LINK_LABEL = 'genie window';
 export const BROWSER_LINK_LABEL = 'genie browser';
+/**
+ * GENIE'S LAUNCHER (Tynn #1058 L5; native/launcher/src/host.rs LINK_LABEL): it starts the host, stops it, and asks what it
+ * runs for its tray. Its link is not a window: no dump, never counted (it must not hold off the host's idle exit), and it
+ * may call these methods only.
+ */
+export const LAUNCHER_LINK_LABEL = 'genie launcher';
+export const LAUNCHER_LINK_METHODS = ['engine.ping', 'engine.shutdown', 'engine.activity'] as const;
 
 export const ENGINE_METHODS = [
     // Commands (window → host): each answers with the session host's own answer.
@@ -84,6 +91,9 @@ export const ENGINE_METHODS = [
     // Liveness, and the graceful end (sessions stopped and verified, writes drained, then the process exits).
     'engine.ping',
     'engine.shutdown',
+    // What this host runs now, by its own count, for the launcher's tray (Tynn #1058 L5): agents and their names, terminals,
+    // kept processes, services.
+    'engine.activity',
     // Window main's heartbeat to genie-host's hang watchdog (Tynn #386: hang-watchdog.ts): `[{pid, rss, bye?}]` every
     // second, call id 0 (a notification, no reply). Heard before any dispatch: never queued behind a slow call.
     'engine.heartbeat',

@@ -82,3 +82,20 @@ describe('answerSecondInstance — a genie:// URL is handed on', () => {
         expect(opened).toEqual([]);
     });
 });
+
+describe('the launcher\'s tray opens Genie at a place (Tynn #1058 L5: --show <route>)', () => {
+    it('a route the tray offers is revealed, then shown after the handler returns; any other route is ignored', () => {
+        for (const route of ['genie://dashboard', 'genie://settings', 'genie://hosting?tab=processes']) {
+            const did: string[] = [];
+            const deferred: (() => void)[] = [];
+            const a = answerSecondInstance(['genie-client', '--open-window', '--show', route], undefined, { quit: () => did.push('quit'), reveal: () => did.push('reveal'), defer: (run) => { deferred.push(run); }, show: (r) => did.push(`show ${r}`) });
+            expect(a).toBe('reveal');
+            expect(did).toEqual(['reveal']);
+            for (const run of deferred) run();
+            expect(did).toEqual(['reveal', `show ${route}`]);
+        }
+        const did: string[] = [];
+        answerSecondInstance(['genie-client', '--show', 'genie://workspace/x?files=/etc/passwd'], undefined, { quit: () => did.push('quit'), reveal: () => did.push('reveal'), defer: (run) => { run(); }, show: (r) => did.push(`show ${r}`) });
+        expect(did).toEqual(['reveal']);
+    });
+});

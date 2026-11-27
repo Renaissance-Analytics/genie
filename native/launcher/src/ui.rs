@@ -334,3 +334,134 @@ pub fn run_setup(roots: &Roots, options: InstallOptions, keys: Vec<VerifyingKey>
     drop(window);
     Ok(outcome)
 }
+
+// --- L5 (Tynn #1058): the launcher's questions ----------------------------------------------------------------------
+
+/// A question the launcher asks before it stops anything from the tray (tray.rs): Cancel is always the default.
+pub use crate::tray::Question;
+
+/// The question's page: the mockup's CSS and the question in place.
+pub fn prompt_html(q: &Question) -> String {
+    let css = format!("{}\n{}", include_str!("../ui/base.css"), include_str!("../ui/theme-c.css"));
+    let data = json!({"title": q.title, "lead": q.lead, "stops": q.stops, "note": q.note, "confirm": q.confirm});
+    // As a script literal: `<` escaped, so no text of the question can close the script element.
+    let literal = data.to_string().replace('<', "\\u003c");
+    include_str!("../ui/prompt.html").replace("/*GENIE_CSS*/", &css).replace("/*GENIE_PROMPT*/null", &literal)
+}
+
+enum Resident {
+    Ask(Question, std::sync::mpsc::Sender<bool>),
+    Ipc(tao::window::WindowId, String),
+}
+
+static RESIDENT: std::sync::OnceLock<std::sync::Mutex<EventLoopProxy<Resident>>> = std::sync::OnceLock::new();
+
+/// Asks the question in a window of the launcher's own and waits for the answer: `Some(true)` to go on, `Some(false)` for
+/// Cancel, Esc or a closed window; `None` when this launcher has no window to ask in (then nothing is stopped).
+pub fn ask(q: Question) -> Option<bool> {
+    let proxy = RESIDENT.get()?.lock().ok()?.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    proxy.send_event(Resident::Ask(q, tx)).ok()?;
+    rx.recv().ok()
+}
+
+/// THE LAUNCHER'S RESIDENT WINDOW LOOP, on the main thread for the launcher's whole life (the control wire is served on
+/// another): each question opens a small window, centred and on top, and closes with its answer. `Err` when no window can
+/// be shown here (no display, or the webview cannot start); it returns only then.
+pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        if std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_none() {
+            return Err("no display (neither WAYLAND_DISPLAY nor DISPLAY)".to_string());
+        }
+        for (k, v) in [("WEBKIT_DISABLE_DMABUF_RENDERER", "1"), ("WEBKIT_DISABLE_COMPOSITING_MODE", "1")] {
+            if std::env::var_os(k).is_none() {
+                std::env::set_var(k, v);
+            }
+        }
+        gtk::init().map_err(|e| format!("GTK could not start: {e}"))?;
+    }
+    let mut event_loop = EventLoopBuilder::<Resident>::with_user_event().build();
+    let proxy = event_loop.create_proxy();
+    if RESIDENT.set(std::sync::Mutex::new(proxy.clone())).is_err() {
+        return Err("the launcher's window loop is already running".to_string());
+    }
+    let mut context = WebContext::new(Some(data_dir));
+    let mut open: std::collections::HashMap<tao::window::WindowId, (tao::window::Window, wry::WebView, std::sync::mpsc::Sender<bool>, String)> = Default::default();
+    event_loop.run_return(|event, target, control_flow| {
+        *control_flow = ControlFlow::Wait;
+        match event {
+            Event::UserEvent(Resident::Ask(q, reply)) => {
+                let made = (|| -> Result<(tao::window::Window, wry::WebView), String> {
+                    let window = WindowBuilder::new()
+                        .with_title("Genie")
+                        .with_inner_size(LogicalSize::new(460.0, 440.0))
+                        .with_resizable(false)
+                        .with_decorations(false)
+                        .with_always_on_top(true)
+                        .build(target)
+                        .map_err(|e| format!("the question's window could not be made: {e}"))?;
+                    if let Some(m) = window.current_monitor().or_else(|| window.primary_monitor()) {
+                        let (ms, mp, ws) = (m.size(), m.position(), window.outer_size());
+                        let x = mp.x + (ms.width.saturating_sub(ws.width) / 2) as i32;
+                        let y = mp.y + (ms.height.saturating_sub(ws.height) / 2) as i32;
+                        window.set_outer_position(tao::dpi::PhysicalPosition::new(x, y));
+                    }
+                    let id = window.id();
+                    let ipc = proxy.clone();
+                    let builder = WebViewBuilder::new_with_web_context(&mut context).with_html(prompt_html(&q)).with_ipc_handler(move |req: wry::http::Request<String>| {
+                        let _ = ipc.send_event(Resident::Ipc(id, req.body().clone()));
+                    });
+                    #[cfg(windows)]
+                    let webview = builder.build(&window).map_err(|e| format!("the question's webview (WebView2) could not start: {e}"))?;
+                    #[cfg(unix)]
+                    let webview = {
+                        use tao::platform::unix::WindowExtUnix;
+                        use wry::WebViewBuilderExtUnix;
+                        let vbox = window.default_vbox().ok_or("the question's window has no GTK box for its webview")?;
+                        builder.build_gtk(vbox).map_err(|e| format!("the question's webview (WebKitGTK) could not start: {e}"))?
+                    };
+                    window.set_focus();
+                    Ok((window, webview))
+                })();
+                match made {
+                    Ok((window, webview)) => {
+                        open.insert(window.id(), (window, webview, reply, q.title.clone()));
+                    }
+                    Err(why) => {
+                        eprintln!("genie: {why}; nothing was stopped");
+                        let _ = reply.send(false);
+                    }
+                }
+            }
+            Event::UserEvent(Resident::Ipc(id, body)) => {
+                let kind = serde_json::from_str::<Value>(&body).ok().and_then(|v| v["kind"].as_str().map(str::to_string)).unwrap_or_default();
+                match kind.as_str() {
+                    "shown" => {
+                        if let Some((_, _, _, title)) = open.get(&id) {
+                            eprintln!("genie: asking: {title}");
+                        }
+                    }
+                    "confirm" | "cancel" => {
+                        if let Some((window, webview, reply, title)) = open.remove(&id) {
+                            eprintln!("genie: {title}: {}", if kind == "confirm" { "confirmed" } else { "cancelled" });
+                            let _ = reply.send(kind == "confirm");
+                            drop(webview);
+                            drop(window);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Event::WindowEvent { window_id, event: WindowEvent::CloseRequested, .. } => {
+                if let Some((window, webview, reply, _)) = open.remove(&window_id) {
+                    let _ = reply.send(false);
+                    drop(webview);
+                    drop(window);
+                }
+            }
+            _ => {}
+        }
+    });
+    Err("the launcher's window loop ended".to_string())
+}

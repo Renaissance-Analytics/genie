@@ -245,10 +245,28 @@ pub fn genie() -> Command {
     Command::new(env!("CARGO_BIN_EXE_genie"))
 }
 
+/// A launcher in these roots. Its logon entry (L5) goes to a place of the test's own, never the VM's real Run value or
+/// autostart file, and it shows no tray icon: a test makes dozens of launchers.
 pub fn genie_in(roots: &Roots, key: &SigningKey) -> Command {
     let mut c = genie();
     c.env("GENIE_CODE_ROOT", &roots.code).env("GENIE_HOME", &roots.data).env("GENIE_LAUNCHER_TEST_PUBLIC_KEY", public_b64(key));
+    c.env("XDG_CONFIG_HOME", roots.data.join("xdg-config")).env("GENIE_LOGON_RUN_KEY", test_run_key(roots)).env("GENIE_LAUNCHER_NO_TRAY", "1");
     c
+}
+
+/// The HKCU key a test launcher's Run value goes in: one per test's roots.
+pub fn test_run_key(roots: &Roots) -> String {
+    let id = roots.data.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "x".to_string());
+    format!(r"Software\GenieLauncherTest\{id}")
+}
+
+/// Where `genie_in`'s launcher writes its logon entry.
+pub fn test_logon_place(roots: &Roots) -> genie_launcher::logon::Place {
+    if cfg!(windows) {
+        genie_launcher::logon::Place::WindowsRun { key: test_run_key(roots), value: genie_launcher::logon::RUN_VALUE.to_string() }
+    } else {
+        genie_launcher::logon::Place::Autostart { file: roots.data.join("xdg-config").join("autostart").join("genie.desktop") }
+    }
 }
 
 pub fn run(c: &mut Command) -> Output {

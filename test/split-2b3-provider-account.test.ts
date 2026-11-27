@@ -175,8 +175,9 @@ describe('main keeps no duplicate of the host’s agent operations (source guard
         expect(gone.filter((name) => new RegExp(`\\b${name}\\b`).test(main))).toEqual([]);
     });
 
-    it('the tray’s Try again is accountRetry over main’s own protocol client', () => {
-        expect(main).toMatch(/onAccountRetry:[\s\S]{0,300}ownProtocol\.call\('accountRetry'/);
+    it('Try again is the window\u2019s accountRetry (the launcher\u2019s tray opens Genie to it, Tynn #1058 L5); main has no tray handler', () => {
+        expect(main).not.toMatch(/onAccountRetry:/);
+        expect(code(src('src/renderer/local-session.ts'))).toMatch(/accountRetry: \(id\) => requestBridge\(\(bridge\) => bridge\.accountRetry!\(id\)\),/);
     });
 
     // genie-host recovers after the one-time move by itself since Tynn #959 (2g-3b): main asks it nothing.

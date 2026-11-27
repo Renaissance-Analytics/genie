@@ -8,6 +8,8 @@ import type { McpServer } from '@particle-academy/prism-acp';
 import { heldRows, rowsPatch, type HeldRows, type RowsPatch } from '../core/agent-push-wire.js';
 import {
     BROWSER_LINK_LABEL,
+    LAUNCHER_LINK_LABEL,
+    LAUNCHER_LINK_METHODS,
     DURABLE_CALLBACKS,
     ENGINE_PROTOCOL,
     parseEngineFrame,
@@ -93,6 +95,8 @@ export interface EngineServerOptions {
     readonly refreshAccountIdentity?: (provider: string) => Promise<void>;
     /** `engine.shutdown`: stop gracefully and exit. The host entry's to implement; absent = refused. */
     readonly onShutdown?: () => void;
+    /** `engine.activity`: what this host runs now, by its own count (the launcher's tray, Tynn #1058 L5). */
+    readonly activity?: () => unknown;
     /** The number of authenticated windows changed (the host's idle exit watches it). */
     readonly onClients?: (count: number) => void;
     /** How state pushes are coalesced: the timer. Default 16 ms, one frame — a streamed reply's chunks travel together. */
@@ -180,6 +184,8 @@ interface Connection {
     readonly local: boolean;
     /** The updater helper's link (P5b): never a window — not counted, sent no dump, open to `engine.updater` alone. */
     helper: boolean;
+    /** Genie's launcher (LAUNCHER_LINK_LABEL): no dump, not a window, its own few methods only. */
+    launcher: boolean;
     /**
      * A WINDOW: it answers what the host asks of one (a forwarded tool, an elevation). The Genie browser's process links
      * here too and answers neither (Tynn #444: asked as the newest link, it failed every forwarded tool on beta.60).
@@ -195,6 +201,7 @@ export class SessionEngineServer {
     readonly #connections = new Set<Connection>();
     /** The updater helper's links (P5b), apart from the windows': nothing a window is sent or counted for reaches them. */
     readonly #helpers = new Set<Connection>();
+    readonly #launchers = new Set<Connection>();
     readonly #queue: EngineCallback[] = [];
     readonly #dirty = new Set<string>();
     #cancelFlush: (() => void) | null = null;
@@ -313,10 +320,11 @@ export class SessionEngineServer {
 
     /** A connection (a window) arrived: it must say the token before anything else. */
     accept(transport: ClientTransport & { trusted?: () => void }, options: { local?: boolean } = {}): void {
-        const conn: Connection = { id: randomUUID(), transport, authed: false, held: new Map(), watched: new Set(), lastGlobal: '', nextCall: 1, pending: new Map(), local: options.local === true, helper: false, window: false };
+        const conn: Connection = { id: randomUUID(), transport, authed: false, held: new Map(), watched: new Set(), lastGlobal: '', nextCall: 1, pending: new Map(), local: options.local === true, helper: false, launcher: false, window: false };
         this.#connections.add(conn);
         transport.onMessage((text) => this.#onMessage(conn, text));
         transport.onClose(() => {
+            if (this.#launchers.delete(conn)) return;
             if (this.#helpers.delete(conn)) {
                 this.#options.updates?.helperDropped(conn.id);
                 return;
@@ -372,6 +380,14 @@ export class SessionEngineServer {
                 conn.helper = true;
                 this.#connections.delete(conn);
                 this.#helpers.add(conn);
+                return;
+            }
+            // GENIE'S LAUNCHER (L5): it polls what this host runs for its tray, so it gets no dump and is never a window.
+            if (message.label === LAUNCHER_LINK_LABEL && conn.local) {
+                conn.launcher = true;
+                conn.window = false;
+                this.#connections.delete(conn);
+                this.#launchers.add(conn);
                 return;
             }
             this.#dump(conn);
@@ -447,6 +463,7 @@ export class SessionEngineServer {
     }
 
     async #dispatch(conn: Connection, method: EngineMethod, args: unknown[]): Promise<unknown> {
+        if (conn.launcher && !(LAUNCHER_LINK_METHODS as readonly string[]).includes(method)) throw new Error('Genie’s launcher may ping this host, stop it, or ask what it runs; nothing else.');
         // The updater helper's link calls its own method and nothing else (P5b).
         if (conn.helper || method === 'engine.updater') return this.#updater(conn, method, args);
         if (method === 'engine.marketplace') return this.#marketplace(conn, args);
@@ -609,6 +626,9 @@ export class SessionEngineServer {
             }
             case 'engine.ping':
                 return 'pong';
+            case 'engine.activity':
+                if (!this.#options.activity) throw new Error('This host does not say what it runs.');
+                return this.#options.activity();
             case 'engine.shutdown':
                 if (!this.#options.onShutdown) throw new Error('This host cannot be shut down from a window.');
                 // Answered first: the shutdown ends this process, and the window waits for the pid, not for this reply.

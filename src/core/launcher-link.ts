@@ -29,3 +29,18 @@ export function launcherLink(env: Readonly<Record<string, string | undefined>>):
     const hostBuild = typeof build === 'string' && !build.includes('+') && parseTrackBuild(build) !== null ? build : null;
     return { launcherExe: exe, hostBuild };
 }
+
+/**
+ * WHERE THE LAUNCHER'S TRAY OPENS GENIE (Tynn #1058 L5): "Needs you: N" opens the Dashboard (the Deck merged into it, Tynn
+ * #730), where a held login's Resume, a signed-out login's Log in and a paused account's Try again live; Settings… and Task
+ * Manager… open those. The launcher hands the client `--show <route>`; only these routes are taken, anything else is ignored.
+ */
+export const LAUNCHER_SHOW_ROUTES = ['genie://dashboard', 'genie://settings', 'genie://hosting?tab=processes'] as const;
+export type LauncherShowRoute = (typeof LAUNCHER_SHOW_ROUTES)[number];
+
+/** The route a `--show <route>` in this argv asks for, when it is one the tray offers; `null` otherwise. */
+export function launcherShowRoute(argv: readonly string[]): LauncherShowRoute | null {
+    const at = argv.lastIndexOf('--show');
+    const route = at >= 0 ? argv[at + 1] : undefined;
+    return (LAUNCHER_SHOW_ROUTES as readonly string[]).includes(route ?? '') ? (route as LauncherShowRoute) : null;
+}
