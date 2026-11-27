@@ -62,6 +62,7 @@ import { ReadingAttribution } from '../core/reading-attribution.js';
 import { LIMIT_ALERTS_SETTING, LimitAlertService, LimitNoticeBook, parseLimitAlerts } from '../core/limit-alerts.js';
 import { StalledTurnBook } from '../core/hung-call.js';
 import { SWITCH_OFFER_WINDOWS_SETTING, SwitchOfferService } from '../core/switch-offer.js';
+import { accountRoom, activeOutView, ActiveOutService, ACTIVE_OUT_SETTING, type AccountRoom, type ActiveOutView } from '../core/active-out.js';
 import { accountsView, type AccountsSnapshot } from '../core/accounts-view.js';
 import { DesignAuthBook } from '../core/design-auth.js';
 import type { AccountsAction, AccountsActResult } from '../core/account-settings.js';
@@ -1421,6 +1422,7 @@ async function main(): Promise<void> {
     });
     // Switch offers (Tynn #481): made from the rate-limit board, composed with it below.
     let switchOffersNow: SwitchOfferService | null = null;
+    let activeOutNow: ActiveOutService | null = null;
     let headroomFeedNow: HeadroomFeed | null = null;
     let saveBoardNow: (() => void) | null = null;
     let designAuthNow: DesignAuthBook | null = null;
@@ -1572,7 +1574,9 @@ async function main(): Promise<void> {
         }
     };
     // The header's account chips (Tynn #483): the book, each account's readings from the board, and the standing offers.
-    const accountsSnapshot = (): AccountsSnapshot => ({ providers: accountsView(accounts.list(), headroomFeedNow?.accounts() ?? [], Object.fromEntries(ACP_PROVIDERS.map((p) => [p, accounts.activeFor(p).id])), claudeLive.current(20_000), { usage: usageProbes.states(), stillOn: Object.fromEntries(ACP_PROVIDERS.map((p) => [p, host.stillOn(p)])) }), offers: switchOffersNow?.offers() ?? [], design: designAuthNow?.view(), signIns: claudeSignIns.view() });
+    // Tynn #1089: the active-out line per provider, beside the Accounts chip (ActiveOutService below sets it).
+    const activeOutViews = new Map<string, ActiveOutView>();
+    const accountsSnapshot = (): AccountsSnapshot => ({ providers: accountsView(accounts.list(), headroomFeedNow?.accounts() ?? [], Object.fromEntries(ACP_PROVIDERS.map((p) => [p, accounts.activeFor(p).id])), claudeLive.current(20_000), { usage: usageProbes.states(), stillOn: Object.fromEntries(ACP_PROVIDERS.map((p) => [p, host.stillOn(p)])) }).map((v) => { const out = activeOutViews.get(v.provider); return out ? { ...v, activeOut: out } : v; }), offers: switchOffersNow?.offers() ?? [], design: designAuthNow?.view(), signIns: claudeSignIns.view() });
     // ...the same book on the one protocol (Tynn #895), answered here for every client.
     accountsPortNow = { list: () => accountsSnapshot(), act: (action, context) => accountsAct(action, context), dismissOffer: (id) => switchOffersNow?.dismiss(id) ?? false };
     // WHOSE READING IT IS ACROSS A SIGN-IN (Tynn #753, core/reading-attribution.ts): while who is signed in is read, a provider's
@@ -1852,7 +1856,30 @@ async function main(): Promise<void> {
         choice: () => settings.snapshot()[SWITCH_OFFER_WINDOWS_SETTING],
     });
     switchOffersNow = switchOffers;
-    headroomFeed.subscribe(() => { limitAlerts.check(); switchOffers.check(); });
+    /*
+     * WHEN THE ACTIVE ACCOUNT RUNS OUT (Tynn #1089; core/active-out.ts): an agent held on the spent active account, another
+     * with room. The person's setting decides: Ask me (the line where it is held and beside the Accounts chip, one click to
+     * switch) or Switch (the normal switch, `accountsAct` switch, made once per reset, and said). Whether an account has
+     * room is `roomOf` alone: its own last reading today; Tynn #1091's turn-free read can feed it later.
+     */
+    const roomOf = (accountId: string): AccountRoom => accountRoom(headroomFeed.accounts().find((r) => r.accountId === accountId)?.room ?? null, Date.now());
+    const activeOut = new ActiveOutService({
+        providers: () => ['claude'],
+        known: () => accounts.list().map((a) => ({ id: a.id, provider: a.provider, label: a.label })),
+        activeId: (provider) => accounts.activeFor(provider).id,
+        room: roomOf,
+        choice: () => (settings.snapshot()[ACTIVE_OUT_SETTING] === 'switch' ? 'switch' : 'ask'),
+        heldOnActive: (provider) => host.heldOnActive(provider),
+        switchTo: (id) => accountsAct({ kind: 'switch', id }),
+        tell: (provider, out) => {
+            const view = out === null ? null : activeOutView(out, provider);
+            if (view === null) activeOutViews.delete(provider); else activeOutViews.set(provider, view);
+            host.setActiveOut(provider, view);
+            accountsChangedNow?.();
+        },
+    });
+    activeOutNow = activeOut;
+    headroomFeed.subscribe(() => { limitAlerts.check(); switchOffers.check(); void activeOut.check(); });
     bootStep('remote and genie 1 imports', stepAt);
     await lockIdentity;
     bootStep('lock identity', stepAt);
@@ -1883,7 +1910,12 @@ async function main(): Promise<void> {
         // An agent's record, read per call (genie#1188), from this host's own registry: no window pushes records (Tynn #954).
         currentRecord: (id) => hostRegistry.find(id as AgentId) ?? null,
         // The window still plays the sound; the host decides whether the agent is nudged (it no longer asks a window to).
-        onAction: (agentId, kind) => { engineHostOptions.onAction(agentId, kind); if (kind === 'replied') planKeepalive?.turnEnded(agentId, 'replied'); },
+        onAction: (agentId, kind) => {
+            engineHostOptions.onAction(agentId, kind);
+            if (kind === 'replied') planKeepalive?.turnEnded(agentId, 'replied');
+            // A hold (or its end) may change what the active-out line says (Tynn #1089).
+            if (kind === 'limited' || kind === 'replied') void activeOutNow?.check();
+        },
         onTurnEnd: (agentId, cause) => { planKeepalive?.turnEnded(agentId, cause); },
         onDesignAuth: (_agentId, event) => designAuth.apply(event),
         onPersonTurn: (agentId) => { planKeepalive?.personTurn(agentId); },

@@ -107,6 +107,7 @@ export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, desig
         else switchTo(offerChoose);
     };
     return (
+        <span data-accounts-chip-wrap="" className="flex min-w-0 items-center gap-2">
         <Popover placement="bottom-end" open={open} onOpenChange={setOpen}>
             <Popover.Trigger>
                 <Button
@@ -205,6 +206,20 @@ export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, desig
                 </div>
             </Popover.Content>
         </Popover>
+        {view.activeOut ? (
+            // THE ACTIVE ACCOUNT RAN OUT (Tynn #1089): said beside the chip, open or not; under Ask me, one click to switch.
+            <span data-accounts-active-out="" role="status" className="flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--warning)]">
+                <span className="max-w-[26rem] truncate" title={view.activeOut.words}>{view.activeOut.words}</span>
+                {view.activeOut.switchTo && onAccountsAct ? (
+                    <Button type="button" size="xs" icon="arrow-right-left" data-action="switch-account"
+                        title={`Make ${view.activeOut.switchTo.label} the active account: every agent continues on it, on its own conversation`}
+                        onClick={() => { void onAccountsAct({ kind: 'switch', id: view.activeOut!.switchTo!.id }); }}>
+                        {`Switch to ${view.activeOut.switchTo.label}`}
+                    </Button>
+                ) : null}
+            </span>
+        ) : null}
+        </span>
     );
 }
 

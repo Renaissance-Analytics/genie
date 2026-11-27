@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import type { ListProviderModels } from '../core/provider-models.js';
 import type { SessionStore } from '@particle-academy/prism-harness';
 import { LiveReadings, planStepsOf } from '../core/live-readings.js';
-import { BackgroundCount } from '../core/background-count.js';
+import { BackgroundCount, touchesBackground } from '../core/background-count.js';
 import { agentActionOf, type AgentActionKind } from '../core/agent-actions.js';
 import { RateLimitGate, type GateView, type LimitReading } from '../core/rate-limit-gate.js';
 import { resetsIn, type Headroom, type ReadingStamp } from '../core/headroom.js';
@@ -1490,6 +1490,13 @@ export class SessionHost {
                     rows.push({ id: `${record.id}:${entry.nextRowId++}`, event, at: this.#clock() });
                     rowAdded(entry);
                 }
+                /*
+                 * A BACKGROUND SHELL ENDED UNDER A HELD AGENT (Tynn #1089; the owner's coordinator sat 52 min on a spent week): the
+                 * move off a refused account waits while Claude's own background work runs, and that work ending is no state
+                 * change of the session, so nothing asked again until his message did. Asked again here, whenever a row can
+                 * change the count (cheap: `#awaitsMove` is false for an agent at work).
+                 */
+                if (touchesBackground(event) && this.#awaitsMove(entry)) this.#scheduleMove(record.id);
                 this.#emit(record.id);
             },
         });
@@ -1687,6 +1694,38 @@ export class SessionHost {
         return { account: { id: on.id, label: on.label, ...(to ? { movesTo: { id: to.id, label: to.label } } : {}) } };
     }
 
+    /** Tynn #1089: what the held agents on each provider's spent ACTIVE account are shown (core/active-out.ts); absent = nothing. */
+    readonly #activeOut = new Map<string, import('../core/active-out.js').ActiveOutView>();
+
+    /** Whether an agent of this provider is held on the limit on the ACTIVE account (the one a switch would move it off). */
+    heldOnActive(provider: string): boolean {
+        for (const entry of this.#running.values()) if (this.#heldOnActiveRun(entry, provider)) return true;
+        return false;
+    }
+
+    #heldOnActiveRun(entry: Running, provider: string): boolean {
+        return entry.provider === provider && entry.session.held && entry.session.running && this.#movesTo(entry) === null;
+    }
+
+    /**
+     * WHEN THE ACTIVE ACCOUNT RUNS OUT (Tynn #1089): genie-host's ActiveOutService says what the held agents show — the line
+     * where each is held, with `Switch to` under Ask me — and, said once, as a line in each one's stream. `null`: nothing.
+     */
+    setActiveOut(provider: string, view: import('../core/active-out.js').ActiveOutView | null): void {
+        if (view === null) this.#activeOut.delete(provider);
+        else this.#activeOut.set(provider, view);
+        for (const [id, entry] of this.#running) {
+            if (entry.provider !== provider) continue;
+            if (view !== null && this.#heldOnActiveRun(entry, provider)) entry.session.notice(view.words);
+            this.#emit(id);
+        }
+    }
+
+    #activeOutOf(entry: Running): Pick<LiveSession, 'activeOut'> {
+        const view = this.#activeOut.get(entry.provider);
+        return view && this.#heldOnActiveRun(entry, entry.provider) ? { activeOut: view } : {};
+    }
+
     accountChanged(provider: string): void {
         for (const [id, entry] of this.#running) if (entry.provider === provider) this.#scheduleMove(id);
     }
@@ -1793,6 +1832,8 @@ export class SessionHost {
         const runRecord: AgentRecord = { ...record, threadId: fresh ? null : threadId };
         this.#moving.add(agentId);
         try {
+            // What waits goes to the new run (`deliverOwed` below): carried, never "undelivered" meanwhile (Tynn #1089).
+            session.carryToNextRun();
             this.stop(agentId, { graceful: false });
             const verdict = await this.ended(agentId);
             if (verdict && !verdict.verified && verdict.survivors.length > 0) return;
@@ -1813,6 +1854,8 @@ export class SessionHost {
             void (async () => {
                 if (this.#running.get(id)) { this.stop(id, { graceful: false }); await this.ended(id); }
                 const again = this.start(this.#currentRecord?.(id) ?? record, cwd, { account: from, quiet: true, why: 'account-move-back' });
+                // What the move carried goes to this run instead (Tynn #1089): carried is never left waiting for nobody.
+                if (again.ok) await this.deliverOwed(id);
                 if (again.ok && to) {
                     this.#stayedWhy.set(id, { to: to.id, why: `it could not start on ${to.label}` });
                     this.#tellStayed(id, from, to, `it could not start on ${to.label}`, true);
@@ -1954,7 +1997,7 @@ export class SessionHost {
     }
 
     /** A stopped run's queued input is durable. Only an explicit Send/Discard resolves its draft. */
-    resolvePrompt(agentId: AgentId, id: string, action: PromptAction): Promise<{ ok: true } | { ok: false; reason: string }> {
+    resolvePrompt(agentId: AgentId, id: string, action: PromptAction): Promise<{ ok: true; waiting?: true } | { ok: false; reason: string }> {
         // Edit on a message already WITHDRAWN (kept in the thread, Tynn #843): out of the thread, as Discard takes a draft —
         // decided by the record itself, below; anything else that is no longer queued answers why.
         let notQueued: { ok: false; reason: string } | null = null;
@@ -1964,7 +2007,7 @@ export class SessionHost {
             notQueued = taken;
             action = 'discard';
         }
-        const resolve = async (): Promise<{ ok: true } | { ok: false; reason: string }> => {
+        const resolve = async (): Promise<{ ok: true; waiting?: true } | { ok: false; reason: string }> => {
             await this.settled();
             const { rows } = await readPromptRows(this.#store(), agentId);
             const status = promptDeliveries(rows).get(id);
@@ -1974,7 +2017,9 @@ export class SessionHost {
             const session = this.#running.get(agentId)?.session;
             if (action === 'send') {
                 if (!session?.running) return { ok: false, reason: 'Restart the agent before sending this draft.' };
-                if (session.hasQueuedPrompt(id)) return { ok: false, reason: 'This message is already queued for the current turn.' };
+                // ALREADY WAITING IN THIS RUN (Tynn #1089): the person's Send is answered "waiting", never refused — the owner's
+                // Send all read this refusal as the button doing nothing at all.
+                if (session.hasQueuedPrompt(id)) return { ok: true, waiting: true };
                 // The person's Send is the person acting, whoever wrote the draft: a Stop's pause ends (genie#1565).
                 session.resumeAfterStop();
                 try {
@@ -2727,7 +2772,9 @@ export class SessionHost {
         return {
             // The account it is really on, and where it moves at its next idle (Tynn #1084).
             ...this.#accountView(entry),
-            limit: this.#limitOf(this.#loginFor(entry.provider), entry.session.held),
+            ...this.#activeOutOf(entry),
+            // ITS OWN LOGIN'S limit (Tynn #1089): a run held on the spent account it is still in read the ACTIVE one's — open.
+            limit: this.#limitOf(this.#runLogin(entry), entry.session.held),
             signedOut: entry.session.signedOut,
             // The turn its provider stopped, explained and counted (Tynn #859): the red stop line's words.
             providerStop: entry.session.providerStop,

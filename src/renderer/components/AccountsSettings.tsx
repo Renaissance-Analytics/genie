@@ -16,11 +16,20 @@ import { DesignAuthRow } from './DesignAuthRow.js';
  * each provider, always, "Use another account" (Tynn #850: the same login naming no account, for a new one). Above
  * them, the windows that make Genie offer a switch (S8). There is no per-agent account: agents use the signed-in one.
  */
+/** The choices of `when_active_account_out`, in the words of its setting. */
+const WHEN_OUT_CHOICES: ReadonlyArray<{ value: 'ask' | 'switch'; label: string }> = [
+    { value: 'ask', label: 'Ask me' },
+    { value: 'switch', label: 'Switch to the account with the most room' },
+];
+
 export interface AccountsSettingsProps {
     readonly snapshot: AccountsSnapshot | undefined;
     /** The `switch_offer_windows` setting as stored. */
     readonly offerWindows: unknown;
     readonly onSetOfferWindows: (value: string) => void;
+    /** The `when_active_account_out` setting as stored (Tynn #1089): `ask` (the default) or `switch`. */
+    readonly whenOut?: unknown;
+    readonly onSetWhenOut?: ((value: string) => void) | undefined;
     readonly onSwitch?: ((provider: string, choose?: string) => void) | undefined;
     readonly onAct?: ((action: AccountsAction) => Promise<AccountsActResult>) | undefined;
     readonly now?: number | undefined;
@@ -28,7 +37,7 @@ export interface AccountsSettingsProps {
     readonly onDesignSignIn?: (() => void) | undefined;
 }
 
-export function AccountsSettings({ snapshot, offerWindows, onSetOfferWindows, onSwitch, onAct, now, onDesignSignIn }: AccountsSettingsProps) {
+export function AccountsSettings({ snapshot, offerWindows, onSetOfferWindows, whenOut, onSetWhenOut, onSwitch, onAct, now, onDesignSignIn }: AccountsSettingsProps) {
     const at = now ?? Date.now();
     // Tynn #1084: open, this page asks for readings (under the probe's 15-min rules), and every 5 min while it stays open.
     const act = useRef(onAct);
@@ -50,6 +59,14 @@ export function AccountsSettings({ snapshot, offerWindows, onSetOfferWindows, on
                     <MultiSwitch size="sm" list={SWITCH_OFFER_WINDOW_CHOICES.map((c) => ({ value: c.value, label: c.label }))}
                         value={parseSwitchOfferWindows(offerWindows)} onValueChange={(v) => onSetOfferWindows(v)} aria-label="Offer a switch when this window is nearly used" />
                 </div>
+                {onSetWhenOut ? (
+                    // WHEN THE ACTIVE ACCOUNT RUNS OUT (Tynn #1089): the person's rule; never a silent switch.
+                    <div data-when-active-out="" className="flex items-center gap-2 text-xs text-[var(--fg-3)]">
+                        <span>When the active account runs out</span>
+                        <MultiSwitch size="sm" list={WHEN_OUT_CHOICES.map((c) => ({ value: c.value, label: c.label }))}
+                            value={whenOut === 'switch' ? 'switch' : 'ask'} onValueChange={(v) => onSetWhenOut(v)} aria-label="When the active account runs out" />
+                    </div>
+                ) : null}
             </div>
             {snapshot === undefined ? <p className="text-sm text-[var(--fg-3)]">Accounts show once Genie’s host answers.</p> : null}
             {snapshot?.providers.map((p) => (

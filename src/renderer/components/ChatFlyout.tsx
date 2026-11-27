@@ -66,11 +66,13 @@ import { WorkspaceSwatch, useAgentColor, wsStyle } from '../workspace-colors.js'
  */
 
 /** One message as the chat draws it (`core/chat-view.ts`'s `ChatMessage`, its optional parts optional). */
-export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'queuedForStart' | 'silentSince' | 'attachmentRefs' | 'promptId' | 'draftProblem' | 'carried' | 'withdrawn'>>;
+export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'queuedForStart' | 'silentSince' | 'attachmentRefs' | 'promptId' | 'draftProblem' | 'carried' | 'withdrawn' | 'movingTo'>>;
 
 export interface ChatThread {
     /** Tynn #1084: the account the agent is really on, and the one it moves to at its next idle. */
     account?: { readonly label: string; readonly movesTo?: string; readonly stays?: string } | undefined;
+    /** Tynn #1089: the active account ran out — the line, and under Ask me the account `Switch to` names. */
+    activeOut?: { readonly words: string; readonly switchTo?: { readonly id: string; readonly label: string } } | undefined;
     agentId: string;
     name: string;
     fidelity: Fidelity;
@@ -331,6 +333,11 @@ export interface ChatFlyoutProps {
     onDesignLogin?: (() => void) | undefined;
     /** Tynn #1084: `Restart on <active> now` on the context line, while the agent is still on another account. */
     onMoveNow?: (() => void) | undefined;
+    /** Tynn #1089: `Switch to <account>` on the active-out line — the normal switch (`accounts.act` switch). */
+    onSwitchAccount?: ((accountId: string) => void) | undefined;
+    /** Tynn #1089: Send all, one message at a time with a result each (core/send-all.ts); `sending` is how far it is. */
+    onSendAllKept?: ((items: readonly import('../../core/send-all.js').SendAllItem[]) => void) | undefined;
+    sending?: import('../../core/send-all.js').SendAllState | null | undefined;
     /** Where the width is remembered; absent = the window's localStorage (tests pass their own). */
     widthStorage?: Pick<Storage, 'getItem' | 'setItem'> | null | undefined;
     /** The width the dock gives the chat (the content row reserves the same; Tynn #798). Absent = the remembered width. */
@@ -427,7 +434,7 @@ export const ChatFlyout = stableView(ChatFlyoutBody, 'ChatFlyout');
 function ChatFlyoutBody({
     busy = false, onChooseProviderProgram,
     thread, onWindowLines, contextUsage = null, approval, approvalInToast = false, commands, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace,
-    onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onResolveQueued, onStopTurn, onInterruptAndSend, loadAttachment, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onMoveNow, widthStorage, scope, dockWidth, onDockWidth, drafts, onTyping, peerTyping, insert, onInserted,
+    onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onResolveQueued, onStopTurn, onInterruptAndSend, loadAttachment, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onMoveNow, onSwitchAccount, onSendAllKept, sending, widthStorage, scope, dockWidth, onDockWidth, drafts, onTyping, peerTyping, insert, onInserted,
 }: ChatFlyoutProps) {
     countRender('ChatFlyout');
     const keeper = drafts === 'loading' ? undefined : drafts;
@@ -741,7 +748,7 @@ function ChatFlyoutBody({
 
             {/* THE CONTEXT LINE: what the agent is doing, in the board's words. Absent until read — never "Idle" as a guess.
                 While a turn runs that can be stopped, `Stop this turn` sits at its end: with the turn, not under Send. */}
-            {thread?.context || thread?.account || onStopTurn || onResumeLimit || onProviderLogin || onAccountRetry || onDesignLogin ? (
+            {thread?.context || thread?.account || thread?.activeOut || onStopTurn || onResumeLimit || onProviderLogin || onAccountRetry || onDesignLogin ? (
                 <div data-chat-context={thread?.context?.tone ?? 'ok'} {...(thread?.context?.title ? { title: thread.context.title } : {})} className={`flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-1.5 text-[12px] ${CONTEXT_TONE[thread?.context?.tone ?? 'ok']}`}>
                     {thread?.context?.retryAt !== undefined ? <RetryCountdown at={thread.context.retryAt} /> : <ChatPlanLine text={thread?.context?.text ?? 'Working'} plan={thread?.context?.planView} />}
                     {thread?.account ? (
@@ -749,6 +756,23 @@ function ChatFlyoutBody({
                         <span data-chat-account="" className={`shrink-0 truncate ${thread.account.movesTo || thread.account.stays ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}`}
                             title={thread.account.stays ? `It stays on ${thread.account.label}: ${thread.account.stays}` : thread.account.movesTo ? `Still running on ${thread.account.label} until its current work is idle; then it continues on ${thread.account.movesTo}` : `Running on ${thread.account.label}`}>
                             {thread.account.stays ? `· stays on ${thread.account.label}: ${thread.account.stays}` : thread.account.movesTo ? `· on ${thread.account.label} until idle, then ${thread.account.movesTo}` : `· on ${thread.account.label}`}
+                        </span>
+                    ) : null}
+                    {thread?.activeOut ? (
+                        // THE ACTIVE ACCOUNT RAN OUT (Tynn #1089): which has room, and under Ask me the one click to switch to it.
+                        <span data-chat-active-out="" className="flex min-w-0 items-center gap-2 text-[var(--warning)]">
+                            <span className="truncate">{thread.activeOut.words}</span>
+                            {thread.activeOut.switchTo && onSwitchAccount ? (
+                                <Button size="xs"
+                                    type="button"
+                                    data-action="switch-account"
+                                    title={`Make ${thread.activeOut.switchTo.label} the active account: every agent continues on it, on its own conversation`}
+                                    onClick={() => onSwitchAccount(thread.activeOut!.switchTo!.id)}
+                                    className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--warning)] bg-[var(--warning)]/10 px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--warning)]/20"
+                                >
+                                    {`Switch to ${thread.activeOut.switchTo.label}`}
+                                </Button>
+                            ) : null}
                         </span>
                     ) : null}
                     {thread?.account?.movesTo && onMoveNow ? (
@@ -907,10 +931,13 @@ function ChatFlyoutBody({
                     waiting={queue.waiting}
                     undelivered={queue.undelivered.length}
                     onInterruptAndSend={onInterruptAndSend}
-                    onSendAll={queue.sendable.length > 0 && onRestartAndSend ? () => {
+                    sending={sending}
+                    onSendAll={queue.sendable.length > 0 && (onSendAllKept || onRestartAndSend) ? () => {
+                        // Tynn #1089: each in the order written, with progress and a result each, at the bar.
+                        if (onSendAllKept) { onSendAllKept(queue.sendable.map((m) => ({ id: m.id, text: m.text }))); return; }
                         // While it runs, each in the order written; not running, the chat's one Restart, which sends them all.
-                        if (queue.sendable.some((m) => m.resend === 'send')) for (const m of queue.sendable) onRestartAndSend(m.id);
-                        else onRestartAndSend(restartOn ?? queue.sendable.at(-1)!.id);
+                        if (queue.sendable.some((m) => m.resend === 'send')) for (const m of queue.sendable) onRestartAndSend!(m.id);
+                        else onRestartAndSend!(restartOn ?? queue.sendable.at(-1)!.id);
                     } : undefined}
                     onDiscardAll={queue.undelivered.length > 0 && onDiscardDraft ? () => { for (const m of queue.undelivered) onDiscardDraft(m.id); } : undefined}
                 />
@@ -1204,8 +1231,8 @@ export function ChatMessages({ messages, thread, refs: replyRefs, mailOnly, onOp
                         {mailOnly && m.read !== undefined ? (
                             <span data-chat-read={m.id} className="font-mono text-[11px] text-[var(--fg-4)]">{m.read === null ? 'not read yet' : `read ${clock(m.read)}`}</span>
                         ) : null}
-                        {m.queued ? (m.queuedForStart || m.queuedForProvider
-                            ? <span data-chat-queued={m.id} className="flex items-center justify-end gap-1.5 font-mono text-[11px] text-[var(--fg-3)]"><span>{m.queuedForStart ? `Starting ${thread?.name ?? 'the agent'} · sent when it is up` : 'Queued · waiting for the provider to resume'}</span>{onQueuedAction && m.promptId ? <ChatQueuedActions id={m.id} busy={queuedBusy?.has(m.id) === true} onAction={onQueuedAction} /> : null}</span>
+                        {m.queued ? (m.movingTo || m.queuedForStart || m.queuedForProvider
+                            ? <span data-chat-queued={m.id} className="flex items-center justify-end gap-1.5 font-mono text-[11px] text-[var(--fg-3)]"><span>{m.movingTo ? `Waiting · moving to ${m.movingTo}` : m.queuedForStart ? `Starting ${thread?.name ?? 'the agent'} · sent when it is up` : 'Queued · waiting for the provider to resume'}</span>{onQueuedAction && m.promptId ? <ChatQueuedActions id={m.id} busy={queuedBusy?.has(m.id) === true} onAction={onQueuedAction} /> : null}</span>
                             : <ChatQueuedNoteLive id={m.id} agentName={thread?.name ?? 'the agent'} silentSince={m.silentSince ?? null} actions={onQueuedAction && m.promptId ? <ChatQueuedActions id={m.id} busy={queuedBusy?.has(m.id) === true} onAction={onQueuedAction} /> : null} />) : null}
                         {/* A Withdraw / Edit that lost to the turn's end (Tynn #843): the host's words, on the message. */}
                         {queuedProblems?.[m.id] ? <span role="alert" className="text-[12px] text-[var(--warning)]">{queuedProblems[m.id]}</span> : null}

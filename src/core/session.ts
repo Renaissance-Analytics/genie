@@ -916,6 +916,15 @@ export class AgentSession {
     }
 
     /**
+     * THIS RUN IS MOVING TO ANOTHER ACCOUNT (Tynn #1089): the host stops it to start the same conversation on the account it
+     * moves to, and hands that run what waits here (`deliverOwed`). So what waits is CARRIED, never left "undelivered": the
+     * owner's message read "Not delivered. Kept for you to send again." for the 8 minutes it waited in the new run.
+     */
+    carryToNextRun(): void {
+        this.#carryQueue = true;
+    }
+
+    /**
      * HELD ON THE LIMIT WITH NOTHING WORKING (the owner, 2026-11-26: switched off a spent account and the agent never moved).
      * The provider refuses this account until its reset, so a turn the limit cut has nothing left to do and what waits is held
      * for the next run: a move to another account cuts nothing. Not quiet (`quiet` is false while held), yet movable.

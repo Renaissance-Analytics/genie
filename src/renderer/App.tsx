@@ -47,6 +47,7 @@ import { dockHolder, pinPanel, routeAfterPin, type DockNotice, type PinnedPanel 
 import { approvalChoice, chatAction, globalAction, isTypingTarget } from '../core/keys.js';
 import { chatAgentsKey, chatSendFor, chatThreadFrom, observedMail, rememberThread, withDrafts, type Draft } from '../core/chat-view.js';
 import { deliverChat, type ChatSendOutcome } from '../core/chat-send.js';
+import { sendAll, type SendAllItem, type SendAllState, type SendOutcome } from '../core/send-all.js';
 import type { Attachment } from '../core/prompt-content.js';
 import { copyToClipboard } from './clipboard.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, pageBridge, tynnBoardHostOf, tynnIssuesHostOf, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
@@ -1992,6 +1993,45 @@ function DesktopApp({ bridge }: AppProps) {
             return { ok: true };
         }));
     };
+    /**
+     * SEND ALL NOW, WITH A RESULT EACH (Tynn #1089; the owner: "clicking the send all now button does nothing at all"). Each
+     * kept message in the order written, one at a time (core/send-all.ts): a queued one by the host's Send (`resolvePrompt`;
+     * one the run already holds answers `waiting`), this window's own kept draft by a prompt, and — the agent not running —
+     * THE ONE RESTART once, which delivers everything owed. The bar shows how far it is and what became of each.
+     */
+    const [sendAllState, setSendAllState] = useState<{ agentId: string; state: SendAllState } | null>(null);
+    const sendAllKept = (items: readonly SendAllItem[]): void => {
+        const bridge = resolvedBridge;
+        const thread = chatThread;
+        if (!bridge || !thread) return;
+        const agentId = thread.agentId;
+        let restarted: Promise<SendOutcome> | null = null;
+        const restart = (): Promise<SendOutcome> => (restarted ??= restartOne(agentId).then(async (r) => {
+            if (!r.ok) return r;
+            for (const d of drafts.filter((x) => x.agentId === agentId && !x.reason)) {
+                const sent = await bridge.prompt(d.agentId, d.text, d.attachments ?? []);
+                if (!sent.ok) return { ok: false as const, reason: sent.reason ?? 'A kept message could not be sent.' };
+                setDrafts((all) => all.filter((x) => x.id !== d.id));
+            }
+            return { ok: true as const };
+        }));
+        const one = async (item: SendAllItem): Promise<SendOutcome> => {
+            const message = thread.messages.find((m) => m.id === item.id);
+            const draft = drafts.find((d) => d.id === item.id);
+            if (message?.resend !== 'send') return restart();
+            if (message.promptId) {
+                const r = await bridge.resolvePrompt(agentId, message.promptId, 'send');
+                return r.ok ? { ok: true, ...((r as { waiting?: true }).waiting ? { waiting: true as const } : {}) } : r;
+            }
+            if (draft) {
+                const sent = await bridge.prompt(draft.agentId, draft.text, draft.attachments ?? []);
+                if (sent.ok) setDrafts((all) => all.filter((x) => x.id !== draft.id));
+                return sent.ok ? { ok: true } : { ok: false, reason: sent.reason ?? 'The message could not be sent.' };
+            }
+            return { ok: false, reason: 'This message is no longer in the chat.' };
+        };
+        void sendAll(items, one, (state) => setSendAllState({ agentId, state }));
+    };
     // Derived when its inputs change, not on every render of the window (the owner, 2026-10-20: "severe UI lag"): the
     // thread reads every row of the subject's ledger.
     // FOLLOWING LIVE (the owner, 2026-10-22): an update derives only the lines the chat shows (core/chat-view.ts
@@ -2287,6 +2327,9 @@ function DesktopApp({ bridge }: AppProps) {
             featureAsk={(action) => (resolvedBridge?.features ?? NO_FEATURES).act(action).then((data) => { setFeatures(data); return data; })}
             onSend={(id, text, attachments) => (id ? send(id, text, attachments ?? []) : Promise.resolve<ChatSendOutcome>({ kind: 'failed', reason: 'No agent to send to.' }))}
             onRestartAndSend={restartAndSend}
+            onSendAllKept={sendAllKept}
+            sendAll={chatThread && sendAllState?.agentId === chatThread.agentId ? sendAllState.state : null}
+            onSwitchAccount={(accountId) => { void accountsAct({ kind: 'switch', id: accountId }).then((r) => { if (!r.ok) showAlert({ title: 'Switch account', body: r.reason }); }, () => {}); }}
             onDiscardDraft={discardDraft}
             // Withdraw / Edit a queued message (Tynn #843): the host takes it back, here and from a Pilot window alike.
             onResolveQueued={chatThread && resolvedBridge ? (promptId, action) => resolvedBridge.resolvePrompt(chatThread.agentId, promptId, action) : undefined}
