@@ -137,7 +137,7 @@ fn main() -> ExitCode {
                 }
                 Ok(None) => {
                     use genie_launcher::logon;
-                    match logon::write_settings(&roots, logon::LogonSettings { setting, start_minimized }).and_then(|_| control::launcher_exe()).and_then(|exe| logon::apply(&roots, &logon::place(), &exe)) {
+                    match logon::write_settings(&roots, logon::LogonSettings { setting, start_minimized }).and_then(|_| logon::entry_exe()).and_then(|exe| logon::apply(&roots, &logon::place(), &exe)) {
                         Ok(said) => {
                             println!("{said}");
                             ExitCode::SUCCESS

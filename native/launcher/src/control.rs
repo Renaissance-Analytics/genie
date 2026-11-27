@@ -336,7 +336,7 @@ pub fn handle_line(ctx: &Context, conn: &mut Connection, line: &str) -> Vec<Valu
             let a = args.first().cloned().unwrap_or(Value::Null);
             match (a["setting"].as_bool(), a["startMinimized"].as_bool()) {
                 (Some(setting), Some(start_minimized)) => crate::logon::write_settings(roots, crate::logon::LogonSettings { setting, start_minimized })
-                    .and_then(|_| launcher_exe())
+                    .and_then(|_| crate::logon::entry_exe())
                     .and_then(|exe| crate::logon::apply(roots, &crate::logon::place(), &exe))
                     .map(|said| json!({"said": said})),
                 _ => Err("launcher.logon needs {setting, startMinimized}".to_string()),

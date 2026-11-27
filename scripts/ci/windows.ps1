@@ -491,7 +491,8 @@ function Row-client-only-update { Need-Install; Need-Electron; Need-TestMachine;
 # shard did not package) in a home of its own; the HKCU Run value read back with reg query, the setting switched live with
 # no restart, and the four logon cases. HKCU is the machine's: the row takes its value away again. Before
 # client-only-update, which replaces dist\ and release\.
-function Row-logon { Need-Build; Need-TestMachine; Run 'vm-logon' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-logon-windows.ps1 -Mode table } }
+# Since Tynn #1058 L5 the LAUNCHER writes the Run value and decides at logon (scripts/vm-logon-launcher-windows.ps1 table).
+function Row-logon { Need-Tracks; Need-TestMachine; Run 'vm-logon-launcher' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-logon-launcher-windows.ps1 -Mode table } }
 # A host update drains and swaps (Tynn #1036 P6-2): last, as it replaces the install, the home and the build once more.
 function Row-host-update { Need-Install; Need-Electron; Need-TestMachine; Run 'vm-windows-update' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-windows-update.ps1 } }
 # THE PACKAGES PER TRACK (Tynn #1058 L3): the client (electron-builder's unpacked app named genie-client, no host bundle),

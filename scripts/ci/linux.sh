@@ -742,7 +742,7 @@ row_client-only-update() { need_install && need_electron && need_display && time
 # LOGON START, READ AT THE OS (Tynn #1036 P6-3): the packaged AppImage (the package row's) in a home of its own; its
 # autostart file read back (Exec, Hidden, and what systemd's xdg-autostart generator makes of it), the setting switched
 # live with no restart, and the four logon cases. Before client-only-update, which replaces dist/ and release/.
-row_logon() { need_install && need_electron && need_display && timeout 840 bash scripts/vm-logon-linux.sh table; }
+row_logon() { need_tracks && need_display && timeout 840 bash scripts/vm-logon-launcher-linux.sh table; }
 # A host update drains and swaps (Tynn #1036 P6-2): last, as it replaces the install, the home and the build once more.
 row_host-update() { need_install && need_electron && need_display && timeout 2300 bash scripts/vm-host-update-linux.sh; }
 row_toolchain() {

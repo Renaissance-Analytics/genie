@@ -214,9 +214,23 @@ pub fn apply(roots: &Roots, place: &Place, exe: &str) -> Result<String, String> 
     }
 }
 
+/// The program the entry runs: this launcher, or on Linux the `~/.local/bin/genie` link when it leads here, so the entry
+/// keeps working when an update points the link at another build.
+pub fn entry_exe() -> Result<String, String> {
+    let me = crate::control::launcher_exe()?;
+    #[cfg(unix)]
+    if let Some(link) = crate::desktop::link_path() {
+        let leads_here = std::fs::canonicalize(&link).ok().zip(std::fs::canonicalize(&me).ok()).map(|(a, b)| a == b).unwrap_or(false);
+        if leads_here {
+            return Ok(link.display().to_string());
+        }
+    }
+    Ok(me)
+}
+
 /// `apply` at this user's place for this launcher, said on stderr (the launcher's log); a failure is said, never fatal.
 pub fn apply_here(roots: &Roots) {
-    let said = match crate::control::launcher_exe() {
+    let said = match entry_exe() {
         Ok(exe) => apply(roots, &place(), &exe).unwrap_or_else(|why| format!("the logon entry could not be made: {why}")),
         Err(why) => format!("the logon entry could not be made: {why}"),
     };
