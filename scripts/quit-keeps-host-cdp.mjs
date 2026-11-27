@@ -784,7 +784,7 @@ try {
     check(JSON.stringify(q?.buttons) === JSON.stringify(['Cancel', 'Just close the UI', 'Shut down everything']), '12. the quit ASKED the two answers, and button 1 was "Just close the UI"', JSON.stringify(q));
     check(alive(launcherPid) && launcherRecord()?.pid === launcherPid, '12l. the LAUNCHER keeps running, the same pid', `pid ${launcherPid}`);
     // The launcher closes every attached client, the one that asked too: whichever word reaches it first is its reason.
-    check(/the client ends \((the quit’s answer: Just close the UI|the launcher closed the UI)\)/.test(readOr(LIFECYCLE).slice(lifecycleAt)), '12c. the client said why it ended: the quit's answer, through the launcher (lifecycle log)');
+    check(/the client ends \((the quit’s answer: Just close the UI|the launcher closed the UI)\)/.test(readOr(LIFECYCLE).slice(lifecycleAt)), '12c. the client said why it ended: the quit’s answer, through the launcher (lifecycle log)');
     check(existsSync(join(GENIE_HOME, 'runtime', 'left-running')), '12m. the host is marked left running (it comes back at logon, P6)');
     a.cdp.close();
 

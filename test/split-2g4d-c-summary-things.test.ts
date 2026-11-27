@@ -313,8 +313,8 @@ describe('wired', () => {
         expect(stopping).toMatch(/processes: \[\.\.\.hostSummaryNow\.processes\], services: \[\.\.\.hostSummaryNow\.services\], sites: \[\.\.\.hostSummaryNow\.sites\]/);
         const quit = block(main, "app.on('before-quit'", '\n});');
         expect(quit).toMatch(/\{ keptProcesses: hostSummaryNow\.processes\.length, \.\.\.onTheClockNow\(\) \}/);
-        // CONTROL: the three blocks are the ones the scan means (each reads the summary's terminals too).
-        for (const b of [activity, stopping, quit]) { expect(b).toMatch(/hostSummaryNow\.terminals/); expect(b).not.toMatch(/(?<![.\w])services[?!]?\.|composed\./); }
+        // CONTROL: the two blocks left in main are the ones the scan means (each reads the summary's terminals too).
+        for (const b of [stopping, quit]) { expect(b).toMatch(/hostSummaryNow\.terminals/); expect(b).not.toMatch(/(?<![.\w])services[?!]?\.|composed\./); }
         // No read of the supervisor's, the engines' or the routes' replica is left for them anywhere in main.
         expect(main).not.toMatch(/services\?\.(supervisor|engines)\.list\(\)|services\?\.routes\(\)/);
     });
