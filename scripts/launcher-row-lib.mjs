@@ -240,12 +240,16 @@ const YDOTOOL_SOCK = '/tmp/genie-ydotool.sock';
 let ydotoolUp = false;
 function ydotool(args) {
     if (!ydotoolUp) {
+        // -Sy: the test image carries no sync database, and `pacman -S` alone answers "target not found" (the webkit rows in
+        // scripts/ci/linux.sh install the same way). What it said is printed: a silent failure cost L5 its tray menu shot.
         if (spawnSync('sh', ['-c', 'command -v ydotool'], { timeout: SYNC_MS }).status !== 0) {
-            spawnSync('sudo', ['-n', 'pacman', '-S', '--needed', '--noconfirm', 'ydotool'], { timeout: 180_000, stdio: 'ignore' });
+            const got = spawnSync('sudo', ['-n', 'pacman', '-Sy', '--needed', '--noconfirm', 'ydotool'], { encoding: 'utf8', timeout: 180_000 });
+            console.log(`  linux tray: pacman -Sy ydotool: exit ${got.status} ${String(got.stderr || got.stdout || '').trim().split('\n').slice(-2).join(' | ').slice(0, 200)}`);
         }
         const ids = `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`;
         spawn('sudo', ['-n', 'ydotoold', `--socket-path=${YDOTOOL_SOCK}`, `--socket-own=${ids}`], { detached: true, stdio: 'ignore' }).unref();
-        spawnSync('sleep', ['1.5']);
+        for (let i = 0; i < 50 && !existsSync(YDOTOOL_SOCK); i++) spawnSync('sleep', ['0.1']);
+        console.log(`  linux tray: ydotoold's socket ${existsSync(YDOTOOL_SOCK) ? 'is up' : 'did not appear in 5 s'}`);
         ydotoolUp = true;
     }
     return spawnSync('ydotool', args, { encoding: 'utf8', timeout: SYNC_MS, env: { ...process.env, YDOTOOL_SOCKET: YDOTOOL_SOCK } });
@@ -258,13 +262,17 @@ function moveCursor(x, y) {
         const dy = Math.round(y - c.y);
         if (Math.abs(dx) <= 3 && Math.abs(dy) <= 3) return `ydotool, ${i} move(s)`;
         const r = ydotool(['mousemove', '-x', String(Math.max(-400, Math.min(400, dx))), '-y', String(Math.max(-400, Math.min(400, dy)))]);
-        if (r.status !== 0) { console.log(`  linux tray: ydotool mousemove: ${String(r.stderr ?? '').trim().slice(0, 120)}`); break; }
+        if (r.status !== 0) { console.log(`  linux tray: ydotool mousemove: exit ${r.status} ${r.error ? r.error.message : ''} ${String(r.stderr || r.stdout || '').trim().slice(0, 160)}`); break; }
         spawnSync('sleep', ['0.15']);
     }
     const tries = [
         ['hyprctl', ['-i', '0', 'dispatch', 'movecursor', String(x), String(y)]],
         ['hyprctl', ['-i', '0', 'eval', `hl.dispatch("movecursor", "${x} ${y}")`]],
         ['hyprctl', ['-i', '0', 'eval', `hl.dispatch("movecursor ${x} ${y}")`]],
+        // Hyprland's Lua config takes a dispatcher object, not its name ("hl.dispatch: expected a dispatcher").
+        ['hyprctl', ['-i', '0', 'eval', `hl.dispatch(hl.dsp.movecursor(${x}, ${y}))`]],
+        ['hyprctl', ['-i', '0', 'eval', `hl.dispatch(hl.dsp.movecursor({ x = ${x}, y = ${y} }))`]],
+        ['hyprctl', ['-i', '0', 'eval', `hl.dispatch(hl.dsp.cursor.move(${x}, ${y}))`]],
     ];
     for (const [cmd, args] of tries) {
         const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: SYNC_MS });

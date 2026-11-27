@@ -648,6 +648,10 @@ async function hostUpdate(broken) {
         check(watch.phases().includes('starting') && watch.phases().includes('rolling-back'), '13c. the new host was started, then the launcher went back', watch.phases().join(' → '));
         check(new RegExp(`the new host ${NEW.replace(/\./g, '\\.')} did not come up`).test(readOr(LAUNCHER_LOG)), `13d. the launcher logged that the host ${NEW} did not come up`);
         await sleep(2_500);
+        // The launcher opens Genie again after the swap (15f), over the Updates window: the tray's Updates brings it forward.
+        const front = await wireCall(RUNTIME, 'launcher.trayAct', [{ action: 'updates' }], 15_000);
+        console.log(`  the Updates window brought forward for the shot: ${front.ok ? 'yes' : front.reason}`);
+        await sleep(2_000);
         shot(`host-update-rollback-${OS}.png`);
     }
 
