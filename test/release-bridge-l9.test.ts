@@ -58,7 +58,8 @@ describe('the bridge release (Tynn #1058 L9): the v* tag builds the bridge from 
         expect(windows).toMatch(/Expand-Archive "bridge-packages\/launcher-\$\{\{ needs\.guard\.outputs\.round \}\}-win32-x64\.zip" bridge-launcher/);
         expect(windows).toMatch(/node scripts\/build-track-packages\.mjs bridge --version "\$tag" --launcher bridge-launcher\/Genie\.exe --from bridge-packages --host-script bridge-host\/app\/dist\/main\/host\.js --signed/);
         // The installer and the launcher it carries, each Renaissance Analytics' and valid, before anything is uploaded.
-        expect(windows).toMatch(/Get-AuthenticodeSignature[\s\S]*Genie-\*-setup\.exe[\s\S]*bridge-launcher\/Genie\.exe/);
+        // Both files listed (the installer, then the launcher), then each one's signature read.
+        expect(windows).toMatch(/Genie-\*-setup\.exe[\s\S]*bridge-launcher\/Genie\.exe[\s\S]*Get-AuthenticodeSignature \$f\.FullName/);
         expect(windows).toMatch(/Status -ne 'Valid'[\s\S]*Renaissance Analytics/);
         expect(windows).toMatch(/node scripts\/verify-windows-update\.cjs release\/tracks\/bridge release\/signature-evidence\/beta59-release-assets\.json/);
         expect(windows).toMatch(/"release\/tracks\/bridge\/Genie-\$tag-setup\.exe" "release\/tracks\/bridge\/Genie-\$tag-setup\.exe\.blockmap" release\/tracks\/bridge\/latest\.yml --clobber/);

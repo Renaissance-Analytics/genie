@@ -287,7 +287,7 @@ async function main() {
     const samples = new Set();
     const sampler = setInterval(() => { void stubKeys().then((ks) => { for (const k of ks) samples.add(k); }); }, 1_000);
     // Asynchronous, so the sampler above runs while it drives (a spawnSync blocked it: run 1127-211951-3a8597 sampled none).
-    const drive = await spawnAsync(process.execPath, ['scripts/update-cdp.mjs'], { stdio: 'inherit', windowsHide: true, env: { ...process.env, EXPECT_VERSION: BRIDGE, CDP_PORT: String(OLD_PORT), CDP_OWN_PID: String(old.pid), ...(CASE === 'unchanged' ? { UPDATE_TICKS_FILE: ticksFile } : {}) } });
+    const drive = await spawnAsync(process.execPath, ['scripts/update-cdp.mjs'], { stdio: 'inherit', windowsHide: true, env: { ...process.env, EXPECT_VERSION: BRIDGE, UPDATE_CDP_SETTLED: '1', CDP_PORT: String(OLD_PORT), CDP_OWN_PID: String(old.pid), ...(CASE === 'unchanged' ? { UPDATE_TICKS_FILE: ticksFile } : {}) } });
     clearInterval(sampler);
     const stubsBefore = [...samples].sort();
     console.log(`  agent providers while install was asked: ${stubsBefore.join(' ') || 'none'}`);
@@ -359,7 +359,9 @@ async function main() {
     const launcherExe = WIN ? join(INSTALL_DIR, 'Genie.exe') : join(HOME, '.local', 'bin', 'genie');
     check(entries.length === 1, '7a. one logon entry runs Genie', JSON.stringify(entries));
     const e = entries[0]?.data ?? '';
-    check(e.includes(`"${launcherExe}" --logon`) && !e.includes('--hidden') && !e.includes('Genie.AppImage'), `7b. it is the launcher's: "${launcherExe}" --logon`, e.split(/\r?\n/).find((l) => /Exec=|Genie\.exe/.test(l)) ?? e);
+    // Windows paths compare without case: NSIS made the folder Programsgenie (run 1127-223352-5d8720).
+    const same = (a, b) => (WIN ? a.toLowerCase().includes(b.toLowerCase()) : a.includes(b));
+    check(same(e, `"${launcherExe}" --logon`) && !e.includes('--hidden') && !e.includes('Genie.AppImage'), `7b. it is the launcher's: "${launcherExe}" --logon`, e.split(/\r?\n/).find((l) => /Exec=|Genie\.exe/.test(l)) ?? e);
     if (WIN) check(entries[0]?.name === 'Genie', '7c. the Run value is the launcher\'s own (Genie); the single app\'s is gone', entries.map((x) => x.name).join(', '));
     const logonJson = readJson(join(RUNTIME, 'logon.json'));
     check(logonJson?.setting === true && logonJson?.startMinimized === true, '7d. start on logon and start minimised carried over', JSON.stringify(logonJson));

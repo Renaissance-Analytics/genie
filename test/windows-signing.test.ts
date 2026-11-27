@@ -111,8 +111,7 @@ describe('Windows release signing', () => {
             expect(steps[login].with[input!]).toBe('${{ vars.' + variable + ' }}');
         }
         // The bridge (Tynn #1058 L9): built and signed from the round's signed packages, its signatures read before upload.
-        const build = steps.findIndex((s: any) => /build-track-packages.mjs bridge[^
-]*--signed/.test(s.run ?? ''));
+        const build = steps.findIndex((s: any) => /build-track-packages\.mjs bridge[^\n]*--signed/.test(s.run ?? ''));
         const verify = steps.findIndex((s: any) => /Get-AuthenticodeSignature/.test(s.run ?? ''));
         const upload = steps.findIndex((s: any) => /gh release upload/.test(s.run ?? ''));
         expect(build).toBeGreaterThan(login);
