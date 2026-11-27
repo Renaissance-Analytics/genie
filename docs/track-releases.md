@@ -38,6 +38,49 @@ Nothing in the workflow publishes. The owner publishes each draft after approvin
 
     gh release edit <track>-v<build> -R Renaissance-Analytics/genie --draft=false
 
+## The bridge (L9)
+
+Every installed single-app Genie updates only through electron-updater, from a `v*` release's `latest.yml` /
+`latest-linux.yml`. The bridge is that release. It moves an install onto the launcher, and it carries the launcher and the
+packages of an approved round, never a second build of them. A `v*` tag builds the bridge, not the single app.
+
+| Asset | What it is | What the outgoing Genie does with it |
+|---|---|---|
+| `Genie-<version>-setup.exe` (+ `.blockmap`, `latest.yml`) | the launcher's installer (`build/launcher-installer.nsh`), carrying the round's client, browser and host packages | runs it `/S --updated --force-run`: the launcher is put at `Programs\Genie\Genie.exe`, installs the packages, replaces the logon entry, and opens Genie |
+| `Genie-<version>.AppImage` (+ `latest-linux.yml`) | an AppImage of the round's launcher and its four Linux packages | puts it at the old AppImage's path and runs it: it installs what it carries, then only ever starts the installed launcher |
+
+Each feed names the round's host (`genieHostHash`). An outgoing Genie whose host is a different build drains its agents,
+installs, and the launcher's host restores each one once. One whose host is the same build keeps its host running, and the
+launcher adopts it (`host.current = adopted`).
+
+The release steps, each after the owner's go for that exact version:
+
+1. **The round.** `tracks-v<build>` as above (a stable round, which both channels read). It leaves four drafts:
+   `client-`, `browser-`, `host-` and `launcher-v<build>`, with their manifests signed in `tracks-sign`.
+2. **The bridge's commit**, on `main`, at the round's commit or after it with no change to any track:
+   - `package.json` and `package-lock.json` at the bridge's version (`2.0.0`: stable, so both channels see it);
+   - `docs/releases/v2.0.0.md`, the release notes, with a `## What's new` section;
+   - `docs/releases/v2.0.0.bridge`, the round's build alone (`2026.11.28-1`).
+3. **The tag** `v2.0.0`, annotated, pushed. The workflow then runs:
+   - **guard** checks the tag against `package.json`, finds the notes and the `.bridge` file, and finds each of the round's
+     four track releases. It then makes the draft.
+   - **publish** (Linux, no secret) downloads the round's Linux packages and builds the AppImage from them
+     (`scripts/build-track-packages.mjs bridge`). The feed names the host package's own `host.js`.
+   - **publish-windows** (the `release` environment) downloads the round's Windows packages and its signed `Genie.exe`. It
+     builds the installer `--signed`, checks that the installer's and the launcher's Authenticode signatures are
+     Renaissance Analytics' and valid, and proves the updater files (`scripts/verify-windows-update.cjs`).
+   - **verify** writes the notes and reads the draft back: still a draft, with every updater asset.
+4. **Publishing**, the owner's step: first the round's four drafts (the host's after its client's), then the bridge:
+
+       gh release edit <track>-v<build> -R Renaissance-Analytics/genie --draft=false
+       gh release edit v2.0.0 -R Renaissance-Analytics/genie --draft=false
+
+   Every installed Genie sees the bridge from that moment.
+
+The single app's own parts (`legacy-host-start.ts`, the `--updater` helper, `materializeHostRuntime`) stay in the tree
+for now. Each outgoing Genie uses its own copy to install the bridge, and the dev and CI runs that start Electron without
+a launcher still use them. They go in a later slice, once those runs start through the launcher.
+
 ## The manifest signing key
 
 - The private key is the secret `GENIE_MANIFEST_SIGNING_KEY` (an Ed25519 PKCS#8 PEM) of the `release` environment.
