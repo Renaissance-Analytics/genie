@@ -395,7 +395,7 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
                 let made = (|| -> Result<(tao::window::Window, wry::WebView), String> {
                     let window = WindowBuilder::new()
                         .with_title("Genie")
-                        .with_inner_size(LogicalSize::new(460.0, 380.0))
+                        .with_inner_size(LogicalSize::new(460.0, 440.0))
                         .with_resizable(false)
                         .with_decorations(false)
                         .with_always_on_top(true)

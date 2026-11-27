@@ -206,8 +206,34 @@ function runs(w, from, hit) {
     return out;
 }
 const lum = (img, x, y) => { const k = (y * img.w + x) * 3; return (img.px[k] + img.px[k + 1] + img.px[k + 2]) / 3; };
-/** Move Hyprland's cursor to (x, y), checked with `hyprctl cursorpos`; the way that worked, or null. */
+const YDOTOOL_SOCK = '/tmp/genie-ydotool.sock';
+let ydotoolUp = false;
+/** ydotool and its daemon (uinput, as root): a pointer the way a person's mouse is one. */
+function ydotool(args) {
+    if (!ydotoolUp) {
+        if (spawnSync('sh', ['-c', 'command -v ydotool'], { timeout: SYNC_MS }).status !== 0) {
+            spawnSync('sudo', ['-n', 'pacman', '-S', '--needed', '--noconfirm', 'ydotool'], { timeout: 180_000, stdio: 'ignore' });
+        }
+        const ids = `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`;
+        spawn('sudo', ['-n', 'ydotoold', `--socket-path=${YDOTOOL_SOCK}`, `--socket-own=${ids}`], { detached: true, stdio: 'ignore' }).unref();
+        spawnSync('sleep', ['1.5']);
+        ydotoolUp = true;
+    }
+    return spawnSync('ydotool', args, { encoding: 'utf8', timeout: SYNC_MS, env: { ...process.env, YDOTOOL_SOCKET: YDOTOOL_SOCK } });
+}
+/** Move the cursor to (x, y): Hyprland's own dispatch where it takes one, else ydotool's moves, corrected against where
+ * `hyprctl cursorpos` says the cursor is (pointer acceleration makes one move land short or long). The way, or null. */
 function moveCursor(x, y) {
+    for (let i = 0; i < 12; i++) {
+        const c = cursorAt();
+        if (!c) break;
+        const dx = Math.round(x - c.x);
+        const dy = Math.round(y - c.y);
+        if (Math.abs(dx) <= 3 && Math.abs(dy) <= 3) return `ydotool, ${i} move(s)`;
+        const r = ydotool(['mousemove', '-x', String(Math.max(-400, Math.min(400, dx))), '-y', String(Math.max(-400, Math.min(400, dy)))]);
+        if (r.status !== 0) { console.log(`  linux tray: ydotool mousemove: ${String(r.stderr ?? '').trim().slice(0, 120)}`); break; }
+        spawnSync('sleep', ['0.15']);
+    }
     const tries = [
         ['hyprctl', ['-i', '0', 'dispatch', 'movecursor', String(x), String(y)]],
         ['hyprctl', ['-i', '0', 'eval', `hl.dispatch("movecursor", "${x} ${y}")`]],
@@ -250,14 +276,7 @@ function openLinuxTrayMenu() {
     const at = { x: Math.round((ours.from + ours.to) / 2), y: expander.y };
     const moved = moveCursor(at.x, at.y);
     if (!moved) return false;
-    if (spawnSync('sh', ['-c', 'command -v ydotool'], { timeout: SYNC_MS }).status !== 0) {
-        spawnSync('sudo', ['-n', 'pacman', '-S', '--needed', '--noconfirm', 'ydotool'], { timeout: 180_000, stdio: 'ignore' });
-    }
-    const sock = '/tmp/genie-ydotool.sock';
-    const ids = `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`;
-    spawn('sudo', ['-n', 'ydotoold', `--socket-path=${sock}`, `--socket-own=${ids}`], { detached: true, stdio: 'ignore' }).unref();
-    spawnSync('sleep', ['1.5']);
-    const click = spawnSync('ydotool', ['click', '0xC1'], { encoding: 'utf8', timeout: SYNC_MS, env: { ...process.env, YDOTOOL_SOCKET: sock } });
+    const click = ydotool(['click', '0xC1']);
     console.log(`  linux tray: right-click on ${at.x},${at.y} (ydotool exit ${click.status}${click.stderr ? `: ${String(click.stderr).trim().slice(0, 120)}` : ''})`);
     return click.status === 0;
 }
