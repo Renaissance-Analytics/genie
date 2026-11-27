@@ -35,6 +35,13 @@ describe('the held agent\'s chat line', () => {
         expect(html).toMatch(/data-action="switch-account"[^>]*>(?:<[^>]+>)*Switch to Account 3</);
     });
 
+    it('is a row of its own under the context line, never squeezed into it (it read "Spent is out…")', () => {
+        const html = renderToStaticMarkup(<ChatFlyout thread={thread(OUT)} onSend={() => {}} onClose={() => {}} onSwitchAccount={() => {}} />);
+        const context = html.slice(html.indexOf('data-chat-context'), html.indexOf('</div>', html.indexOf('data-chat-context')));
+        expect(context).not.toContain('data-chat-active-out');
+        expect(html).toMatch(/data-chat-active-out="row"/);
+    });
+
     it('CONTROL: nothing out, no line and no switch', () => {
         const html = renderToStaticMarkup(<ChatFlyout thread={thread()} onSend={() => {}} onClose={() => {}} onSwitchAccount={() => {}} />);
         expect(html).not.toContain('data-chat-active-out');
