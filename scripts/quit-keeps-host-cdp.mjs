@@ -674,6 +674,16 @@ console.log(`\nQUIT KEEPS THE HOST — "Just close the UI" with agents streaming
 gaugeFrom = readOr(LIFECYCLE).length;
 step('0.5a', `the launcher (${LAUNCHER_SRC}) installs the signed packages into ${CODE_ROOT}`);
 if (!existsSync(LAUNCHER_SRC) || !existsSync(PACKAGES)) refuse(`no launcher or packages from the package-tracks row (${LAUNCHER_SRC}, ${PACKAGES})`);
+// THE CODE ROOT IS THE USER'S ONLY (the launcher refuses one other accounts can write to). On Windows the run's home is under
+// the VM's temp folder, whose D: root gives BUILTIN\Users create rights (native/launcher/tests/common: the same fix): this
+// user and SYSTEM only, inherited, as %LOCALAPPDATA% gives a real code root.
+if (WIN) {
+    mkdirSync(CODE_ROOT, { recursive: true });
+    const me = (spawnSync('whoami', ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', timeout: SYNC_MS }).stdout ?? '').trim().split(',').pop()?.replace(/"/g, '') ?? '';
+    if (!/^S-1-5-/.test(me)) refuse(`this user's SID could not be read (${me})`);
+    const acl = spawnSync('icacls', [CODE_ROOT, '/inheritance:r', '/grant:r', `*${me}:(OI)(CI)F`, '/grant:r', '*S-1-5-18:(OI)(CI)F'], { encoding: 'utf8', timeout: SYNC_MS });
+    if (acl.status !== 0) refuse(`the code root could not be made private: ${String(acl.stdout ?? '')}${String(acl.stderr ?? '')}`.slice(0, 300));
+}
 const installed = launcherCli(['install', '--profile', 'both', '--from', PACKAGES, '--yes'], 300_000);
 if (installed.code !== 0) refuse(`the launcher did not install the packages: ${installed.out.slice(0, 400)}`);
 console.log(`  ${installed.out.split(/\r?\n/).join(' | ')}`);
