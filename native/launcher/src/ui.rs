@@ -655,3 +655,8 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
     });
     Err("the launcher's window loop ended".to_string())
 }
+
+/// THE MIGRATION'S CARD (L9). RED STUB.
+pub fn moving_html() -> String {
+    String::new()
+}

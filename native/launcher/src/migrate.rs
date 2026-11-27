@@ -225,3 +225,11 @@ pub fn run_values(key: &str) -> Vec<(String, String)> {
     unsafe { RegCloseKey(h) };
     out
 }
+
+/// THE MIGRATION'S CARD (L9). RED STUB.
+pub const CARD_LIMIT: std::time::Duration = std::time::Duration::from_secs(0);
+
+/// RED STUB.
+pub fn card_may_close(_status: Option<&serde_json::Value>) -> bool {
+    false
+}
