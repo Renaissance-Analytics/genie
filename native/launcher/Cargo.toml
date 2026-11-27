@@ -45,6 +45,8 @@ tao = { version = "0.38", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+# The tray (src/tray.rs, L5): a StatusNotifierItem over D-Bus, with no GTK (the spec's choice).
+ksni = "0.2"
 # GTK, which the setup window's webview already links (WebKitGTK): show_uri opens the download page (src/ui.rs).
 gtk = { version = "0.19", optional = true }
 
@@ -59,6 +61,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_JobObjects",
     "Win32_System_LibraryLoader",
     "Win32_System_Pipes",
+    "Win32_System_Registry",
     "Win32_System_Threading",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",

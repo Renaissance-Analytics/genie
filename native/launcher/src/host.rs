@@ -164,7 +164,7 @@ pub struct StopBounds {
 }
 
 impl StopBounds {
-    pub const DEFAULT: StopBounds = StopBounds { stall: Duration::from_secs(45), max: HOST_GONE };
+    pub const DEFAULT: StopBounds = StopBounds { stall: Duration::from_secs(45), max: Duration::from_secs(15 * 60) };
 }
 
 /// `{stopped: true, pid}` once the host has gone; `{stopped: false}` when none was running.
@@ -172,20 +172,64 @@ pub fn stop_host(roots: &Roots) -> Result<Value, String> {
     stop_host_with(roots, StopBounds::DEFAULT)
 }
 
-/// The graceful stop, waited for within `bounds`.
+/// The graceful stop, waited for within `bounds`: `engine.shutdown`, then the host's own progress watched until its pid
+/// has gone. Each change of its step or of what is left in it is progress; a host whose progress stands still for
+/// `bounds.stall` is ended and said (Tynn #1079: a slow, clean stop is never cut short, so it is never a crash).
 pub fn stop_host_with(roots: &Roots, bounds: StopBounds) -> Result<Value, String> {
     let Some(rec) = read_record(roots).filter(|r| pid_alive(r.pid)) else {
         return Ok(json!({"stopped": false}));
     };
     let token = read_token(roots)?;
+    let progress_file = roots.runtime_dir().join(STOP_PROGRESS_FILE);
+    let _ = std::fs::remove_file(&progress_file);
     let answers = converse(&rec, &token, &[("engine.shutdown", json!([]))], Duration::from_secs(30))?;
     let result = &answers[1];
     if result["ok"] != true {
         return Err(format!("The host refused to stop: {}", result["reason"].as_str().unwrap_or("no reason given")));
     }
-    if !wait_gone(rec.pid, bounds.stall) {
-        end(rec.pid);
-        return Err(format!("The host (pid {}) did not stop within {} s, so it was ended.", rec.pid, bounds.stall.as_secs()));
+    let started = Instant::now();
+    let mut moved = Instant::now();
+    let mut last: Option<(String, u64)> = None;
+    loop {
+        if !pid_alive(rec.pid) {
+            let _ = std::fs::remove_file(&progress_file);
+            return Ok(json!({"stopped": true, "pid": rec.pid, "seconds": started.elapsed().as_secs()}));
+        }
+        if let Some((pid, step, remaining)) = read_progress(&progress_file) {
+            if pid == rec.pid && last.as_ref() != Some(&(step.clone(), remaining)) {
+                last = Some((step, remaining));
+                moved = Instant::now();
+            }
+        }
+        let at = last.as_ref().map(|(s, n)| format!("{s}, {n} left")).unwrap_or_else(|| "before its first step".to_string());
+        if moved.elapsed() >= bounds.stall {
+            end(rec.pid);
+            wait_gone(rec.pid, Duration::from_secs(10));
+            return Err(format!("The host (pid {}) made no progress for {} s while stopping ({at}), so it was ended.", rec.pid, bounds.stall.as_secs()));
+        }
+        if started.elapsed() >= bounds.max {
+            end(rec.pid);
+            wait_gone(rec.pid, Duration::from_secs(10));
+            return Err(format!("The host (pid {}) was still stopping after {} s ({at}), so it was ended.", rec.pid, bounds.max.as_secs()));
+        }
+        std::thread::sleep(Duration::from_millis(100));
     }
-    Ok(json!({"stopped": true, "pid": rec.pid}))
+}
+
+/// What the host runs now, by its own count (`engine.activity`: agents and their names, terminals, kept processes,
+/// services): the tray's line and its questions. `None` from a host that does not answer it within 3 s, or has none.
+pub fn activity(roots: &Roots) -> Option<Value> {
+    let rec = read_record(roots).filter(|r| pid_alive(r.pid))?;
+    let token = read_token(roots).ok()?;
+    let answers = converse(&rec, &token, &[("engine.activity", json!([]))], Duration::from_secs(3)).ok()?;
+    let r = answers.get(1)?;
+    if r["ok"] == true { Some(r["value"].clone()) } else { None }
+}
+
+/// `<runtime>/host-stopping.json` as genie-host writes it (src/core/stop-progress.ts): its pid, its step, what is left.
+pub const STOP_PROGRESS_FILE: &str = "host-stopping.json";
+
+fn read_progress(file: &std::path::Path) -> Option<(u32, String, u64)> {
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()?;
+    Some((u32::try_from(v["pid"].as_u64()?).ok()?, v["step"].as_str()?.to_string(), v["remaining"].as_u64().unwrap_or(0)))
 }

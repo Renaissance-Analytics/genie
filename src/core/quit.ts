@@ -229,7 +229,11 @@ export type QuitBy = { readonly by: 'launcher' } | { readonly by: 'window' } | {
  *    a 5 s kill), then the launcher exits.
  * Only with no launcher at all (a development run) does this window shut the host down itself (`windowShutDown`).
  */
-export async function quitThroughLauncher(_answer: 'close-ui' | 'shut-down', ports: { readonly call: LauncherCaller; readonly windowShutDown: () => Promise<unknown> }): Promise<QuitBy> {
-    await ports.windowShutDown();
+export async function quitThroughLauncher(answer: 'close-ui' | 'shut-down', ports: { readonly call: LauncherCaller; readonly windowShutDown: () => Promise<unknown> }): Promise<QuitBy> {
+    const reply = await ports.call(answer === 'close-ui' ? 'launcher.closeUi' : 'launcher.shutDown');
+    if (reply.ok) return { by: 'launcher' };
+    if (reply.code !== 'no-launcher') return { by: 'failed', reason: reply.reason };
+    // No launcher (a development run): Just close the UI is this window closing; Shut down everything is the old way.
+    if (answer === 'shut-down') await ports.windowShutDown();
     return { by: 'window' };
 }

@@ -20,12 +20,13 @@ import { getTailscaleStatus, installTailscale, tailscaleCommand, tailscaleUp } f
 import { tailscaleLive } from './tailscale-live.js';
 import { ensureFirewallRule, firewallReader, readFirewallRule, removeFirewallRule } from './remote-firewall.js';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { connect, createServer, type Server } from 'node:net';
 import { hostname, uptime } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ENGINE_PROTOCOL, hostEndpoint, parseHostRecord, type HostRecord } from '../core/engine-protocol.js';
+import { stopProgress } from '../core/stop-progress.js';
 import { lineTransport } from '../core/line-transport.js';
 import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
 import { makeServiceExec } from './service-exec.js';
@@ -1713,6 +1714,12 @@ async function main(): Promise<void> {
         timeCall: (method) => hostWatchdog.ipc(method),
         log: say,
         onShutdown: () => void shutdown('a window asked'),
+        // What this host runs now, for the launcher's tray and its questions (Tynn #1058 L5).
+        activity: () => {
+            const running = hostRegistry.listAgents().filter((a) => host.probe(a.id as AgentId)?.running === true);
+            const s = hostSummary.now();
+            return { agents: running.length, agentNames: running.map((a) => a.name), terminals: s.terminals.length, processes: s.processes.length, services: s.services.length };
+        },
         heartbeat: hangWatchdog,
         crash: crashState,
         // Every window shows the banner, and may leave it (safe-mode-host.ts).
@@ -3024,6 +3031,10 @@ async function main(): Promise<void> {
         try {
             hangWatchdog.shuttingDown();
             say(`shutting down: ${why}`);
+            // ITS PROGRESS, SAID AS IT GOES (Tynn #1079): the launcher waits as long as this moves, and ends the host only when
+            // it stands still. Written whole each time (core/stop-progress.ts).
+            const stopping = stopProgress(runtime, { pid: process.pid, now: Date.now, write: (file, text) => { writeFileSync(`${file}.tmp`, text); renameSync(`${file}.tmp`, file); } });
+            stopping.step('agents', host.count);
             if (marketplaceHost) await marketplaceHost.close().catch((error: unknown) => say(`Marketplace shutdown: ${error instanceof Error ? error.message : String(error)}`));
             lifecycleLog(`host shutdown pid=${process.pid} reason=${why}`);
             browserService.quit();
@@ -3032,10 +3043,14 @@ async function main(): Promise<void> {
             const bound = new Promise<void>((r) => setTimeout(r, 10_000).unref());
             // Every session stopped and its stop verified, every write drained — bounded, so a stuck stop never keeps a
             // host nobody wants.
+            const agentsLeft = setInterval(() => stopping.step('agents', host.count), 500);
             await Promise.race([host.stopAll().then(() => host.drained(2_000)), bound]).catch(() => undefined);
+            clearInterval(agentsLeft);
+            stopping.step('terminals', terminalHost.list().length);
             // ITS TERMINALS (§7.1: nothing Genie spawned outlives it; Tynn #953): this host holds them, so it ends them, never
             // a window asking for it first. An upgrade once jammed on 31 orphaned OpenConsole.exe processes.
             terminalHost.closeAll();
+            stopping.step('services');
             files?.close();
             issueWatch.stop();
             await mcp?.stop();
@@ -3045,7 +3060,13 @@ async function main(): Promise<void> {
             // THEN EVERYTHING THIS HOST SUPERVISES (P5a.3): its sites, the front door's Caddy, the kept processes — stopped, then
             // the hosting's own part, then the spawn-host children end. The engines' containers keep running: databases
             // outlive "Shut down everything", and the next host's reconcile finds them (host-shutdown.ts).
+            // The kept processes go one by one (122 of them in Tynn #1079): each one fewer is progress.
+            const processesLeft = (): number => processSupervisor.list().filter((p) => p.state === 'running' || p.state === 'restarting').length;
+            stopping.step('processes', processesLeft());
+            const onStopProgress = setInterval(() => stopping.step('processes', processesLeft()), 250);
             await stopHostedOnce();
+            clearInterval(onStopProgress);
+            stopping.step('hosting');
             await appInboxDoor.close().catch(() => undefined);
             await gappServer?.close().catch(() => undefined);
             server.close();
@@ -3055,6 +3076,7 @@ async function main(): Promise<void> {
                 rmSync(recordFile, { force: true });
                 rmSync(tokenFile, { force: true });
             }
+            stopping.step('exit');
             // THE CLEAN-EXIT MARKER, LAST (Tynn #386): everything above ended; its absence at the next boot is safe mode.
             safeMode.writeCleanExit(why);
             process.exit(0);

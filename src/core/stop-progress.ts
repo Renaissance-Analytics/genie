@@ -32,8 +32,18 @@ export interface StopProgress {
     step(step: string, remaining?: number): void;
 }
 
-export function stopProgress(_runtimeDir: string, _ports: StopProgressPorts): StopProgress {
-    return { step: () => undefined };
+export function stopProgress(runtimeDir: string, ports: StopProgressPorts): StopProgress {
+    const file = stopProgressFile(runtimeDir);
+    let last: string | null = null;
+    return {
+        step(step, remaining = 0) {
+            const key = `${step}\u0000${remaining}`;
+            if (key === last) return;
+            last = key;
+            const record: StopProgressRecord = { pid: ports.pid, step, remaining, at: ports.now() };
+            try { ports.write(file, JSON.stringify(record)); } catch { /* a stop is never held by its own progress note */ }
+        },
+    };
 }
 
 /** The file's path in a runtime folder. */
