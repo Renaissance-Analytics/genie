@@ -8,7 +8,7 @@
 //!   Needs you: 2                               (only while the host's Deck waits on the person: the icon has its dot)
 //!   Open Genie / Open Genie Browser / Settings… / Task Manager…
 //!   Stop (or Start) this computer's host
-//!   Close Genie (agents keep running)          = "Just close the UI"
+//!   Close Genie window                         = "Just close the UI"
 //!   Shut down everything
 //!
 //! Stopping anything from here asks first, every time (the owner, 2026-11-02: "Always ask"), in a window of the launcher's
@@ -39,7 +39,7 @@ pub enum Action {
     OpenTaskManager,
     /// L6: the launcher's Updates window (every track, the host's update with its agents).
     Updates,
-    /// L6: the tray's offer, "Update the host to <build>…": the host's update, through its own drain.
+    /// L6: the tray's offer, "Update host to <build>": the host's update, through its own drain.
     InstallHostUpdate,
 }
 
@@ -149,9 +149,20 @@ pub fn tooltip(v: &View) -> String {
     parts.join(" · ")
 }
 
+/// The host's line in the MENU, short: a tray's menu cuts long labels (Waybar cut "This computer’s host · …" at about 23
+/// characters, run 1127-163420-eeac7a). The tooltip and the questions keep the full words (`host_line`).
+pub fn host_label(v: &View) -> String {
+    match &v.host {
+        HostView::NotHere => "No host here".to_string(),
+        HostView::Stopped => "Host: stopped".to_string(),
+        HostView::Running { agents: Some(n) } => format!("Host: running · {}", agents(*n)),
+        HostView::Running { agents: None } => "Host: running".to_string(),
+    }
+}
+
 /// The menu, top to bottom.
 pub fn menu(v: &View) -> Vec<Item> {
-    let mut items = vec![Item::Label(host_line(v))];
+    let mut items = vec![Item::Label(host_label(v))];
     if v.needs_you > 0 {
         items.push(Item::Do { action: Action::OpenDeck, label: format!("Needs you: {}", v.needs_you), enabled: true });
     }
@@ -168,11 +179,11 @@ pub fn menu(v: &View) -> Vec<Item> {
     match v.host {
         HostView::Running { .. } => {
             items.push(Item::Separator);
-            items.push(Item::Do { action: Action::StopHost, label: "Stop this computer’s host".to_string(), enabled: true });
+            items.push(Item::Do { action: Action::StopHost, label: "Stop host".to_string(), enabled: true });
         }
         HostView::Stopped => {
             items.push(Item::Separator);
-            items.push(Item::Do { action: Action::StartHost, label: "Start this computer’s host".to_string(), enabled: true });
+            items.push(Item::Do { action: Action::StartHost, label: "Start host".to_string(), enabled: true });
         }
         HostView::NotHere => items.push(Item::Separator),
     }
@@ -181,11 +192,11 @@ pub fn menu(v: &View) -> Vec<Item> {
     let label = if v.updates > 0 { format!("Updates ({})", v.updates) } else { "Updates".to_string() };
     items.push(Item::Do { action: Action::Updates, label, enabled: true });
     if let (Some(build), false) = (&v.host_update, v.host == HostView::NotHere) {
-        items.push(Item::Do { action: Action::InstallHostUpdate, label: format!("Update the host to {build}…"), enabled: true });
+        items.push(Item::Do { action: Action::InstallHostUpdate, label: format!("Update host to {build}"), enabled: true });
     }
     items.push(Item::Separator);
     let keep = matches!(v.host, HostView::Running { .. });
-    items.push(Item::Do { action: Action::CloseUi, label: if keep { "Close Genie (agents keep running)" } else { "Close Genie" }.to_string(), enabled: v.windows > 0 });
+    items.push(Item::Do { action: Action::CloseUi, label: if keep { "Close Genie window" } else { "Close Genie" }.to_string(), enabled: v.windows > 0 });
     items.push(Item::Do { action: Action::ShutDown, label: "Shut down everything".to_string(), enabled: true });
     items
 }
@@ -240,7 +251,7 @@ pub fn shut_down_question(activity: Option<&Value>, starts_at_logon: bool) -> Qu
 pub fn stop_host_question(activity: Option<&Value>) -> Question {
     let stops = stopping(activity);
     let lead = if stops.is_empty() { "Nothing is running on the host.".to_string() } else { "The host stops, and with it:".to_string() };
-    Question { title: "Stop this computer’s host?".to_string(), lead, stops, note: "Genie stays in the tray; Start this computer’s host brings it back.".to_string(), confirm: "Stop the host".to_string() }
+    Question { title: "Stop this computer’s host?".to_string(), lead, stops, note: "Genie stays in the tray; Start host brings it back.".to_string(), confirm: "Stop the host".to_string() }
 }
 
 /// The tray's view now.
@@ -777,7 +788,7 @@ mod tests {
         let v = View { host: HostView::Running { agents: Some(3) }, windows: 1, browser: true, needs_you: 0, ..View::default() };
         assert_eq!(
             labels(&menu(&v)),
-            vec!["[This computer’s host · running · 3 agents]", "---", "Open Genie", "Open Genie Browser", "Settings…", "Task Manager…", "---", "Stop this computer’s host", "Updates", "---", "Close Genie (agents keep running)", "Shut down everything"]
+            vec!["[Host: running · 3 agents]", "---", "Open Genie", "Open Genie Browser", "Settings…", "Task Manager…", "---", "Stop host", "Updates", "---", "Close Genie window", "Shut down everything"]
         );
         assert_eq!(tooltip(&v), "Genie · This computer’s host · running · 3 agents");
     }
@@ -800,9 +811,9 @@ mod tests {
         let v = View { host: HostView::Running { agents: Some(3) }, windows: 1, browser: true, updates: 4, host_update: Some("2026.11.26-1".into()), ..View::default() };
         let m = menu(&v);
         let l = labels(&m);
-        let stop = l.iter().position(|x| x == "Stop this computer’s host").expect("the host's item");
+        let stop = l.iter().position(|x| x == "Stop host").expect("the host's item");
         assert_eq!(l[stop + 1], "Updates (4)", "under the host's item, as the mockup: {l:?}");
-        assert_eq!(l[stop + 2], "Update the host to 2026.11.26-1…", "the offer: {l:?}");
+        assert_eq!(l[stop + 2], "Update host to 2026.11.26-1", "the offer: {l:?}");
         assert!(m.iter().any(|i| matches!(i, Item::Do { action: Action::Updates, enabled: true, .. })));
         assert!(m.iter().any(|i| matches!(i, Item::Do { action: Action::InstallHostUpdate, enabled: true, .. })));
         assert_eq!(tooltip(&v), "Genie · 4 updates ready · This computer’s host · running · 3 agents");
@@ -817,13 +828,13 @@ mod tests {
             let v = View { host: host.clone(), windows: 0, browser: false, ..View::default() };
             let l = labels(&menu(&v));
             assert!(l.contains(&"Updates".to_string()), "{host:?}: {l:?}");
-            assert!(!l.iter().any(|x| x.starts_with("Update the host")), "{host:?}: {l:?}");
+            assert!(!l.iter().any(|x| x.starts_with("Update host")), "{host:?}: {l:?}");
         }
         // A client-only computer is told of its own updates, and is never offered a host's.
         let v = View { host: HostView::NotHere, updates: 1, host_update: Some("2026.11.26-1".into()), ..View::default() };
         let l = labels(&menu(&v));
         assert!(l.contains(&"Updates (1)".to_string()), "{l:?}");
-        assert!(!l.iter().any(|x| x.starts_with("Update the host")), "{l:?}");
+        assert!(!l.iter().any(|x| x.starts_with("Update host")), "{l:?}");
     }
 
     #[test]
@@ -842,20 +853,20 @@ mod tests {
     fn with_no_window_open_close_genie_has_nothing_to_close() {
         let v = View { host: HostView::Running { agents: Some(1) }, windows: 0, browser: false, needs_you: 0, ..View::default() };
         let m = labels(&menu(&v));
-        assert!(m.contains(&"Close Genie (agents keep running) (unavailable)".to_string()), "{m:?}");
-        assert!(m.contains(&"[This computer’s host · running · 1 agent]".to_string()), "{m:?}");
+        assert!(m.contains(&"Close Genie window (unavailable)".to_string()), "{m:?}");
+        assert!(m.contains(&"[Host: running · 1 agent]".to_string()), "{m:?}");
         assert!(!m.iter().any(|l| l.contains("Browser")), "no browser installed: {m:?}");
     }
 
     #[test]
     fn a_stopped_host_offers_start_and_a_client_only_computer_offers_neither() {
         let stopped = labels(&menu(&View { host: HostView::Stopped, windows: 1, browser: true, needs_you: 0, ..View::default() }));
-        assert!(stopped.contains(&"Start this computer’s host".to_string()), "{stopped:?}");
+        assert!(stopped.contains(&"Start host".to_string()), "{stopped:?}");
         assert!(stopped.contains(&"Close Genie".to_string()), "{stopped:?}");
         let none = labels(&menu(&View { host: HostView::NotHere, windows: 1, browser: false, needs_you: 0, ..View::default() }));
         assert!(!none.contains(&"Task Manager…".to_string()), "no host: no kept processes to manage: {none:?}");
-        assert!(!none.iter().any(|l| l.contains("this computer’s host") && !l.starts_with('[')), "{none:?}");
-        assert_eq!(none[0], "[No host on this computer]");
+        assert!(!none.iter().any(|l| (l == "Start host" || l == "Stop host")), "{none:?}");
+        assert_eq!(none[0], "[No host here]");
         assert_eq!(none.last().map(String::as_str), Some("Shut down everything"));
     }
 
