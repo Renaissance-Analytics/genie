@@ -97,6 +97,11 @@ export function launcherInstallerConfig(base, { version }) {
     };
 }
 
+/** THE BRIDGE (Tynn #1058 L9). RED STUB. */
+export function bridgeConfig() {
+    throw new Error('the bridge is not built yet');
+}
+
 async function files(root) {
     const out = [];
     async function walk(rel) {
