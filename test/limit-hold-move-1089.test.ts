@@ -255,3 +255,30 @@ describe('a message a restart hands to a run that cannot send it yet', () => {
         expect(await state(id)).toBe('carried');
     });
 });
+
+describe('the host says when an agent is held on the limit, or let go', () => {
+    it('a refusal WITH a reading holds the agent and says so once — after the gate has it (the active-out rule looks then)', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'genie-1089-held-'));
+        const held: string[] = [];
+        let gateSaidSpent: boolean | null = null;
+        let running = false;
+        const events: { e: DriverEvents | null } = { e: null };
+        const driverFor: DriverFor = () => ({ events: ev }) => { events.e = ev; return { start: () => { running = true; }, prompt: () => {}, cancel: () => Promise.resolve(), kill: () => { running = false; }, get running() { return running; }, get cliSessionId() { return THREAD; } } as SessionDriver; };
+        const tree: ProcessTree = { snapshot: () => [{ pid: process.pid, ppid: 1, started: 1, name: 'genie-test' }], killTree: () => ({ killed: 0, refused: false }) };
+        const host: SessionHost = new SessionHost({ userData: dir, driverFor, processTree: tree, stopGraceMs: 0, activeAccount: () => A, threadInAccount: () => 'present',
+            onHeldChanged: (provider: string) => { held.push(provider); gateSaidSpent = host.refusedUntil('claude', A.id) !== null; } });
+        try {
+            const record: AgentRecord = { ...agentRecord({ id: mintAgentId(), workspaceId: 'workspace', provider: 'claude', name: 'atlas' }), threadId: THREAD };
+            host.start(record, dir);
+            await vi.waitFor(() => expect(events.e).not.toBeNull());
+            host.prompt(record.id, 'work', 'you');
+            events.e!.onUpdate?.(weekSpent(Date.now()));
+            events.e!.onTurnEnd?.(endOnLimit);
+            await vi.waitFor(() => expect(held).toEqual(['claude']));
+            expect(gateSaidSpent).toBe(true);
+        } finally {
+            host.stopAll(); await host.drained(0); await host.settled();
+            await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
+        }
+    });
+});
