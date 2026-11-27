@@ -297,9 +297,11 @@ export function chatMessages(detail: ChatDetail, _rows: readonly AgentRow[] = []
         const from = who === 'you' ? 'you' : who === 'peer' ? `${e.peerName ?? 'peer'} → ${detail.agent.name}` : detail.agent.name;
         const delivered = delivery === undefined || delivery === 'sent';
         // `carried` (Tynn #702): kept across the restart an unconfirmed interrupt made, waiting for the new run like a queued one.
-        // Carried with NO run up (the moment of a move, a restart starting; Tynn #1089) still waits: any start delivers it.
-        const queued = ((delivery === 'queued' || delivery === 'carried') && detail.session?.running === true) || delivery === 'carried';
-        const awaitsReturn = delivery === 'carried' && detail.session?.running !== true;
+        // WITH NO RUN UP (the moment of a move, a restart starting; Tynn #1089) a carried or queued message still waits: the next
+        // start delivers both (`deliverOwed`). Queued without its delivery row is the window's view before the stopped run's
+        // row has reached it; it read "Not delivered. Kept for you to send again." for that moment.
+        const awaitsReturn = (delivery === 'carried' || delivery === 'queued') && detail.session?.running !== true;
+        const queued = ((delivery === 'queued' || delivery === 'carried') && detail.session?.running === true) || awaitsReturn;
         // Taken back by the person while it waited (Tynn #843): kept, marked, never delivered and never owed.
         const withdrawn = delivery === 'withdrawn';
         const waits = who === 'you' && delivered ? waiting.get(row.id) : undefined;
