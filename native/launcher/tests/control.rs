@@ -3,6 +3,7 @@
 //! is the graceful stop; openWindow starts the client and startBrowser the browser, each from its own track.
 mod common;
 
+use common::live::*;
 use common::*;
 use genie_launcher::install::{install_from, InstallOptions, Profile};
 use genie_launcher::layout::{client_executable_name, host_executable_name, Roots, Track, HOST_ENTRY};
@@ -12,126 +13,6 @@ use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Stdio};
 use std::time::{Duration, Instant};
-
-fn fake_bytes() -> Vec<u8> {
-    std::fs::read(env!("CARGO_BIN_EXE_genie-fake-host")).expect("the fake host was built (cargo test --features test-keys)")
-}
-
-/// Installs a client and a host whose programs are the fake, signed with `key`.
-fn install_fakes(r: &Roots, key: &ed25519_dalek::SigningKey, base: &std::path::Path) {
-    let from = base.join("from");
-    let fake = fake_bytes();
-    write_package(&from, key, &Package::new("host", "2026.11.25-1", vec![(host_executable_name().into(), fake.clone()), (HOST_ENTRY.into(), b"// host".to_vec())]));
-    write_package(&from, key, &Package::new("client", "2026.11.25-1", vec![(client_executable_name().into(), fake.clone())]));
-    let _ = fake;
-    write_package(&from, key, &Package::new("browser", "2026.11.25-1", vec![("browser.json".into(), br#"{"runs":"client","args":["--genie-browser"]}"#.to_vec())]));
-    let options = InstallOptions { from, profile: Profile::Both, channel: "stable".into(), launcher_build: "2026.11.25-1".into() };
-    install_from(r, &options, &[verifying(key)]).expect("the fakes install");
-}
-
-struct Launcher {
-    child: Child,
-    roots: Roots,
-}
-
-impl Drop for Launcher {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        // A host a test left running goes too.
-        if let Some(rec) = genie_launcher::host::read_record(&self.roots) {
-            kill(rec.pid);
-        }
-    }
-}
-
-fn kill(pid: u32) {
-    #[cfg(unix)]
-    unsafe {
-        libc::kill(pid as i32, libc::SIGKILL);
-    }
-    #[cfg(windows)]
-    {
-        let _ = std::process::Command::new(r"C:\Windows\System32\taskkill.exe").args(["/F", "/PID", &pid.to_string()]).output();
-    }
-}
-
-fn start(r: &Roots, key: &ed25519_dalek::SigningKey) -> Launcher {
-    // Its stderr goes to a file, so a launcher that refuses at start says why here (in 1125-060418-1c2da8 every test
-    // waited 20 s and read only "launcher.json never appeared").
-    let err_path = r.data.join(format!("launcher-stderr-{}.log", std::process::id()));
-    let err = std::fs::File::create(&err_path).expect("a stderr file");
-    let mut child = genie_in(r, key).arg("serve").stdin(Stdio::null()).stdout(Stdio::null()).stderr(err).spawn().expect("the launcher starts");
-    let record = r.runtime_dir().join("launcher.json");
-    let t = Instant::now();
-    while !record.exists() {
-        if let Ok(Some(status)) = child.try_wait() {
-            panic!("the launcher exited ({status}) before launcher.json: {}", std::fs::read_to_string(&err_path).unwrap_or_default());
-        }
-        assert!(t.elapsed() < Duration::from_secs(20), "launcher.json never appeared: {}", std::fs::read_to_string(&err_path).unwrap_or_default());
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    Launcher { child, roots: r.clone() }
-}
-
-struct Wire {
-    out: LocalStream,
-    lines: BufReader<LocalStream>,
-    next: u64,
-}
-
-impl Wire {
-    fn open(r: &Roots) -> Wire {
-        let rec: Value = serde_json::from_str(&std::fs::read_to_string(r.runtime_dir().join("launcher.json")).unwrap()).unwrap();
-        let stream = LocalStream::connect(rec["endpoint"].as_str().unwrap(), Duration::from_secs(5)).expect("connects");
-        Wire { out: stream.try_clone().unwrap(), lines: BufReader::new(stream), next: 1 }
-    }
-    fn send(&mut self, v: Value) {
-        writeln!(self.out, "{v}").unwrap();
-        self.out.flush().unwrap();
-    }
-    fn read(&mut self) -> Option<Value> {
-        let mut line = String::new();
-        match self.lines.read_line(&mut line) {
-            Ok(0) | Err(_) => None,
-            Ok(_) => Some(serde_json::from_str(&line).expect("a JSON line")),
-        }
-    }
-    fn hello(r: &Roots) -> Wire {
-        let mut w = Wire::open(r);
-        let token = std::fs::read_to_string(r.runtime_dir().join("launcher.token")).unwrap();
-        w.send(json!({"kind": "hello", "auth": {"kind": "token", "token": token.trim()}, "label": "test", "track": "client", "build": "2026.11.25-1", "schema": "2026.11.25", "minSchema": "2026.10.26", "capabilities": ["launcher@1"]}));
-        let welcome = w.read().expect("an answer");
-        assert_eq!(welcome["kind"], "welcome", "{welcome}");
-        w
-    }
-    fn call(&mut self, method: &str, args: Value) -> Value {
-        let id = self.next;
-        self.next += 1;
-        self.send(json!({"kind": "call", "id": id, "method": method, "args": args}));
-        loop {
-            let v = self.read().expect("a result");
-            if v["kind"] == "result" && v["id"] == id {
-                return v;
-            }
-        }
-    }
-}
-
-/// One launcher per user is the rule under test, so these tests run one at a time (on Windows the endpoint is the
-/// user's own pipe, whatever the data root). Each test holds the guard for its whole run.
-static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
-    ONE_AT_A_TIME.lock().unwrap_or_else(|p| p.into_inner())
-}
-
-fn setup(name: &str) -> (std::path::PathBuf, Roots, ed25519_dalek::SigningKey) {
-    let base = temp_dir(name);
-    let r = roots(&base);
-    let key = throwaway_key();
-    (base, r, key)
-}
 
 #[test]
 fn one_launcher_per_user_and_it_says_so() {
@@ -217,7 +98,7 @@ fn the_hello_is_negotiated_on_track_launcher() {
 }
 
 #[test]
-fn status_answers_and_unknown_or_later_methods_say_unsupported() {
+fn status_answers_and_unknown_methods_say_unsupported() {
     let _one = one_at_a_time();
     let (base, r, key) = setup("methods");
     install_fakes(&r, &key, &base);
@@ -226,10 +107,16 @@ fn status_answers_and_unknown_or_later_methods_say_unsupported() {
     let s = w.call("launcher.status", json!([]));
     assert_eq!(s["ok"], true, "{s}");
     assert_eq!(s["value"]["tracks"]["host"]["current"], "2026.11.25-1");
-    for m in ["launcher.updates", "launcher.check", "launcher.apply", "launcher.channel", "launcher.nope"] {
+    let v = w.call("launcher.nope", json!([]));
+    assert_eq!(v["ok"], false, "{v}");
+    assert_eq!(v["code"], "unsupported", "{v}");
+    // The launcher's updates (L6) are something it does: answered, never `unsupported` (tests/updates.rs drives them).
+    let u = w.call("launcher.updates", json!([]));
+    assert_eq!(u["ok"], true, "{u}");
+    for m in ["launcher.apply", "launcher.channel"] {
         let v = w.call(m, json!([]));
-        assert_eq!(v["ok"], false, "{m}: {v}");
-        assert_eq!(v["code"], "unsupported", "{m}: {v}");
+        assert_ne!(v["code"], "unsupported", "{m}: {v}");
+        assert_eq!(v["ok"], false, "{m} with no track or channel is refused in words: {v}");
     }
 }
 
@@ -453,30 +340,6 @@ fn uninstall_stops_the_host_and_the_running_launcher_then_removes_the_programs()
 }
 
 // --- L5 (Tynn #1058): quit, logon and the graceful stop -------------------------------------------------------------
-
-fn wait_for(what: &str, secs: u64, mut done: impl FnMut() -> bool) {
-    let t = Instant::now();
-    while !done() {
-        assert!(t.elapsed() < Duration::from_secs(secs), "{what} (waited {secs} s)");
-        std::thread::sleep(Duration::from_millis(50));
-    }
-}
-
-/// The host and one client that stays (attached to the launcher), started through the wire: (host pid, client pid).
-fn host_and_staying_client(r: &Roots, w: &mut Wire) -> (u32, u32) {
-    std::fs::write(r.data.join("fake-client-mode.txt"), "stay").unwrap();
-    let h = w.call("launcher.ensureHost", json!([]));
-    assert_eq!(h["ok"], true, "{h}");
-    let host = h["value"]["pid"].as_u64().unwrap() as u32;
-    let c = w.call("launcher.openWindow", json!([]));
-    assert_eq!(c["ok"], true, "{c}");
-    let client = c["value"]["pid"].as_u64().unwrap() as u32;
-    wait_for("the client ran", 15, || std::fs::read_to_string(r.data.join("client-args.txt")).map(|t| t.contains("--open-window")).unwrap_or(false));
-    // It has had time to attach (a real client attaches as its window comes up).
-    std::thread::sleep(Duration::from_millis(1500));
-    assert!(pid_alive(client), "the client stays up until it is closed");
-    (host, client)
-}
 
 #[test]
 fn just_close_the_ui_ends_the_client_process_only() {

@@ -3,6 +3,9 @@
 //! `.manifest.json` and `.manifest.json.sig` beside it).
 #![allow(dead_code)]
 
+pub mod feed;
+pub mod live;
+
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use genie_launcher::layout::Roots;
@@ -248,7 +251,12 @@ pub fn genie() -> Command {
 /// A launcher in these roots. Its logon entry (L5) goes to a place of the test's own, never the VM's real Run value or
 /// autostart file, and it shows no tray icon: a test makes dozens of launchers.
 pub fn genie_in(roots: &Roots, key: &SigningKey) -> Command {
-    let mut c = genie();
+    genie_at(Path::new(env!("CARGO_BIN_EXE_genie")), roots, key)
+}
+
+/// `genie_in`'s launcher, run from `program` (a copy where a self-update may replace it, never cargo's own binary).
+pub fn genie_at(program: &Path, roots: &Roots, key: &SigningKey) -> Command {
+    let mut c = Command::new(program);
     c.env("GENIE_CODE_ROOT", &roots.code).env("GENIE_HOME", &roots.data).env("GENIE_LAUNCHER_TEST_PUBLIC_KEY", public_b64(key));
     c.env("XDG_CONFIG_HOME", roots.data.join("xdg-config")).env("GENIE_LOGON_RUN_KEY", test_run_key(roots)).env("GENIE_LAUNCHER_NO_TRAY", "1");
     c

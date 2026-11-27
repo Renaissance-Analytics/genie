@@ -1,5 +1,6 @@
 import { accountsActionOf } from '../core/account-settings.js';
 import type { FeatureCallers, FeatureBrowser } from './feature-callers.js';
+import { startWhyOf } from '../core/start-why.js';
 import type { HostAgentKeys } from './host-agent-keys.js';
 import type { WorkstationService } from './workstation-service.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
@@ -530,7 +531,8 @@ export class SessionEngineServer {
                 if (!record || typeof record.id !== 'string') throw new Error('engine.start needs a record');
                 const windowEnv = args[3];
                 if (windowEnv && typeof windowEnv === 'object') (this.#options.adoptWindowEnv ?? ((e) => adoptWindowEnv(process.env, e)))(windowEnv as Record<string, string>);
-                return host.start(record, str(1));
+                const how = args[2] as { why?: unknown } | undefined;
+                return host.start(record, str(1), how && how.why !== undefined ? { why: startWhyOf(how.why) } : {});
             }
             case 'engine.stop':
                 return host.stop(id(), (args[1] as { graceful?: boolean } | undefined) ?? {});
@@ -665,7 +667,9 @@ export class SessionEngineServer {
             case 'engine.updates':
                 if (!this.#options.updates) throw new Error('This host runs no updater.');
                 if (!conn.local) throw new Error('Genie’s updates are driven from a local window only.');
-                return this.#options.updates.call(str(0), Array.isArray(args[1]) ? args[1] : [], { window: true, connection: conn.id });
+                // Genie's launcher (L6) asks what is on offer and for the install; nothing else of the updater is its.
+                if (conn.launcher && !['state', 'check', 'install'].includes(str(0))) throw new Error(`Genie’s launcher may not ask the updater for ${str(0)}.`);
+                return this.#options.updates.call(str(0), Array.isArray(args[1]) ? args[1] : [], conn.launcher ? { window: false, launcher: true, connection: conn.id } : { window: true, connection: conn.id });
             case 'engine.tynnPage':
                 if (!conn.local) throw new Error('The Tynn pages are read from a local window only.');
                 if (!this.#options.tynnPages) throw new Error('This host reads no Tynn pages.');

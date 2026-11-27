@@ -23,22 +23,36 @@ const ps1 = () => code(read('scripts', 'vm-client-only-update.ps1'), /^\s*#/);
 const sh = () => code(read('scripts', 'vm-client-only-update-linux.sh'), /^\s*#/);
 const js = (file: string) => code(read('scripts', file), /^\s*(\/\/|\*|\/\*)/);
 
-describe('registered as a row, last', () => {
-    it('linux.sh: listed just before host-update, run with its own timeout under its ceiling, its leftovers reaped', () => {
-        // Just before host-update (Tynn #1036 P6-2), which replaces the install, the home and the build once more.
-        expect(linuxRows.slice(-2)).toEqual(['client-only-update', 'host-update']);
-        expect(linuxRow('client-only-update')).toBe('row_client-only-update() { need_install && need_electron && need_display && timeout 2300 bash scripts/vm-client-only-update-linux.sh; }');
-        expect(linuxSh).toMatch(/\n\s*client-only-update\) echo 2400 ;;/);
+describe('registered as a row: the launcher’s since L6 (Tynn #1058)', () => {
+    /*
+     * The spec's "What the CI rows become": client-only-update keeps its name and its assertions (the same host and provider
+     * pids, the ticks streamed through), driven by the launcher from a local feed of signed manifests. The electron-updater
+     * scripts below stay on disk for the bridge release (L9), which electron-updater still installs, and no row runs them.
+     */
+    it('linux.sh: before host-update and its rollback and the launcher’s own update, run by launcher-updates-row.mjs', () => {
+        expect(linuxRows.slice(-4)).toEqual(['client-only-update', 'host-update', 'host-update-rollback', 'launcher-self-update']);
+        expect(linuxRow('client-only-update')).toBe('row_client-only-update() { need_build && need_tracks && need_display && on_display timeout 1320 env LAUNCHER_ROW_OUT="$OUT/client-only-update" LAUNCHER_ROW_KEY_DIR="$SETUP" CDP_PORT=9401 LAUNCHER_ROW_DEADLINE_MS=1200000 node scripts/launcher-updates-row.mjs --row client-only-update; }');
+        expect(linuxSh).toMatch(/\n\s*client-only-update\|host-update\|host-update-rollback\) echo 1500 ;;/);
         expect(/case " ([^"\n]*) " in\n\s*\*" \$name "\*\) reap_leftovers "\$name" ;;/.exec(linuxSh)?.[1]?.split(' ')).toContain('client-only-update');
+        expect(linuxSh).not.toContain('vm-client-only-update-linux.sh');
     });
 
-    it('windows.ps1: listed just before host-update, its function, its ceiling', () => {
-        expect(windowsRows.slice(-2)).toEqual(['client-only-update', 'host-update']);
-        expect(windowsFunction('Row-client-only-update')).toBe("function Row-client-only-update { Need-Install; Need-Electron; Need-TestMachine; Run 'vm-client-only-update' { powershell -NoProfile -ExecutionPolicy Bypass -File scripts/vm-client-only-update.ps1 } }");
-        expect(windowsPs1).toMatch(/\n\s*'client-only-update' \{ return 2400 \}/);
+    it('windows.ps1: the same order, its function, its ceiling; the old script is run by no row', () => {
+        expect(windowsRows.slice(-4)).toEqual(['client-only-update', 'host-update', 'host-update-rollback', 'launcher-self-update']);
+        expect(windowsPs1).toContain("function Row-client-only-update {\n    Need-Build; Need-Tracks; Need-TestMachine\n    Invoke-LauncherUpdatesRow 'client-only-update' @{ LAUNCHER_ROW_OUT = (Join-Path $Out 'client-only-update'); LAUNCHER_ROW_KEY_DIR = $Setup; CDP_PORT = '9401'; LAUNCHER_ROW_DEADLINE_MS = '1620000' }\n}");
+        expect(windowsPs1).toMatch(/\n\s*\{ \$_ -in 'client-only-update', 'host-update', 'host-update-rollback' \} \{ return 1800 \}/);
+        expect(windowsPs1).not.toContain('vm-client-only-update.ps1');
+    });
+
+    it('the launcher’s row keeps the row’s promise: the same host and provider pids, every tick in order, the next window new', () => {
+        const row = js('launcher-updates-row.mjs');
+        expect(row).toMatch(/const gap = contiguous\(after\.ticks, ag\.before\.max \+ 1, after\.max\);/);
+        expect(row).toContain("'--row'");
+        for (const name of ['client-only-update', 'host-update', 'host-update-rollback', 'launcher-self-update']) expect(row).toContain(`'${name}'`);
     });
 });
 
+/* THE BRIDGE RELEASE'S SCRIPTS (L9): what follows proves the electron-updater scripts, kept for the bridge, as they were. */
 describe('the agent streams through the install', () => {
     it('both rows switch the stub to its ticker by a marker holding the row script’s own pid, and name the ledger file', () => {
         expect(ps1()).toMatch(/\$ticker = Join-Path \(\[System\.IO\.Path\]::GetTempPath\(\)\) 'genie-stub-codex-ticker'/);

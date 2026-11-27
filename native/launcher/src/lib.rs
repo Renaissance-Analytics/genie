@@ -13,6 +13,8 @@
 //! - `logon`: the logon entry the launcher writes, and what its run does (`logonEntry`'s table, held with the TypeScript).
 //! - `tray`: the launcher's tray (Shell_NotifyIcon, StatusNotifierItem) and what its menu does (L5).
 //! - `ui`: the setup window (direction C) in the platform webview, from assets bundled in `ui/`.
+//! - `feed`, `updates` (L6): the feed read with an ETag, updates made ready, and applied per track (client, browser,
+//!   host with its drain and rollback); the launcher's own update is `control::self_update`.
 //! - `win`: genie-launch.exe's three modes (`detach`, `job`, `pipe-owner-only`), folded in (Windows).
 
 pub mod archive;
@@ -21,6 +23,7 @@ pub mod components;
 pub mod control;
 #[cfg(unix)]
 pub mod desktop;
+pub mod feed;
 pub mod folder;
 pub mod host;
 pub mod install;
@@ -35,6 +38,7 @@ pub mod spawn;
 pub mod state;
 pub mod tray;
 pub mod uninstall;
+pub mod updates;
 pub mod version;
 #[cfg(feature = "ui")]
 pub mod ui;

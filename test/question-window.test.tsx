@@ -157,11 +157,11 @@ describe('the ForceTheQuestion window', () => {
 });
 
 describe('only LIVE questions take the window (stale ones stay in the Deck, marked)', () => {
-    const stale = (id: string, at: number, reason: 'session-ended' | 'earlier-run'): DeckItem => ({ ...q(id, at), stale: reason });
+    const stale = (id: string, at: number, reason: 'agent-gone'): DeckItem => ({ ...q(id, at), stale: reason });
 
     it('two stale and one live: the window opens on the LIVE one, with nothing waiting behind it; the Deck still holds all three', () => {
         // The stale ones are OLDER — on origin/main the oldest-first queue showed one of them.
-        const items = [stale('old1', 10, 'earlier-run'), stale('old2', 20, 'session-ended'), q('live', 30)];
+        const items = [stale('old1', 10, 'agent-gone'), stale('old2', 20, 'agent-gone'), q('live', 30)];
         const h = harness(items);
         h.ctl.changed();
         // COUNTED: one window, the live question, +0 (stale ones are not "waiting behind").
@@ -172,7 +172,7 @@ describe('only LIVE questions take the window (stale ones stay in the Deck, mark
     });
 
     it('only stale questions: no window at all — they are in the Deck', () => {
-        const h = harness([stale('old1', 10, 'earlier-run'), stale('old2', 20, 'session-ended')]);
+        const h = harness([stale('old1', 10, 'agent-gone'), stale('old2', 20, 'agent-gone')]);
         h.ctl.changed();
         expect(h.log).toEqual([]);
         expect(h.ctl.showing).toBeNull();

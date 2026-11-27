@@ -43,7 +43,7 @@ async function windowQuitsForInstall(scope: UpdateScope | undefined) {
     const replica = new UpdatesReplica(async () => null, 4000);
     const seq = quitSequence();
     const told: Array<UpdateScope | undefined> = [];
-    replica.onInstalling((s) => { told.push(s); seq.markRecorded(); seq.choose(installQuit(s)); });
+    replica.onInstalling((s) => { told.push(s); seq.markRecorded(); seq.choose(installQuit(s, false)); });
     replica.rebase(installing(scope));
     const { calls, p } = ports();
     const steps: QuitStep[] = [];
@@ -83,9 +83,9 @@ describe('the window’s quit for an install the host runs', () => {
 
 describe('installQuit: how the window quits for the install, by what the update changes', () => {
     it('client-only → exit the window; full or unknown → shut down', () => {
-        expect(installQuit(CLIENT_ONLY)).toBe('exit-window');
-        expect(installQuit(FULL)).toBe('shut-down');
-        expect(installQuit(undefined)).toBe('shut-down');
+        expect(installQuit(CLIENT_ONLY, false)).toBe('exit-window');
+        expect(installQuit(FULL, false)).toBe('shut-down');
+        expect(installQuit(undefined, false)).toBe('shut-down');
     });
 });
 
@@ -132,7 +132,7 @@ describe('wired: main.ts quits for an install by its scope', () => {
     it('the install’s quit is chosen from the scope the replica names, never shut-down outright', () => {
         const on = block(main(), 'replica.onInstalling(', '\n        });');
         expect(on).toMatch(/replica\.onInstalling\(\(scope\) => \{/);
-        expect(on).toMatch(/const how = installQuit\(scope\);/);
+        expect(on).toMatch(/const how = installQuit\(scope, launcherLink\(process\.env\) !== null\);/);
         expect(on).toMatch(/quit\.choose\(how\);/);
         expect(on).not.toMatch(/quit\.choose\('shut-down'\)/);
     });

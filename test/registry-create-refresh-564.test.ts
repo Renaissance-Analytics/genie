@@ -76,7 +76,7 @@ async function rig() {
             writeTextAtomic: async (path, text) => { files.set(path, text); },
             register: (input) => registry.register(input),
         }, workspaceId, input),
-        agentOps: { restart: (id, kind) => restartAgent(restartPorts, id, kind) },
+        agentOps: { restart: (id, kind) => restartAgent(restartPorts, id, kind, kind === 'fresh' ? 'fresh' : 'restart') },
     } as HostApiDeps);
     const add = async () => {
         const result = await api.invoke('addAgent', ['fixture', { name: 'new-agent', purpose: 'fixture', provider: 'codex' }]) as { ok: boolean; id: string };
@@ -114,7 +114,7 @@ describe('newly created agents stay available through registry refresh (Tynn #56
         const id = await r.add();
         held.release(); await refreshing;
         expect(await r.api.invoke('agents.restart', [id, 'graceful'])).toEqual({ ok: true, kind: 'graceful' });
-        expect(r.start).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id }), '/fixture/workspace');
+        expect(r.start).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id }), '/fixture/workspace', { why: 'restart' });
     });
 
     it('CONTROL: starts immediately when no older refresh is in flight', async () => {

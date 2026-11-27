@@ -13,6 +13,20 @@ pub struct TrackState {
     pub current: Option<String>,
     pub previous: Option<String>,
     pub channel: String,
+    /// L6: the client build was just applied by an update and has not yet come up (`updates::watch_client`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub trial: bool,
+    /// L6: how many starts of the build on trial ended before it came up, in a row.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub quick_exits: u32,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +46,8 @@ impl State {
         let t = self.tracks.entry(track.to_string()).or_default();
         if t.current.as_deref() != Some(build) {
             t.previous = t.current.take();
+            t.trial = false;
+            t.quick_exits = 0;
         }
         t.current = Some(build.to_string());
         t.channel = channel.to_string();

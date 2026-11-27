@@ -37,7 +37,8 @@ export const BROWSER_LINK_LABEL = 'genie browser';
  * may call these methods only.
  */
 export const LAUNCHER_LINK_LABEL = 'genie launcher';
-export const LAUNCHER_LINK_METHODS = ['engine.ping', 'engine.shutdown', 'engine.activity'] as const;
+/** L6 (updates): the launcher may also ask the host's updater (`engine.updates`: `state`, `check`, `install`). */
+export const LAUNCHER_LINK_METHODS = ['engine.ping', 'engine.shutdown', 'engine.activity', 'engine.updates'] as const;
 
 export const ENGINE_METHODS = [
     // Commands (window → host): each answers with the session host's own answer.

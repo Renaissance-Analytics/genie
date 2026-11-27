@@ -181,7 +181,8 @@ describe('the window asks for the notes again when it opens', () => {
     });
 
     it('opening the update window calls it', () => {
-        expect(src('src/renderer/Shell.tsx')).toContain('onOpenUpdate={() => { setUpdateOpen(true); void updates.notes?.(); }}');
+        // Under the launcher (Tynn #1058 L6) the pill opens the launcher's own window instead; otherwise this window, with its notes.
+        expect(src('src/renderer/Shell.tsx')).toMatch(/onOpenUpdate=\{\(\) => \{\n\s*\/\/[^\n]*\n\s*if \(updateNotice\?\.action === 'launcher-updates'\) \{ void updates\.openLauncher\?\.\(\); return; \}\n\s*setUpdateOpen\(true\); void updates\.notes\?\.\(\);\n\s*\}\}/);
     });
 });
 

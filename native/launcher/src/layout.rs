@@ -74,6 +74,16 @@ pub struct Program {
     folder: PathBuf,
 }
 
+/// The launcher's own program where it is installed, for its self-update (L6): on Windows the NSIS folder's Genie.exe
+/// (the path every shortcut and the Run value use), outside the code root by design; it must be named as the launcher.
+pub fn launcher_at(path: &Path) -> Option<Program> {
+    let named = path.file_name().and_then(|n| n.to_str()).map_or(false, |n| n.eq_ignore_ascii_case(launcher_executable_name()));
+    if !path.is_absolute() || !named {
+        return None;
+    }
+    Some(Program { path: path.to_path_buf(), folder: path.parent()?.to_path_buf() })
+}
+
 impl Program {
     pub fn path(&self) -> &Path {
         &self.path

@@ -42,3 +42,6 @@ ci-measure671.json
 ci-changed.txt
 # What scripts/smoke-seed.mjs records of the project.json it writes, to know it again on the next run (Tynn #692)
 project.json.smoke-seed
+
+# The launcher rows' own homes (scripts/launcher-row-lib.mjs ownHome), on the work disk.
+/.row-homes/

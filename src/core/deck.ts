@@ -87,9 +87,9 @@ export interface DeckItem {
      */
     asks?: number | undefined;
     /**
-     * Its agent NO LONGER WAITS for it (deck-sources.ts `questionStale`): the agent is gone from the roster, its session
-     * ended, or the session running now started after it was asked (an earlier run asked it). Absent = live, or not
-     * judged (no liveness was given). The owner, 2026-10-15, on old items: "Keep, but mark stale" — it stays on the
+     * Its agent NO LONGER WAITS for it (deck-sources.ts `questionStale`): the agent is gone from the roster. A session that
+     * ended or restarted still gets its answer by mail, so that is never stale (Tynn #1085). Absent = live, or not judged
+     * (no liveness was given). The owner, 2026-10-15, on old items: "Keep, but mark stale" — it stays on the
      * Deck, greyed and said, with one-click Dismiss and "Dismiss all stale".
      */
     stale?: StaleReason | undefined;
@@ -110,15 +110,16 @@ export function deckCopyText(item: DeckItem, optionId: string): string | null {
     return optionId === COPY_DETAIL_OPTION && typeof item.detail === 'string' && item.detail !== '' ? item.detail : null;
 }
 
-/** Why a question's agent no longer waits for it. */
-export type StaleReason = 'agent-gone' | 'session-ended' | 'earlier-run';
+/**
+ * Why a question's agent no longer waits for it: only its removal from the roster (Tynn #1085). "session ended" and
+ * "asked by an earlier run" were reasons until beta.66.1, and closed the owner's open windows at every restart.
+ */
+export type StaleReason = 'agent-gone';
 
 /** The words a person reads for each reason. */
 export function staleLabel(reason: StaleReason): string {
     switch (reason) {
         case 'agent-gone': return 'agent gone';
-        case 'session-ended': return 'session ended';
-        case 'earlier-run': return 'asked by an earlier run';
     }
 }
 
@@ -304,7 +305,7 @@ export function needsYouCount(items: readonly DeckItem[]): number {
     return deckBand(items).filter((i) => !isStale(i)).length;
 }
 
-/** The questions asked by an earlier run, or whose agent is gone, still unanswered: their own band, in rank order. */
+/** The questions whose agent is gone, still unanswered: their own band, in rank order (named for the earlier runs it once held too). */
 export function earlierRuns(items: readonly DeckItem[]): DeckItem[] {
     return deckBand(items).filter(isStale);
 }
@@ -312,7 +313,7 @@ export function earlierRuns(items: readonly DeckItem[]): DeckItem[] {
 export type SignalKind = 'flows' | 'mail' | 'github' | 'os-agent' | 'update';
 
 /** The one kind of door that is an action rather than a place: the update's next step. */
-export type SignalAction = 'update-check' | 'update-download' | 'update-install';
+export type SignalAction = 'update-check' | 'update-download' | 'update-install' | 'launcher-updates';
 
 export interface Signal {
     kind: SignalKind;
@@ -339,6 +340,8 @@ export interface UpdateSignalInput {
     userInitiated?: boolean;
     /** What is in the update (core/update-notes.ts): `null` = fetching, `'unavailable'` = offline. */
     changelog?: import('./update-notes.js').UpdateChangelog | 'unavailable' | null;
+    /** Under the launcher (Tynn #1058 L6): how many updates it has ready. Absent = no launcher (the old pill and screen). */
+    launcher?: { ready: number };
 }
 
 export interface SignalState {

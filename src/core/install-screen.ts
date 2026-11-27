@@ -7,6 +7,8 @@
 export interface InstallScreenInput {
     readonly phase: string;
     readonly version: string | null;
+    /** Under the launcher (L6): its own window shows the host's update, and this window has left; no screen here. */
+    readonly launcher?: { readonly ready: number };
     readonly installing?: { readonly step: 'waiting' | 'agents' | 'processes' | 'restarting'; readonly agents: number; readonly left: number; readonly reason?: 'upgrade' | 'quit'; readonly waiting?: readonly { id: string; name: string }[]; readonly deadline?: number; readonly interrupted?: readonly { id: string; name: string }[] };
 }
 
@@ -18,6 +20,8 @@ export interface InstallScreen {
 
 export function installScreen(state: InstallScreenInput | null, asked: boolean): InstallScreen | null {
     if (!state || state.phase === 'error') return null;
+    // Under the launcher an UPDATE's restart screen is the launcher's; the window's own quit keeps "Quitting Genie…".
+    if (state.launcher && state.installing?.reason !== 'quit') return null;
     if (state.phase !== 'installing' && !(asked && state.phase === 'downloaded')) return null;
     const p = state.phase === 'installing' ? state.installing : undefined;
     const title = p?.reason === 'quit' ? 'Quitting Genie…' : `Restarting to install Genie${state.version ? ` ${state.version}` : ''}…`;

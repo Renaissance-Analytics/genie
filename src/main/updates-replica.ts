@@ -25,6 +25,7 @@ export class UpdatesReplica {
     readonly #listeners = new Set<(state: UpdateState) => void>();
     readonly #installing = new Set<(scope: UpdateScope | undefined) => void>();
     #told = false;
+    #atStart = false;
     readonly #failedListeners = new Set<(notice: UpdateFailedRecord) => void>();
     #failedPending: UpdateFailedRecord | null = null;
 
@@ -39,7 +40,18 @@ export class UpdatesReplica {
         for (const l of [...this.#listeners]) l(state);
         // WHOEVER ASKED (Tynn #898 step 2d-2b): a phone or another workstation can install through genie-host, so every
         // window quits when the install restarts (its last step before the helper takes over), not only the one that asked.
-        if (state.phase === 'installing' && state.installing?.step === 'restarting') this.#tellInstalling();
+        // Early only for an UPDATE's install: "Shut down everything" drains through the same phase (reason `quit`), and that
+        // quit is the person's to carry out, never an install to leave for (the full gate, 1127-174858-edb743).
+        const early = this.#atStart && state.installing?.reason !== 'quit';
+        if (state.phase === 'installing' && (early || state.installing?.step === 'restarting')) this.#tellInstalling();
+    }
+
+    /**
+     * UNDER THE LAUNCHER (Tynn #1058 L6): the window is told at the install's START, not its restart, and leaves: the
+     * launcher's own window shows the drain and the swap, and the launcher opens Genie again after.
+     */
+    tellAtStart(): void {
+        this.#atStart = true;
     }
 
     #tellInstalling(): void {

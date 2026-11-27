@@ -480,7 +480,7 @@ export function ledgerRow(row: TimedEvent, context: RowContext = {}): LedgerRow 
 
         case 'notice':
             // A rate-limit notice reads as its headroom line, never the provider's raw sentence with an ISO date.
-            return { ...base, icon: 'info', tone: 'amber', main: row.event.headroom ? headroomLine(row.event.headroom) : row.event.message, lane: null, ...(row.event.commandRun ? { commandRun: row.event.commandRun } : {}) };
+            return { ...base, icon: 'info', tone: 'amber', main: row.event.headroom ? headroomLine(row.event.headroom, row.event.account ?? null) : row.event.message, lane: null, ...(row.event.commandRun ? { commandRun: row.event.commandRun } : {}) };
 
         case 'approval': {
             // The decision, in one line: `allowed · php artisan migrate --force`. The tool, when the request named one.

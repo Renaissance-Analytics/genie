@@ -488,6 +488,8 @@ export interface AgentSessionOptions {
     onRateLimit?: (readings: readonly LimitReading[], message: string | null) => void;
     /** The provider's headroom, as a frame reports it — for the Dashboard header (main buffers it per provider). */
     onHeadroom?: (headroom: Headroom) => void;
+    /** The account this run is on now (Tynn #1084): a rate-limit row keeps it, so it says whose limit it was. */
+    readingAccountLabel?: () => string | null;
     /** Claude Design's authorization (Tynn #480): a refusal for want of /design-login, and every call that completes. */
     onDesignAuth?: (event: DesignAuthEvent) => void;
     /** Each MCP server's state as the provider reports it (prism-acp 0.27.0, genie#1202): what a missing server is told by. */
@@ -3005,7 +3007,12 @@ export class AgentSession {
 
         const read = toStreamEvent(update);
         if (!read) return; // Deliberately not a ledger row (e.g. the slash-command menu).
-        const event = this.#markSubagentCall(read);
+        let event = this.#markSubagentCall(read);
+        // WHOSE LIMIT (Tynn #1084): a rate-limit row keeps the account the run was on when it came.
+        if (event.kind === 'notice' && event.headroom) {
+            const account = this.#options.readingAccountLabel?.() ?? null;
+            if (account) event = { ...event, account };
+        }
         if (event.kind === 'tool' && event.toolCallId) this.#trackCall(event);
 
         /*

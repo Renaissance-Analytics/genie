@@ -121,7 +121,7 @@ describe('Restart delivers what a Broken agent is owed — once', () => {
         expect(await w.deliveries()).toEqual([{ text: RESUME_AFTER_RESTART, status: 'undelivered' }]);
 
         // The person presses Restart. Red on main: refused, "only a fresh restart reaches a wedged agent".
-        expect(await restartAgent(w.ports, w.record.id, 'graceful')).toEqual({ ok: true, kind: 'graceful' });
+        expect(await restartAgent(w.ports, w.record.id, 'graceful', 'restart')).toEqual({ ok: true, kind: 'graceful' });
         await w.comeUp();
         await vi.waitFor(() => expect(w.sent).toEqual([RESUME_AFTER_RESTART]));
         // On the same conversation, and the ledger says it was delivered — the message row once, not a copy of it.
@@ -130,7 +130,7 @@ describe('Restart delivers what a Broken agent is owed — once', () => {
 
         // Restart again: nothing owed any more, so nothing is sent again.
         w.endTurn();
-        expect(await restartAgent(w.ports, w.record.id, 'graceful')).toEqual({ ok: true, kind: 'graceful' });
+        expect(await restartAgent(w.ports, w.record.id, 'graceful', 'restart')).toEqual({ ok: true, kind: 'graceful' });
         await w.comeUp();
         await vi.waitFor(() => expect(w.host.probe(w.record.id)?.turnState).not.toBe('failed'));
         await w.host.settled();
@@ -146,9 +146,9 @@ describe('Restart delivers what a Broken agent is owed — once', () => {
         await w.failPreparation('preparation failed');
         expect((await w.deliveries()).map((d) => d.status)).toEqual(['undelivered', 'undelivered']);
 
-        expect(await restartAgent(w.ports, w.record.id, 'graceful')).toEqual({ ok: true, kind: 'graceful' });
+        expect(await restartAgent(w.ports, w.record.id, 'graceful', 'restart')).toEqual({ ok: true, kind: 'graceful' });
         // Pressed twice while it comes up (a second surface, an impatient click): still each once.
-        expect(await restartAgent(w.ports, w.record.id, 'graceful')).toEqual({ ok: true, kind: 'graceful' });
+        expect(await restartAgent(w.ports, w.record.id, 'graceful', 'restart')).toEqual({ ok: true, kind: 'graceful' });
         await w.comeUp();
         await vi.waitFor(() => expect(w.sent).toEqual([RESUME_AFTER_RESTART, 'and then rebase the Deck branch']));
         await vi.waitFor(async () => expect((await w.deliveries()).map((d) => d.status)).toEqual(['sent', 'sent']));
@@ -161,7 +161,7 @@ describe('Restart delivers what a Broken agent is owed — once', () => {
         await w.host.recordOwed(w.record.id, RESUME_AFTER_RESTART, 'genie');
         expect(await w.deliveries()).toEqual([{ text: RESUME_AFTER_RESTART, status: 'undelivered' }]);
 
-        expect(await restartAgent(w.ports, w.record.id, 'graceful')).toEqual({ ok: true, kind: 'graceful' });
+        expect(await restartAgent(w.ports, w.record.id, 'graceful', 'restart')).toEqual({ ok: true, kind: 'graceful' });
         await w.comeUp();
         await vi.waitFor(() => expect(w.sent).toEqual([RESUME_AFTER_RESTART]));
         await vi.waitFor(async () => expect(await w.deliveries()).toEqual([{ text: RESUME_AFTER_RESTART, status: 'sent' }]));
@@ -175,7 +175,7 @@ describe('Restart delivers what a Broken agent is owed — once', () => {
         await vi.waitFor(() => expect(w.sent).toEqual(['refactor the Deck']));
         expect(w.host.probe(w.record.id)?.turnState).toBe('working');
 
-        expect(await restartAgent(w.ports, w.record.id, 'graceful')).toEqual({ ok: true, kind: 'graceful' });
+        expect(await restartAgent(w.ports, w.record.id, 'graceful', 'restart')).toEqual({ ok: true, kind: 'graceful' });
         await w.comeUp();
         await vi.waitFor(() => expect(w.sent).toEqual(['refactor the Deck', RESUME_AFTER_USER_RESTART]));
     });
@@ -186,12 +186,12 @@ describe('Restart delivers what a Broken agent is owed — once', () => {
         expect(w.host.prompt(w.record.id, RESUME_AFTER_RESTART, 'genie')).toBe(true);
         await w.failPreparation('first');
 
-        expect(await restartAgent(w.ports, w.record.id, 'graceful')).toEqual({ ok: true, kind: 'graceful' });
+        expect(await restartAgent(w.ports, w.record.id, 'graceful', 'restart')).toEqual({ ok: true, kind: 'graceful' });
         await w.failPreparation('second');
         expect(w.sent).toEqual([]);
         expect(await w.deliveries()).toEqual([{ text: RESUME_AFTER_RESTART, status: 'undelivered' }]);
 
-        expect(await restartAgent(w.ports, w.record.id, 'graceful')).toEqual({ ok: true, kind: 'graceful' });
+        expect(await restartAgent(w.ports, w.record.id, 'graceful', 'restart')).toEqual({ ok: true, kind: 'graceful' });
         await w.comeUp();
         await vi.waitFor(() => expect(w.sent).toEqual([RESUME_AFTER_RESTART]));
     });

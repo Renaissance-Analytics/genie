@@ -1,5 +1,6 @@
 import type { ActivityFeed } from '../core/activity-feed.js';
 import type { NativeTerminalPort } from './local-terminal-native.js';
+import { startWhyOf, type StartWhy } from '../core/start-why.js';
 import { isLocalTerminalMethod, decodeTerminalNativeArguments } from '../core/local-terminals.js';
 import type { Headroom } from '../core/headroom.js';
 import { isAcpProvider } from '../core/engine.js';
@@ -286,8 +287,11 @@ export interface HostApiDeps {
         applyOffer?(workspaceId: unknown, offerId: unknown): Promise<unknown>;
     };
     agentOps: {
-        /** THE ONE RESTART (genie#1238): `restartAgent` — 'graceful' from every state, delivering what is owed. */
-        restart(agentId: string, kind: 'graceful' | 'fresh'): Promise<{ ok: true; kind: 'graceful' | 'fresh'; discarded?: string | null } | { ok: false; reason: string }>;
+        /**
+         * THE ONE RESTART (genie#1238): `restartAgent` — 'graceful' from every state, delivering what is owed. `why` is the
+         * reason the log records (Tynn #1085); absent = the person's own Restart (`restart`, or `fresh`).
+         */
+        restart(agentId: string, kind: 'graceful' | 'fresh', why?: StartWhy): Promise<{ ok: true; kind: 'graceful' | 'fresh'; discarded?: string | null } | { ok: false; reason: string }>;
         previewDelete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[]): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
         /** `handoff`: ask a running agent for a handoff first (bounded wait); see agent-ops-host `deleteAgent`. */
         delete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[], handoff: boolean): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
@@ -350,6 +354,8 @@ export interface HostApiDeps {
         install(): Promise<{ report: string }> | null;
         forceDrain?(): boolean | Promise<boolean>;
         notes?(): Promise<UpdateState | null>;
+        /** Under the launcher (L6): its Updates window opened; `false` = no launcher here, or it did not. */
+        openLauncher?(): Promise<boolean>;
         /** Abandon a drain in progress (§7.5); `false` when there is none. */
         onChange(listener: (state: UpdateState) => void): () => void;
     } | null;
@@ -541,7 +547,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             }
             case 'agents.restart':
                 if (typeof args[0] !== 'string' || (args[1] !== 'graceful' && args[1] !== 'fresh')) return { ok: false, reason: 'a restart names an agent and a kind: graceful or fresh' };
-                return deps.agentOps.restart(args[0], args[1]);
+                // A reason only when the caller gave one: the person's own Restart passes two arguments, as it always did.
+                return args[2] === undefined ? deps.agentOps.restart(args[0], args[1]) : deps.agentOps.restart(args[0], args[1], startWhyOf(args[2]));
             case 'agents.previewDelete':
                 if (typeof args[0] !== 'string' || (args[1] !== 'unmount' && args[1] !== 'delete')) return { ok: false, reason: 'a delete names an agent and an outcome: unmount or delete' };
                 return deps.agentOps.previewDelete(args[0], args[1], Array.isArray(args[2]) ? args[2].map(String) : []);
@@ -906,6 +913,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.updates?.forceDrain?.() ?? false;
             case 'updates.notes':
                 return deps.updates?.notes?.() ?? null;
+            case 'updates.openLauncher':
+                return deps.updates?.openLauncher?.() ?? false;
             case 'headroom':
                 return deps.headroom ? deps.headroom.view() : null;
             case 'accountRetry': {

@@ -288,3 +288,21 @@ pub fn install_from_with(roots: &Roots, options: &InstallOptions, keys: &[Verify
     }
     Ok(done)
 }
+
+/// AN UPDATE'S STAGING (L6): one track's package in `from` (a download, laid out as `--from` is), checked exactly as an
+/// install is (signature, the package asked for, newer than `current`, minLauncher, each file as it unpacks into
+/// `<build>.partial`), then renamed to `<build>` with its manifest, signature and `.complete` LAST. `current` is NOT
+/// pointed at it: a check only makes an update ready; applying it is `updates::apply`. Its manifest.
+pub fn stage_from(roots: &Roots, from: &Path, track: Track, channel: &str, launcher_build: &str, keys: &[VerifyingKey]) -> Result<Manifest, String> {
+    let st = state::read(&roots.state_file())?;
+    let options = InstallOptions { from: from.to_path_buf(), profile: Profile::Both, channel: channel.to_string(), launcher_build: launcher_build.to_string() };
+    let checked = check_package(roots, &options, keys, &st, track)?;
+    let staged = unpack(checked, &mut |_| {})?;
+    if let Err(e) = commit(&staged) {
+        let _ = std::fs::remove_dir_all(&staged.partial);
+        let _ = std::fs::remove_dir_all(&staged.target);
+        return Err(format!("{} {} could not be put in place: {e}", track.as_str(), staged.manifest.build));
+    }
+    keys::learn_next_key(roots, &staged.manifest)?;
+    Ok(staged.manifest)
+}

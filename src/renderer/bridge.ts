@@ -621,6 +621,8 @@ export interface GenieBridge {
         forceDrain?(): Promise<boolean>;
         /** Read the release notes again when what is held is empty, unavailable or partial (UpdateHost.refreshNotes). */
         notes?(): Promise<UpdateState | null>;
+        /** Under the launcher (L6): its Updates window opened (a local window's only); `false` = not opened. */
+        openLauncher?(): Promise<boolean>;
     };
 
     /**
@@ -659,6 +661,8 @@ export interface GenieBridge {
 
 /** Mirror of `src/main/updater.ts`'s state, crossed as-is — every unknown is `null`. */
 export interface UpdateState {
+    /** Under the launcher (Tynn #1058 L6): how many updates it has ready. Absent = no launcher (the old pill and screen). */
+    launcher?: { ready: number };
     phase: 'idle' | 'checking' | 'none' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error';
     version: string | null;
     percent: number | null;

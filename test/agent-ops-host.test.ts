@@ -77,23 +77,23 @@ function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; manifes
 describe('restart', () => {
     it('graceful (Restart, genie#1238): stops and starts with the SAME thread, then delivers what is owed — a never-started and a wedged agent too', async () => {
         const f = fakes();
-        expect(await restartAgent(f.ports, 'agent_a', 'graceful')).toEqual({ ok: true, kind: 'graceful' });
+        expect(await restartAgent(f.ports, 'agent_a', 'graceful', 'restart')).toEqual({ ok: true, kind: 'graceful' });
         expect(f.calls).toEqual(['stop:agent_a', 'ended:agent_a', 'start:agent_a:sess-1:/w/tynn', 'deliverOwed:agent_a']);
 
         const none = fakes({ record: record({ threadId: null }) });
-        expect(await restartAgent(none.ports, 'agent_a', 'graceful')).toEqual({ ok: true, kind: 'graceful' });
+        expect(await restartAgent(none.ports, 'agent_a', 'graceful', 'restart')).toEqual({ ok: true, kind: 'graceful' });
         expect(none.calls).toEqual(['stop:agent_a', 'ended:agent_a', 'start:agent_a:null:/w/tynn', 'deliverOwed:agent_a']);
 
         const wedged = fakes({ probe: { running: true, turnState: 'failed', startedAt: 1, pendingApproval: null, failure: { reason: 'crashed', fixes: [] } } as unknown as LiveSession });
-        expect(await restartAgent(wedged.ports, 'agent_a', 'graceful')).toEqual({ ok: true, kind: 'graceful' });
+        expect(await restartAgent(wedged.ports, 'agent_a', 'graceful', 'restart')).toEqual({ ok: true, kind: 'graceful' });
         expect(wedged.calls).toEqual(['stop:agent_a', 'ended:agent_a', 'start:agent_a:sess-1:/w/tynn', 'deliverOwed:agent_a']);
     });
 
     it('fresh: starts with no thread, then clears the stored one — only once the start went ahead; works on a wedged agent; an unknown agent is refused', async () => {
         const f = fakes({ probe: { running: true, turnState: 'failed', startedAt: 1, pendingApproval: null, failure: { reason: 'x', fixes: [] } } as unknown as LiveSession });
-        expect(await restartAgent(f.ports, 'agent_a', 'fresh')).toEqual({ ok: true, kind: 'fresh', discarded: 'sess-1' });
+        expect(await restartAgent(f.ports, 'agent_a', 'fresh', 'fresh')).toEqual({ ok: true, kind: 'fresh', discarded: 'sess-1' });
         expect(f.calls).toEqual(['stop:agent_a', 'ended:agent_a', 'start:agent_a:null:/w/tynn', 'clearThread:agent_a']);
-        expect(await restartAgent(fakes().ports, 'agent_zz', 'fresh')).toEqual({ ok: false, reason: 'unknown agent' });
+        expect(await restartAgent(fakes().ports, 'agent_zz', 'fresh', 'fresh')).toEqual({ ok: false, reason: 'unknown agent' });
     });
 });
 

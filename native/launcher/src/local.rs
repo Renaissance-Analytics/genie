@@ -75,6 +75,33 @@ impl LocalListener {
     }
 }
 
+/// A listener let go (the launcher's self-update hands its endpoint to the new launcher): on Windows the instance waiting
+/// for the next client is closed, so the name is served only by the new launcher's instances.
+#[cfg(windows)]
+impl Drop for LocalListener {
+    fn drop(&mut self) {
+        let pending = *self.pending.lock().unwrap_or_else(|p| p.into_inner());
+        crate::win::close(pending as windows_sys::Win32::Foundation::HANDLE);
+    }
+}
+
+impl LocalListener {
+    /// Binds an endpoint another launcher of this user is handing over (L6, `serve --handover`), or one this launcher
+    /// takes back: on Windows instances of the name may still be open (clients of the old launcher), so it is not asked
+    /// to be the first instance; the DACL is the same owner-only one. On Linux it is `bind`.
+    pub fn bind_handed_over(endpoint: &str) -> io::Result<LocalListener> {
+        #[cfg(windows)]
+        {
+            let next = crate::win::create_owner_only_pipe(endpoint, false)?;
+            Ok(LocalListener { endpoint: endpoint.to_string(), pending: std::sync::Mutex::new(next as isize) })
+        }
+        #[cfg(unix)]
+        {
+            LocalListener::bind(endpoint)
+        }
+    }
+}
+
 impl LocalStream {
     /// Connects, waiting up to `timeout` for the endpoint to exist and to have a free instance.
     pub fn connect(endpoint: &str, timeout: Duration) -> io::Result<LocalStream> {

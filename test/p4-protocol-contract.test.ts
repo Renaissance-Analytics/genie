@@ -77,6 +77,8 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'features.snapshot': [], 'features.soundData': ['sound_question'], 'features.picked': [['/picked.txt']], 'features.act': [{ kind: 'contract' }], 'features.setBrowserBounds': [null],
     'updates.state': [], 'host.listDir': [ROOT], 'host.mkdir': [ROOT, 'invalid/name'], 'host.home': [],
     'updates.check': [], 'updates.download': [], 'updates.install': [], 'updates.notes': [],
+    // Tynn #1058 L6: a window's "Updates (N)" asks the host to open the launcher's Updates window; no launcher here: false.
+    'updates.openLauncher': [],
     // Tynn #616: "Quit now" / "Upgrade now" during the safe-point wait. No wait in flight here: false, both ways.
     'updates.forceDrain': [],
     headroom: [], accountRetry: ['agent_a'],

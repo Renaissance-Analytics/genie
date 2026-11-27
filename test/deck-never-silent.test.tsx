@@ -71,12 +71,12 @@ describe('the lifecycle line', () => {
 
 describe('the person sees the reason on that item', () => {
     it('a stale row, its form folded, shows the refusal under it', () => {
-        const html = renderToStaticMarkup(<DeckOnDashboard items={[item({ stale: 'session-ended' } as never)]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} onDismiss={() => {}} formRefusal={{ itemId: 'q_dd6bedde-0000', reason: 'This question is no longer waiting.' }} />);
+        const html = renderToStaticMarkup(<DeckOnDashboard items={[item({ stale: 'agent-gone' } as never)]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} onDismiss={() => {}} formRefusal={{ itemId: 'q_dd6bedde-0000', reason: 'This question is no longer waiting.' }} />);
         expect(html).toMatch(/data-deck-refusal="q_dd6bedde-0000"[^>]*>[^<]*This question is no longer waiting\./);
     });
 
     it('CONTROL: another item’s refusal is not drawn here', () => {
-        const html = renderToStaticMarkup(<DeckOnDashboard items={[item({ stale: 'session-ended' } as never)]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} onDismiss={() => {}} formRefusal={{ itemId: 'q_other', reason: 'nope' }} />);
+        const html = renderToStaticMarkup(<DeckOnDashboard items={[item({ stale: 'agent-gone' } as never)]} signals={QUIET} answering={null} onAnswer={() => {}} onOpenItem={() => {}} onNavigate={() => {}} onAnswerForm={() => {}} onDismiss={() => {}} formRefusal={{ itemId: 'q_other', reason: 'nope' }} />);
         expect(html).not.toContain('data-deck-refusal');
     });
 

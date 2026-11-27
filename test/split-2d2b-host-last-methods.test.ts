@@ -292,7 +292,8 @@ describe('a window quits when the host\'s install restarts, whoever asked', () =
 
     it('the engine link tells the updater which link said it, and when a window\'s link closes', () => {
         const server = readFileSync('src/main/session-engine-server.ts', 'utf8');
-        expect(server).toMatch(/updates\.call\(str\(0\), Array\.isArray\(args\[1\]\) \? args\[1\] : \[\], \{ window: true, connection: conn\.id \}\)/);
+        // Genie's launcher's own link says it is the launcher's (Tynn #1058 L6); a window's link, a window's.
+        expect(server).toMatch(/updates\.call\(str\(0\), Array\.isArray\(args\[1\]\) \? args\[1\] : \[\], conn\.launcher \? \{ window: false, launcher: true, connection: conn\.id \} : \{ window: true, connection: conn\.id \}\)/);
         expect(server).toMatch(/updates\?\.windowDropped\(conn\.id\)/);
     });
 });

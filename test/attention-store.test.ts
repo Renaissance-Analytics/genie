@@ -223,7 +223,8 @@ describe('the two lists', () => {
  * AN UPDATE SAYS THE AGENT WAITS NOW (2026-11-08, beta.60). impactium asked on 11-06; Genie restarted, so its session
  * started later; it UPDATED the question at 17:51Z and the owner never saw it. The Deck judges whether the asker still
  * waits by its latest ask (`reaskedAt`, else `askedAt`); an update kept `askedAt` and set nothing, so the question stayed
- * "asked by an earlier run": stale, never in the ForceTheQuestion window, never in the count.
+ * "asked by an earlier run": stale, never in the ForceTheQuestion window, never in the count. Since Tynn #1085 a later run
+ * never makes a question stale at all (its answer is mailed); `reaskedAt` is still stamped, and still read for its age.
  */
 describe('an update is the agent waiting now', () => {
     const questions = [{ header: 'Next', question: 'What next?', options: [{ label: 'a' }, { label: 'b' }] }];
@@ -231,7 +232,7 @@ describe('an update is the agent waiting now', () => {
     const deck = (q: ReturnType<AttentionStore['pending']>[number], startedAt: number) =>
         deckItemsFrom({ questions: [q], userList: [], unreadDms: [], agents: { [agent]: { name: 'atlas', workspaceId: 'tynn' } }, asker: () => ({ running: true, startedAt }) })[0]!;
 
-    it('stamps reaskedAt, keeps askedAt, and the Deck then counts it as waiting; the same question before the update is stale (CONTROL)', async () => {
+    it('stamps reaskedAt, keeps askedAt, and the Deck counts it as waiting — before the update too: a run started after the ask does not make it stale (Tynn #1085)', async () => {
         const asked = await store.ask({ agentId: agent, agentName: 'atlas', workspaceId: 'tynn', questions }, { userActive: true });
         const before = store.pending()[0]!;
         expect(before.reaskedAt).toBeUndefined();
@@ -245,6 +246,6 @@ describe('an update is the agent waiting now', () => {
         expect(after.revision).toBe(1);
         expect(Date.parse(after.reaskedAt!)).toBeGreaterThan(sessionStartedAt);
         expect(deck(after, sessionStartedAt).stale).toBeUndefined();
-        expect(deck(before, sessionStartedAt).stale).toBe('earlier-run');
+        expect(deck(before, sessionStartedAt).stale).toBeUndefined();
     });
 });

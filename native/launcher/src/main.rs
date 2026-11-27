@@ -83,7 +83,15 @@ fn main() -> ExitCode {
             if let Err(why) = private_code_root(&roots) {
                 return fail(&why);
             }
-            match control::serve(roots) {
+            // `serve --handover <pid>` (L6): a new launcher taking over from the one that updated itself.
+            let handover = match text.iter().position(|a| a == "--handover") {
+                Some(i) => match text.get(i + 1).and_then(|p| p.parse::<u32>().ok()) {
+                    Some(pid) => Some(pid),
+                    None => return fail("--handover needs the old launcher's pid"),
+                },
+                None => None,
+            };
+            match control::serve_then(roots, handover, |_| {}) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(why) => fail(&why),
             }
@@ -229,7 +237,7 @@ fn cmd_logon(roots: Roots) -> ExitCode {
         logon::apply_here(&roots);
         return ExitCode::SUCCESS;
     }
-    let served = control::serve_then(roots, move |roots| {
+    let served = control::serve_then(roots, None, move |roots| {
         let has_host = genie_launcher::state::read(&roots.state_file()).ok().and_then(|s| s.track("host").and_then(|t| t.current.clone())).is_some();
         if plan.start_host && has_host {
             if let Err(why) = host::ensure_host(roots, &keys::trusted_keys(roots)) {
@@ -266,7 +274,7 @@ fn cmd_open(roots: Roots) -> ExitCode {
     if let Err(why) = private_code_root(&roots) {
         return fail(&why);
     }
-    let opened = control::serve_then(roots, |roots| {
+    let opened = control::serve_then(roots, None, |roots| {
         control::opened(roots);
         let has_host = genie_launcher::state::read(&roots.state_file()).ok().and_then(|s| s.track("host").and_then(|t| t.current.clone())).is_some();
         if has_host {

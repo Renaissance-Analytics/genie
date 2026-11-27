@@ -136,7 +136,10 @@ describe('the capability table', () => {
         // the host owner's only) (host split P7).
         // 194 with `agents.setAppWakeCap` (a write, agent-scoped, the owner's): an agent's app wake cap (Tynn #1053).
         // 195 with `elevation.answer` (a write: the client's answer to the host's password prompt, from the asked connection only) (Tynn #973).
-        expect(REMOTE_METHODS.length).toBe(195);
+        // 196 with `updates.openLauncher` (local: a local window's "Updates (N)" asks the host to open the launcher's Updates
+        // window) (Tynn #1058 L6).
+        expect(REMOTE_METHODS.length).toBe(196);
+        expect(capabilityOf('updates.openLauncher')).toBe('local');
         expect(capabilityOf('elevation.answer')).toBe('write');
         expect(capabilityOf('agents.setAppWakeCap')).toBe('write');
         expect(AGENT_SCOPED_METHODS).toContain('agents.setAppWakeCap');

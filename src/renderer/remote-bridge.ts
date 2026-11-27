@@ -713,7 +713,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             download: () => read<boolean>('updates.download'),
             install: () => read<{ report: string } | null>('updates.install'),
             forceDrain: () => read<boolean>('updates.forceDrain'),
-            ...(local ? { notes: () => read<UpdateState | null>('updates.notes') } : {}),
+            ...(local ? { notes: () => read<UpdateState | null>('updates.notes'), openLauncher: () => read<boolean>('updates.openLauncher') } : {}),
         },
     };
 
