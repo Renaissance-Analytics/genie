@@ -67,6 +67,11 @@ export interface UpdatesCaller {
     /** The engine link that asked: a window's, so it can say it is one (`window [pid]`) and be forgotten when it closes. */
     readonly connection?: string;
     /**
+     * Genie's launcher asked, on its own link to this host (Tynn #1058 L6: its tray, its Updates window, or `host.update`
+     * passed on): it may install with no window open, as the person's own action there.
+     */
+    readonly launcher?: boolean;
+    /**
      * A remote client asked through genie-host's own answers (Tynn #898 step 2d-2b). It may install, or proceed with a drain,
      * on the terms it always had when a window answered for it: while a Genie window is open on this host.
      */
@@ -95,6 +100,11 @@ export interface UpdatesServiceOptions {
     readonly handOverFailed?: (reason: string, launch: HelperLaunch) => void;
     /** Why this host has no updater (P10.1d: plain Node, its image updated by its deployment). Absent = it has one. */
     readonly unavailable?: string;
+    /**
+     * THE LAUNCHER'S PORT (Tynn #1058 L6, launcher-updates.ts): a host the launcher started gets its updates from it, and
+     * never starts the `--updater` helper. Absent = the helper's port (the bridge release, a dev run).
+     */
+    readonly port?: UpdaterPort;
 }
 
 /** Why the last install did not happen, for the next window (`<home>/runtime/update-failed.json`). */
@@ -227,11 +237,24 @@ export class UpdatesService {
         };
         this.#host = new UpdateHost({
             ...options.host,
-            port,
+            port: options.port ? this.#launcherBacked(options.port) : port,
             spare: () => [...(this.#helper ? [this.#helper.pid] : []), ...this.#allWindowPids()],
             ...(options.defer ? { defer: options.defer } : {}),
         });
         this.#host.onChange((state) => { for (const l of [...this.#listeners]) l(state); });
+    }
+
+    /** The launcher's port, with this host's own end after a host update's hand-over (the launcher swaps once it has gone). */
+    #launcherBacked(port: UpdaterPort): UpdaterPort {
+        return {
+            ...port,
+            quitAndInstall: async () => {
+                const clientOnly = this.#host.clientOnly();
+                await port.quitAndInstall();
+                this.#log(clientOnly ? 'updater: the launcher has the client update; this host stays' : 'updater: the launcher swaps the host once this one has gone; this host exits');
+                if (!clientOnly) await this.#options.exit();
+            },
+        };
     }
 
     get updates(): UpdateHost {
@@ -308,6 +331,20 @@ export class UpdatesService {
             case 'install': {
                 if (this.#options.unavailable !== undefined) throw new Error(this.#options.unavailable);
                 if (!this.#mayInstall(caller)) throw new Error(NO_WINDOW_INSTALL);
+                // The launcher asks for the install of what it has ready: checked and "downloaded" here first, if not yet. It is
+                // answered once the install has STARTED: the drain can take minutes, and ends in the launcher's own swap
+                // (`launcher.apply {track: host, afterPid}`), which is how the launcher hears how it went.
+                if (caller.launcher === true) {
+                    if (this.#host.state().phase !== 'downloaded') {
+                        const checked = await this.#host.check();
+                        if (checked.phase !== 'available' && checked.phase !== 'downloaded') throw new Error('There is no update to install.');
+                        await this.#host.download();
+                    }
+                    const started = this.#host.install();
+                    if (started === null) throw new Error('The update is not ready to install.');
+                    void started;
+                    return { installing: true, version: this.#host.state().version };
+                }
                 const pid = args[0];
                 this.#windowPids = caller.window && typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? [pid] : [];
                 return this.#host.install();
@@ -324,7 +361,7 @@ export class UpdatesService {
 
     /** A window asked; or a remote client did while a Genie window is open on this host (as when a window answered it). */
     #mayInstall(caller: UpdatesCaller): boolean {
-        return caller.window || (caller.remote === true && this.#windows.size > 0);
+        return caller.window || caller.launcher === true || (caller.remote === true && this.#windows.size > 0);
     }
 
     /** The windows the install leaves running until the helper sees them gone: every linked one, and the one that asked. */

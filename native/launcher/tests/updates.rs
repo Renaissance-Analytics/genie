@@ -306,6 +306,8 @@ fn a_host_update_drains_stops_waits_for_the_pid_points_starts_and_restores_once(
     assert_eq!(current(&r, "host"), NEW);
     assert_eq!(state(&r)["tracks"]["host"]["previous"], OLD);
     assert_eq!(current(&r, "client"), NEW, "the host's client came with it");
+    // The swap says it is done once the new host has answered its hello (a moment after it wrote host.json).
+    wait_for("the swap said it is done", 20, || ok(&w.call("launcher.updates", json!([])))["hostUpdate"]["phase"] != "starting");
     let updates = ok(&w.call("launcher.updates", json!([]))).clone();
     assert_eq!(updates["hostUpdate"]["phase"], "done", "{updates}");
     assert_eq!(updates["hostUpdate"]["to"], NEW, "{updates}");

@@ -333,6 +333,10 @@ pub fn apply_window(shared: &Shared, roots: &Roots, track: Track) -> Result<(Str
     }
     state::write_atomic(&roots.state_file(), &st).map_err(|e| format!("state.json could not be written: {e}"))?;
     retain(shared, roots, track);
+    // The browser runs on a client build: once it has moved, a client build only its old previous needed can go.
+    if track == Track::Browser {
+        retain(shared, roots, Track::Client);
+    }
     Ok((build.clone(), json!({"kind": "event", "name": "launcher.updateReady", "track": track.as_str(), "build": build})))
 }
 

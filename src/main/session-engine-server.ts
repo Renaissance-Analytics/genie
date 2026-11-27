@@ -665,7 +665,9 @@ export class SessionEngineServer {
             case 'engine.updates':
                 if (!this.#options.updates) throw new Error('This host runs no updater.');
                 if (!conn.local) throw new Error('Genie’s updates are driven from a local window only.');
-                return this.#options.updates.call(str(0), Array.isArray(args[1]) ? args[1] : [], { window: true, connection: conn.id });
+                // Genie's launcher (L6) asks what is on offer and for the install; nothing else of the updater is its.
+                if (conn.launcher && !['state', 'check', 'install'].includes(str(0))) throw new Error(`Genie’s launcher may not ask the updater for ${str(0)}.`);
+                return this.#options.updates.call(str(0), Array.isArray(args[1]) ? args[1] : [], conn.launcher ? { window: false, launcher: true, connection: conn.id } : { window: true, connection: conn.id });
             case 'engine.tynnPage':
                 if (!conn.local) throw new Error('The Tynn pages are read from a local window only.');
                 if (!this.#options.tynnPages) throw new Error('This host reads no Tynn pages.');

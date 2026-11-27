@@ -137,11 +137,16 @@ pub fn host_line(v: &View) -> String {
 }
 
 pub fn tooltip(v: &View) -> String {
+    let mut parts = vec!["Genie".to_string()];
     if v.needs_you > 0 {
-        format!("Genie · Needs you: {} · {}", v.needs_you, host_line(v))
-    } else {
-        format!("Genie · {}", host_line(v))
+        parts.push(format!("Needs you: {}", v.needs_you));
     }
+    // L6: what is ready, said where the person looks first.
+    if v.updates > 0 {
+        parts.push(format!("{} {} ready", v.updates, if v.updates == 1 { "update" } else { "updates" }));
+    }
+    parts.push(host_line(v));
+    parts.join(" · ")
 }
 
 /// The menu, top to bottom.
@@ -169,7 +174,14 @@ pub fn menu(v: &View) -> Vec<Item> {
             items.push(Item::Separator);
             items.push(Item::Do { action: Action::StartHost, label: "Start this computer’s host".to_string(), enabled: true });
         }
-        HostView::NotHere => {}
+        HostView::NotHere => items.push(Item::Separator),
+    }
+    // L6: Updates, with how many are ready (the mockup's badge), and a ready host update offered by name. A computer with
+    // no host is never offered one.
+    let label = if v.updates > 0 { format!("Updates ({})", v.updates) } else { "Updates".to_string() };
+    items.push(Item::Do { action: Action::Updates, label, enabled: true });
+    if let (Some(build), false) = (&v.host_update, v.host == HostView::NotHere) {
+        items.push(Item::Do { action: Action::InstallHostUpdate, label: format!("Update the host to {build}…"), enabled: true });
     }
     items.push(Item::Separator);
     let keep = matches!(v.host, HostView::Running { .. });

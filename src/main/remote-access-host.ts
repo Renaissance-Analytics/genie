@@ -1,3 +1,4 @@
+import type { HostUpdateAnswer } from '../core/protocol-version.js';
 import { randomBytes } from 'node:crypto';
 import { PairApprovals, type PairConfirm } from '../core/pair-confirm.js';
 import type { DriveMode } from '../core/connected-here.js';
@@ -154,6 +155,8 @@ export interface RemoteAccessHostOptions {
     readonly build?: string;
     /** This host's protocol offer, read at each hello (Tynn #894); absent = this build's, with no catalog elements. */
     readonly protocol?: () => ProtocolOffer;
+    /** `host.update` from an owner (Tynn #894): the launcher's (L6, launcher-updates.ts); absent = RemoteHost's stub. */
+    readonly requestUpdate?: (who: { label: string; connectionId: string }) => Promise<HostUpdateAnswer>;
     /**
      * Where a local connection stages what it uploads (a draft's file, a file to write; Tynn #898 step 2d-3b): one
      * registry per connection, over this host's staging area. Absent = "local staging is not configured on this host".
@@ -192,6 +195,7 @@ export class RemoteAccessHost {
             now,
             ...(options.build ? { build: options.build } : {}),
             ...(options.protocol ? { protocol: options.protocol } : {}),
+            ...(options.requestUpdate ? { requestUpdate: options.requestUpdate } : {}),
             ...(options.createLocalUploads ? { createLocalUploads: options.createLocalUploads } : {}),
             ...(options.localSnapshot ? { localSnapshot: options.localSnapshot } : {}),
             ...(options.crossStation ? { crossStation: options.crossStation } : {}),

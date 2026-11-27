@@ -157,6 +157,8 @@ import { createThroughAddAgent } from './mcp-tools-agents.js';
 import { pidAlive } from './engine-launch.js';
 import { hostBrowserStart } from './host-browser-start.js';
 import { callLauncher, launcherReachable, launcherWire } from './launcher-control.js';
+import { launcherHostUpdate, launcherUpdaterPort } from './launcher-updates.js';
+import { launcherLink } from '../core/launcher-link.js';
 import { FilesWatchHub } from './files-watch-hub.js';
 import { workerWatchSource } from './files-watch-worker.js';
 import { openHostKeychain, type HostKeychain } from './host-keychain.js';
@@ -1056,8 +1058,13 @@ async function main(): Promise<void> {
         hold: () => host.holdForShutdown(),
         release: () => host.releaseAfterShutdown(),
     });
+    // A HOST THE LAUNCHER STARTED (Tynn #1058 L6) gets its updates from the launcher, never from the `--updater` helper,
+    // which stays only in the bridge release; `host.update` from a paired owner is the launcher's too.
+    const updatesFromLauncher = launcherLink(process.env) !== null;
+    const launcherForUpdates = launcherWire(runtime, 'host', build);
     const updatesService = new UpdatesService({
         ...(capabilities.window ? {} : { unavailable: NO_UPDATES_HERE }),
+        ...(updatesFromLauncher ? { port: launcherUpdaterPort((method, args) => callLauncher(launcherForUpdates, method, args ?? []), process.pid) } : {}),
         host: {
             // The install the updater replaces, never this host's own copy (Tynn #1036 P6-1).
             installDir: hostInstallDir(process.env, process.execPath),
@@ -1410,8 +1417,9 @@ async function main(): Promise<void> {
         localSnapshot: (connectionId) => protocolTunnels.windowSnapshotOf(connectionId),
         // THE HOST'S OFFER (Tynn #894), read at each hello: its track and build, the wire's schema and the fixed window's
         // floor, and the catalog's elements as capabilities, so a client sees which elements this host has. `host.update`
-        // answers with RemoteHost's stub until the launcher step wires it.
+        // is the launcher's on a host it started (L6); without one (genie-cloud, a dev run) RemoteHost's own answer stands.
         protocol: () => remoteOffer('host', build, [...catalogCapabilities(catalogService.snapshot().definitions), `${CAP_CROSS_STATION}@1`, `${CAP_ELEVATION_PROMPT}@1`]),
+        ...(updatesFromLauncher ? { requestUpdate: launcherHostUpdate(updatesService, hostname()) } : {}),
         api: hostRemoteApi({
             hostName: hostname(),
             // What this host answers itself, window or not. The phone's set comes here next (Tynn #551).

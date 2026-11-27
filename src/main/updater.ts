@@ -88,7 +88,7 @@ export interface UpdaterPort {
      * Resolves the offered version, or `null` when there is none. Rejects on a library error. `hostHash` and
      * `engineProtocol` are what the release feed says of the offered genie-host (Tynn #413); absent = not said.
      */
-    check(): Promise<{ version: string; hostHash?: string | null; engineProtocol?: number | null } | null>;
+    check(): Promise<{ version: string; hostHash?: string | null; engineProtocol?: number | null; scope?: import('../core/update-kind.js').UpdateScope } | null>;
     /** Downloads the update found by the last check, reporting progress 0–100. */
     download(onProgress: (percent: number) => void): Promise<void>;
     /** Quits and runs the installer. Does not return in the real implementation. */
@@ -335,7 +335,8 @@ export class UpdateHost {
                 if (found) {
                     const fetching = this.options.releases && this.options.runningVersion ? { changelog: null } : {};
                     // What it changes (Tynn #413): the window alone, or genie-host too. Said with the offer, kept until it is installed.
-                    const scope = classifyUpdate(found, this.options.running);
+                    // A launcher states it (L6: it knows whether the host is on offer); the feed's hash says it otherwise.
+                    const scope = found.scope ?? classifyUpdate(found, this.options.running);
                     this.set({ phase: 'available', version: found.version, percent: null, error: null, checkedAt, scope, ...fetching });
                     if ('changelog' in fetching) void this.#fetchChangelog(found.version);
                 }
