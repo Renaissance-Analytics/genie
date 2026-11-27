@@ -25,9 +25,12 @@ describe('the release workflow', () => {
         expect(workflow().length).toBeGreaterThan(200);
     });
 
-    it('runs only for a v* tag — never on a push to a branch, never on a schedule', () => {
+    it('runs only for a v* tag or a track round tag — never on a push to a branch, never on a schedule', () => {
         const on = workflow().match(/^on:\n([\s\S]*?)\n\S/m)?.[1] ?? '';
         expect(on).toMatch(/tags:\s*\n\s*-\s*['"]?v\*/);
+        // Tynn #1058 L8: one approved tag per round of track releases, stable or dev; no other tag pattern.
+        const tags = [...on.matchAll(/^\s*-\s*['"]?([^'"\n]+?)['"]?\s*$/gm)].map((m) => m[1]);
+        expect(tags).toEqual(['v*', 'tracks-v*', 'tracks-dev-v*']);
         expect(on).not.toMatch(/branches:/);
         expect(on).not.toMatch(/schedule:/);
         expect(on).not.toMatch(/pull_request/);
@@ -90,6 +93,14 @@ describe('release notes', () => {
         expect(notes).toContain(version);
         // The condition the owner attached to the go: the limitations are IN the notes.
         expect(notes).toMatch(/Known limitations/i);
+    });
+
+    it('a track release needs its own notes, docs/releases/<track>-v<build>.md, with "What\'s new" (Tynn #1058 L8)', () => {
+        const wf = workflow();
+        // The round's guard refuses a changed track with no notes, naming the file, before any draft is made.
+        expect(wf).toMatch(/for track in \$tracks[\s\S]*tag="\$\{track\}-v\$\{build\}"[\s\S]*\[ ! -s "docs\/releases\/\$tag\.md" \][\s\S]*::error::/);
+        expect(wf).toMatch(/grep -q "\^## What's new" "docs\/releases\/\$tag\.md"/);
+        expect(wf.indexOf('docs/releases/$tag.md" ]')).toBeLessThan(wf.indexOf('gh release create "$tag"'));
     });
 
     it('are guarded by the workflow and written into the release', () => {
