@@ -164,7 +164,13 @@ try {
     const end = Date.now() + 60_000;
     while (Date.now() < end && !said(roomyDir, 'why do I keep getting this?')) {
         const t = (await chatText().catch(() => '')) ?? '';
-        if (/Not delivered/.test(t)) sawNotDelivered = true;
+        if (/Not delivered/.test(t) && !sawNotDelivered) {
+            sawNotDelivered = true;
+            // WHAT THE WINDOW HAD at that moment: the session and the prompt rows, for the reason.
+            await shot('03x-not-delivered-during-move');
+            const seen = await page.evaluate(`window.genieTest.agentDetail(${q(atlas.id)}).then((d) => JSON.stringify({ session: d?.session ? { running: d.session.running, starting: d.session.starting, account: d.session.account } : null, rows: (d?.rows ?? []).filter((r) => ['run', 'prompt_delivery'].includes(r.event.kind) || (r.event.kind === 'message' && r.event.pending)).slice(-8).map((r) => ({ kind: r.event.kind, id: r.event.id ?? r.event.pending?.id, status: r.event.status, text: r.event.text?.slice(0, 30), moved: r.event.moved, quiet: r.event.quiet })) }))`).catch((e) => String(e));
+            console.log(`  NOT DELIVERED SEEN: ${seen}`);
+        }
         const note = await text(`${CHAT} [data-chat-queued]`).catch(() => null);
         if (!movingShot && note && calls().some((c) => c.dir === roomyDir && !c.probe && c.args?.includes('--print'))) { await shot('03-moving'); movingShot = true; console.log(`  the note during the move: ${note}`); }
         await sleep(100);
