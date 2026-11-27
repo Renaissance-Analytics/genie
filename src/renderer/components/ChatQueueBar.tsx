@@ -26,7 +26,6 @@ function SendAllReport({ sending }: { sending: SendAllState }) {
     );
 }
 
-/**
 export function ChatQueueBar({ agentName, waiting, undelivered, onInterruptAndSend, onSendAll, onDiscardAll, sending }: { agentName: string; waiting: number; undelivered: number; onInterruptAndSend?: (() => void) | undefined; onSendAll?: (() => void) | undefined; onDiscardAll?: (() => void) | undefined; sending?: SendAllState | null | undefined }) {
     const bar = 'flex items-center justify-end gap-2 self-end text-[12px]';
     const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]';
