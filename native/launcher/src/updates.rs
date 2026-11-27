@@ -126,8 +126,10 @@ fn channel_of(st: &state::State, track: Track) -> String {
 }
 
 /// The installed build of a track; for the launcher on Windows (installed by NSIS, not a track folder) its own build.
+/// Under an adoption (L9) the host's is the build installed beside the adopted one: what an update must be newer than,
+/// and what a failed update goes back to.
 fn current_of(st: &state::State, track: Track) -> Option<String> {
-    let c = st.track(track.as_str()).and_then(|t| t.current.clone());
+    let c = st.installed(track.as_str());
     if c.is_none() && track == Track::Launcher && crate::version::parse_track_build(LAUNCHER_BUILD).is_some() {
         return Some(LAUNCHER_BUILD.to_string());
     }
@@ -393,9 +395,23 @@ pub fn ask_host(shared: &Shared, roots: &Roots, windows_open: usize) -> Result<V
     if current_of(&st, Track::Client).as_deref() != Some(client.as_str()) && verify_build(roots, Track::Client, &client, &keys, HashScope::Executables).is_err() {
         return Err(format!("The host {to} ships with client {client}, which is not ready here. Check for updates again."));
     }
-    let running = host::read_record(roots).filter(|r| pid_alive(r.pid));
+    let mut running = host::read_record(roots).filter(|r| pid_alive(r.pid));
+    let adopted = st.track(Track::Host.as_str()).and_then(|t| t.current.as_deref()) == Some(state::ADOPTED);
+    if adopted && running.is_some() {
+        // THE ADOPTED HOST (L9) is the single-app install's: asked to install, it would run its own electron-updater
+        // helper against the old feed. It is given the graceful stop instead (`engine.shutdown`, as any host), then the
+        // new host is pointed at and started. Only the unchanged-host bridge leaves a host to adopt; the changed-host
+        // bridge has drained and stopped it before the installer ran.
+        shared.set_host_update(json!({"phase": "stopping", "from": from, "to": to, "said": null, "agents": null, "steps": ["stopping"], "at": now()}));
+        host::stop_host(roots).map_err(|why| format!("The host Genie ran before its launcher did not stop: {why}"))?;
+        host::remove_single_app_copy(roots);
+        running = None;
+    }
     if running.is_none() {
         point_host(roots, &to, Some(&client))?;
+        if adopted {
+            host::ensure_host(roots, &keys).map_err(|why| format!("The new host {to} did not start: {why}"))?;
+        }
         shared.host_phase("done", from.as_deref(), &to, None);
         retain(shared, roots, Track::Host);
         retain(shared, roots, Track::Client);

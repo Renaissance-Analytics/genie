@@ -51,8 +51,15 @@ fn main() -> ExitCode {
         Ok(r) => r,
         Err(why) => return fail(&why),
     };
+    // THE BRIDGE APPIMAGE (L9): run from its own mount, this launcher installs what it carries and hands over.
+    #[cfg(unix)]
+    if let Some(packages) = bridge_packages() {
+        return cmd_bridge(roots, packages, text);
+    }
     match text.first().map(String::as_str) {
-        None => cmd_open(roots),
+        // `--updated`: what electron-updater's NSIS run starts the installed app with (L9: the bridge's installer
+        // starts the launcher so), and Genie opens.
+        None | Some("--updated") => cmd_open(roots),
         Some("--doctor") => match genie_launcher::components::component("client").ok_or_else(|| "no client component".to_string()).and_then(|c| control::start_component(&roots, c, vec!["--doctor".to_string()])) {
             Ok(_) => ExitCode::SUCCESS,
             Err(why) => fail(&why),
@@ -202,6 +209,7 @@ fn cmd_setup(roots: &Roots, from: PathBuf, channel: String, beside: bool) -> Res
     if beside {
         let _ = std::fs::remove_dir_all(&from);
     }
+    genie_launcher::migrate::carry_over_here(roots);
     Ok(())
 }
 
@@ -436,6 +444,60 @@ fn cmd_install(roots: &Roots, rest: &[String]) -> ExitCode {
             for d in done {
                 println!("installed {} {}", d.track.as_str(), d.build);
             }
+            // THE BRIDGE (L9): the bridge's installer runs this over the single-app install; its logon entry is replaced
+            // by the launcher's and its two settings carried over. On any other install there is nothing to replace.
+            genie_launcher::migrate::carry_over_here(roots);
+            ExitCode::SUCCESS
+        }
+        Err(why) => fail(&why),
+    }
+}
+
+/// The packages the bridge AppImage carries, when this launcher runs from its mount: `$APPDIR/packages` beside this
+/// program, with `$APPIMAGE` set by the AppImage's runtime.
+#[cfg(unix)]
+fn bridge_packages() -> Option<PathBuf> {
+    let appdir = PathBuf::from(std::env::var_os("APPDIR").filter(|v| !v.is_empty())?);
+    std::env::var_os("APPIMAGE").filter(|v| !v.is_empty())?;
+    let me = std::env::current_exe().ok()?;
+    if !me.starts_with(&appdir) {
+        return None;
+    }
+    packages_beside_me()
+}
+
+/// THE BRIDGE APPIMAGE (Tynn #1058 L9). electron-updater replaces the single app's AppImage with this one at the same
+/// path, so a pinned or remembered path keeps working, and runs it (`APPIMAGE_SILENT_INSTALL=true`). Its first act is the
+/// install of what it carries, the launcher included, as `genie install --from <its packages>` does: silent where Genie
+/// was already here (the update, or the data root there), the setup window for a person running it fresh. Then the
+/// installed launcher takes over with the same arguments; from then on this AppImage only starts it.
+#[cfg(unix)]
+fn cmd_bridge(roots: Roots, packages: PathBuf, text: Vec<String>) -> ExitCode {
+    let installed = |r: &Roots| genie_launcher::state::read(&r.state_file()).ok().and_then(|s| s.track("launcher").and_then(|t| t.current.clone()));
+    if installed(&roots).is_none() {
+        let silent = std::env::var("APPIMAGE_SILENT_INSTALL").as_deref() == Ok("true") || roots.runtime_dir().is_dir();
+        eprintln!("genie: the bridge AppImage installs Genie's programs from {} ({})", packages.display(), if silent { "Genie was here: silently" } else { "the setup window" });
+        let done = if silent {
+            cmd_install(&roots, &["--from".to_string(), packages.display().to_string(), "--profile".to_string(), "both".to_string(), "--yes".to_string()])
+        } else {
+            match cmd_setup(&roots, packages, "stable".to_string(), false) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(why) => fail(&why),
+            }
+        };
+        if installed(&roots).is_none() {
+            return done;
+        }
+    }
+    if std::env::var("APPIMAGE_EXIT_AFTER_INSTALL").as_deref() == Ok("true") {
+        return ExitCode::SUCCESS;
+    }
+    let Some(build) = installed(&roots) else { return fail("the bridge installed no launcher") };
+    let Some(program) = roots.program(genie_launcher::layout::Track::Launcher, &build) else { return fail("not a track build") };
+    let args: Vec<String> = text.into_iter().filter(|a| a != "--updated").collect();
+    match genie_launcher::spawn::start_window(&program, &args, &[], &roots.logs_dir().join("genie-launcher.log")) {
+        Ok(pid) => {
+            eprintln!("genie: the bridge AppImage handed over to the installed launcher {build} (pid {pid})");
             ExitCode::SUCCESS
         }
         Err(why) => fail(&why),

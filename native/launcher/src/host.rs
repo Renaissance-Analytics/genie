@@ -136,11 +136,28 @@ pub fn ensure_host_within(roots: &Roots, keys: &[VerifyingKey], ready: Duration)
     if let Some(rec) = read_record(roots).filter(|r| pid_alive(r.pid)) {
         let token = read_token(roots)?;
         return match hello(&rec, &token, Duration::from_secs(10)) {
-            Ok(_) => Ok(json!({"how": "adopted", "pid": rec.pid, "build": rec.build})),
+            Ok(_) => {
+                // THE BRIDGE (L9): a host no launcher started (the single-app install's, running from its own copy under
+                // `<data root>/host/`, with the old app's build) is adopted as it is: its pid and its agents are kept,
+                // and `host.current` says `adopted`, the installed build waiting as `previous`.
+                if crate::version::parse_track_build(&rec.build).is_none() {
+                    let mut st = state::read(&roots.state_file())?;
+                    if st.adopt(Track::Host.as_str()) {
+                        state::write_atomic(&roots.state_file(), &st).map_err(|e| format!("state.json could not be written: {e}"))?;
+                        eprintln!("genie: adopted the host Genie was running before its launcher (pid {}, build {})", rec.pid, rec.build);
+                    }
+                }
+                Ok(json!({"how": "adopted", "pid": rec.pid, "build": rec.build}))
+            }
             Err(why) => Err(format!("A host is running (pid {}) that does not answer this launcher: {why}.", rec.pid)),
         };
     }
-    let st = state::read(&roots.state_file())?;
+    let mut st = state::read(&roots.state_file())?;
+    if st.settle_adopted(Track::Host.as_str()).is_some() {
+        // The adopted host has gone: the installed build is current again, and the single app's copy is removed.
+        state::write_atomic(&roots.state_file(), &st).map_err(|e| format!("state.json could not be written: {e}"))?;
+        remove_single_app_copy(roots);
+    }
     let build = st.track(Track::Host.as_str()).and_then(|t| t.current.clone()).ok_or("No host is installed on this computer.")?;
     verify_build(roots, Track::Host, &build, keys, HashScope::Executables)?;
     let program = roots.host_program(&build).ok_or("the host's build is not a track build")?;
@@ -173,6 +190,26 @@ pub fn ensure_host_within(roots: &Roots, keys: &[VerifyingKey], ready: Duration)
     }
     end(pid);
     Err(format!("The new host did not start within a minute, so it was ended. The host's log: {}", log.display()))
+}
+
+/// The single-app install's host copy (P6-1's `<data root>/host/`: `runtime-<electron>-host/` and each bundle committed by
+/// its `.complete` marker), removed once the host adopted from it has gone. Nothing else there is touched, and the folder
+/// goes only when that leaves it empty.
+pub fn remove_single_app_copy(roots: &Roots) {
+    let dir = roots.data.join("host");
+    let Ok(entries) = std::fs::read_dir(&dir) else { return };
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let path = e.path();
+        let p6_copy = (name.starts_with("runtime-") && name.ends_with("-host")) || path.join(".complete").is_file();
+        if p6_copy && path.is_dir() {
+            match std::fs::remove_dir_all(&path) {
+                Ok(()) => eprintln!("genie: removed the single-app host copy {}", path.display()),
+                Err(e) => eprintln!("genie: the single-app host copy {} could not be removed: {e}", path.display()),
+            }
+        }
+    }
+    let _ = std::fs::remove_dir(&dir);
 }
 
 /// How the graceful stop waits for the host (Tynn #1079): as long as the host's own stop progress
