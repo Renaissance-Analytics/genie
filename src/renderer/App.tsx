@@ -57,11 +57,14 @@ import { refusalReason } from './site-actions.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
 import { approvalKey, refusalWords, type ApprovalAnswering, type ApprovalRefusal } from '../core/approval-answering.js';
 import type { Approval } from '../core/approval.js';
-import { alertsBetween, finishAlerts, type AlertSnapshot } from '../core/alert-diff.js';
+import { alertsBetween, finishAlerts, type Alert, type AlertSnapshot } from '../core/alert-diff.js';
 import { ALERT_KINDS, alertDelivery, alertSound, toastFor, type AlertKind } from '../core/alerts.js';
 import { toolchainSecurityAlerts } from '../core/toolchain-alerts.js';
 import type { ToolStatus } from '../core/toolchain.js';
-import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
+import { setCustomSoundLoader } from './alert-sound.js';
+import { soundAndCue } from './sound-and-cue.js';
+import { addCue, cueOfAction, cueOfAlert, NO_CUES, seeAgent, seeAll, seeCue, seeRoute, type NewCue, type SoundCue, type SoundCues } from '../core/sound-cues.js';
+import { SoundCuesContext, type SoundCuesView } from './sound-cues-context.js';
 import { alertVolume } from '../core/sound-volume.js';
 import { clientSoundValues } from './client-sound-settings.js';
 import { limitAlertSound } from '../core/limit-alerts.js';
@@ -650,31 +653,49 @@ const THREADS_KEY = 'genie.chat.threads';
 
 const EMPTY_REMOTE: RemoteState = { connected: false, host: null, isOwner: false, workspaceId: null, driver: null, driving: false, locked: false, lastRefusal: null, token: null };
 
+/** What main's `genie:action` carries to the window. */
+type BridgeAction = Parameters<Parameters<NonNullable<GenieBridge['onAction']>>[0]>[0];
+
+/** A cue's id: unique in this window (Tynn #1057). */
+let cueCounter = 0;
+const nextCueId = (): string => `cue_${Date.now().toString(36)}_${(cueCounter += 1)}`;
+
 /**
  * ALERTS (§6.3) — derived from consecutive snapshots, never a timer: a new question, approval,
  * finish or mail item, or an agent that turned broken, plays its registered sound (if that row and
  * the master switch are on) and raises a toast naming the WORKSPACE and the AGENT. The first
  * snapshot after boot alerts nobody.
  */
-function useAlerts(snapshot: GenieSnapshot, settings: Readonly<Record<string, boolean | string>> | null, show: (toast: { title: string; body: string; color?: string }) => void): void {
+function useAlerts(snapshot: GenieSnapshot, settings: Readonly<Record<string, boolean | string>> | null, show: (toast: { title: string; body: string; color?: string }) => void, cue: (cue: NewCue) => void): void {
     const prev = useRef<AlertSnapshot | null>(null);
     // The last handoff time seen per agent (Tynn #658): a finish alerts once, however its row comes and goes.
     const handoffsSeen = useRef<ReadonlyMap<string, number | null>>(new Map());
+    // ONE ALERT RAISED: its sound and its cue (Tynn #1057), and its toast.
+    const raise = useRef((_alert: Alert): void => {});
+    raise.current = (alert: Alert): void => {
+        // The chosen sound — a wav or the Default chime — through the one player Preview uses too, and its cue.
+        soundAndCue({ sound: alertSound(alert.kind, settings ?? {}), volume: alertVolume(alert.kind, clientSoundValues()), cue: cueOfAlert(alert, Date.now(), nextCueId()), settings: settings ?? {}, add: cue });
+        // The agent's workspace colour beside its address (genie#1300).
+        const color = snapshot.workspaces?.find((w) => w.id === alert.workspace)?.color;
+        show({ ...toastFor(alert, slugsFor(snapshot.workspaces ?? [])), ...(color ? { color } : {}) });
+    };
     useEffect(() => {
         const next: AlertSnapshot = { deckItems: snapshot.deckItems, agents: snapshot.agents.map((a) => ({ id: a.id, name: a.name, workspaceId: a.workspaceId, state: a.state, reason: a.reason, handoff: a.handoff ?? null })) };
         // A finish is read from the rows against the ref, so it does not wait on the Deck having been read.
         const finishes = finishAlerts(handoffsSeen.current, next.agents);
         handoffsSeen.current = finishes.seen;
         const deck = snapshot.deckItems !== null ? alertsBetween(prev.current, next) : [];
-        for (const alert of [...deck, ...finishes.alerts]) {
-            // The chosen sound — a wav or the Default chime — through the one player Preview uses too.
-            playAlertSound(alertSound(alert.kind, settings ?? {}), alertVolume(alert.kind, clientSoundValues()));
-            // The agent's workspace colour beside its address (genie#1300).
-            const color = snapshot.workspaces?.find((w) => w.id === alert.workspace)?.color;
-            show({ ...toastFor(alert, slugsFor(snapshot.workspaces ?? [])), ...(color ? { color } : {}) });
-        }
+        for (const alert of [...deck, ...finishes.alerts]) raise.current(alert);
         if (snapshot.deckItems !== null) prev.current = next;
     }, [snapshot, settings]);
+    // A PROBE'S WAY IN (GENIE_PAGE_PROBE only, as the actions' below): an alert raised by this same path, for the rows that
+    // photograph what one leaves (scripts/sound-cues-cdp.mjs). A normal window has no such door.
+    useEffect(() => {
+        const probe = typeof window !== 'undefined' && window.genieTestMode === true ? (window as unknown as { genieAlertProbe?: (alert: Alert) => void }) : null;
+        if (!probe) return;
+        probe.genieAlertProbe = (alert) => raise.current(alert);
+        return () => { delete probe.genieAlertProbe; };
+    }, []);
 }
 
 /**
@@ -682,12 +703,12 @@ function useAlerts(snapshot: GenieSnapshot, settings: Readonly<Record<string, bo
  * tool newly under its security floor raises the `ghsecurity` alert once — the sound and notification the person set
  * for "a security alert" — the moment the probe reports it, not when Settings is next opened.
  */
-function useToolchainSecurityAlerts(tools: readonly ToolStatus[] | null, settings: Readonly<Record<string, boolean | string>> | null, show: (toast: { title: string; body: string }) => void): void {
+function useToolchainSecurityAlerts(tools: readonly ToolStatus[] | null, settings: Readonly<Record<string, boolean | string>> | null, show: (toast: { title: string; body: string }) => void, cue: (cue: NewCue) => void): void {
     const prev = useRef<readonly ToolStatus[] | null>(null);
     useEffect(() => {
         if (tools === null) return;
         for (const alert of toolchainSecurityAlerts(prev.current, tools)) {
-            playAlertSound(alertSound(alert.kind, settings ?? {}), alertVolume(alert.kind, clientSoundValues()));
+            soundAndCue({ sound: alertSound(alert.kind, settings ?? {}), volume: alertVolume(alert.kind, clientSoundValues()), cue: cueOfAlert(alert, Date.now(), nextCueId()), settings: settings ?? {}, add: cue });
             show(toastFor(alert));
         }
         prev.current = tools;
@@ -1197,7 +1218,15 @@ function DesktopApp({ bridge }: AppProps) {
             try { new Notification(toast.title, { body: toast.body }); } catch { /* no notification surface here */ }
         }
     }, [dismissAlert]);
-    useAlerts(snapshot, features.settings.values, showAlert);
+    /*
+     * EVERY SOUND HAS A SIGHT (Tynn #1057): what sounded, kept by this window until it is seen (core/sound-cues.ts) and
+     * drawn on the sidebar's rows, the Dashboard's activity and each workspace dashboard's.
+     */
+    const [soundCues, setSoundCues] = useState<SoundCues>(NO_CUES);
+    const keepCue = useCallback((cue: NewCue) => setSoundCues((s) => addCue(s, cue)), []);
+    // Going to it sees it: a workspace's page what happened there, an agent's page that agent's (the pulse's rule).
+    useEffect(() => { setSoundCues((s) => seeRoute(s, route)); }, [route]);
+    useAlerts(snapshot, features.settings.values, showAlert, keepCue);
     // A TERMINAL AN AGENT STARTED NEEDS THE PERSON (Tynn #722): main sends it to the window in use. A one-click Show terminal
     // opens that workspace's Terminals tab; nothing moves on its own (core/view-requests.ts).
     useEffect(() => resolvedBridge?.onAction?.((action) => {
@@ -1205,7 +1234,10 @@ function DesktopApp({ bridge }: AppProps) {
         const route = showTerminalRoute(action.workspaceId);
         showAlert({ title: `${action.agentName ?? 'An agent'} needs you in a terminal`, body: 'A terminal is waiting for you: a login, a code or a question.', action: { label: 'Show terminal', run: () => { window.location.hash = `#${route}`; } } });
     }), [resolvedBridge, showAlert]);
-    useToolchainSecurityAlerts(features.toolchain?.tools ?? null, features.settings.values, showAlert);
+    useToolchainSecurityAlerts(features.toolchain?.tools ?? null, features.settings.values, showAlert, keepCue);
+    // Who an action was (its cue's agent and workspace): the roster as it is now, Genie's own agent included.
+    const cueAgents = useRef<readonly { id: string; name: string; workspaceId: string }[]>([]);
+    cueAgents.current = snapshot.osAgent ? [...snapshot.agents, snapshot.osAgent] : snapshot.agents;
     // EVERY KIND OF ACTION (Tynn #766 C): what an agent just did, pushed by main; the sound chosen for it, if any.
     // The send key, to every open composer, the moment the setting changes (Tynn issue #697).
     useEffect(() => { setSendKey(sendKeyFrom(features.settings.values)); }, [features.settings.values]);
@@ -1246,32 +1278,40 @@ function DesktopApp({ bridge }: AppProps) {
         return r;
     }, [resolvedBridge, readAccounts]);
     const dismissSwitchOffer = useCallback((id: string) => { void resolvedBridge?.dismissSwitchOffer?.(id).then(() => readAccounts(), () => {}); }, [resolvedBridge, readAccounts]);
-    useEffect(() => resolvedBridge?.onAction?.((action) => {
-        // A RATE-LIMIT ALERT the person set (Tynn #748): its own sound, held by Do not disturb, and a notice naming the account.
-        if (action.kind === 'limit-alert' && action.title && action.body) {
-            playAlertSound(limitAlertSound(action.sound ?? 'synth', soundSettings.current ?? {}), alertVolume(null, clientSoundValues()));
-            showAlert({ title: action.title, body: action.body });
-            return;
-        }
-        // HOW A CLAUDE SIGN-IN OR SIGN-OUT CAME OUT (Tynn #1011).
-        if (action.kind === 'account-notice') {
-            showAlert({ title: action.title ?? 'Accounts', body: action.body ?? '' });
-            return;
-        }
-        // HOW AN ACCOUNT SWITCH CAME OUT (Tynn #482): the account now active, or nothing changed with Retry (one click, again).
-        if (action.kind === 'account-switch') {
-            const outcome = accountSwitchOutcomeOf(action.outcome);
-            if (outcome) showAlert(accountSwitchToast(outcome, (provider) => { void resolvedBridge?.switchAccount?.(provider).then((r) => { if (r.ok) openCompanion(r, 'Switch account'); }, () => {}); }));
-            return;
-        }
-        if (ALERT_KINDS.some((k) => k.kind === action.kind)) playAlertSound(alertSound(action.kind as AlertKind, soundSettings.current ?? {}), alertVolume(action.kind as AlertKind, clientSoundValues()));
-        const emoji = action.agentId ? ROW_EMOJI[action.kind as RowSignalKind] : undefined;
-        if (emoji && action.agentId) {
-            const id = action.agentId;
-            setRowEmoji((prev) => ({ ...prev, [id]: emoji }));
-            setTimeout(() => setRowEmoji((prev) => { if (prev[id] !== emoji) return prev; const next = { ...prev }; delete next[id]; return next; }), ROW_EMOJI_MS);
-        }
-    }), [resolvedBridge, showAlert]);
+    useEffect(() => {
+        const handle = (action: BridgeAction): void => {
+            // A RATE-LIMIT ALERT the person set (Tynn #748): its own sound, held by Do not disturb, and a notice naming the account.
+            if (action.kind === 'limit-alert' && action.title && action.body) {
+                soundAndCue({ sound: limitAlertSound(action.sound ?? 'synth', soundSettings.current ?? {}), volume: alertVolume(null, clientSoundValues()), cue: cueOfAction(action, cueAgents.current, Date.now(), nextCueId()), settings: soundSettings.current ?? {}, add: keepCue });
+                showAlert({ title: action.title, body: action.body });
+                return;
+            }
+            // HOW A CLAUDE SIGN-IN OR SIGN-OUT CAME OUT (Tynn #1011).
+            if (action.kind === 'account-notice') {
+                showAlert({ title: action.title ?? 'Accounts', body: action.body ?? '' });
+                return;
+            }
+            // HOW AN ACCOUNT SWITCH CAME OUT (Tynn #482): the account now active, or nothing changed with Retry (one click, again).
+            if (action.kind === 'account-switch') {
+                const outcome = accountSwitchOutcomeOf(action.outcome);
+                if (outcome) showAlert(accountSwitchToast(outcome, (provider) => { void resolvedBridge?.switchAccount?.(provider).then((r) => { if (r.ok) openCompanion(r, 'Switch account'); }, () => {}); }));
+                return;
+            }
+            if (ALERT_KINDS.some((k) => k.kind === action.kind)) soundAndCue({ sound: alertSound(action.kind as AlertKind, soundSettings.current ?? {}), volume: alertVolume(action.kind as AlertKind, clientSoundValues()), cue: cueOfAction(action, cueAgents.current, Date.now(), nextCueId()), settings: soundSettings.current ?? {}, add: keepCue });
+            const emoji = action.agentId ? ROW_EMOJI[action.kind as RowSignalKind] : undefined;
+            if (emoji && action.agentId) {
+                const id = action.agentId;
+                setRowEmoji((prev) => ({ ...prev, [id]: emoji }));
+                setTimeout(() => setRowEmoji((prev) => { if (prev[id] !== emoji) return prev; const next = { ...prev }; delete next[id]; return next; }), ROW_EMOJI_MS);
+            }
+        };
+        const off = resolvedBridge?.onAction?.(handle);
+        // A PROBE'S WAY IN (GENIE_PAGE_PROBE only: the test VMs' rows, scripts/sound-cues-cdp.mjs): an action handed to this SAME
+        // handler main's `genie:action` reaches, so what it shows is what a real one shows. A normal window has no such door.
+        const probe = typeof window !== 'undefined' && window.genieTestMode === true ? (window as unknown as { genieSoundProbe?: (action: BridgeAction) => void }) : null;
+        if (probe) probe.genieSoundProbe = handle;
+        return () => { off?.(); if (probe) delete probe.genieSoundProbe; };
+    }, [resolvedBridge, showAlert, keepCue]);
     // MAIL BETWEEN AGENTS ON THE BOARD (genie#1209): a send starts a signal, a read marks it, a tick lets it go.
     const [mailSignalList, setMailSignalList] = useState<readonly MailSignal[]>([]);
     useEffect(() => resolvedBridge?.onAction?.((action) => {
@@ -2181,6 +2221,22 @@ function DesktopApp({ bridge }: AppProps) {
             </div>
         );
     }
+    /*
+     * WHAT SOUNDED, FOR THE SIDEBAR AND THE DASHBOARDS (Tynn #1057). Opening a cue goes to what it is about the way its row
+     * would: an agent's opens its chat beside the page (the Dashboard row's click), a workspace's opens the workspace; either
+     * sees it. One of the whole machine has nowhere to go, and is seen where it is.
+     */
+    const soundCuesView: SoundCuesView = {
+        cues: soundCues,
+        osAgentId: snapshot.osAgent?.id ?? null,
+        onOpen: (cue: SoundCue) => {
+            setSoundCues((s) => seeCue(cue.agentId ? seeAgent(s, cue.agentId) : s, cue.id));
+            if (cue.agentId) setChatPick(cue.agentId);
+            else if (cue.workspaceId && snapshot.workspaces?.some((w) => w.id === cue.workspaceId)) navigate(`genie://workspace/${cue.workspaceId}`);
+        },
+        onSee: (id: string) => setSoundCues((s) => seeCue(s, id)),
+        onSeeAll: () => setSoundCues((s) => seeAll(s)),
+    };
     return (
         <HostPathPickerContext.Provider value={pickHostPath}>
         <PluginEditorsContext.Provider value={pluginEditors}>
@@ -2191,6 +2247,7 @@ function DesktopApp({ bridge }: AppProps) {
                 <Button size="xs" type="button" className="rounded border border-[var(--border-1)] px-3 py-1 hover:bg-[var(--bg-2)]" onClick={() => local?.retry()}>Retry</Button>
             </div>
         ) : null}
+        <SoundCuesContext.Provider value={soundCuesView}>
         <Shell
             alertToasts={alertToasts}
             onDismissAlert={dismissAlert}
@@ -2340,7 +2397,7 @@ function DesktopApp({ bridge }: AppProps) {
                 const next = route.replace(/[?&]chat=[^&]*/, '').replace(/[?&]pin=[^&]*/, '');
                 navigate(next);
             }}
-            onChatAgent={(id) => setChatPick(id)}
+            onChatAgent={(id) => { setChatPick(id); setSoundCues((s) => seeAgent(s, id)); }}
             onOpenAgent={(id) => {
                 // OPENING SHOWS IT (q_04ce323c, 2026-11-01): main starts nothing here — a running agent's session is the
                 // one shown, a stopped one stays stopped with its Start, and its first message starts it.
@@ -2436,6 +2493,7 @@ function DesktopApp({ bridge }: AppProps) {
             onOpenPalette={() => setPaletteOpen(true)}
             windowScope={windowScope}
         />
+        </SoundCuesContext.Provider>
         <CommandWindow
             // The Command Window jumps across the workstation: not in a workspace window (Tynn #690).
             open={paletteOpen && windowScope.kind === 'workstation'}

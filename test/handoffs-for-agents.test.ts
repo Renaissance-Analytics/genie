@@ -141,7 +141,7 @@ describe('an agent finishing still sounds its alert, once (the person hears it; 
     it('a newer handoff is one "finished" alert, naming the agent and the handoff\u2019s first line', () => {
         const seen = new Map<string, number | null>([['agent_a', 1]]);
         const r = finishAlerts(seen, [row({ text: 'PR #15 is up.', at: 2 })]);
-        expect(r.alerts).toEqual([{ kind: 'finished', workspace: 'tynn', agent: 'atlas', detail: 'atlas finished: PR #15 is up.' }]);
+        expect(r.alerts).toEqual([{ kind: 'finished', workspace: 'tynn', agent: 'atlas', agentId: 'agent_a', detail: 'atlas finished: PR #15 is up.' }]);
         expect(r.seen.get('agent_a')).toBe(2);
     });
 

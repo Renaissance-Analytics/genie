@@ -15,6 +15,8 @@ export interface Alert {
     readonly workspace: string;
     readonly agent: string;
     readonly detail: string;
+    /** The agent it was, when it was one (Tynn #1057: its cue is seen when that agent is opened). */
+    readonly agentId?: string | null;
 }
 
 export interface AlertSnapshot {
@@ -37,11 +39,11 @@ export function alertsBetween(prev: AlertSnapshot | null, next: AlertSnapshot): 
         if (seen.has(item.id)) continue;
         const kind = kindOf(item);
         if (!kind) continue;
-        alerts.push({ kind, workspace: item.workspaceId ?? '—', agent: item.agentName ?? item.agentId ?? '—', detail: item.title });
+        alerts.push({ kind, workspace: item.workspaceId ?? '—', agent: item.agentName ?? item.agentId ?? '—', agentId: item.agentId, detail: item.title });
     }
     const wasBroken = new Set(prev.agents.filter((a) => a.state === 'broken').map((a) => a.id));
     for (const a of next.agents) {
-        if (a.state === 'broken' && !wasBroken.has(a.id)) alerts.push({ kind: 'broken', workspace: a.workspaceId, agent: a.name, detail: a.reason ?? 'broken' });
+        if (a.state === 'broken' && !wasBroken.has(a.id)) alerts.push({ kind: 'broken', workspace: a.workspaceId, agent: a.name, agentId: a.id, detail: a.reason ?? 'broken' });
     }
     return alerts;
 }
@@ -65,7 +67,7 @@ export function finishAlerts(seen: ReadonlyMap<string, number | null>, agents: A
         const last = next.get(a.id) ?? null;
         if (at === null || (last !== null && at <= last)) continue;
         next.set(a.id, at);
-        alerts.push({ kind: 'finished', workspace: a.workspaceId, agent: a.name, detail: `${a.name} finished: ${a.handoff!.text}` });
+        alerts.push({ kind: 'finished', workspace: a.workspaceId, agent: a.name, agentId: a.id, detail: `${a.name} finished: ${a.handoff!.text}` });
     }
     return { alerts, seen: next };
 }

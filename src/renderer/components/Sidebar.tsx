@@ -9,6 +9,9 @@ import { folderName } from '../../core/workspace-name.js';
 import { WorkspaceSwatch, wsStyle } from '../workspace-colors.js';
 import { agentStatusStyle } from '../agent-status-color.js';
 import { ProviderLogo } from './ProviderLogo.js';
+import { latestUnseen, type SoundCue } from '../../core/sound-cues.js';
+import { useSoundCues } from '../sound-cues-context.js';
+import { CueCorner, CueIcon, CueSlot, cueWords } from './SoundCues.js';
 
 export type { RailSurface };
 
@@ -162,6 +165,7 @@ function NavRow({
     dotLabel,
     dotTooltip = false,
     compact = false,
+    cue = null,
 }: {
     route: string;
     current: string;
@@ -178,6 +182,8 @@ function NavRow({
     dotTooltip?: boolean | undefined;
     /** Collapsed rail: the icon alone, the label as its tooltip and accessible name. */
     compact?: boolean;
+    /** What sounded here and is not seen yet (Tynn #1057): its icon beside the label, at the icon's corner collapsed. */
+    cue?: SoundCue | null | undefined;
 }) {
     // A route carries query state (`?group=workspace`), so the comparison is on the path.
     // Matching the whole string would un-highlight the Dashboard the moment someone regrouped
@@ -189,8 +195,8 @@ function NavRow({
             data-nav={route}
             active={active}
             onClick={() => onNavigate(route)}
-            icon={<Icon name={icon} size="sm" className="shrink-0 text-[var(--fg-4)]" />}
-            badge={children ?? undefined}
+            icon={compact && cue ? <span className="relative inline-flex"><Icon name={icon} size="sm" className="shrink-0 text-[var(--fg-4)]" /><CueCorner cue={cue} /></span> : <Icon name={icon} size="sm" className="shrink-0 text-[var(--fg-4)]" />}
+            badge={!compact && cue ? <span className="ml-auto flex items-center gap-1"><span title={cueWords(cue)} className="inline-flex"><CueIcon cue={cue} /></span>{children}</span> : children ?? undefined}
             {...(dot ? { dot, ...(dotLabel ? { dotLabel, dotTooltip } : {}) } : {})}
             // Collapsed with a dot, Sidebar names the item by its label AND the dot's words; without one, name it here.
             {...(compact && !dot ? { 'aria-label': label } : {})}
@@ -276,8 +282,10 @@ export function railAgents(agents: readonly AgentRow[], workspaces: readonly Rai
  * running, and two icon buttons beside the row: open its workspace, its settings. None of the workspace row's controls.
  * A click opens its chat; the page on screen stays.
  */
-function AgentRailRow({ agent, workspaceName, active, compact, onChat, onNavigate, onOpenTerminal, onOpenFiles }: {
+function AgentRailRow({ agent, workspaceName, active, compact, onChat, onNavigate, onOpenTerminal, onOpenFiles, cue = null }: {
     agent: AgentRow;
+    /** What sounded for this agent and is not seen yet (Tynn #1057). */
+    cue?: SoundCue | null;
     workspaceName: string;
     active: boolean;
     compact: boolean;
@@ -311,7 +319,7 @@ function AgentRailRow({ agent, workspaceName, active, compact, onChat, onNavigat
                 active={active}
                 onClick={() => onChat(agent.id)}
                 aria-label={`${agent.name} · ${word}`}
-                icon={<span className="relative inline-flex"><ProviderLogo provider={agent.provider} />{dot}</span>}
+                icon={<span className="relative inline-flex"><ProviderLogo provider={agent.provider} />{dot}<CueCorner cue={cue} /></span>}
                 className={RAIL_ITEM_COMPACT}
             >
                 {agent.name}
@@ -333,6 +341,7 @@ function AgentRailRow({ agent, workspaceName, active, compact, onChat, onNavigat
                 icon={<ProviderLogo provider={agent.provider} />}
                 badge={
                     <span className="flex shrink-0 items-center gap-1.5">
+                        {cue ? <span title={cueWords(cue)} className="inline-flex"><CueIcon cue={cue} /></span> : null}
                         {dot}
                         {shells !== null ? (
                             <span data-agent-shells={shells} title={shellsTitle} className="flex items-center gap-0.5 font-mono text-[11px] tabular-nums text-[var(--fg-4)]">
@@ -374,6 +383,11 @@ function readShowAsleep(): boolean {
 
 export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, available, onNavigate, onWakeWorkspace, onAddWorkspace, railStorage, currentWorkspaceId = null, onOpenProcesses, onOpenSites, onOpenBrowser, pulsing, rateLimitAlert = null, settingsAlert = null, agents, onChatAgent, onOpenWorkspaceTerminal, onOpenWorkspaceFiles, personInbox }: SidebarProps) {
     countRender('Sidebar');
+    // WHAT SOUNDED AND IS NOT SEEN (Tynn #1057): on the row it belongs to — its workspace's, its agent's, Genie's own agent's,
+    // or the Dashboard's for what belongs to no workspace.
+    const { cues, osAgentId } = useSoundCues();
+    const machineCue = latestUnseen(cues, 'machine');
+    const genieCue = osAgentId ? latestUnseen(cues, { agentId: osAgentId }) : null;
     const has = (s: RailSurface): boolean => available.includes(s);
     const storage = railStorage === undefined ? browserStorage() : railStorage;
     // COLLAPSED (Tynn #799): an icon rail where every destination is still one click away; remembered on this device.
@@ -420,7 +434,7 @@ export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, a
     const chatAgent = onChatAgent ?? ((agentId: string) => onNavigate(`genie://agent/${agentId}`));
     const agentRows = (compact: boolean) => listed.map((a) => (
         <AgentRailRow key={a.id} agent={a} workspaceName={workspaceNameOf(a.workspaceId)} active={current === `genie://agent/${a.id}`} compact={compact}
-            onChat={chatAgent} onNavigate={onNavigate} onOpenTerminal={onOpenWorkspaceTerminal} onOpenFiles={onOpenWorkspaceFiles} />
+            onChat={chatAgent} onNavigate={onNavigate} onOpenTerminal={onOpenWorkspaceTerminal} onOpenFiles={onOpenWorkspaceFiles} cue={latestUnseen(cues, { agentId: a.id })} />
     ));
     // THE TOGGLE (Tynn #687): two icons, no words — each named by its tooltip and accessible name.
     const viewToggle = canListAgents ? (
@@ -466,10 +480,10 @@ export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, a
                 {viewToggle}
                 <FancySidebar embedded collapsed collapseMode="icons" navLabel="Genie" keyboardNav className="w-full items-center gap-1">
                 {has('dashboard') ? (
-                    <NavRow route="genie://dashboard" current={route} icon="layout-list" label="Dashboard" onNavigate={onNavigate} compact {...(rateLimitAlert ? { dot: limitDot(rateLimitAlert), dotLabel: rateLimitAlert.label, dotTooltip: true } : badge !== null ? { dot: 'amber' as const, dotLabel: `${badge} waiting`, dotTooltip: true } : {})} />
+                    <NavRow route="genie://dashboard" current={route} icon="layout-list" label="Dashboard" onNavigate={onNavigate} compact cue={machineCue} {...(rateLimitAlert ? { dot: limitDot(rateLimitAlert), dotLabel: rateLimitAlert.label, dotTooltip: true } : badge !== null ? { dot: 'amber' as const, dotLabel: `${badge} waiting`, dotTooltip: true } : {})} />
                 ) : null}
                 {personInbox ? <InboxRow inbox={personInbox} compact /> : null}
-                {has('genie') ? <NavRow route="genie://agent/genie" current={route} icon="sparkles" label="genie" onNavigate={onNavigate} compact /> : null}
+                {has('genie') ? <NavRow route="genie://agent/genie" current={route} icon="sparkles" label="genie" onNavigate={onNavigate} compact cue={genieCue} /> : null}
                 {has('hosting') ? <NavRow route="genie://hosting" current={route} icon="server" label="Hosting" onNavigate={onNavigate} compact /> : null}
                 {has('browser') ? (onOpenBrowser ? <BrowserDoor onOpen={onOpenBrowser} compact /> : <NavRow route="genie://browser" current={route} icon="globe" label="Browser" onNavigate={onNavigate} compact />) : null}
                 {has('settings') ? (
@@ -499,6 +513,8 @@ export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, a
                             icon={
                                 <span className="font-mono text-[11px] font-semibold uppercase">
                                     {w.asleep === true ? <Icon name="moon" size="sm" /> : name.slice(0, 2)}
+                                    {/* What sounded here, not seen yet (Tynn #1057): at the corner. */}
+                                    {w.asleep === true ? null : <CueCorner cue={latestUnseen(cues, { workspaceId: w.id })} />}
                                     {/* Its colour (genie#1300): a bar under the letters — the letters stay the cue. */}
                                     {w.color ? <span aria-hidden="true" data-workspace-color={w.color} style={wsStyle(w.color)} className="absolute inset-x-2 bottom-0.5 h-0.5 rounded-full bg-[var(--ws)]" /> : null}
                                 </span>
@@ -546,6 +562,7 @@ export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, a
                     icon="layout-list"
                     label="Dashboard"
                     onNavigate={onNavigate}
+                    cue={machineCue}
                     {...(rateLimitAlert ? { dot: limitDot(rateLimitAlert), dotLabel: rateLimitAlert.label, dotTooltip: true } : badge !== null ? { dot: 'amber' as const, dotLabel: `${badge} waiting`, dotTooltip: true } : {})}
                 >
                 {/*
@@ -581,7 +598,7 @@ export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, a
              * rail once the agent surface can render it.
              */}
             {has('genie') ? (
-                <NavRow route="genie://agent/genie" current={route} icon="sparkles" label="genie" onNavigate={onNavigate} />
+                <NavRow route="genie://agent/genie" current={route} icon="sparkles" label="genie" onNavigate={onNavigate} cue={genieCue} />
             ) : null}
 
             {/* Each named as its surface names itself: Sites / Processes / Services live in Hosting. */}
@@ -647,7 +664,9 @@ export function Sidebar({ route, deckCount, deckStaleCount = null, workspaces, a
                         onClick={() => openWorkspace(w)}
                         {...(w.alert === true ? { dot: 'amber' as const, dotLabel: 'needs you' } : {})}
                         {...(w.count !== null ? { badgeLabel: `${w.count} agent${w.count === 1 ? '' : 's'}` } : {})}
-                        icon={<Icon name={w.asleep === true ? 'moon' : 'folder'} size="sm" className="shrink-0 text-[var(--fg-4)]" />}
+                        // NO FOLDER (Tynn #1057; the owner: "The folder icon in the sidebar items is useless"): the slot is the
+                        // workspace's live cue — the icon of its most recent unseen event — or nothing. A hibernated row keeps its moon.
+                        icon={w.asleep === true ? <Icon name="moon" size="sm" className="shrink-0 text-[var(--fg-4)]" /> : <CueSlot cue={latestUnseen(cues, { workspaceId: w.id })} />}
                         badge={
                             <span className="flex shrink-0 items-center gap-1.5">
                                 {/*

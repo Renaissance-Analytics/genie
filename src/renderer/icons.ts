@@ -5,6 +5,7 @@ import { NAV_GROUPS } from '../core/settings-nav.js';
 import { KIND_COPY } from './components/AddWorkspaceWizard.js';
 import { ORDER_ICON } from '../core/inbox-view.js';
 import { BUILT_IN_TAB } from './components/WorkspaceTabs.js';
+import { CUE_LOOK } from '../core/sound-cues.js';
 
 /**
  * ICON REGISTRATION — and the reason it has its own file and its own test.
@@ -181,6 +182,10 @@ export const ICON_NAMES: readonly string[] = [
     ...Object.values(BUILT_IN_TAB).flatMap((t) => (t.icon ? [t.icon] : [])),
     // The Toolchain's Check and repair (Tynn #962).
     'stethoscope',
+    // EVERY SOUND HAS A SIGHT (Tynn #1057): each sound event's icon, named in data (`CUE_LOOK`), so registered from it; the
+    // activity's "all seen".
+    ...Object.values(CUE_LOOK).map((l) => l.icon),
+    'check-check',
 ];
 
 /** Lucide exports components in PascalCase; `registerIcons` kebab-cases the keys itself. */

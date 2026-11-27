@@ -4,6 +4,7 @@ import type { FeedKind } from '../../core/activity-feed.js';
 import type { DashLane, WorkspaceDashboardView } from '../../core/workspace-dashboard.js';
 import { FidelityDot } from './Dashboard.js';
 import { ProviderLogo } from './ProviderLogo.js';
+import { SoundActivity } from './SoundCues.js';
 
 /**
  * THE WORKSPACE DASHBOARD — A LANE PER AGENT (beta.33 item 10; the owner, 2026-10-20: "Each agent should have a full lane
@@ -181,6 +182,8 @@ export function WorkspaceDashboard({ name, workspaceId, view, onOpenAgent, onOpe
                 {onSaveToRepo ? <Button type="button" size="xs" data-action="save-to-repo" data-save-to-repo={workspaceId} onClick={onSaveToRepo}>Save to repo</Button> : null}
                 <Button type="button" size="xs" icon="plus" data-action="add-agent" data-add-agent={workspaceId} onClick={onAddAgent}>Add agent</Button>
             </div>
+            {/* WHAT SOUNDED HERE, AND TO THE WHOLE MACHINE (Tynn #1057): newest first, what is not seen yet standing out. */}
+            <SoundActivity scope={{ workspaceId }} />
             {/* A question in this workspace no agent's lane holds (a flow's) — it would otherwise have no way in here. */}
             {view.waiting.map((w) => (
                 <div key={w.id} data-dash-waiting={w.id} className="flex items-center gap-2 rounded-lg border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-3 py-2 text-[13px]">

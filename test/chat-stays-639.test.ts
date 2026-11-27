@@ -56,7 +56,8 @@ describe('the wiring', () => {
     const app = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8').split(/\r?\n/).filter((l) => !l.trim().startsWith('//')).join('\n');
     it('App keeps ONE pick for the window: the Dashboard click sets it, an agent tab sets it, and nothing clears it on navigation', () => {
         expect(app).toMatch(/chatSubjectFor\(parsed, chatRoster, chatPick\)/);
-        expect(app).toMatch(/onChatAgent=\{\(id\) => setChatPick\(id\)\}/);
+        // The pick, and (Tynn #1057) opening that agent's chat sees its sound cues.
+        expect(app).toMatch(/onChatAgent=\{\(id\) => \{ setChatPick\(id\); setSoundCues\(\(s\) => seeAgent\(s, id\)\); \}\}/);
         expect(app).toMatch(/chatPickAfter\(parsed, chatRoster, /);
         expect(app).not.toMatch(/setDashboardChat\(null\)/);
     });

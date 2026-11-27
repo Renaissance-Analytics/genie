@@ -11,6 +11,7 @@ import { shortDateTime } from '../../core/clock-words.js';
 import type { MailSignal } from '../../core/mail-signals.js';
 import { MailSignalLayer } from './MailSignalLayer.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
+import { SoundActivity } from './SoundCues.js';
 import { AccountsChip } from './AccountsChip.js';
 import type { AccountsSnapshot } from '../../core/accounts-view.js';
 import type { AccountsAction, AccountsActResult } from '../../core/account-settings.js';
@@ -854,6 +855,11 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
                     ))}
                 </div>
             ) : null}
+            {/*
+             * WHAT SOUNDED, NOT SEEN YET (Tynn #1057): every event that played a sound, on any workspace or none, each a door to
+             * what it is about and cleared in place. Its own strip, apart from Genie's notices (toasts, Tynn #1068).
+             */}
+            <SoundActivity scope="dashboard" />
             {legend ? <div data-legend="" className="flex shrink-0 flex-wrap gap-5 border-b border-[var(--border-1)] px-7 py-2 text-xs text-[var(--fg-3)]">
                 <span className="flex items-center gap-1.5"><span className="size-[7px] rounded-full bg-[var(--fg-3)]" />Declared — reports plan, deliveries, comms, usage</span>
                 <span className="flex items-center gap-1.5"><span className="size-[7px] rounded-full border-[1.5px] border-[var(--fg-3)]" />Observed — terminal activity, commits and file writes only</span>
