@@ -5,6 +5,14 @@
 //! `<GENIE_HOME>/client-args.txt`, and its own path with what the launcher handed it (GENIE_LAUNCHER_EXE,
 //! GENIE_LAUNCHER_HOST_BUILD) to `<GENIE_HOME>/client-env.txt`, and exits. As a host it prints the same, and its
 //! GENIE_RESOURCES. FAKE_HOST_MODE=exit-at-boot makes the host exit at once.
+//!
+//! L5 (Tynn #1058): a mode may also be written in `<GENIE_HOME>/fake-host-mode.txt` (one test's host, not every child of
+//! the test process). `slow-stop`: `engine.shutdown` takes ~2.5 s, writing its progress to `<runtime>/host-stopping.json`
+//! every 250 ms as genie-host does (one process fewer each time), then a clean exit. `stall-stop`: it writes its progress
+//! once and then never moves or exits. Every clean exit writes `<GENIE_HOME>/host-clean-exit.txt` last (genie-host's
+//! clean-exit marker: a host ended before it is a crash at the next boot). As a client, `<GENIE_HOME>/fake-client-mode.txt`
+//! = `stay` keeps it running: it attaches to the launcher (`launcher.attach`) and exits only when the launcher says
+//! `launcher.closeUi`, writing `<GENIE_HOME>/client-closed-<pid>.txt` first.
 
 use genie_launcher::local::LocalListener;
 use serde_json::{json, Value};
@@ -22,10 +30,16 @@ fn main() {
         writeln!(f, "{}", args.join(" ")).unwrap();
         let mut e = std::fs::OpenOptions::new().create(true).append(true).open(home.join("client-env.txt")).unwrap();
         writeln!(e, "{} | exe={exe} launcher={} hostBuild={}", args.join(" "), env("GENIE_LAUNCHER_EXE"), env("GENIE_LAUNCHER_HOST_BUILD")).unwrap();
+        drop(e);
+        drop(f);
+        if std::fs::read_to_string(home.join("fake-client-mode.txt")).map(|m| m.trim() == "stay").unwrap_or(false) && !args.iter().any(|a| a == "--genie-browser") {
+            stay_attached(&home);
+        }
         return;
     }
     println!("fake host env exe={exe} launcher={} resources={}", env("GENIE_LAUNCHER_EXE"), env("GENIE_RESOURCES"));
-    if std::env::var("FAKE_HOST_MODE").as_deref() == Ok("exit-at-boot") {
+    let mode = std::env::var("FAKE_HOST_MODE").ok().or_else(|| std::fs::read_to_string(home.join("fake-host-mode.txt")).ok().map(|m| m.trim().to_string())).unwrap_or_default();
+    if mode == "exit-at-boot" {
         std::process::exit(3);
     }
     let runtime = home.join("runtime");
@@ -44,6 +58,8 @@ fn main() {
         let token = token.clone();
         let build = build.clone();
         let runtime = runtime.clone();
+        let home = home.clone();
+        let mode = mode.clone();
         std::thread::spawn(move || {
             let mut out = stream.try_clone().unwrap();
             let mut welcomed = false;
@@ -65,8 +81,27 @@ fn main() {
                     Some("engine.shutdown") => {
                         let _ = writeln!(out, "{}", json!({"kind": "result", "id": id, "ok": true, "value": true}));
                         let _ = out.flush();
+                        println!("fake host shutting down ({})", if mode.is_empty() { "quick" } else { mode.as_str() });
+                        let progress = |step: &str, remaining: u32| {
+                            let tmp = runtime.join("host-stopping.json.tmp");
+                            let _ = std::fs::write(&tmp, json!({"pid": std::process::id(), "step": step, "remaining": remaining, "at": 0}).to_string());
+                            let _ = std::fs::rename(&tmp, runtime.join("host-stopping.json"));
+                        };
+                        if mode == "stall-stop" {
+                            progress("hosting", 1);
+                            loop {
+                                std::thread::sleep(std::time::Duration::from_secs(60));
+                            }
+                        }
+                        if mode == "slow-stop" {
+                            for remaining in (0..10).rev() {
+                                progress("processes", remaining);
+                                std::thread::sleep(std::time::Duration::from_millis(250));
+                            }
+                        }
                         let _ = std::fs::remove_file(runtime.join("host.json"));
                         std::thread::sleep(std::time::Duration::from_millis(200));
+                        let _ = std::fs::write(home.join("host-clean-exit.txt"), format!("{}", std::process::id()));
                         println!("fake host shut down");
                         std::process::exit(0);
                     }
@@ -74,5 +109,41 @@ fn main() {
                 }
             }
         });
+    }
+}
+
+/// A client that stays: attached to the launcher until it says `launcher.closeUi` (then a clean exit), or two minutes.
+fn stay_attached(home: &std::path::Path) {
+    let me = std::process::id();
+    let runtime = home.join("runtime");
+    let attach = || -> Option<(genie_launcher::local::LocalStream, BufReader<genie_launcher::local::LocalStream>)> {
+        let rec: Value = serde_json::from_str(&std::fs::read_to_string(runtime.join("launcher.json")).ok()?).ok()?;
+        let token = std::fs::read_to_string(runtime.join("launcher.token")).ok()?;
+        let stream = genie_launcher::local::LocalStream::connect(rec["endpoint"].as_str()?, std::time::Duration::from_secs(5)).ok()?;
+        let mut out = stream.try_clone().ok()?;
+        let mut lines = BufReader::new(stream);
+        writeln!(out, "{}", json!({"kind": "hello", "auth": {"kind": "token", "token": token.trim()}, "label": "fake client", "track": "client", "build": "2026.11.25-1", "schema": "2026.11.25", "minSchema": "2026.10.26", "capabilities": ["launcher@1"]})).ok()?;
+        out.flush().ok()?;
+        let mut line = String::new();
+        lines.read_line(&mut line).ok()?;
+        writeln!(out, "{}", json!({"kind": "call", "id": 1, "method": "launcher.attach", "args": [{"pid": me}]})).ok()?;
+        out.flush().ok()?;
+        Some((out, lines))
+    };
+    let t = std::time::Instant::now();
+    if let Some((_out, lines)) = attach() {
+        for line in lines.lines() {
+            let Ok(line) = line else { break };
+            let Ok(frame) = serde_json::from_str::<Value>(&line) else { continue };
+            if frame["kind"] == "event" && frame["name"] == "launcher.closeUi" {
+                let _ = std::fs::write(home.join(format!("client-closed-{me}.txt")), "closeUi");
+                println!("fake client {me}: the launcher closed the UI");
+                std::process::exit(0);
+            }
+        }
+    }
+    // Not attached, or the launcher went: it stays up anyway, so a launcher that does not close it is seen.
+    while t.elapsed() < std::time::Duration::from_secs(120) {
+        std::thread::sleep(std::time::Duration::from_millis(200));
     }
 }

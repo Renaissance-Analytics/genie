@@ -155,8 +155,25 @@ pub fn ensure_host(roots: &Roots, keys: &[VerifyingKey]) -> Result<Value, String
     Err(format!("The new host did not start within a minute, so it was ended. The host's log: {}", log.display()))
 }
 
+/// How the graceful stop waits for the host (Tynn #1079): as long as the host's own stop progress
+/// (`<runtime>/host-stopping.json`) keeps moving, up to `max`; a host whose progress stands still for `stall` is ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StopBounds {
+    pub stall: Duration,
+    pub max: Duration,
+}
+
+impl StopBounds {
+    pub const DEFAULT: StopBounds = StopBounds { stall: Duration::from_secs(45), max: HOST_GONE };
+}
+
 /// `{stopped: true, pid}` once the host has gone; `{stopped: false}` when none was running.
 pub fn stop_host(roots: &Roots) -> Result<Value, String> {
+    stop_host_with(roots, StopBounds::DEFAULT)
+}
+
+/// The graceful stop, waited for within `bounds`.
+pub fn stop_host_with(roots: &Roots, bounds: StopBounds) -> Result<Value, String> {
     let Some(rec) = read_record(roots).filter(|r| pid_alive(r.pid)) else {
         return Ok(json!({"stopped": false}));
     };
@@ -166,8 +183,9 @@ pub fn stop_host(roots: &Roots) -> Result<Value, String> {
     if result["ok"] != true {
         return Err(format!("The host refused to stop: {}", result["reason"].as_str().unwrap_or("no reason given")));
     }
-    if !wait_gone(rec.pid, HOST_GONE) {
-        return Err(format!("The host (pid {}) did not stop within {} s.", rec.pid, HOST_GONE.as_secs()));
+    if !wait_gone(rec.pid, bounds.stall) {
+        end(rec.pid);
+        return Err(format!("The host (pid {}) did not stop within {} s, so it was ended.", rec.pid, bounds.stall.as_secs()));
     }
     Ok(json!({"stopped": true, "pid": rec.pid}))
 }

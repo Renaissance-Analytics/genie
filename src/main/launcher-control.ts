@@ -94,3 +94,16 @@ export async function callLauncher(wire: LauncherWire, method: string, args: rea
 export function launcherWire(runtimeDir: string, track: Track, build: string | null = null): LauncherWire {
     return { runtimeDir, track, build };
 }
+
+/**
+ * A CLIENT ATTACHED TO ITS LAUNCHER (Tynn #1058 L5). The launcher owns the tray, so "Just close the UI" and "Shut down
+ * everything" chosen there must reach every client window: each client holds one link open (`launcher.attach {pid}`), and
+ * the launcher says `{kind: 'event', name: 'launcher.closeUi'}` on it. The client then closes its windows and exits.
+ */
+export interface LauncherAttachment {
+    close(): void;
+}
+
+export async function attachLauncher(_wire: LauncherWire, _input: { readonly pid: number; readonly onCloseUi: () => void; readonly log?: (line: string) => void }): Promise<LauncherAttachment | null> {
+    return null;
+}
