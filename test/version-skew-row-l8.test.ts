@@ -34,6 +34,12 @@ describe('the version-skew row', () => {
     it('streams a turn both ways in each pairing: asked from that client, every tick back into it, from a provider under that host', () => {
         expect(row()).toMatch(/await skewTurn\(newOld, '12',/);
         expect(row()).toMatch(/await skewTurn\(oldNew, '14',/);
+        // Its agents' names are names the host takes: a letter, then lower-case letters, digits and dashes, at most 40, with
+        // the largest pid an OS gives (gate 1127-205532-3c9e94 failed both OSes on a 47-character name holding the builds).
+        expect(row()).toContain('const name = `skew-${tag}-${process.pid}`;');
+        const tags = [...row().matchAll(/await skewTurn\([^\n]*, '([a-z0-9-]+)'\);/g)].map((m) => m[1]!);
+        expect(tags).toEqual(['newclient', 'oldclient']);
+        for (const tag of tags) expect(`skew-${tag}-${4_194_304}`).toMatch(/^[a-z][a-z0-9-]{0,39}$/);
         expect(row()).toMatch(/descends\(pid, host, parents\(\)\) && \/stub-codex\/\.test\(commandLine\(pid\)\)/);
         expect(row()).toMatch(/const gap = contiguous\(t\.ticks, 1, t\.max\);/);
         // The reverse pairing comes only after the host really is NEW, through its own drain and the launcher's swap.
