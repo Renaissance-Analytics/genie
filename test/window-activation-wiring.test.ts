@@ -40,7 +40,8 @@ describe('a NEW window is shown when Wayland lets it be (genie#1370)', () => {
         const bare = sources.flatMap(({ file, text }) => (text.match(/\.once\('ready-to-show'/g) ?? []).map(() => file));
         expect(bare).toEqual([]);
         const through = sources.flatMap(({ file, text }) => (text.match(/onceShowable\(\w+, process\.platform, /g) ?? []).map(() => file)).sort();
-        expect(through).toEqual(['doctor.ts', 'genie-browser-electron.ts', 'main.ts', 'main.ts', 'main.ts', 'main.ts', 'question-window-electron.ts']);
+        // main.ts: the take-over, route, files and flow windows, and the host directory (Tynn #1058 L4).
+        expect(through).toEqual(['doctor.ts', 'genie-browser-electron.ts', 'main.ts', 'main.ts', 'main.ts', 'main.ts', 'main.ts', 'question-window-electron.ts']);
     });
 });
 
@@ -83,13 +84,15 @@ describe('the paths an agent or a job can reach are BACKGROUND', () => {
 describe('every main-process activation names its gesture', () => {
     it('revealMainWindow takes a reason and is the user-gesture path; it is never handed over bare', () => {
         // With no window (tray-only, P1b) the person's gesture builds one; otherwise it is shown as the user-gesture it is.
-        expect(main).toMatch(/function revealMainWindow\(reason: string\): void \{\s*leftRunning\.set\(false\);\s*if \(!window \|\| window\.isDestroyed\(\)\) \{ mountMainWindow\(true, reason\); return; \}\s*bringUp\(window, \{ activation: 'user-gesture', reason/);
+        // No host linked yet (Tynn #1058 L4): the host directory is the client's window, raised as the same user gesture.
+        expect(main).toMatch(/function revealMainWindow\(reason: string\): void \{\s*if \(hostDirectoryWindow && !hostDirectoryWindow\.isDestroyed\(\)\) \{ bringUp\(hostDirectoryWindow, \{ activation: 'user-gesture', reason, ledger: activationLedger, label: 'host-directory' \}\); return; \}\s*leftRunning\.set\(false\);\s*if \(!window \|\| window\.isDestroyed\(\)\) \{ mountMainWindow\(true, reason\); return; \}\s*bringUp\(window, \{ activation: 'user-gesture', reason/);
         expect(main.match(/[(,:]\s*revealMainWindow\s*[,)]/g) ?? []).toEqual([]);
     });
 
     it('take-over, files, flow editor, main and remote windows are shown through showWhenReady, with the opener’s activation', () => {
-        // Four `win` windows since genie#1204 added the flow editor's own window.
-        expect(main.match(/onceShowable\(win, process\.platform, \(\) => showWhenReady\(win, (request|\{ activation)/g) ?? []).toHaveLength(4);
+        // Five `win` windows: genie#1204 added the flow editor's own, Tynn #1058 L4 the host directory (a user gesture: it is the window the person opened).
+        expect(main.match(/onceShowable\(win, process\.platform, \(\) => showWhenReady\(win, (request|\{ activation)/g) ?? []).toHaveLength(5);
+        expect(main).toMatch(/onceShowable\(win, process\.platform, \(\) => showWhenReady\(win, \{ activation: 'user-gesture', reason: 'host directory'/);
         expect(main).toMatch(/function openFlowEditorWindow\(route: string, activation: Activation\): void/);
         // Settled when the window closes: genie-host ends what it started then (Tynn #896).
         expect(main).toMatch(/function openTakeOverWindow\(route: string, activation: Activation\): Promise<'closed' \| 'raised'>/);

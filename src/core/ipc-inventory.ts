@@ -29,7 +29,7 @@ export const WINDOW_CAPABILITIES = [
     'site-panel', // the site panels, webviews in the window by design (one login per site)
     'feature-effect', // what a feature does to this window: its browser pane
     'gapp-window', // a GApp's own BrowserWindow; asked by the host through windowOps
-    'host-wait', // the window shown while genie-host does not answer: it cannot be on the protocol
+    'host-wait', // the windows shown while genie-host does not answer or there is none (the wait, the host directory): they cannot be on the protocol
 ] as const;
 export type WindowCapability = (typeof WINDOW_CAPABILITIES)[number];
 
@@ -101,6 +101,10 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     // dead host cannot serve its own restart; the restart moves to the launcher in split step 6, never to the host. Its
     // handler exists only while the engine link is down (main.ts; split-2f-question-window.test.ts guards it).
     ['host-wait:act', 'window:host-wait'],
+    // THE HOST DIRECTORY (Tynn #1058 L4): shown when there is no host to link to, so no host can serve it; its Start goes to
+    // the launcher's control wire. Registered only while the directory is open (main.ts openHostDirectory).
+    ['host-directory:current', 'window:host-wait'],
+    ['host-directory:act', 'window:host-wait'],
 
     // THE QUESTION WINDOW keeps only its window (Tynn #912, 2f-1): what to show, Later, the queue pick, the draft, Open in
     // Files and the drawer's width. Its answers and Dismiss (features.act) and its files and visuals (questions.*) go to

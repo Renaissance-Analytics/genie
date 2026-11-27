@@ -17,16 +17,29 @@
 set -uo pipefail
 ROOT="$(pwd)"
 OUT="$ROOT/ci-out/client-no-host"
+# The two homes live beside the tree, never in ci-out: only their logs come home with the pictures, not two installs.
+HOMES="$(cd "$ROOT/.." && pwd)/client-no-host-homes"
 PKG="$ROOT/release/tracks/packages"
 DOWNLOADED="$ROOT/release/tracks/trees/launcher/genie"
 # Debugger ports of this row's own (test/ci-debug-ports-unique.test.ts): A's client, then B's.
 PORT_A=9461
 PORT_B=9462
 pids_started=()
-cleanup() { local p; for p in "${pids_started[@]}"; do kill -9 "$p" 2>/dev/null || true; done; pkill -9 -f "$OUT/" 2>/dev/null || true; }
+cleanup() {
+    local p h
+    for p in "${pids_started[@]}"; do kill -9 "$p" 2>/dev/null || true; done
+    [ -n "${HOMES:-}" ] && [ "$HOMES" != / ] || return 0
+    pkill -9 -f "$HOMES/" 2>/dev/null || true
+    for h in "$HOMES"/*/; do
+        [ -d "$h" ] || continue
+        mkdir -p "$OUT/logs/$(basename "$h")"
+        cp "$h"/.genie/logs/*.log "$h"/.genie/runtime/lifecycle.log "$OUT/logs/$(basename "$h")/" 2>/dev/null || true
+    done
+    rm -rf "$HOMES"
+}
 fail() {
     local h f
-    for h in "$OUT/a" "$OUT/b"; do for f in .genie/runtime/lifecycle.log .genie/logs/genie-host.log .genie/logs/genie-client.log; do [ -f "$h/$f" ] && { echo "--- $h/$f"; tail -25 "$h/$f"; }; done; done
+    for h in "$HOMES/a" "$HOMES/b"; do for f in .genie/runtime/lifecycle.log .genie/logs/genie-host.log .genie/logs/genie-client.log; do [ -f "$h/$f" ] && { echo "--- $h/$f"; tail -25 "$h/$f"; }; done; done
     echo "### client-no-host=FAIL $*"; cleanup; exit 1
 }
 take_session() {
@@ -42,9 +55,9 @@ take_session
 [ -f "$ROOT/release/tracks/build.txt" ] || fail 'no release/tracks/build.txt: see the package-tracks row'
 BUILD="$(cat "$ROOT/release/tracks/build.txt")"
 [ -x "$DOWNLOADED" ] || fail "no launcher at $DOWNLOADED"
-rm -rf "$OUT"; mkdir -p "$OUT"
+rm -rf "$OUT" "$HOMES"; mkdir -p "$OUT" "$HOMES"
 as_person() { local h="$1"; shift; env -u XDG_DATA_HOME -u XDG_CONFIG_HOME -u GENIE_HOME -u GENIE_CODE_ROOT -u GENIE_LAUNCHER_EXE -u GENIE_LAUNCHER_HOST_BUILD HOME="$h" "$@"; }
-home() { local h="$OUT/$1"; mkdir -p "$h"; chmod 700 "$h"; echo "$h"; }
+home() { local h="$HOMES/$1"; mkdir -p "$h"; chmod 700 "$h"; echo "$h"; }
 wait_line() { local file="$1" pat="$2" secs="$3" i; for i in $(seq 1 "$secs"); do grep -m1 -E "$pat" "$file" 2>/dev/null && return 0; sleep 1; done; return 1; }
 hosts_of() { local p; for p in $(pgrep -x genie-host || true); do [[ "$(readlink "/proc/$p/exe" 2>/dev/null)" == "$1"/* ]] && echo "$p"; done; }
 clients_of() { local p; for p in $(pgrep -f "$1/client/" || true); do [[ "$(readlink "/proc/$p/exe" 2>/dev/null)" == "$1"/client/* ]] && echo "$p"; done; }

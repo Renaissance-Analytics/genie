@@ -128,6 +128,9 @@ export const DATA_ROOT_RULES: readonly DataRootRule[] = [
     machine('app-inbox-endpoint.json', 'the app inbox’s port'),
     machine('runtime/genie.pid', 'the window’s pid', { live: true }),
     machine('runtime/doctor-hold.json', 'that the doctor holds Genie stopped', { live: true }),
+    // The launcher's control wire (native/launcher/src/control.rs; read by launcher-control.ts, Tynn #1058 L4).
+    machine('runtime/launcher.json', 'the launcher's pid, endpoint, build and schema', { live: true }),
+    machine('runtime/launcher.token', 'the token a client or the host says to the launcher', { live: true }),
     machine('runtime/startup-updates.json', 'what the host is updating before it starts, for a window waiting for it (Tynn #1067); removed once it is done'),
     machine('runtime/host-proxy.json', 'the proxy routes the OS last gave'),
     machine('runtime/provider-programs.json', 'where each provider’s program is on this machine'),
