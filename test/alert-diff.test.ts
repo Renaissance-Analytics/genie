@@ -15,20 +15,20 @@ const item = (id: string, source: DeckItem['source'], over: Partial<DeckItem> = 
 const row = (id: string, state: string) => ({ id, name: 'atlas', workspaceId: 'tynn', state, reason: state === 'broken' ? 'exited with code 1' : null });
 
 describe('alertsBetween', () => {
-    it('a new question, approval or mail item is one alert each, naming workspace, agent and the detail', () => {
+    it('a new question, approval or mail item is one alert each, naming workspace, agent (and its id, for its cue: Tynn #1057) and the detail', () => {
         const prev = { deckItems: [item('q_old', 'agent-question')], agents: [] };
         const next = { deckItems: [item('q_old', 'agent-question'), item('q_1', 'agent-question'), item('appr_1', 'agent-question', { title: 'Run tests?' }), item('msg_1', 'unread-dm', { agentName: 'wren', title: 'wren: ping' })], agents: [] };
         expect(alertsBetween(prev, next)).toEqual([
-            { kind: 'question', workspace: 'tynn', agent: 'atlas', detail: 'Ship now?' },
-            { kind: 'approval', workspace: 'tynn', agent: 'atlas', detail: 'Run tests?' },
-            { kind: 'mail', workspace: 'tynn', agent: 'wren', detail: 'wren: ping' },
+            { kind: 'question', workspace: 'tynn', agent: 'atlas', agentId: 'agent_a', detail: 'Ship now?' },
+            { kind: 'approval', workspace: 'tynn', agent: 'atlas', agentId: 'agent_a', detail: 'Run tests?' },
+            { kind: 'mail', workspace: 'tynn', agent: 'wren', agentId: 'agent_a', detail: 'wren: ping' },
         ]);
     });
 
     it('an agent that TURNED broken alerts once with its reason; one already broken does not; nothing alerts on the first snapshot', () => {
         const prev = { deckItems: [], agents: [row('agent_a', 'working'), row('agent_b', 'broken')] };
         const next = { deckItems: [], agents: [row('agent_a', 'broken'), row('agent_b', 'broken')] };
-        expect(alertsBetween(prev, next)).toEqual([{ kind: 'broken', workspace: 'tynn', agent: 'atlas', detail: 'exited with code 1' }]);
+        expect(alertsBetween(prev, next)).toEqual([{ kind: 'broken', workspace: 'tynn', agent: 'atlas', agentId: 'agent_a', detail: 'exited with code 1' }]);
         expect(alertsBetween(null, next)).toEqual([]);
         expect(alertsBetween(next, next)).toEqual([]);
     });

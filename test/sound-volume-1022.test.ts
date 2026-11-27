@@ -93,13 +93,16 @@ describe('what plays: master × event', () => {
 });
 
 describe('every alert plays at its volume (the call sites)', () => {
-    it('each playAlertSound in App passes alertVolume for the same kind; COUNTED: four, so a new one without it fails here', async () => {
+    it('each sound in App (through soundAndCue, Tynn #1057) passes alertVolume for the same kind; COUNTED: four, so a new one without it fails here', async () => {
         const { readFileSync } = await import('node:fs');
         const src = readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8');
-        const calls = src.split('\n').filter((l) => l.includes('playAlertSound(') && !l.trim().startsWith('import') && !l.trim().startsWith('//') && !l.trim().startsWith('*'));
+        const calls = src.split('\n').filter((l) => l.includes('soundAndCue(') && !l.trim().startsWith('import') && !l.trim().startsWith('//') && !l.trim().startsWith('*'));
         expect(calls).toHaveLength(4);
         // The levels are this CLIENT's: read from its own store at play time, never from the host's settings.
-        for (const line of calls) expect(line, line.trim()).toMatch(/playAlertSound\((?:alertSound|limitAlertSound)\([^;]*\), alertVolume\([^;]*clientSoundValues\(\)\)\);/);
+        for (const line of calls) expect(line, line.trim()).toMatch(/soundAndCue\(\{ sound: (?:alertSound|limitAlertSound)\([^;]*\), volume: alertVolume\([^;]*clientSoundValues\(\)\), cue: /);
+        // ...and the one call that plays them hands that volume to the player, untouched.
+        const helper = readFileSync(new URL('../src/renderer/sound-and-cue.ts', import.meta.url), 'utf8');
+        expect(helper).toContain('playAlertSound(input.sound, input.volume);');
     });
 
     it('each preview in Settings plays at THIS client’s levels too (COUNTED: two — a sound row and a rate-limit alert)', async () => {

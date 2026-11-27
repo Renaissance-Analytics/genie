@@ -216,8 +216,10 @@ describe('genie-host says the sounds of what it runs', () => {
 
     it('READER: main passes on only an agentless thing sound; an agent’s name, another kind or anything more is not one', () => {
         for (const kind of ['exits', 'siteup', 'sitedown', 'serviceup', 'flowdone']) expect(readThingSignal({ agentId: null, kind })).toEqual({ agentId: null, kind });
-        // What goes on is the reader's own two members, never what else came with them.
-        expect(readThingSignal({ agentId: null, kind: 'exits', workspaceId: 'ws_a', sound: 'alarm' })).toEqual({ agentId: null, kind: 'exits' });
+        // What goes on is the reader's own members — and the workspace it happened in (Tynn #1057: its sidebar row shows it) —
+        // never what else came with them.
+        expect(readThingSignal({ agentId: null, kind: 'exits', workspaceId: 'ws_a', sound: 'alarm' })).toEqual({ agentId: null, kind: 'exits', workspaceId: 'ws_a' });
+        expect(readThingSignal({ agentId: null, kind: 'exits', workspaceId: '', sound: 'alarm' })).toEqual({ agentId: null, kind: 'exits' });
         for (const bad of [null, 7, 'exits', {}, { kind: 'exits' }, { agentId: 'a1', kind: 'exits' }, { agentId: null, kind: 'question' }, { agentId: null, kind: 'limit-alert' }, { agentId: null, kind: 'terminal-needs-you' }, { agentId: null, kind: 'account-switch' }, { agentId: null, kind: 'toString' }, { agentId: null, kind: ['exits'] }, { agentId: undefined, kind: 'exits' }]) {
             expect(readThingSignal(bad), JSON.stringify(bad)).toBeNull();
         }
@@ -260,7 +262,8 @@ describe('ACTIVITY SOUNDS ARE A CLIENT SETTING (the owner): genie-host only says
         // CONTROL: the scan finds a setting read where there is one (the window's own decision).
         const app = code(src('src/renderer/App.tsx'));
         // Which sound is the settings' choice; how loud is this client's own level (Tynn #1022): both read in the window.
-        expect(app).toContain('if (ALERT_KINDS.some((k) => k.kind === action.kind)) playAlertSound(alertSound(action.kind as AlertKind, soundSettings.current ?? {}), alertVolume(action.kind as AlertKind, clientSoundValues()));');
+        // (Through soundAndCue since Tynn #1057: the sound and its cue in one call.)
+        expect(app).toContain('if (ALERT_KINDS.some((k) => k.kind === action.kind)) soundAndCue({ sound: alertSound(action.kind as AlertKind, soundSettings.current ?? {}), volume: alertVolume(action.kind as AlertKind, clientSoundValues()), cue: cueOfAction(action, cueAgents.current, Date.now(), nextCueId()), settings: soundSettings.current ?? {}, add: keepCue });');
         expect(SETTING.test(app)).toBe(true);
         // The module that hears the things and says them: its only import is the kinds' type.
         const things = code(src('src/core/thing-sounds.ts'));

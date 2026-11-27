@@ -42,7 +42,7 @@ ROWS=(
     deps electron-binary
     typecheck unit build bundles sounds
     seed no-pty smoke layout local-door-break local-door host-late-ready files-watch chat-drafts gapp-open artboard ui-lag plan-popover
-    trust-step accounts-popover claude-accounts sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash quit-keeps-host rebuilt-machine cli-drain
+    trust-step accounts-popover claude-accounts sound-picker sound-cues esc-unsend question-maximize site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash quit-keeps-host rebuilt-machine cli-drain
     flows zip64 host-plain-node mailpit launcher-unit
     package package-fuse
     logon
@@ -540,6 +540,8 @@ row_accounts-popover() { need_build && need_display && on_display timeout 240 no
 # Claude accounts of their own (Tynn #1011): live state, one-click switch, add, sign in, in the real app (a stand-in CLI).
 row_claude-accounts() { need_build && need_display && on_display timeout 240 node scripts/claude-accounts-cdp.mjs; }
 row_sound-picker() { need_build && need_display && on_display timeout 240 node scripts/sound-picker-cdp.mjs; }
+# EVERY SOUND HAS A SIGHT (Tynn #1057): the sidebar's rows, the Dashboard's activity and a workspace dashboard's, photographed.
+row_sound-cues() { need_build && need_display && on_display timeout 240 node scripts/sound-cues-cdp.mjs; }
 # The whole question window maximized and restored, screenshots of both (Tynn #1019).
 row_question-maximize() { need_build && need_display && on_display timeout 240 node scripts/question-maximize-cdp.mjs; }
 # Esc unsends a message still in the send buffer, files and all, in the real chat with a real key press (Tynn #1029).
@@ -737,7 +739,7 @@ ceiling() {
         accounts-popover) echo 300 ;;
         plan-popover) echo 480 ;;
         claude-accounts) echo 300 ;;
-        sound-picker|question-maximize) echo 300 ;;
+        sound-picker|sound-cues|question-maximize) echo 300 ;;
         esc-unsend) echo 300 ;;
         files-watch) echo 240 ;;
         chat-drafts|artboard) echo 420 ;;
@@ -943,7 +945,7 @@ run_rows() {
     for name in "${selected[@]}"; do
         echo "=== $name"
         machine_line "$name"
-        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover trust-step accounts-popover claude-accounts sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash quit-keeps-host cli-drain host-late-ready package-fuse logon toolchain client-only-update host-update " in
+        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover trust-step accounts-popover claude-accounts sound-picker sound-cues esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash quit-keeps-host cli-drain host-late-ready package-fuse logon toolchain client-only-update host-update " in
             *" $name "*) reap_leftovers "$name" ;;
         esac
         from="$(now_ms)"
