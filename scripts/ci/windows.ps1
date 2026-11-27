@@ -517,7 +517,7 @@ function Ceiling([string]$name) {
         'sound-picker' { return 300 }
         'question-maximize' { return 300 }
         'esc-unsend' { return 300 }
-        'usage-on-switch' { return 360 }
+        'usage-on-switch' { return 540 }
         'files-watch' { return 240 }
         { $_ -in 'chat-drafts', 'artboard' } { return 420 }
         { $_ -in 'ui-lag', 'renderer-crash' } { return 480 }

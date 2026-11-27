@@ -1561,7 +1561,7 @@ async function main(): Promise<void> {
             }
             else if (action.kind === 'move-now') {
                 // Tynn #1084: "Restart on <active> now": the person's go for the agents still on another account.
-                const moved = host.moveNow(action.provider, action.agentId as AgentId | undefined);
+                const moved = host.moveNow(action.provider, action.agentId as AgentId | undefined, action.fresh === true ? { fresh: true } : {});
                 if (moved === 0) return { ok: false, reason: 'No agent is waiting to move to the active account.' };
                 accountsChangedNow?.();
             }
@@ -1874,6 +1874,8 @@ async function main(): Promise<void> {
         launchBlocked: (account) => (account.configDir !== undefined && claudeSignIns.busy(account.configDir) ? 'That account is signing in; it starts once the sign-in is over.' : null),
         // An account's first use (Tynn #1084): its usage is read when it has none of its own, and the panel's "still on" count moves.
         onAccountUsed: (account) => { void usageProbes.request(account); accountsChangedNow?.(); },
+        // An agent turned out to stay on its account (or stopped): the Accounts panel's count changes (Tynn #1084).
+        onMovesChanged: () => { accountsChangedNow?.(); },
         userData: home,
         ...engineHostOptions,
         // The servers Genie provides to every agent (Tynn #1017; the Fancy Dev Kit's fancy-ui), each switchable off per workspace.

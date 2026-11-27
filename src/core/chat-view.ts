@@ -176,7 +176,7 @@ export interface ChatThreadView {
     /** The message still arriving ({@link arrivingMessageId}), drawn progressively; `null` = every message is finished. */
     arriving: string | null;
     /** Tynn #1084: the account the agent is really on, and the active one it moves to at its next idle. Absent = not known. */
-    account?: { readonly label: string; readonly movesTo?: string };
+    account?: { readonly label: string; readonly movesTo?: string; readonly stays?: string };
 }
 
 /** The slice of an agent's detail the thread reads (structurally `AgentDetail`, without binding core to the bridge). */
@@ -425,7 +425,7 @@ export function chatThreadFrom(detail: ChatDetail | null, subjectId: string, row
         loaded: conversation !== null,
         earlier: start > 0,
         arriving: conversation ? arrivingMessageId(conversation, messages) : null,
-        ...(detail?.session?.account ? { account: { label: detail.session.account.label, ...(detail.session.account.movesTo ? { movesTo: detail.session.account.movesTo.label } : {}) } } : {}),
+        ...(detail?.session?.account ? { account: { label: detail.session.account.label, ...(detail.session.account.movesTo ? { movesTo: detail.session.account.movesTo.label } : {}), ...(detail.session.account.stays ? { stays: detail.session.account.stays.why } : {}) } } : {}),
     };
 }
 

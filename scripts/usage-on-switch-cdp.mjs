@@ -14,6 +14,9 @@
  *   U4 atlas's header and chat say "On Aux · moves to Main at next idle" with Restart on Main now (shot 03)
  *   U5 "Check usage now" on Aux reads Aux at once (shot 04)
  *   U6 Restart on Main now moves atlas to Main, on its thread: the banner goes, the header says On Main (shot 05)
+ *   U7 Switch back to Aux, whose history does not hold atlas's conversation: atlas STAYS on Main and says why, in its header,
+ *      its chat line and the panel (shots 06, 07), never "moves at next idle"
+ *   U8 Restart on Aux now asks first: a new conversation (shot 08); Confirm starts atlas fresh on Aux, no --resume (shot 09)
  */
 import { mainWindow } from './cdp-main-window.mjs';
 import { closeWhatsNew } from './cdp-whats-new.mjs';
@@ -77,6 +80,9 @@ try {
     copyFileSync(resolve('scripts/usage-on-switch-stub-claude.mjs'), stub); chmodSync(stub, 0o755);
     const auxDir = join(genie, 'accounts', 'claude', AUX);
     mkdirSync(auxDir, { recursive: true });
+    // Aux's own history holds other conversations, not atlas's: once atlas is on Main, it CANNOT move back to Aux (U7).
+    mkdirSync(join(auxDir, 'projects', '-elsewhere'), { recursive: true });
+    writeFileSync(join(auxDir, 'projects', '-elsewhere', '0d1e2f30-4a5b-4c6d-8e7f-1084bbbb0002.jsonl'), '{}\n');
     // Who is signed in where, and each folder's limits (the share used), as the stand-in reports them.
     writeFileSync(join(stubDir, 'status.json'), JSON.stringify({
         '': { loggedIn: true, authMethod: 'claude.ai', email: 'main@example.invalid', subscriptionType: 'max', limit: { seven_day: 0.12 } },
@@ -193,6 +199,37 @@ try {
     const relaunch = calls().find((c) => !c.probe && c.args.includes('--resume') && c.args[c.args.indexOf('--resume') + 1] === SESSION);
     check('U6c', relaunch !== undefined && relaunch.dir === null, 'on its own thread (--resume), in the default home', relaunch ? `${relaunch.dir} ${relaunch.args.join(' ')}` : JSON.stringify(calls().filter((c) => !c.probe).map((c) => [c.dir, c.args.slice(0, 6).join(' ')])));
     await shot('05-after-restart-on-main');
+
+    // U7: back to Aux. Atlas's conversation is not in Aux's history, so it cannot move: it says it stays, and why.
+    if (!(await page.evaluate(`Boolean(document.querySelector(${q(POP)}))`))) await click(CHIP);
+    await until('the popover (U7)', () => page.evaluate(`Boolean(document.querySelector(${q(POP)}))`), 10_000);
+    check('U7a', await press(`${POP} [data-account="${AUX}"] [data-action="account-switch"]`), 'Switch on Aux takes a click');
+    const WHY = "its conversation can't be opened on Aux";
+    const staysBanner = await maybe('the stays banner', async () => { const t = await text(`${POP} [data-accounts-still-on]`); return t && t.includes('stays on Main') ? t : null; }, 60_000);
+    check('U7b', (staysBanner ?? '').includes(`1 agent stays on Main: ${WHY}`) && !(staysBanner ?? '').includes('until idle') && (staysBanner ?? '').includes('Restart on Aux now'), 'the panel: 1 agent stays on Main, and why; Restart on Aux now', staysBanner);
+    await shot('06-stays-panel');
+    await click(CHIP); await sleep(300);
+    const staysHeader = await maybe('the stays header', () => text(`[data-agent-runs-on="${MAIN}"][data-stays="true"]`), 15_000);
+    check('U7c', staysHeader === `Stays on Main: ${WHY}`, 'the header: Stays on Main, and why (never "moves at next idle")', staysHeader);
+    const staysChat = await maybe('the stays chat line', () => text(`${CHAT} [data-chat-account]`), 15_000);
+    check('U7d', (staysChat ?? '').includes(`stays on Main: ${WHY}`), 'the chat line says it stays, and why', staysChat);
+    await shot('07-stays-header-and-chat');
+
+    // U8: Restart on Aux now asks first, then starts atlas FRESH on Aux.
+    check('U8a', await press('[data-surface="agent"] [data-action="move-now"][data-fresh="true"], [data-action="move-now"][data-fresh="true"]'), 'the header offers Restart on Aux now');
+    const ask = await maybe('the confirm', () => text('[data-move-fresh-confirm]'), 5_000);
+    check('U8b', /new conversation on Aux/.test(ask ?? '') && /can't move/.test(ask ?? ''), 'it asks first: a new conversation on Aux, because this one can\'t move', ask);
+    await shot('08-confirm-fresh');
+    const before = calls().filter((c) => !c.probe && c.args.includes('--print')).length;
+    check('U8c', await press('[data-move-fresh-confirm] [data-action="move-fresh-confirm"]'), 'Confirm takes a click');
+    const onAux = await maybe('atlas on Aux', () => page.evaluate(`(() => { const t = document.querySelector('[data-agent-runs-on="${AUX}"]')?.textContent ?? ''; return t.trim() === 'On Aux' ? t : null; })()`), 60_000);
+    check('U8d', Boolean(onAux), 'atlas is on Aux: the header says On Aux', onAux);
+    await page.evaluate(`(() => { const f = document.querySelector(${q(FIELD)}); f?.focus(); return document.activeElement === f; })()`);
+    await page.send('Input.insertText', { text: 'U1084 fresh start' });
+    await page.evaluate(`(() => { const b = document.querySelector(${q(`${BOX} [data-react-fancy-prompt-input-send]`)}); if (!b || b.disabled) return false; b.click(); return true; })()`);
+    const fresh = await maybe('the fresh launch', async () => calls().filter((c) => !c.probe && c.args.includes('--print')).slice(before).find((c) => c.dir === auxDir) ?? null, 60_000);
+    check('U8e', Boolean(fresh) && !fresh.args.includes('--resume'), 'a NEW conversation in Aux\'s own folder (no --resume)', fresh ? `${fresh.dir} ${fresh.args.join(' ')}` : JSON.stringify(calls().slice(-4)));
+    await shot('09-fresh-on-aux');
     code = checks.every((c) => c.ok) ? 0 : 1;
 } catch (error) {
     failure = error instanceof Error ? error.message : String(error);

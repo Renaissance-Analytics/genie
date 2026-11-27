@@ -7,6 +7,7 @@ import { offerWords, targetWords, type SwitchOffer } from '../../core/switch-off
 import { rankSwitchNext } from '../../core/switch-next.js';
 import { DesignAuthRow } from './DesignAuthRow.js';
 import { PANEL_RECHECK_MS } from '../../core/usage-probe.js';
+import { MoveFreshConfirm } from './MoveFreshConfirm.js';
 import type { AccountsAction, AccountsActResult } from '../../core/account-settings.js';
 import { mismatchWords, type ClaudeAccountLive, type ClaudeSignInView } from '../../core/claude-accounts.js';
 import type { DesignAuthView } from '../../core/design-auth.js';
@@ -57,6 +58,8 @@ function tightest(account: AccountView): LiveWindow | null {
 
 export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, design, onDesignSignIn, onAccountsAct, signIns }: AccountsChipProps) {
     const [open, setOpen] = useState(false);
+    // Tynn #1084: the fresh restart of agents that cannot move is asked first.
+    const [askFresh, setAskFresh] = useState(false);
     /*
      * THE PANEL ASKS FOR READINGS (Tynn #1084): when it opens, and every 5 min while it stays open, the host reads each account
      * that has no reading of its own in 15 min (its probe's rules). Never on a timer while closed.
@@ -149,12 +152,27 @@ export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, desig
                     ) : null}
                     {(signIns ?? []).filter((s) => view.accounts.some((a) => a.id === s.accountId) || provider === 'claude').map((s) => <SignInPending key={s.accountId} signIn={s} onAct={onAccountsAct} />)}
                     {view.stillOn && view.stillOn.length > 0 ? (
-                        // AGENTS NOT YET ON THE ACTIVE ACCOUNT (Tynn #1084): each moves at its next idle; this says so, and moves them now.
+                        /*
+                         * AGENTS NOT YET ON THE ACTIVE ACCOUNT (Tynn #1084). One that moves at its next idle says so, and Restart moves it
+                         * now on its conversation. One whose conversation cannot move STAYS, and says why; its Restart starts it fresh
+                         * on the active account, a new conversation, asked first.
+                         */
                         <Callout color="amber" icon={<Icon name="info" size="sm" />} data-accounts-still-on="">
-                            {view.stillOn.map((s) => <p key={s.accountId}>{`${s.count} ${s.count === 1 ? 'agent' : 'agents'} still on ${s.label} until idle`}</p>)}
+                            {view.stillOn.filter((s) => s.stays === undefined).map((s) => <p key={`${s.accountId}|moves`}>{`${s.count} ${s.count === 1 ? 'agent' : 'agents'} still on ${s.label} until idle`}</p>)}
+                            {view.stillOn.filter((s) => s.stays !== undefined).map((s) => <p key={`${s.accountId}|${s.stays}`}>{`${s.count} ${s.count === 1 ? 'agent stays' : 'agents stay'} on ${s.label}: ${s.stays}`}</p>)}
                             {onAccountsAct ? (
-                                <div className="mt-1.5 flex gap-1.5">
-                                    <Button type="button" size="xs" icon="rotate-cw" data-action="move-now" onClick={() => { void onAccountsAct({ kind: 'move-now', provider }); }}>{`Restart on ${active.label} now`}</Button>
+                                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                                    {view.stillOn.some((s) => s.stays === undefined)
+                                        ? <Button type="button" size="xs" icon="rotate-cw" data-action="move-now" onClick={() => { void onAccountsAct({ kind: 'move-now', provider }); }}>{`Restart on ${active.label} now`}</Button>
+                                        : null}
+                                    {view.stillOn.some((s) => s.stays !== undefined)
+                                        ? <Button type="button" size="xs" icon="rotate-cw" data-action="move-now" data-fresh="true" onClick={() => setAskFresh(true)}>{`Restart on ${active.label} now`}</Button>
+                                        : null}
+                                </div>
+                            ) : null}
+                            {askFresh && onAccountsAct ? (
+                                <div className="mt-1.5">
+                                    <MoveFreshConfirm to={active.label} onConfirm={() => { setAskFresh(false); void onAccountsAct({ kind: 'move-now', provider, fresh: true }); }} onCancel={() => setAskFresh(false)} />
                                 </div>
                             ) : null}
                         </Callout>

@@ -25,7 +25,7 @@ const acct = (suffix: string, configDir: string): AccountRecord => ({
 const A = acct('1', '/genie/accounts/claude/a');
 const B = acct('2', '/genie/accounts/claude/b');
 
-interface Driver { prompts: unknown[]; events: DriverEvents; account: AccountRecord | undefined; killed: boolean }
+interface Driver { prompts: unknown[]; events: DriverEvents; account: AccountRecord | undefined; killed: boolean; resume: string | null }
 
 describe('switchNoteFor: what an agent is told on a switch', () => {
     it('an agent that moves now is told the switch, as before', () => {
@@ -40,6 +40,44 @@ describe('switchNoteFor: what an agent is told on a switch', () => {
     });
 });
 
+/** The host, its fake drivers and the book's active account (A, then whatever a switch makes it). */
+function makeWorld(dir: string, hosts: SessionHost[], store: 'present' | 'absent' | 'indeterminate' = 'present', onMovesChanged?: () => void) {
+    let active: AccountRecord = A;
+    const drivers: Driver[] = [];
+    const used: string[] = [];
+    let processes: ProcessInfo[] = [{ pid: process.pid, ppid: 1, started: 1, name: 'genie-test' }];
+    const tree: ProcessTree = {
+        snapshot: () => [...processes],
+        killTree: (targets) => { const ids = new Set(targets.map((p) => p.pid)); processes = processes.filter((p) => !ids.has(p.pid)); return { killed: targets.length, refused: false }; },
+    };
+    const driverFor: DriverFor = (_agent, _cwd, resume, extras) => ({ events }) => {
+        const pid = process.pid + 3_000_000 + drivers.length + 1;
+        let running = false;
+        const d: Driver = { prompts: [], events, account: extras?.account, killed: false, resume: resume ?? null };
+        drivers.push(d);
+        const driver: SessionDriver = {
+            start: () => { running = true; processes.push({ pid, ppid: process.pid, started: 3, name: 'claude-fixture' }); },
+            prompt: (content) => { d.prompts.push(content); },
+            cancel: () => Promise.resolve(),
+            kill: () => { d.killed = true; running = false; processes = processes.filter((p) => p.pid !== pid); },
+            get running() { return running; },
+            get cliSessionId() { return THREAD; },
+        };
+        return driver;
+    };
+    const host = new SessionHost({
+        userData: dir, driverFor, processTree: tree, stopGraceMs: 0,
+        activeAccount: () => active,
+        threadInAccount: () => store,
+        onAccountUsed: (account: AccountRecord) => { used.push(account.id); },
+        ...(onMovesChanged ? { onMovesChanged } : {}),
+    });
+    hosts.push(host);
+    const record: AgentRecord = { ...agentRecord({ id: mintAgentId(), workspaceId: 'workspace', provider: 'claude', name: 'atlas' }), threadId: THREAD };
+    const switchTo = (a: AccountRecord) => { active = a; host.accountChanged('claude'); host.accountSwitched('claude', { account: a, headroom: null }); };
+    return { host, record, drivers, used, switchTo };
+}
+
 describe('an agent busy on the old account after a switch', () => {
     let dir: string;
     const hosts: SessionHost[] = [];
@@ -49,41 +87,7 @@ describe('an agent busy on the old account after a switch', () => {
         await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
     });
 
-    function world() {
-        let active: AccountRecord = A;
-        const drivers: Driver[] = [];
-        const used: string[] = [];
-        let processes: ProcessInfo[] = [{ pid: process.pid, ppid: 1, started: 1, name: 'genie-test' }];
-        const tree: ProcessTree = {
-            snapshot: () => [...processes],
-            killTree: (targets) => { const ids = new Set(targets.map((p) => p.pid)); processes = processes.filter((p) => !ids.has(p.pid)); return { killed: targets.length, refused: false }; },
-        };
-        const driverFor: DriverFor = (_agent, _cwd, _resume, extras) => ({ events }) => {
-            const pid = process.pid + 3_000_000 + drivers.length + 1;
-            let running = false;
-            const d: Driver = { prompts: [], events, account: extras?.account, killed: false };
-            drivers.push(d);
-            const driver: SessionDriver = {
-                start: () => { running = true; processes.push({ pid, ppid: process.pid, started: 3, name: 'claude-fixture' }); },
-                prompt: (content) => { d.prompts.push(content); },
-                cancel: () => Promise.resolve(),
-                kill: () => { d.killed = true; running = false; processes = processes.filter((p) => p.pid !== pid); },
-                get running() { return running; },
-                get cliSessionId() { return THREAD; },
-            };
-            return driver;
-        };
-        const host = new SessionHost({
-            userData: dir, driverFor, processTree: tree, stopGraceMs: 0,
-            activeAccount: () => active,
-            threadInAccount: () => 'present',
-            onAccountUsed: (account: AccountRecord) => { used.push(account.id); },
-        });
-        hosts.push(host);
-        const record: AgentRecord = { ...agentRecord({ id: mintAgentId(), workspaceId: 'workspace', provider: 'claude', name: 'atlas' }), threadId: THREAD };
-        const switchTo = (a: AccountRecord) => { active = a; host.accountChanged('claude'); host.accountSwitched('claude', { account: a, headroom: null }); };
-        return { host, record, drivers, used, switchTo };
-    }
+    const world = (store: 'present' | 'absent' | 'indeterminate' = 'present') => makeWorld(dir, hosts, store);
     const flush = async () => { for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 0)); };
 
     async function busyAfterSwitch() {
@@ -137,5 +141,80 @@ describe('an agent busy on the old account after a switch', () => {
         expect(w.used).toEqual([A.id]);
         w.host.moveNow('claude');
         await vi.waitFor(() => expect(w.used).toEqual([A.id, B.id]));
+    });
+});
+
+/**
+ * AN AGENT THAT CANNOT MOVE SAYS SO (Tynn #1084, the coordinator's review). When its conversation cannot be opened on the new
+ * account (it is not in that account's history), the move at its next idle never happens. "Moves at next idle" would then be
+ * the very screen this story fixes. So it says it STAYS on the old account and why, in plain words, and "Restart on <active>
+ * now" starts it fresh there, a new conversation, only as the person's explicit choice.
+ */
+describe('an agent whose conversation cannot move to the new account', () => {
+    let dir: string;
+    const hosts: SessionHost[] = [];
+    beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie-1084-stays-')); });
+    afterEach(async () => {
+        for (const h of hosts.splice(0)) { h.stopAll(); await h.drained(0); await h.settled(); }
+        await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
+    });
+    const flush = async () => { for (let i = 0; i < 10; i += 1) await new Promise((r) => setTimeout(r, 0)); };
+
+    async function stayingAfterSwitch(store: 'absent' | 'indeterminate' = 'absent') {
+        const w = makeWorld(dir, hosts, store);
+        expect(w.host.start(w.record, dir)).toEqual({ ok: true });
+        await vi.waitFor(() => expect(w.drivers).toHaveLength(1));
+        // Idle: the switch asks it to move now, and its conversation is not where the new account can open it.
+        w.switchTo(B);
+        await new Promise((r) => setTimeout(r, 20));
+        return w;
+    }
+
+    it('it says it stays on the old account, and why, in plain words', async () => {
+        const w = await stayingAfterSwitch();
+        expect(w.drivers).toHaveLength(1);
+        const account = w.host.probe(w.record.id)?.account;
+        expect(account).toMatchObject({ id: A.id, label: 'Account 1', stays: { id: B.id, label: 'Account 2' } });
+        expect(account?.movesTo).toBeUndefined();
+        expect(account?.stays?.why).toBe("its conversation can't be opened on Account 2");
+    });
+
+    it('the windows are told when an agent turns out to stay, so an open panel shows it (not a stale "until idle")', async () => {
+        let told = 0;
+        const w = makeWorld(dir, hosts, 'absent', () => { told += 1; });
+        w.host.start(w.record, dir);
+        await vi.waitFor(() => expect(w.drivers).toHaveLength(1));
+        const before = told;
+        w.switchTo(B);
+        await vi.waitFor(() => expect(w.host.stillOn('claude')[0]?.stays).toBeDefined());
+        expect(told).toBeGreaterThan(before);
+    });
+
+    it('when Genie cannot tell, it says that, never a guess', async () => {
+        const w = await stayingAfterSwitch('indeterminate');
+        expect(w.host.probe(w.record.id)?.account?.stays?.why).toBe('Genie could not tell whether Account 2 can open its conversation');
+    });
+
+    it('the panel counts it as staying, with the reason', async () => {
+        const w = await stayingAfterSwitch();
+        expect(w.host.stillOn('claude')).toEqual([{ accountId: A.id, label: 'Account 1', count: 1, stays: "its conversation can't be opened on Account 2" }]);
+    });
+
+    it('CONTROL: without the fresh restart, Restart now moves nothing (it cannot carry the conversation)', async () => {
+        const w = await stayingAfterSwitch();
+        expect(w.host.moveNow('claude')).toBe(0);
+        await flush();
+        expect(w.drivers).toHaveLength(1);
+    });
+
+    it('the fresh restart starts it on the active account as a NEW conversation', async () => {
+        const w = await stayingAfterSwitch();
+        expect(w.host.moveNow('claude', undefined, { fresh: true })).toBe(1);
+        await vi.waitFor(() => expect(w.drivers).toHaveLength(2));
+        expect(w.drivers[0]!.killed).toBe(true);
+        expect(w.drivers[1]!.account?.id).toBe(B.id);
+        expect(w.drivers[1]!.resume).toBeNull();
+        await vi.waitFor(() => expect(w.host.probe(w.record.id)?.account).toEqual({ id: B.id, label: 'Account 2' }));
+        expect(w.host.stillOn('claude')).toEqual([]);
     });
 });

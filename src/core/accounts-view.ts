@@ -41,7 +41,13 @@ export interface AccountView {
 }
 
 /** Tynn #1084: running agents of a provider still on another account than its active one, until each is idle. */
-export interface StillOnAccount { readonly accountId: string; readonly label: string; readonly count: number }
+export interface StillOnAccount {
+    readonly accountId: string;
+    readonly label: string;
+    readonly count: number;
+    /** It cannot move to the active account: why, in plain words (Restart then starts it fresh, a new conversation). */
+    readonly stays?: string;
+}
 
 export interface ProviderAccountsView {
     readonly provider: string;

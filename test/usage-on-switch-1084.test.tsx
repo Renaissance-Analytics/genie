@@ -152,3 +152,69 @@ describe('the account an agent and its readings are really on is named', () => {
         expect(row.account).toEqual({ label: 'wish+ai@', movesTo: 'wish@' });
     });
 });
+
+/**
+ * AN AGENT THAT CANNOT MOVE SAYS SO (Tynn #1084, the coordinator's review): its conversation cannot be opened on the active
+ * account, so "moves at next idle" would never come true. It says it STAYS, and why; Restart on <active> now starts it fresh
+ * there only after the person confirms that the conversation starts new.
+ */
+const WHY = "its conversation can't be opened on wish@";
+/** Static markup escapes the apostrophe ("can&#x27;t"); the words on screen are compared. */
+const plain = (html: string) => html.replace(/&#x27;/g, "'");
+const staying = { id: OLD, label: 'wish+ai@', stays: { id: NEW, label: 'wish@', why: WHY } };
+
+describe('an agent that cannot move says it stays, and why', () => {
+    it('the panel says it stays, with the reason; Restart asks first, saying the conversation starts new', () => {
+        const acts = openChip(viewWith({ stillOn: { claude: [{ accountId: OLD, label: 'wish+ai@', count: 1, stays: WHY }] } }));
+        const banner = document.querySelector('[data-accounts-still-on]')!;
+        expect(banner.textContent).toContain(`1 agent stays on wish+ai@: ${WHY}`);
+        expect(banner.textContent).not.toContain('until idle');
+        click(banner.querySelector('[data-action="move-now"]'));
+        expect(acts.filter((a) => a.kind === 'move-now')).toEqual([]);
+        const confirm = document.querySelector('[data-move-fresh-confirm]')!;
+        expect(confirm.textContent).toMatch(/starts? a new conversation on wish@/i);
+        expect(confirm.textContent).toMatch(/can't move/i);
+        click(confirm.querySelector('[data-action="move-fresh-confirm"]'));
+        expect(acts.at(-1)).toEqual({ kind: 'move-now', provider: 'claude', fresh: true });
+    });
+
+    it('CONTROL: Cancel sends nothing', () => {
+        const acts = openChip(viewWith({ stillOn: { claude: [{ accountId: OLD, label: 'wish+ai@', count: 1, stays: WHY }] } }));
+        click(document.querySelector('[data-accounts-still-on] [data-action="move-now"]'));
+        click(document.querySelector('[data-move-fresh-confirm] [data-action="move-fresh-cancel"]'));
+        expect(acts.filter((a) => a.kind === 'move-now')).toEqual([]);
+        expect(document.querySelector('[data-move-fresh-confirm]')).toBeNull();
+    });
+
+    it('the agent header says it stays and why, with Restart on <active> now (asked first)', () => {
+        const html = plain(renderAgent(session({ account: staying }), () => {}));
+        expect(html).toContain(`Stays on wish+ai@: ${WHY}`);
+        expect(html).not.toContain('moves to');
+        expect(html).toMatch(/data-action="move-now"[^>]*data-fresh="true"[^>]*>[\s\S]*?Restart on wish@ now/);
+        expect(headerActions(session({ account: staying }), 'declared').moveNow).toBe(true);
+    });
+
+    it('the header\'s Restart asks first; only Confirm restarts it fresh', () => {
+        const calls: Array<{ fresh: boolean }> = [];
+        act(() => root.render(<AgentView agent={agent} session={session({ account: staying })} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={3} cost={null} onNavigate={() => {}} onSelect={() => {}} onStart={() => {}} onStop={() => {}} onTakeOver={() => {}} now={() => NOW} workspace={{ id: 'tynn', name: 'Tynn.ai', path: '/w/tynn' }} log={[]} ops={ops} onMoveNow={(_id, options) => { calls.push({ fresh: options?.fresh === true }); }} />));
+        click(host.querySelector('[data-surface="agent"] [data-action="move-now"], [data-action="move-now"]'));
+        expect(calls).toEqual([]);
+        click(document.querySelector('[data-move-fresh-confirm] [data-action="move-fresh-confirm"]'));
+        expect(calls).toEqual([{ fresh: true }]);
+    });
+
+    it('the chat and the Dashboard row say it stays', () => {
+        const detail = { agent: { id: 'a1', name: 'atlas', provider: 'claude', fidelity: 'declared', workspaceId: 'tynn' }, session: session({ account: staying }), rows: [] } as never;
+        const thread = chatThreadFrom(detail, 'a1', [], () => NOW);
+        expect(thread.account).toEqual({ label: 'wish+ai@', stays: WHY });
+        const html = plain(renderToStaticMarkup(<ChatFlyout thread={thread as never} onSend={() => {}} onClose={() => {}} onMoveNow={() => {}} />));
+        expect(html).toContain('data-chat-account');
+        expect(html).toContain(`stays on wish+ai@: ${WHY}`);
+        expect(agentRowFor({ id: 'a1', name: 'atlas', provider: 'claude', workspaceId: 'ws' } as never, session({ account: staying }), () => NOW).account).toEqual({ label: 'wish+ai@', stays: WHY });
+    });
+
+    it('the host keeps only these fields of the fresh restart', () => {
+        expect(accountsActionOf({ kind: 'move-now', provider: 'claude', fresh: true, junk: 1 })).toEqual({ kind: 'move-now', provider: 'claude', fresh: true });
+        expect(accountsActionOf({ kind: 'move-now', provider: 'claude', fresh: 'yes' })).toEqual({ kind: 'move-now', provider: 'claude' });
+    });
+});

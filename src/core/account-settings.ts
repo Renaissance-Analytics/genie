@@ -33,7 +33,7 @@ export type AccountsAction =
      */
     | { readonly kind: 'read-usage'; readonly provider: string; readonly id?: string; readonly manual?: true }
     /** Tynn #1084: "Restart on <active> now": the provider's agents still on another account move now (one, by `agentId`). */
-    | { readonly kind: 'move-now'; readonly provider: string; readonly agentId?: string };
+    | { readonly kind: 'move-now'; readonly provider: string; readonly agentId?: string; readonly fresh?: true };
 
 export type AccountsActResult = { readonly ok: true } | { readonly ok: false; readonly reason: string };
 
@@ -68,7 +68,8 @@ export function accountsActionOf(value: unknown): AccountsAction | null {
     // Tynn #1084: only these fields are kept.
     if (v['kind'] === 'read-usage' || v['kind'] === 'move-now') {
         if (typeof v['provider'] !== 'string' || v['provider'] === '') return null;
-        if (v['kind'] === 'move-now') return { kind: 'move-now', provider: v['provider'], ...(typeof v['agentId'] === 'string' && v['agentId'] !== '' ? { agentId: v['agentId'] } : {}) };
+        // `fresh` (an agent that cannot move starts a NEW conversation on the active account) only when it is exactly true.
+        if (v['kind'] === 'move-now') return { kind: 'move-now', provider: v['provider'], ...(typeof v['agentId'] === 'string' && v['agentId'] !== '' ? { agentId: v['agentId'] } : {}), ...(v['fresh'] === true ? { fresh: true as const } : {}) };
         const id = typeof v['id'] === 'string' && v['id'] !== '' ? { id: v['id'] } : {};
         return { kind: 'read-usage', provider: v['provider'], ...id, ...('id' in id && v['manual'] === true ? { manual: true as const } : {}) };
     }

@@ -335,8 +335,8 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
                 <ProviderLogo provider={row.provider} />
                 {row.account ? (
                     // The account it is really on (Tynn #1084), and where it moves at its next idle.
-                    <span data-row-account="" className={`shrink-0 truncate text-xs ${row.account.movesTo ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}`} title={row.account.movesTo ? `On ${row.account.label} until idle, then ${row.account.movesTo}` : `On ${row.account.label}`}>
-                        {row.account.movesTo ? `${row.account.label} → ${row.account.movesTo}` : row.account.label}
+                    <span data-row-account="" className={`shrink-0 truncate text-xs ${row.account.movesTo || row.account.stays ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}`} title={row.account.stays ? `Stays on ${row.account.label}: ${row.account.stays}` : row.account.movesTo ? `On ${row.account.label} until idle, then ${row.account.movesTo}` : `On ${row.account.label}`}>
+                        {row.account.stays ? `${row.account.label} (stays)` : row.account.movesTo ? `${row.account.label} → ${row.account.movesTo}` : row.account.label}
                     </span>
                 ) : null}
                 {switchOffer ? (

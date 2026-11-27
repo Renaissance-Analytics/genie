@@ -83,6 +83,15 @@ export function accountSwitchNote(label: string, headroom: Headroom | null, nowM
 }
 
 /**
+ * WHY AN AGENT STAYS ON ITS OLD ACCOUNT (Tynn #1084), in plain words: its conversation cannot be opened on the new account (it is
+ * not in that account's history), or Genie could not tell. Said on its header, its chat line and the panel, never "moves at next
+ * idle", which would never come true.
+ */
+export function staysWhy(store: 'absent' | 'indeterminate', to: string): string {
+    return store === 'absent' ? `its conversation can't be opened on ${to}` : `Genie could not tell whether ${to} can open its conversation`;
+}
+
+/**
  * WHAT AN AGENT IS TOLD ON A SWITCH (Tynn #1084). One that moves now hears the switch and the new account's room. One still in
  * the old account's folder (busy: it moves at its next clean idle) is told exactly that: it is still running on the old
  * account until its current work is idle, then continues on the new one. "Account switched" to an agent that had not switched

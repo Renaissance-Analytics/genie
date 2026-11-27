@@ -214,7 +214,7 @@ export function headerActions(session: LiveSession | null, fidelity: Fidelity, p
     const login = (managed && session.signedOut === true) || (start && providerSignedOut);
     const retryAccount = managed && session.accountPaused != null;
     const designLogin = managed && session.designLogin === true;
-    const moveNow = managed && session.account?.movesTo !== undefined;
+    const moveNow = managed && (session.account?.movesTo !== undefined || session.account?.stays !== undefined);
     return { stop: managed && turnStopOffered(session), restart, openTerminal: broken, resumeLimit: held, login, retryAccount, designLogin, moveNow, start, takeOver: true, chat: true };
 }
 

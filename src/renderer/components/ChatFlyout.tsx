@@ -70,7 +70,7 @@ export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'deli
 
 export interface ChatThread {
     /** Tynn #1084: the account the agent is really on, and the one it moves to at its next idle. */
-    account?: { readonly label: string; readonly movesTo?: string } | undefined;
+    account?: { readonly label: string; readonly movesTo?: string; readonly stays?: string } | undefined;
     agentId: string;
     name: string;
     fidelity: Fidelity;
@@ -746,9 +746,9 @@ function ChatFlyoutBody({
                     {thread?.context?.retryAt !== undefined ? <RetryCountdown at={thread.context.retryAt} /> : <ChatPlanLine text={thread?.context?.text ?? 'Working'} plan={thread?.context?.planView} />}
                     {thread?.account ? (
                         // THE ACCOUNT IT IS REALLY ON (Tynn #1084), and where it moves at its next idle.
-                        <span data-chat-account="" className={`shrink-0 truncate ${thread.account.movesTo ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}`}
-                            title={thread.account.movesTo ? `Still running on ${thread.account.label} until its current work is idle; then it continues on ${thread.account.movesTo}` : `Running on ${thread.account.label}`}>
-                            {thread.account.movesTo ? `· on ${thread.account.label} until idle, then ${thread.account.movesTo}` : `· on ${thread.account.label}`}
+                        <span data-chat-account="" className={`shrink-0 truncate ${thread.account.movesTo || thread.account.stays ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}`}
+                            title={thread.account.stays ? `It stays on ${thread.account.label}: ${thread.account.stays}` : thread.account.movesTo ? `Still running on ${thread.account.label} until its current work is idle; then it continues on ${thread.account.movesTo}` : `Running on ${thread.account.label}`}>
+                            {thread.account.stays ? `· stays on ${thread.account.label}: ${thread.account.stays}` : thread.account.movesTo ? `· on ${thread.account.label} until idle, then ${thread.account.movesTo}` : `· on ${thread.account.label}`}
                         </span>
                     ) : null}
                     {thread?.account?.movesTo && onMoveNow ? (

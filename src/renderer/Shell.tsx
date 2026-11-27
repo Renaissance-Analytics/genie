@@ -299,7 +299,7 @@ export interface ShellProps {
     /** `Log in to Claude Design` for an agent a tool refused for want of `/design-login` (#1081). */
     onDesignLogin?: ((agentId: string) => void) | undefined;
     /** Tynn #1084: `Restart on <active> now` for an agent still on another account. */
-    onMoveNow?: ((agentId: string) => void) | undefined;
+    onMoveNow?: ((agentId: string, options?: { readonly fresh?: boolean }) => void) | undefined;
     /** Start an agent that is not running (the Agent view's Start). */
     onStartAgent?: ((agentId: string) => void) | undefined;
     /** The safe-mode banner's Start for an agent (Tynn #386): the one Restart, with its answer, so the banner says it. */

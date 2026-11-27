@@ -7,8 +7,8 @@
  *  - `auth status --json`: who is signed in where, from `status.json` beside this file (the default home: no variable);
  *  - `--print --input-format stream-json` with `--no-session-persistence`: Genie's usage probe. It waits PROBE_DELAY_MS (so the
  *    window's "Reading usage…" can be seen), reports that folder's limits as a `rate_limit_event`, and ends the turn;
- *  - the same without it: an agent. Its first turn reports the folder's limit and then stays open for HOLD_MS (the agent is
- *    busy, so it cannot move at a clean idle); later turns end at once.
+ *  - the same without it: an agent. Its first turn reports the folder's limit; a prompt that asks for "a long piece of work"
+ *    then stays open for HOLD_MS (the agent is busy, so it cannot move at a clean idle); any other turn ends at once.
  * Every launch is written to `calls.jsonl` beside this file (its arguments and folder), which is how the row proves the probe
  * ran in the right folder with the right flags. prism-acp hands the child a filtered environment, so the place is beside the
  * file, never a variable.
@@ -53,7 +53,7 @@ function limit() {
 }
 
 let turn = 0;
-async function answer(n) {
+async function answer(n, long) {
     const id = `msg_1084_${n}`;
     send({ type: 'system', subtype: 'init', session_id: SESSION, claude_code_version: CLI_VERSION, model: 'claude-opus-5-5', tools: [], mcp_servers: [], cwd: process.cwd() });
     // `delayMs` in status.json, else: the default home's read is slower, so the row can see "Reading usage…" right after
@@ -64,7 +64,7 @@ async function answer(n) {
     if (reported) send({ type: 'rate_limit_event', rate_limit_info: reported, session_id: SESSION });
     event({ type: 'message_start', message: { id, usage: { input_tokens: 5, output_tokens: 1 } } });
     event({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
-    const words = !probe && n === 1 ? Math.ceil(HOLD_MS / 1000) : 1;
+    const words = !probe && long ? Math.ceil(HOLD_MS / 1000) : 1;
     for (let i = 0; i < words; i++) {
         event({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: `${i === 0 ? '' : ' '}${probe ? 'OK' : `working${i}`}` } });
         if (words > 1) await sleep(1000);
@@ -85,7 +85,10 @@ function handle(frame) {
     }
     if (frame?.type === 'user') {
         const n = ++turn;
-        chain = chain.then(() => answer(n)).catch((e) => process.stderr.write(`[1084-stub] turn failed: ${e?.message ?? e}\n`));
+        const content = frame.message?.content;
+        const said = typeof content === 'string' ? content : Array.isArray(content) ? content.map((b) => (b && b.type === 'text' ? b.text : '')).join(' ') : '';
+        const long = said.includes('long piece of work');
+        chain = chain.then(() => answer(n, long)).catch((e) => process.stderr.write(`[1084-stub] turn failed: ${e?.message ?? e}\n`));
     }
 }
 let buffer = '';

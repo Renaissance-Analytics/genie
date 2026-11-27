@@ -23,7 +23,7 @@ import { McpPreparationError } from './mcp-preparation-error.js';
 import { mcpOffFor, sameMcpServer } from '../core/agent-mcp.js';
 import { CLAUDE_DRIVER_CAPABILITIES, CODEX_DRIVER_CAPABILITIES, ClaudeDriver, CodexDriver, claudeAccounts, probeSessionStore } from '@particle-academy/prism-acp';
 import { respawnDecision, stayedWords } from '../core/claude-accounts.js';
-import { switchNoteFor } from '../core/account-switch.js';
+import { staysWhy, switchNoteFor } from '../core/account-switch.js';
 
 /**
  * Whether an agent can ask for approval — the DRIVER's published claim (`permissionRequests`), read from prism-acp's
@@ -635,6 +635,7 @@ export class SessionHost {
     readonly #threadInAccount: (threadId: string, configDir: string | null) => 'present' | 'absent' | 'indeterminate';
     readonly #launchBlocked: ((account: AccountRecord) => string | null) | undefined;
     readonly #onAccountUsed: ((account: AccountRecord) => void) | undefined;
+    readonly #onMovesChanged: (() => void) | undefined;
     /** Starts a sign-in in their account's folder refused (Tynn #1011), as they were asked: started when the sign-in is over (`launchUnblocked`). */
     readonly #blockedStarts = new Map<AgentId, { readonly record: AgentRecord; readonly cwd: string; readonly how: StartHow; readonly reason: string }>();
     /** The Claude folder of each run that is stopping, or that a stop could not end: its process is in that folder until it has ended. */
@@ -643,6 +644,8 @@ export class SessionHost {
     readonly #moving = new Set<AgentId>();
     /** The account each agent was last told it could not move to: told once per account, not on every turn. */
     readonly #toldStayed = new Map<AgentId, string>();
+    /** Tynn #1084: an agent that cannot move to the active account (`to`), and why, in plain words, for its row and the panel. */
+    readonly #stayedWhy = new Map<AgentId, { readonly to: string; readonly why: string }>();
     readonly #mcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
     readonly #untrustedFilesFor: ((record: AgentRecord) => Promise<GenieInstructionFiles | null>) | undefined;
     readonly #endToolCalls: ((agentId: AgentId, intent: CancelIntent) => number) | undefined;
@@ -810,6 +813,8 @@ export class SessionHost {
         launchBlocked?: (account: AccountRecord) => string | null;
         /** An agent launched on this account (Tynn #1084): its first use, so its usage can be read (the probe's own rules apply). */
         onAccountUsed?: (account: AccountRecord) => void;
+        /** An agent turned out to stay on its account, or stopped staying (Tynn #1084): the Accounts panel's count changed. */
+        onMovesChanged?: () => void;
         /** The person wrote to an agent (a message of their own starts a turn): the plan keepalive's count starts again. */
         onPersonTurn?: (agentId: AgentId) => void;
         /** Each agent's headroom reading, with its provider: the Dashboard header's one-per-provider indicator (main buffers). */
@@ -866,6 +871,7 @@ export class SessionHost {
         this.#threadInAccount = options.threadInAccount ?? realThreadInAccount;
         this.#launchBlocked = options.launchBlocked;
         this.#onAccountUsed = options.onAccountUsed;
+        this.#onMovesChanged = options.onMovesChanged;
         this.#mcpServersFor = options.mcpServersFor;
         this.#untrustedFilesFor = options.untrustedFilesFor;
         this.#endToolCalls = options.endToolCalls;
@@ -1615,16 +1621,26 @@ export class SessionHost {
      * THE AGENTS NOT YET ON THE ACTIVE ACCOUNT (Tynn #1084): per account they are still on, how many. An agent moves at its next
      * clean idle, and a busy one may not have one for hours; the panel says so instead of leaving the person to guess.
      */
-    stillOn(provider: string): Array<{ accountId: string; label: string; count: number }> {
-        const out = new Map<string, { accountId: string; label: string; count: number }>();
+    stillOn(provider: string): Array<{ accountId: string; label: string; count: number; stays?: string }> {
+        const out = new Map<string, { accountId: string; label: string; count: number; stays?: string }>();
         for (const entry of this.#running.values()) {
             if (entry.provider !== provider || !this.#movesTo(entry)) continue;
             const on = entry.account!;
-            const seen = out.get(on.id) ?? { accountId: on.id, label: on.label, count: 0 };
+            // One that cannot move is counted apart, with why it stays (never "until idle").
+            const stays = this.#staysWhy(entry);
+            const key = `${on.id}|${stays ?? ''}`;
+            const seen = out.get(key) ?? { accountId: on.id, label: on.label, count: 0, ...(stays !== null ? { stays } : {}) };
             seen.count += 1;
-            out.set(on.id, seen);
+            out.set(key, seen);
         }
         return [...out.values()];
+    }
+
+    /** Why a run stays on its account rather than moving to the active one, or `null` when it moves (Tynn #1084). */
+    #staysWhy(entry: Running): string | null {
+        const to = this.#movesTo(entry);
+        const stayed = to ? this.#stayedWhy.get(entry.session.agentId as AgentId) : undefined;
+        return to && stayed && stayed.to === to.id ? stayed.why : null;
     }
 
     /**
@@ -1633,12 +1649,15 @@ export class SessionHost {
      * back to the old account if it does not come up), but without waiting for its turn, its tools or its queue: the person
      * chose to cut them. How many were asked to move.
      */
-    moveNow(provider: string, agentId?: AgentId): number {
+    moveNow(provider: string, agentId?: AgentId, options: { readonly fresh?: boolean } = {}): number {
         let count = 0;
         for (const [id, entry] of this.#running) {
             if (entry.provider !== provider || (agentId !== undefined && id !== agentId) || !this.#movesTo(entry)) continue;
+            // One whose conversation cannot move is restarted only FRESH, a new conversation, and only when the person said so.
+            const stays = this.#staysWhy(entry) !== null;
+            if (stays && options.fresh !== true) continue;
             this.#toldStayed.delete(id);
-            void this.#considerMove(id, true);
+            void this.#considerMove(id, true, stays);
             count += 1;
         }
         return count;
@@ -1663,6 +1682,8 @@ export class SessionHost {
         const on = this.#accountOn(entry);
         if (!on) return {};
         const to = this.#movesTo(entry);
+        const stays = this.#staysWhy(entry);
+        if (to && stays !== null) return { account: { id: on.id, label: on.label, stays: { id: to.id, label: to.label, why: stays } } };
         return { account: { id: on.id, label: on.label, ...(to ? { movesTo: { id: to.id, label: to.label } } : {}) } };
     }
 
@@ -1727,7 +1748,7 @@ export class SessionHost {
         setTimeout(() => { void this.#considerMove(agentId); }, 0);
     }
 
-    async #considerMove(agentId: AgentId, force = false): Promise<void> {
+    async #considerMove(agentId: AgentId, force = false, fresh = false): Promise<void> {
         const entry = this.#running.get(agentId);
         if (!entry || entry.provider !== 'claude' || entry.account === undefined || this.#moving.has(agentId)) return;
         const active = this.#activeAccount?.(entry.provider);
@@ -1754,14 +1775,22 @@ export class SessionHost {
         // The new account's folder is signing in: the move waits for its end (the next change asks again).
         if (this.#launchBlocked?.(active) != null) return;
         // Only now is the store asked: it is the one look before anything is stopped.
-        const decision = threadId === null ? first : respawnDecision({ ...base, store: this.#threadInAccount(threadId, activeConfigDir) });
-        if (decision.kind === 'note') { this.#tellStayed(agentId, entry.account, active, decision.text); return; }
+        // FRESH (Tynn #1084): the person chose a new conversation on the active account; its thread is not asked for.
+        const store = threadId === null || fresh ? null : this.#threadInAccount(threadId, activeConfigDir);
+        const decision = store === null ? (fresh ? { kind: 'respawn' as const, threadId: null } : first) : respawnDecision({ ...base, store });
+        if (decision.kind === 'note') {
+            this.#stayedWhy.set(agentId, { to: active.id, why: staysWhy(store === 'absent' ? 'absent' : 'indeterminate', active.label) });
+            this.#tellStayed(agentId, entry.account, active, decision.text);
+            this.#emit(agentId);
+            this.#movesChanged();
+            return;
+        }
         if (decision.kind !== 'respawn') return;
         const from = entry.account;
         const cwd = entry.cwd;
         if (record === null || cwd === undefined) return;
-        // The SAME thread, always: the one the provider reported, if the record has not caught up with it yet.
-        const runRecord: AgentRecord = { ...record, threadId };
+        // The SAME thread, always: the one the provider reported, if the record has not caught up with it yet. FRESH: none.
+        const runRecord: AgentRecord = { ...record, threadId: fresh ? null : threadId };
         this.#moving.add(agentId);
         try {
             this.stop(agentId, { graceful: false });
@@ -1770,6 +1799,7 @@ export class SessionHost {
             const started = this.start(runRecord, cwd, { account: active, quiet: true, movedFrom: from, why: 'account-move' });
             if (!started.ok) { this.#moveBack(runRecord, cwd, from, active); return; }
             this.#toldStayed.delete(agentId);
+            if (this.#stayedWhy.delete(agentId)) this.#movesChanged();
             await this.deliverOwed(agentId);
         } finally {
             this.#moving.delete(agentId);
@@ -1783,9 +1813,19 @@ export class SessionHost {
             void (async () => {
                 if (this.#running.get(id)) { this.stop(id, { graceful: false }); await this.ended(id); }
                 const again = this.start(this.#currentRecord?.(id) ?? record, cwd, { account: from, quiet: true, why: 'account-move-back' });
-                if (again.ok && to) this.#tellStayed(id, from, to, `it could not start on ${to.label}`, true);
+                if (again.ok && to) {
+                    this.#stayedWhy.set(id, { to: to.id, why: `it could not start on ${to.label}` });
+                    this.#tellStayed(id, from, to, `it could not start on ${to.label}`, true);
+                    this.#emit(id);
+                    this.#movesChanged();
+                }
             })().catch(() => { /* the refusal is on the agent's row (start says why) */ });
         }, 0);
+    }
+
+    /** The panel's "still on / stays on" count changed: its windows read the accounts again. A listener's failure is its own. */
+    #movesChanged(): void {
+        try { this.#onMovesChanged?.(); } catch { /* not the move's */ }
     }
 
     #tellStayed(agentId: AgentId, from: AccountRecord, to: AccountRecord, why: string, always = false): void {
