@@ -55,6 +55,8 @@ import { removeAccountDir, signInFolderRefusal } from './claude-account-dirs.js'
 import { HostRegistryStore } from './agent-stores-replica.js';
 import { ProviderModelCache } from '../core/provider-models.js';
 import { HeadroomFeed, headroomBufferMs } from '../core/headroom-board.js';
+import { UsageProbes } from '../core/usage-probe.js';
+import { readClaudeUsage } from './claude-usage-read.js';
 import type { Headroom, ReadingStamp } from '../core/headroom.js';
 import { ReadingAttribution } from '../core/reading-attribution.js';
 import { LIMIT_ALERTS_SETTING, LimitAlertService, LimitNoticeBook, parseLimitAlerts } from '../core/limit-alerts.js';
@@ -1433,6 +1435,28 @@ async function main(): Promise<void> {
         changed: () => { accountsChangedNow?.(); },
     });
     void claudeLive.refresh();
+    /*
+     * EACH ACCOUNT'S USAGE, READ WHEN IT IS NEEDED (Tynn #1084). A Claude reading only came from an agent's turn in that account's
+     * folder, so an account switched to with no agent on it yet read "Usage unknown" for good. A switch, an account's first use
+     * and the Accounts panel ask here; the probe's rules (core/usage-probe.ts) decide whether to read. The read is one tiny turn
+     * in that account's folder (main/claude-usage-read.ts); Genie touches no credential. The default home holds one sign-in, so
+     * a default-home account is read only while Claude Code says that home is signed in to IT.
+     */
+    const usageProbes = new UsageProbes({
+        read: (account) => readClaudeUsage({ configDir: claudeLaunchConfigDir(account), cwd: join(home, 'usage-probe'), ...realClaudeCliOptions() }),
+        // Asked of Claude Code afresh (`claude auth status`, credentials withheld), as a Switch asks: the default home holds ONE
+        // sign-in, and is read for a default-home account only while it is that account's.
+        canRead: async (account) => {
+            const signedIn = await claudeSignedInNow(account, { accounts: () => accounts.list(), describe: (dir) => realDescribeClaude(dir), defaultDir: () => claudeLaunchConfigDir({}) });
+            if (signedIn === true) return null;
+            if (signedIn === null) return 'Claude Code could not be asked who is signed in';
+            return account.configDir === undefined ? "Claude Code's default home is signed in to another account now" : 'Claude Code says this account is not signed in';
+        },
+        lastReadingAt: (id) => headroomFeedNow?.readingAt('claude', id) ?? null,
+        offer: (account, room) => { offerReadingNow?.(account.provider, room, { accountId: account.id, runId: 'usage-probe', fresh: true }); },
+        changed: () => { accountsChangedNow?.(); },
+        now: () => Date.now(),
+    });
     // EVERY SWITCH TELLS THE AGENTS THEIR NEW ROOM (Tynn #1011, the owner's requirement): the new account's last reading,
     // published at once and put ahead of each running agent's next turn; its limit holds lifted.
     const announceSwitch = (provider: string, accountId: string): void => {
@@ -1440,6 +1464,8 @@ async function main(): Promise<void> {
         if (!account) return;
         const reading = headroomFeedNow?.accounts().find((r) => r.provider === provider && r.accountId === accountId);
         host.accountSwitched(provider, { account, headroom: reading?.room ?? null });
+        // Its own reading, at once when it has none of its own in 15 min (Tynn #1084).
+        void usageProbes.request(account);
     };
     // EVERY CLAUDE SIGN-IN IN THE BROWSER (Tynn #1011; the owner: "I should not see any terminals nor do we store login keys"):
     // prism-acp's hidden login(), Anthropic's page opened on the screen of the window that asked; sign out is its logout().
@@ -1522,14 +1548,31 @@ async function main(): Promise<void> {
                 void claudeLive.refresh();
                 accountsChangedNow?.();
             }
-            else { await accounts.forget(action.id); headroomFeedNow?.forget(action.id); saveBoardNow?.(); }
+            else if (action.kind === 'read-usage') {
+                // Tynn #1084: the panel opening (each account under the 15-min rules), or "Check usage now" (that one, at once).
+                // Answered at once: "Reading usage…" and then the result reach the windows as the accounts change.
+                if (action.id !== undefined) {
+                    const account = accounts.get(action.id);
+                    if (!account) throw new Error('Genie does not know that account.');
+                    void usageProbes.request(account, action.manual === true ? { manual: true } : {});
+                } else {
+                    for (const account of accounts.list()) if (account.provider === action.provider) void usageProbes.request(account);
+                }
+            }
+            else if (action.kind === 'move-now') {
+                // Tynn #1084: "Restart on <active> now": the person's go for the agents still on another account.
+                const moved = host.moveNow(action.provider, action.agentId as AgentId | undefined, action.fresh === true ? { fresh: true } : {});
+                if (moved === 0) return { ok: false, reason: 'No agent is waiting to move to the active account.' };
+                accountsChangedNow?.();
+            }
+            else { await accounts.forget(action.id); headroomFeedNow?.forget(action.id); usageProbes.forget(action.id); saveBoardNow?.(); }
             return { ok: true };
         } catch (error) {
             return { ok: false, reason: error instanceof Error ? error.message : String(error) };
         }
     };
     // The header's account chips (Tynn #483): the book, each account's readings from the board, and the standing offers.
-    const accountsSnapshot = (): AccountsSnapshot => ({ providers: accountsView(accounts.list(), headroomFeedNow?.accounts() ?? [], Object.fromEntries(ACP_PROVIDERS.map((p) => [p, accounts.activeFor(p).id])), claudeLive.current(20_000)), offers: switchOffersNow?.offers() ?? [], design: designAuthNow?.view(), signIns: claudeSignIns.view() });
+    const accountsSnapshot = (): AccountsSnapshot => ({ providers: accountsView(accounts.list(), headroomFeedNow?.accounts() ?? [], Object.fromEntries(ACP_PROVIDERS.map((p) => [p, accounts.activeFor(p).id])), claudeLive.current(20_000), { usage: usageProbes.states(), stillOn: Object.fromEntries(ACP_PROVIDERS.map((p) => [p, host.stillOn(p)])) }), offers: switchOffersNow?.offers() ?? [], design: designAuthNow?.view(), signIns: claudeSignIns.view() });
     // ...the same book on the one protocol (Tynn #895), answered here for every client.
     accountsPortNow = { list: () => accountsSnapshot(), act: (action, context) => accountsAct(action, context), dismissOffer: (id) => switchOffersNow?.dismiss(id) ?? false };
     // WHOSE READING IT IS ACROSS A SIGN-IN (Tynn #753, core/reading-attribution.ts): while who is signed in is read, a provider's
@@ -1829,6 +1872,10 @@ async function main(): Promise<void> {
         activeAccount: provider => isAcpProvider(provider) ? accounts.activeFor(provider) : null,
         // Nothing launches in a folder a Claude sign-in is running in (prism-acp: one process per folder; Tynn #1011).
         launchBlocked: (account) => (account.configDir !== undefined && claudeSignIns.busy(account.configDir) ? 'That account is signing in; it starts once the sign-in is over.' : null),
+        // An account's first use (Tynn #1084): its usage is read when it has none of its own, and the panel's "still on" count moves.
+        onAccountUsed: (account) => { void usageProbes.request(account); accountsChangedNow?.(); },
+        // An agent turned out to stay on its account (or stopped): the Accounts panel's count changes (Tynn #1084).
+        onMovesChanged: () => { accountsChangedNow?.(); },
         userData: home,
         ...engineHostOptions,
         // The servers Genie provides to every agent (Tynn #1017; the Fancy Dev Kit's fancy-ui), each switchable off per workspace.

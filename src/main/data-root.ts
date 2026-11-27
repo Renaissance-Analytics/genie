@@ -170,6 +170,7 @@ export const DATA_ROOT_RULES: readonly DataRootRule[] = [
 
     // --- MACHINE: readings and notices that are asked again ----------------------------------------------------------
     machine('headroom-board.json', 'the last rate-limit readings'),
+    machine('usage-probe/', 'the empty folder an account’s usage is read from (Tynn #1084)'),
     machine('limit-alerts-armed.json', 'which rate-limit alerts already fired'),
     machine('limit-alert-notices.json', 'the rate-limit notices not yet dismissed'),
     machine('switch-offers.json', 'the account switches offered'),

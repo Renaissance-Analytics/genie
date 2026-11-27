@@ -138,7 +138,8 @@ describe('the popover: live state, one-click switch, sign in, add', () => {
         const pop = open({ onAct });
         click(pop.querySelector('[data-action="account-add-subscription"]'));
         click(pop.querySelector('[data-action="account-add-console"]'));
-        expect(onAct.mock.calls.map((c) => c[0])).toEqual([{ kind: 'add-claude', method: 'subscription' }, { kind: 'add-claude', method: 'console' }]);
+        // Opening the popover asks for its accounts' usage first (Tynn #1084).
+        expect(onAct.mock.calls.map((c) => c[0])).toEqual([{ kind: 'read-usage', provider: 'claude' }, { kind: 'add-claude', method: 'subscription' }, { kind: 'add-claude', method: 'console' }]);
     });
 
     it('every action in the chip is a react-fancy Button (source guard)', () => {
@@ -199,7 +200,8 @@ describe('Switch names the account by its id; Sign in only for an account known 
         const row = document.querySelector(`[data-account-popover="claude"] [data-account="${C}"]`)!;
         expect(row.querySelector('[data-action="account-sign-in"]')).toBeNull();
         click(row.querySelector('[data-action="account-switch"]'));
-        expect(onAct.mock.calls).toEqual([[{ kind: 'switch', id: C }]]);
+        // Opening the popover asks for its accounts' usage first (Tynn #1084); then exactly the switch, by id.
+        expect(onAct.mock.calls).toEqual([[{ kind: 'read-usage', provider: 'claude' }], [{ kind: 'switch', id: C }]]);
         expect(onSwitch).not.toHaveBeenCalled();
         // CONTROL, same popover: the one Claude Code said is signed out still offers Sign in.
         expect(document.querySelector(`[data-account-popover="claude"] [data-account="${B}"] [data-action="account-sign-in"]`)).not.toBeNull();
@@ -213,7 +215,7 @@ describe('Switch names the account by its id; Sign in only for an account known 
         act(() => root.render(<AccountsChip view={VIEW} offer={offer} now={NOW} onSwitch={onSwitch} onAccountsAct={onAct} />));
         click(host.querySelector('[data-account-chip="claude"]'));
         click(document.querySelector('[data-action="switch-offer-switch"]'));
-        expect(onAct.mock.calls).toEqual([[{ kind: 'switch', id: C }]]);
+        expect(onAct.mock.calls).toEqual([[{ kind: 'read-usage', provider: 'claude' }], [{ kind: 'switch', id: C }]]);
         expect(onSwitch).not.toHaveBeenCalled();
     });
 
@@ -226,7 +228,8 @@ describe('Switch names the account by its id; Sign in only for an account known 
         click(row(C).querySelector('[data-action="account-switch"]'));
         click(row(D).querySelector('[data-action="account-switch"]'));
         click(row(B).querySelector('[data-action="account-switch"]'));
-        expect(onAct.mock.calls).toEqual([[{ kind: 'switch', id: C }], [{ kind: 'switch', id: D }], [{ kind: 'switch', id: B }]]);
+        // The page asks for its accounts' usage when shown (Tynn #1084); then exactly the three switches, by id.
+        expect(onAct.mock.calls).toEqual([[{ kind: 'read-usage', provider: 'claude' }], [{ kind: 'switch', id: C }], [{ kind: 'switch', id: D }], [{ kind: 'switch', id: B }]]);
         expect(onSwitch).not.toHaveBeenCalled();
     });
 
@@ -249,6 +252,7 @@ describe('Switch names the account by its id; Sign in only for an account known 
         act(() => root.render(<AccountsSettings snapshot={snapshot} offerWindows="both" onSetOfferWindows={() => {}} onSwitch={onSwitch} onAct={onAct} />));
         click(host.querySelector(`[data-settings-account="${Y}"] [data-action="account-switch"]`));
         expect(onSwitch.mock.calls).toEqual([['codex', 'second@example.invalid']]);
-        expect(onAct).not.toHaveBeenCalled();
+        // The host is asked for nothing but the page's usage read (Tynn #1084).
+        expect(onAct.mock.calls).toEqual([[{ kind: 'read-usage', provider: 'codex' }]]);
     });
 });

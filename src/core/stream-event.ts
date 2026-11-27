@@ -201,6 +201,8 @@ export type StreamEvent =
           commandRun?: CommandRunRef;
           /** The provider's rate-limit headroom when the notice carried it (`core/headroom.ts`); `null` otherwise. */
           headroom?: Headroom | null;
+          /** The account the run was on when that reading came (Tynn #1084): whose limit it is. Absent = not known. */
+          account?: string;
           /** A thinking-token ESTIMATE riding the notice (Claude's `system/thinking_tokens` frame); it belongs to its thought. */
           estimate?: number | null;
           /** The model IN USE when the notice reported one (`MODEL_META`); `null` when it did not say. */

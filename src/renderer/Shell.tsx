@@ -298,6 +298,8 @@ export interface ShellProps {
     onAccountRetry?: ((agentId: string) => void) | undefined;
     /** `Log in to Claude Design` for an agent a tool refused for want of `/design-login` (#1081). */
     onDesignLogin?: ((agentId: string) => void) | undefined;
+    /** Tynn #1084: `Restart on <active> now` for an agent still on another account. */
+    onMoveNow?: ((agentId: string, options?: { readonly fresh?: boolean }) => void) | undefined;
     /** Start an agent that is not running (the Agent view's Start). */
     onStartAgent?: ((agentId: string) => void) | undefined;
     /** The safe-mode banner's Start for an agent (Tynn #386): the one Restart, with its answer, so the banner says it. */
@@ -466,6 +468,7 @@ export function Shell({
     onProviderLogin,
     onAccountRetry,
     onDesignLogin,
+    onMoveNow,
     onStartAgent,
     onSafeModeStartAgent,
     onOpenPalette,
@@ -1030,6 +1033,7 @@ export function Shell({
                                 onProviderLogin={scoped ? undefined : onProviderLogin}
                                 onAccountRetry={scoped ? undefined : onAccountRetry}
                                 onDesignLogin={scoped ? undefined : onDesignLogin}
+                                onMoveNow={scoped ? undefined : onMoveNow}
                                 onStart={readOnly ? undefined : onStartAgent}
                                 terminals={shownTerminals}
                                 terminalsReadOnly={readOnly}
@@ -1244,6 +1248,7 @@ export function Shell({
                         onProviderLogin={chatThread && onProviderLogin && !scoped && chatSession?.signedOut ? { provider: snapshot.agents.find((a) => a.id === chatThread.agentId)?.provider ?? '', run: () => onProviderLogin(chatThread.agentId) } : undefined}
                         onAccountRetry={chatThread && onAccountRetry && !scoped && chatSession?.accountPaused ? () => onAccountRetry(chatThread.agentId) : undefined}
                         onDesignLogin={chatThread && onDesignLogin && !scoped && chatSession?.designLogin ? () => onDesignLogin(chatThread.agentId) : undefined}
+                        onMoveNow={chatThread && onMoveNow && !scoped && chatSession?.account?.movesTo ? () => onMoveNow(chatThread.agentId) : undefined}
                     />
                     </ErrorBoundary>
                 </div>

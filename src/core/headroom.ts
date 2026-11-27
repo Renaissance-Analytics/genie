@@ -149,10 +149,13 @@ export function rateLimitWarning(headroom: Headroom | null, nowMs: number): stri
 }
 
 
-/** `pro · 60% of 5h window left · resets 6:30 PM`; spent past the allowance: `over the 5h window · resets 4:00 PM`. */
-export function headroomLine(h: Headroom): string {
+/**
+ * `pro · 60% of 5h window left · resets 6:30 PM`; spent past the allowance: `over the 5h window · resets 4:00 PM`. With the
+ * account the reading is (Tynn #1084): `max · 67% of 7d window left on wish+ai@ · resets 6:30 PM`.
+ */
+export function headroomLine(h: Headroom, account?: string | null): string {
     const share = h.over ? `over the ${h.window} window` : `${h.leftPct}% of ${h.window} window left`;
-    return `${h.plan ? `${h.plan} · ` : ''}${share} · resets ${clockAmPm(h.resetsAtMs)}`;
+    return `${h.plan ? `${h.plan} · ` : ''}${share}${account ? ` on ${account}` : ''} · resets ${clockAmPm(h.resetsAtMs)}`;
 }
 
 /** The hover on that line: the full date and time the window resets. */

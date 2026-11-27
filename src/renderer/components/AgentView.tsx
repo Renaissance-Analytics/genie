@@ -8,6 +8,7 @@ import { stableView } from '../stable-view.js';
 import { providerLogin } from '../../core/provider-login.js';
 import { headroomLine, headroomTitle, headroomOf } from '../../core/headroom.js';
 import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react';
+import { MoveFreshConfirm } from './MoveFreshConfirm.js';
 import type { ToolOutputReply } from '../../core/tool-row-bound.js';
 import { activityBars, outputHistogram, outputTotalLabel, activityLedger, lastOutputLabel, type TakeOverProbe } from '../../core/observed.js';
 import { contextNote, diffHeader, headerActions, personaView, planSteps, processEnded, railMode, railSummary, tabNote } from '../../core/agent-view.js';
@@ -328,6 +329,8 @@ export interface AgentViewProps {
     onStopToolCall?: ((agentId: string, toolCallId: string) => void) | undefined;
     /** `Resume now` while the agent's provider login is held for its rate limit (Tynn #794). */
     onResumeLimit?: ((agentId: string) => void) | undefined;
+    /** Tynn #1084: `Restart on <active> now` while it is still on another account than the active one (until idle). */
+    onMoveNow?: ((agentId: string, options?: { readonly fresh?: boolean }) => void) | undefined;
     /** `Log in to <provider>` for a signed-out agent (the owner, 2026-10-18). */
     onProviderLogin?: ((agentId: string) => void) | undefined;
     /** `Try again` for an agent whose ACCOUNT the provider paused (the owner, 2026-10-21): every agent on that login comes back. */
@@ -401,9 +404,11 @@ export const AgentView = stableView(AgentViewBody, 'AgentView');
 function AgentViewBody({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, chatRefs, onSelect, now,
     chatSubject, approvalInToast = false, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace, onLanes, range = null, onRange, onTakeOver, bar, chatInView = false, ops,
-    startRefusal, providerSignedOut, files, workspace, initialChanges, initialDiskChanges, readCommits, loadToolOutput, initialCommits, takeOver = null, terminals, terminalsReadOnly = false, onStop, onCancelTurn, onStopToolCall, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, planStorage, onPlanCollapse, onDiscussStep, settingsSection: settingsSectionProp,
+    startRefusal, providerSignedOut, files, workspace, initialChanges, initialDiskChanges, readCommits, loadToolOutput, initialCommits, takeOver = null, terminals, terminalsReadOnly = false, onStop, onCancelTurn, onStopToolCall, onResumeLimit, onMoveNow, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, planStorage, onPlanCollapse, onDiscussStep, settingsSection: settingsSectionProp,
 }: AgentViewProps) {
     countRender('AgentView');
+    // Tynn #1084: the fresh restart of an agent that cannot move is asked first.
+    const [askFresh, setAskFresh] = useState(false);
     const tabs = tabsFor(agent.fidelity);
     // A message's pills in the Stream (genie#1263): a file opens in this agent's workspace, an agent or a workspace opens
     // it — each only on the person's click (genie#1265). Stable across renders (the latest navigate read through a ref),
@@ -799,6 +804,49 @@ function AgentViewBody({
                             Log in to Claude Design
                         </Button>
                     ) : null}
+                    {session?.account ? (
+                        // THE ACCOUNT IT IS REALLY ON (Tynn #1084): where it moves at its next idle, or that it STAYS and why.
+                        <span data-agent-runs-on={session.account.id} data-moves-to={session.account.movesTo?.id} data-stays={session.account.stays ? 'true' : undefined}
+                            title={session.account.stays
+                                ? `It cannot move to ${session.account.stays.label}: ${session.account.stays.why}. Restart on ${session.account.stays.label} starts a new conversation there.`
+                                : session.account.movesTo ? `Still running on ${session.account.label} until its current work is idle; then it continues on ${session.account.movesTo.label}` : `Running on ${session.account.label}`}
+                            className={`shrink-0 truncate text-xs ${session.account.movesTo || session.account.stays ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}`}>
+                            {session.account.stays
+                                ? `Stays on ${session.account.label}: ${session.account.stays.why}`
+                                : session.account.movesTo ? `On ${session.account.label} · moves to ${session.account.movesTo.label} at next idle` : `On ${session.account.label}`}
+                        </span>
+                    ) : null}
+                    {actions.moveNow && onMoveNow && session?.account?.movesTo ? (
+                        <Button size="xs"
+                            type="button"
+                            data-action="move-now"
+                            title={`Stop what it is doing and continue on ${session.account.movesTo.label} now, on this same conversation`}
+                            onClick={() => onMoveNow(agent.id)}
+                            className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--warning)] bg-[var(--warning)]/10 px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--warning)]/20"
+                        >
+                            {`Restart on ${session.account.movesTo.label} now`}
+                        </Button>
+                    ) : null}
+                    {actions.moveNow && onMoveNow && session?.account?.stays ? (
+                        // It cannot carry its conversation: Restart starts it FRESH there, asked first (MoveFreshConfirm).
+                        <span className="relative shrink-0">
+                            <Button size="xs"
+                                type="button"
+                                data-action="move-now"
+                                data-fresh="true"
+                                title={`Start it on ${session.account.stays.label} as a new conversation (asked first)`}
+                                onClick={() => setAskFresh(true)}
+                                className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--warning)] bg-[var(--warning)]/10 px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--warning)]/20"
+                            >
+                                {`Restart on ${session.account.stays.label} now`}
+                            </Button>
+                            {askFresh ? (
+                                <span className="absolute right-0 top-full z-50 mt-1 block w-72">
+                                    <MoveFreshConfirm to={session.account.stays.label} onConfirm={() => { setAskFresh(false); onMoveNow(agent.id, { fresh: true }); }} onCancel={() => setAskFresh(false)} />
+                                </span>
+                            ) : null}
+                        </span>
+                    ) : null}
                     {actions.resumeLimit && onResumeLimit ? (
                         <Button size="xs"
                             type="button"
@@ -1155,7 +1203,7 @@ function AgentViewBody({
                                             </span>
                                         ) : null}
                                         {headroom ? (
-                                            <span data-rail-headroom title={headroomTitle(headroom)} className={`font-mono ${headroom.over || headroom.leftPct < 10 ? 'text-[var(--warning)]' : ''}`}>{headroomLine(headroom)}</span>
+                                            <span data-rail-headroom title={headroomTitle(headroom)} className={`font-mono ${headroom.over || headroom.leftPct < 10 ? 'text-[var(--warning)]' : ''}`}>{headroomLine(headroom, session?.account?.label ?? null)}</span>
                                         ) : null}
                                         {/* Whether this session was STARTED with Genie's MCP — the servers the host handed the driver. */}
                                         {session?.mcpServers ? (
