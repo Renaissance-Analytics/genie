@@ -58,9 +58,9 @@ describe('the host says whether one is linked', () => {
 });
 
 describe('the wires', () => {
-    it('the window counts it', () => {
-        const src = readFileSync('src/main/main.ts', 'utf8');
-        expect(src).toMatch(/browser: browserLinked \? 1 : 0/);
-        expect(src).toMatch(/event\.kind === 'browserUp'/);
+    it('genie-host counts it, from its own Browser service, for the launcher\u2019s tray (Tynn #1058 L5)', () => {
+        const host = readFileSync('src/main/genie-host.ts', 'utf8');
+        expect(host).toMatch(/browserUp: browserService\.up,/);
+        expect(readFileSync('src/main/browser-service.ts', 'utf8')).toMatch(/get up\(\): boolean \{\s*return this\.#browser !== null;/);
     });
 });

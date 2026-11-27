@@ -2034,7 +2034,7 @@ async function boot(): Promise<void> {
     mountMainWindow(true);
     // THE LAUNCHER'S TRAY ASKED FOR A PLACE (L5: Needs you, Settings…, Task Manager…): `--show <route>`, one it offers.
     const shownAtBoot = launcherShowRoute(process.argv);
-    if (shownAtBoot) showToPerson({ activation: 'user-gesture', route: shownAtBoot, reason: 'launcher tray' });
+    if (shownAtBoot) { revealMainWindow('launcher tray'); showToPerson({ activation: 'user-gesture', route: shownAtBoot, reason: 'launcher tray' }); }
     // START ON LOGON IS THE LAUNCHER'S (Tynn #1058 L5): it writes the entry (the Run value, the autostart file) running
     // itself with --logon, and decides with the logon table. This client says the person's two settings to it: at boot, on
     // every change, and when genie-host says its settings whole (late, after the boot's deadline).

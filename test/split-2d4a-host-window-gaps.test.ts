@@ -136,9 +136,9 @@ describe('a chat follows its mail', () => {
 });
 
 describe('the wiring', () => {
-    it('genie-host retries a paused account; the window’s tray asks it (accountRetry, Tynn #896 2b-3)', () => {
+    it('genie-host retries a paused account; the window asks it (accountRetry, Tynn #896 2b-3; from the window since L5)', () => {
         expect(readFileSync('src/main/host-alone-api.ts', 'utf8')).toMatch(/retryPausedAgents\(/);
         expect(readFileSync('src/main/main.ts', 'utf8')).not.toMatch(/retryPausedAgents\(/);
-        expect(readFileSync('src/main/main.ts', 'utf8')).toMatch(/ownProtocol\.call\('accountRetry'/);
+        expect(readFileSync('src/renderer/local-session.ts', 'utf8')).toMatch(/accountRetry: \(id\) => requestBridge\(\(bridge\) => bridge\.accountRetry!\(id\)\)/);
     });
 });

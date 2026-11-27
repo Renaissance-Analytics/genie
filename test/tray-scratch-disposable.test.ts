@@ -53,7 +53,9 @@ describe('the tray’s scratch terminal is disposable and ends with its window',
     it('main’s tray handler asks genie-host for Genie’s own (terminals.scratch, null); main keeps no ScratchTerminals (Tynn #897, 2c-4)', () => {
         // Comment lines dropped by LINE, CRLF-safe: a guard that matched a comment would pass on prose.
         const main = readFileSync('src/main/main.ts', 'utf8').split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
-        expect(main).toMatch(/onScratchTerminal: \(\) => \{\s*void ownProtocol\.call\('terminals\.scratch', \[null\]\)/);
+        // Genie's own is asked for by the Dashboard's genie row since Tynn #1058 L5 (scratch-terminal-own-l5.test.ts): main has
+        // no tray handler for it.
+        expect(main).not.toMatch(/onScratchTerminal:/);
         expect(main).not.toContain('scratchTerminals?.windowClosed');
         expect(main).not.toContain('new ScratchTerminals(');
     });

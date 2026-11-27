@@ -153,6 +153,77 @@ function pressKey(key) {
     if (WIN) spawnSync('powershell', ['-NoProfile', '-Command', `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${key === 'Escape' ? '{ESC}' : key}')`], { timeout: SYNC_MS, windowsHide: true });
     else spawnSync('wtype', ['-k', key], { timeout: SYNC_MS });
 }
+/**
+ * THE LINUX TRAY'S MENU, OPENED AS A PERSON OPENS IT (best effort, for the screenshot): Waybar draws a StatusNotifierItem's
+ * menu, and only a pointer opens it. The icon is found as the bar's pixels that changed when the launcher put it up
+ * (grim -t ppm, before and after); Hyprland puts the cursor on it (its own dispatch, checked with `hyprctl cursorpos`), and
+ * ydotool presses the right button. Each step says whether it worked; the row does not fail on it.
+ */
+function screenPixels() {
+    const r = spawnSync('grim', ['-t', 'ppm', '-'], { maxBuffer: 64 * 1024 * 1024, timeout: SYNC_MS, encoding: 'buffer' });
+    if (r.status !== 0 || !r.stdout || r.stdout.length < 16) return null;
+    const buf = r.stdout;
+    const fields = [];
+    let i = 0;
+    const space = (b) => b === 0x20 || b === 0x0a || b === 0x0d || b === 0x09;
+    while (fields.length < 4 && i < buf.length) {
+        while (space(buf[i])) i++;
+        let j = i;
+        while (j < buf.length && !space(buf[j])) j++;
+        fields.push(buf.subarray(i, j).toString('latin1'));
+        i = j;
+    }
+    if (fields[0] !== 'P6' || fields[3] !== '255') return null;
+    return { w: Number(fields[1]), h: Number(fields[2]), px: buf.subarray(i + 1) };
+}
+function trayIconOf(before, after) {
+    if (!before || !after || before.w !== after.w) return null;
+    const rows = Math.min(30, after.h);
+    const changed = [];
+    for (let x = Math.floor(after.w * 0.6); x < after.w; x++) {
+        let d = 0;
+        for (let y = 0; y < rows; y++) { const k = (y * after.w + x) * 3; d += Math.abs(after.px[k] - before.px[k]) + Math.abs(after.px[k + 1] - before.px[k + 1]) + Math.abs(after.px[k + 2] - before.px[k + 2]); }
+        if (d > 120) changed.push(x);
+    }
+    if (changed.length === 0) return null;
+    // The rightmost run of changed columns ends where the new icon ends (what shifted left of it changed too).
+    const right = changed[changed.length - 1];
+    return { x: right - 9, y: Math.round(rows * 0.45) };
+}
+function cursorAt() {
+    const r = spawnSync('hyprctl', ['-i', '0', 'cursorpos'], { encoding: 'utf8', timeout: SYNC_MS });
+    const m = /(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/.exec(r.stdout ?? '');
+    return m ? { x: Number(m[1]), y: Number(m[2]) } : null;
+}
+function openLinuxTrayMenu(before) {
+    const at = trayIconOf(before, screenPixels());
+    if (!at) { console.log('  linux tray: the icon was not found in the bar (no change where the launcher put it)'); return false; }
+    console.log(`  linux tray: the icon is at about ${at.x},${at.y}`);
+    const tries = [
+        ['hyprctl', ['-i', '0', 'dispatch', 'movecursor', String(at.x), String(at.y)]],
+        ['hyprctl', ['-i', '0', 'eval', `hl.dispatch("movecursor", "${at.x} ${at.y}")`]],
+        ['hyprctl', ['-i', '0', 'eval', `hl.dispatch("movecursor ${at.x} ${at.y}")`]],
+    ];
+    let moved = false;
+    for (const [cmd, args] of tries) {
+        spawnSync(cmd, args, { encoding: 'utf8', timeout: SYNC_MS });
+        const c = cursorAt();
+        if (c && Math.abs(c.x - at.x) <= 3 && Math.abs(c.y - at.y) <= 3) { moved = true; console.log(`  linux tray: the cursor is on it (${args.slice(2).join(' ')})`); break; }
+    }
+    if (!moved) { console.log(`  linux tray: Hyprland did not move the cursor there (it is at ${JSON.stringify(cursorAt())})`); return false; }
+    if (spawnSync('sh', ['-c', 'command -v ydotool'], { timeout: SYNC_MS }).status !== 0) {
+        spawnSync('sudo', ['-n', 'pacman', '-S', '--needed', '--noconfirm', 'ydotool'], { timeout: 180_000, stdio: 'ignore' });
+    }
+    const sock = '/tmp/genie-ydotool.sock';
+    const ids = `${process.getuid?.() ?? 1000}:${process.getgid?.() ?? 1000}`;
+    spawn('sudo', ['-n', 'ydotoold', `--socket-path=${sock}`, `--socket-own=${ids}`], { detached: true, stdio: 'ignore' }).unref();
+    spawnSync('sleep', ['1.5']);
+    const click = spawnSync('ydotool', ['click', '0xC1'], { encoding: 'utf8', timeout: SYNC_MS, env: { ...process.env, YDOTOOL_SOCKET: sock } });
+    console.log(`  linux tray: the right button pressed (ydotool exit ${click.status}${click.stderr ? `: ${String(click.stderr).trim().slice(0, 120)}` : ''})`);
+    return click.status === 0;
+}
+let barBefore = null;
+
 /** How many crash records the host's runtime holds. */
 const crashRecords = () => { try { return readdirSync(join(GENIE_HOME, 'runtime', 'crash')).length; } catch { return 0; } };
 /**
@@ -606,6 +677,8 @@ if (!existsSync(LAUNCHER_SRC) || !existsSync(PACKAGES)) refuse(`no launcher or p
 const installed = launcherCli(['install', '--profile', 'both', '--from', PACKAGES, '--yes'], 300_000);
 if (installed.code !== 0) refuse(`the launcher did not install the packages: ${installed.out.slice(0, 400)}`);
 console.log(`  ${installed.out.split(/\r?\n/).join(' | ')}`);
+// The bar before the launcher's icon is in it (Linux): what changes is where the icon went.
+if (!WIN) barBefore = screenPixels();
 step('0.5b', 'the launcher started (serve, with its tray probe) (≤ 30 s)');
 mkdirSync(OUT, { recursive: true });
 {
@@ -710,7 +783,8 @@ try {
     const q = asked();
     check(JSON.stringify(q?.buttons) === JSON.stringify(['Cancel', 'Just close the UI', 'Shut down everything']), '12. the quit ASKED the two answers, and button 1 was "Just close the UI"', JSON.stringify(q));
     check(alive(launcherPid) && launcherRecord()?.pid === launcherPid, '12l. the LAUNCHER keeps running, the same pid', `pid ${launcherPid}`);
-    check(/the client ends \(the quit’s answer: Just close the UI\)/.test(readOr(LIFECYCLE).slice(lifecycleAt)), '12c. the client said why it ended (lifecycle log)');
+    // The launcher closes every attached client, the one that asked too: whichever word reaches it first is its reason.
+    check(/the client ends \((the quit’s answer: Just close the UI|the launcher closed the UI)\)/.test(readOr(LIFECYCLE).slice(lifecycleAt)), '12c. the client said why it ended: the quit's answer, through the launcher (lifecycle log)');
     check(existsSync(join(GENIE_HOME, 'runtime', 'left-running')), '12m. the host is marked left running (it comes back at logon, P6)');
     a.cdp.close();
 
@@ -729,9 +803,12 @@ try {
     const said = Number(/· (\d+) agents?\]/.exec(header)?.[1] ?? 0);
     check(menu.code === 0 && said >= AGENTS && items.includes('Open Genie') && items.includes('Stop this computer’s host') && items.includes('Shut down everything') && items.includes('Close Genie (agents keep running) (unavailable)'),
         '17m. the TRAY (the launcher\'s) says the host runs the agents, offers Open Genie, Stop this computer\'s host and Shut down everything; Close Genie is unavailable with no window', menu.out.slice(0, 400));
+    // Windows: the probe showed the menu at the icon. Linux: a pointer opens Waybar's menu (best effort, said either way).
+    const linuxMenu = WIN ? true : openLinuxTrayMenu(barBefore);
     await sleep(1_500);
     shot(`tray-menu-${WIN ? 'windows' : 'linux'}.png`);
-    if (WIN) pressKey('Escape');
+    console.log(`  the tray menu ${linuxMenu ? 'was opened for this screenshot' : 'could not be opened on this desktop: the screenshot shows the bar and its icon only'}`);
+    pressKey('Escape');
 
     // -------------------------------------------------------------------------------- Genie opened again
     lifecycleAt = readOr(LIFECYCLE).length;

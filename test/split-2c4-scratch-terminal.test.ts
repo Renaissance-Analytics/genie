@@ -168,8 +168,9 @@ describe('every window asks the host; main keeps no scratch terminal of its own'
         expect(code(src('src/renderer/App.tsx'))).toMatch(/resolvedBridge\.scratchTerminal!\(workspaceId\)\.then\(\(r\) => \{ if \(r\.ok\) openCompanion\(r, 'Terminal'\); return r; \}\)/);
     });
 
-    it('the tray asks over main’s own protocol connection for Genie’s own (null)', () => {
-        expect(code(src('src/main/main.ts'))).toMatch(/onScratchTerminal: \(\) => \{\s*void ownProtocol\.call\('terminals\.scratch', \[null\]\)/);
+    it('Genie\u2019s own is asked for from the window (the Dashboard\u2019s genie row, Tynn #1058 L5), as every workspace\u2019s is', () => {
+        expect(code(src('src/main/main.ts'))).not.toMatch(/onScratchTerminal:/);
+        expect(code(src('src/main/scratch-terminal.ts'))).toMatch(/if \(isGenieOwnScratch\(workspaceId\)\) opened = ports\.scratch\.open\(\{ workspaceId: OS_WORKSPACE, cwd: ports\.home \}, context\);/);
     });
 
     it('no channel, no ScratchTerminals, no window-close hook in main; no preload line; the row leaves both lists', () => {

@@ -58,7 +58,8 @@ describe('main: one door to the window’s view, and it asks who', () => {
         const gestures = main.split('\n').filter((l) => /showToPerson\(\{ activation: 'user-gesture'/.test(l));
         expect(gestures.length).toBeGreaterThanOrEqual(3);
         for (const line of gestures) expect(line).toMatch(/revealMainWindow\(/);
-        expect(main).toMatch(/onTaskManager: \(\) => \{ revealMainWindow\('tray: Task Manager'\); showToPerson\(\{ activation: 'user-gesture', route: 'genie:\/\/hosting\?tab=processes', reason: 'tray: Task Manager' \}\); \},/);
+        // Task Manager is the launcher's tray item since Tynn #1058 L5 (--show genie://hosting?tab=processes): revealed, then shown.
+        expect(main).toMatch(/if \(shownAtBoot\) \{ revealMainWindow\('launcher tray'\); showToPerson\(\{ activation: 'user-gesture', route: shownAtBoot, reason: 'launcher tray' \}\); \}/);
     });
 });
 

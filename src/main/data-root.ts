@@ -131,6 +131,8 @@ export const DATA_ROOT_RULES: readonly DataRootRule[] = [
     // The launcher's control wire (native/launcher/src/control.rs; read by launcher-control.ts, Tynn #1058 L4).
     machine('runtime/launcher.json', 'the launcher’s pid, endpoint, build and schema'),
     machine('runtime/launcher.token', 'the token a client or the host says to the launcher'),
+    machine('runtime/logon.json', 'the person’s two logon settings as the client last said them to the launcher (Tynn #1058 L5)'),
+    machine('runtime/host-stopping.json', 'the host’s stop, said as it goes, for the launcher waiting on it (Tynn #1079); removed once the host has gone'),
     machine('runtime/startup-updates.json', 'what the host is updating before it starts, for a window waiting for it (Tynn #1067); removed once it is done'),
     machine('runtime/host-proxy.json', 'the proxy routes the OS last gave'),
     machine('runtime/provider-programs.json', 'where each provider’s program is on this machine'),

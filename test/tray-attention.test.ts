@@ -58,14 +58,18 @@ describe('main wires it (comments stripped, so a sentence cannot stand in for th
     const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8')
         .split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
 
-    it('the Deck count comes from needsYouCount over this window’s error notices and the host’s Deck, and refreshes the tray', () => {
-        // genie-host's Deck (deck.watch, Tynn #941 2f-2), recounted as it changes and as this window's own notices do.
-        expect(main).toMatch(/const waiting = needsYouCount\(\[\.\.\.mainErrors\.deckItems\(\), \.\.\.hostDeckNow\]\);\s*if \(waiting !== trayWaiting\) \{ trayWaiting = waiting; refreshTray\(\); \}/);
-        expect(main).toMatch(/registry\.subscribe\(\(\) => \{ refreshTrayWaiting\(\); \}\)/);
-        expect(main).toMatch(/hostDeckNow = items;\s*questionWindow\?\.changed\(\);\s*refreshTrayWaiting\(\);/);
+    it('the Deck count is genie-host\u2019s own (needsYouCount over its Deck), for the launcher\u2019s tray (Tynn #1058 L5)', () => {
+        const host = readFileSync(new URL('../src/main/genie-host.ts', import.meta.url), 'utf8');
+        expect(host).toMatch(/needsYou: needsYouCount\(featureDeckItems\(\)\),/);
+        // The client keeps no tray count of its own any more.
+        expect(main).not.toMatch(/trayWaiting|refreshTrayWaiting/);
     });
 
-    it('the tray image follows it: the dot while anything waits, the plain mark otherwise', () => {
-        expect(main).toMatch(/tray\.setImage\(trayWaiting > 0 \? trayImages\.attention : trayImages\.plain\)/);
+    it('the launcher\u2019s tray image follows it: the dot (the same colour and geometry as withAttentionDot) while anything waits', () => {
+        const tray = readFileSync(new URL('../native/launcher/src/tray.rs', import.meta.url), 'utf8');
+        expect(tray).toMatch(/pub const ATTENTION_RGB: \[u8; 3\] = \[0xef, 0x44, 0x44\];/);
+        expect(tray).toMatch(/let radius = \(\(width as f64 \* 0\.2\)\.round\(\)\)\.max\(2\.0\);/);
+        expect(tray).toMatch(/d\.hIcon = icon\(v\.needs_you > 0\);/);
+        expect(tray).toMatch(/if self\.view\.needs_you > 0 \{ self\.dotted\.clone\(\) \} else \{ self\.icon\.clone\(\) \}/);
     });
 });

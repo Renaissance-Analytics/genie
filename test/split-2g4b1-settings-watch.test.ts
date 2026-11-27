@@ -255,11 +255,9 @@ describe('the window registry’s Deck wiring is dead: main reads only its agent
         expect(reads.length).toBeGreaterThan(5);
         expect([...new Set(reads)].sort()).toEqual(['agents', 'workspaces']);
         // Each listener's own parameter list, read up to its arrow; every subscribe found by the plain pattern is one of them.
+        // Its one listener fed the client tray's count; the tray is the launcher's since Tynn #1058 L5, so none is left.
         const subscribes = [...main.matchAll(/registry[?!]?\.subscribe\(/g)];
-        const listeners = [...main.matchAll(/registry[?!]?\.subscribe\(\s*(\([^)]*\))\s*=>/g)];
-        expect(subscribes.length).toBeGreaterThan(0);
-        expect(listeners).toHaveLength(subscribes.length);
-        for (const l of listeners) expect(l[1], l[0]).toBe('()');
+        expect(subscribes).toHaveLength(0);
         // What main hands the registry to reads no snapshot, or only its workspaces.
         expect(code(src('src/main/mcp-callers.ts'))).not.toMatch(/\.snapshot\(\)/);
         expect(code(src('src/main/registry-refresh.ts'))).not.toMatch(/\.snapshot\(\)/);

@@ -227,9 +227,11 @@ describe('a share-link guest is still refused logins.provider (owner-only)', () 
 describe('main’s tray uses its protocol client; main’s own sign-in is gone (source guards)', () => {
     const main = code(src('src/main/main.ts'));
 
-    it('the tray’s Log in calls logins.provider, and its Claude Design login calls logins.design, over the own client', () => {
-        expect(main).toMatch(/onProviderLogin:[\s\S]{0,200}\.call\('logins\.provider'/);
-        expect(main).toMatch(/onDesignLogin:[\s\S]{0,200}\.call\('logins\.design'/);
+    it('Log in and Claude Design\u2019s login are the window\u2019s (the launcher\u2019s tray opens Genie to them, Tynn #1058 L5); main has no tray handler', () => {
+        expect(main).not.toMatch(/onProviderLogin:|onDesignLogin:/);
+        const session = code(src('src/renderer/local-session.ts'));
+        expect(session).toMatch(/providerLogin: \(id\) => answered\(\(b\) => b\.providerLogin\(id\)\),/);
+        expect(session).toMatch(/designLogin: \(id\) => answered\(\(b\) => b\.designLogin!\(id\)\),/);
     });
 
     it('main has no sign-in of its own: no signIn, no engine login, no cancelLogin when a window closes', () => {
