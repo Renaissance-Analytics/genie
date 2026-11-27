@@ -132,7 +132,7 @@ describe('wired: main.ts quits for an install by its scope', () => {
     it('the install’s quit is chosen from the scope the replica names, never shut-down outright', () => {
         const on = block(main(), 'replica.onInstalling(', '\n        });');
         expect(on).toMatch(/replica\.onInstalling\(\(scope\) => \{/);
-        expect(on).toMatch(/const how = installQuit\(scope\);/);
+        expect(on).toMatch(/const how = installQuit\(scope, launcherLink\(process\.env\) !== null\);/);
         expect(on).toMatch(/quit\.choose\(how\);/);
         expect(on).not.toMatch(/quit\.choose\('shut-down'\)/);
     });

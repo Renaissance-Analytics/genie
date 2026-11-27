@@ -584,7 +584,8 @@ function watchUpdate() {
         while (!stopped) {
             for (const p of (await processesNamed('stub-codex')) ?? []) if (!seen.has(p.key)) seen.set(p.key, { ...p, at: since() });
             const ids = idsIn(RUNNING_AT_QUIT);
-            if (ids.length > 0) record = ids;
+            // Every agent it named while the update ran: the restore takes each off as it starts, 3 s apart.
+            for (const id of ids) if (!record.includes(id)) record.push(id);
             await sleep(WIN ? 250 : 500);
         }
     })();
@@ -677,6 +678,16 @@ async function hostUpdate(broken) {
     check(agents.every((ag) => saw.record.includes(ag.id)), "15d. the drain's record (running-at-quit.json) named every agent while the update ran", JSON.stringify(saw.record));
     const spent = await until(() => (idsIn(RUNNING_AT_QUIT).length === 0 ? true : null), 60_000);
     check(spent === true, '15e. the record is spent: the agents were restored from it', JSON.stringify(idsIn(RUNNING_AT_QUIT)));
+
+    step('15f', `the window left when the host installed, and the launcher opened Genie again, on the client ${expectBuild} (≤ 60 s)`);
+    const reopened = await until(() => {
+        const m = /Genie opened again after the host's update \((\{.*\})\)/.exec(readOr(LAUNCHER_LOG).slice(logAt));
+        try { return m ? JSON.parse(m[1]) : null; } catch { return null; }
+    }, 60_000);
+    if (Number.isInteger(reopened?.pid)) installedClientPids.add(reopened.pid);
+    check(reopened?.program === expectBuild, `15f. the launcher opened Genie again after the swap, on the client ${expectBuild} ("drain and swap the host, then refresh the UI")`, JSON.stringify(reopened));
+    // Its window has no debugger port: it is ended, and step 16 reads the agents in a client of this row's own.
+    if (Number.isInteger(reopened?.pid)) { endPid(reopened.pid); await until(() => (!alive(reopened.pid) ? true : null), 15_000); }
 
     step('16', `each agent's session runs again, read in a new client linked to the host ${expectBuild}`);
     await endClient(a);
