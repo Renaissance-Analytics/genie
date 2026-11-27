@@ -620,8 +620,11 @@ async function hostUpdate(broken) {
 
     step('11', 'before the update: the providers under the old host, read from the OS');
     const map = parents();
-    const before = ((await processesNamed('stub-codex')) ?? []).filter((p) => descends(p.pid, hostPid, map));
-    const beforeKeys = new Set(before.map((p) => p.key));
+    const everyBefore = (await processesNamed('stub-codex')) ?? [];
+    const before = everyBefore.filter((p) => descends(p.pid, hostPid, map));
+    // EVERY provider alive before the update, ours or not: "no other was started while it ran" counts only what started
+    // after. A gate VM can hold another row's stub (Linux, 1127-174858-edb743: one from 23 s into the row, under no host of it).
+    const beforeKeys = new Set(everyBefore.map((p) => p.key));
     check(before.length === AGENTS && agents.every((ag) => before.some((p) => p.pid === ag.pid)), `11. CONTROL: the OS shows ${AGENTS} stub-codex providers under the host ${hostPid}, the agents' own`, JSON.stringify(before));
 
     step('12', `the tray's "Update host to ${NEW}": the host drains itself, the launcher swaps it`);
@@ -645,7 +648,10 @@ async function hostUpdate(broken) {
     check(ended?.phase === finalPhase, `13a. the host update ended ${finalPhase}`, JSON.stringify(ended));
     if (broken) {
         check(String(ended?.said ?? '').includes(`so Genie went back to ${OLD}`), `13b. it says why, in words: "…so Genie went back to ${OLD}…"`, String(ended?.said));
-        check(watch.phases().includes('starting') && watch.phases().includes('rolling-back'), '13c. the new host was started, then the launcher went back', watch.phases().join(' → '));
+        // The launcher's own record of the steps: "starting" can last under a second (the new host exits at once), which a
+        // sampler misses (Windows, 1127-174858-edb743).
+        const steps = (ended?.steps ?? []).join(' → ');
+        check(/starting → rolling-back → rolled-back$/.test(steps), '13c. the new host was started, then the launcher went back', steps);
         check(new RegExp(`the new host ${NEW.replace(/\./g, '\\.')} did not come up`).test(readOr(LAUNCHER_LOG)), `13d. the launcher logged that the host ${NEW} did not come up`);
         await sleep(2_500);
         // The launcher opens Genie again after the swap (15f), over the Updates window: the tray's Updates brings it forward.

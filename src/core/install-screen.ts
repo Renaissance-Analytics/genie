@@ -19,7 +19,9 @@ export interface InstallScreen {
 }
 
 export function installScreen(state: InstallScreenInput | null, asked: boolean): InstallScreen | null {
-    if (!state || state.phase === 'error' || state.launcher) return null;
+    if (!state || state.phase === 'error') return null;
+    // Under the launcher an UPDATE's restart screen is the launcher's; the window's own quit keeps "Quitting Genie…".
+    if (state.launcher && state.installing?.reason !== 'quit') return null;
     if (state.phase !== 'installing' && !(asked && state.phase === 'downloaded')) return null;
     const p = state.phase === 'installing' ? state.installing : undefined;
     const title = p?.reason === 'quit' ? 'Quitting Genie…' : `Restarting to install Genie${state.version ? ` ${state.version}` : ''}…`;

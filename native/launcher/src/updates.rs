@@ -84,7 +84,13 @@ impl Shared {
     fn host_phase(&self, phase: &str, from: Option<&str>, to: &str, said: Option<String>) {
         let mut h = self.host_update.lock().unwrap_or_else(|p| p.into_inner());
         let agents = h.get("agents").cloned().unwrap_or(Value::Null);
-        *h = json!({"phase": phase, "from": from, "to": to, "said": said, "agents": agents, "at": now()});
+        // Every step of this update, in order: a step can last less than a second (a new host that exits at once), so what
+        // was passed through is kept, not only where it is now.
+        let mut steps: Vec<Value> = h.get("steps").and_then(Value::as_array).cloned().unwrap_or_default();
+        if steps.last().and_then(Value::as_str) != Some(phase) {
+            steps.push(json!(phase));
+        }
+        *h = json!({"phase": phase, "from": from, "to": to, "said": said, "agents": agents, "steps": steps, "at": now()});
     }
     pub fn set_launcher_why(&self, why: Option<String>) {
         *self.launcher_why.lock().unwrap_or_else(|p| p.into_inner()) = why;
@@ -397,7 +403,7 @@ pub fn ask_host(shared: &Shared, roots: &Roots, windows_open: usize) -> Result<V
     }
     // Who the drain will pause, for the Updates window's "keeping agents" screen.
     let agents = host::activity(roots).map(|a| json!({"count": a["agents"], "names": a["agentNames"]})).unwrap_or(Value::Null);
-    shared.set_host_update(json!({"phase": "draining", "from": from, "to": to, "said": null, "agents": agents, "at": now()}));
+    shared.set_host_update(json!({"phase": "draining", "from": from, "to": to, "said": null, "agents": agents, "steps": ["draining"], "at": now()}));
     match host::call(roots, "engine.updates", json!(["install", [{"from": "launcher", "build": to}]]), Duration::from_secs(30)) {
         Ok(v) => Ok(json!({"asked": true, "build": to, "host": v})),
         Err(why) => {

@@ -870,7 +870,7 @@ try {
     const header = items.find((i) => i.startsWith('[Host: running')) ?? '';
     const said = Number(/· (\d+) agents?\]/.exec(header)?.[1] ?? 0);
     check(menu.code === 0 && said >= AGENTS && items.includes('Open Genie') && items.includes('Stop host') && items.includes('Shut down everything') && items.includes('Close Genie window (unavailable)'),
-        '17m. the TRAY (the launcher\'s) says the host runs the agents, offers Open Genie, Stop this computer\'s host and Shut down everything; Close Genie is unavailable with no window', menu.out.slice(0, 400));
+        '17m. the TRAY (the launcher\'s) says the host runs the agents, offers Open Genie, Stop host and Shut down everything; Close Genie is unavailable with no window', menu.out.slice(0, 400));
     // Windows: the probe showed the menu at the icon. Linux: a pointer opens Waybar's menu (best effort, said either way).
     const linuxMenu = WIN ? true : openLinuxTrayMenu();
     await sleep(1_500);

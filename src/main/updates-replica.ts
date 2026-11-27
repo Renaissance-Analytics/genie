@@ -40,7 +40,10 @@ export class UpdatesReplica {
         for (const l of [...this.#listeners]) l(state);
         // WHOEVER ASKED (Tynn #898 step 2d-2b): a phone or another workstation can install through genie-host, so every
         // window quits when the install restarts (its last step before the helper takes over), not only the one that asked.
-        if (state.phase === 'installing' && (this.#atStart || state.installing?.step === 'restarting')) this.#tellInstalling();
+        // Early only for an UPDATE's install: "Shut down everything" drains through the same phase (reason `quit`), and that
+        // quit is the person's to carry out, never an install to leave for (the full gate, 1127-174858-edb743).
+        const early = this.#atStart && state.installing?.reason !== 'quit';
+        if (state.phase === 'installing' && (early || state.installing?.step === 'restarting')) this.#tellInstalling();
     }
 
     /**

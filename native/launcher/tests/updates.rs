@@ -332,6 +332,7 @@ fn a_new_host_that_never_answers_is_ended_and_the_old_one_comes_back_with_the_ag
     assert_eq!(current(&r, "client"), OLD, "its client went back with it");
     let updates = ok(&w.call("launcher.updates", json!([]))).clone();
     assert_eq!(updates["hostUpdate"]["phase"], "rolled-back", "{updates}");
+    assert_eq!(updates["hostUpdate"]["steps"], json!(["draining", "stopping", "swapping", "starting", "rolling-back", "rolled-back"]), "every step, in order: {updates}");
     let said = updates["hostUpdate"]["said"].as_str().unwrap_or("");
     assert!(said.contains(&format!("The new host did not start within a minute, so Genie went back to {OLD}. Your agents are back.")), "{said}");
     assert!(said.contains("genie-host.log"), "the host's log is named: {said}");
