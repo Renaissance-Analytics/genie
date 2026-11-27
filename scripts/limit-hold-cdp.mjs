@@ -13,9 +13,11 @@
  *   L2 a message sent while held waits, never "Not delivered" (shot 02)
  *   L3 "Switch to Roomy" (the normal switch): atlas moves to Roomy on its thread; the message waits through the move and is
  *      never "Not delivered" at any moment (shot 03), and is delivered in Roomy's folder (shot 04)
- *   L4 atlas stopped, two messages kept "Not delivered"; Send all now restarts it once and sends both: "Sending 1 of 2…"
- *      (shot 06), then each message's result at the bar (shot 07)
- *   L5 Settings → Providers: "When the active account runs out", Ask me / Switch to the account with the most room (shot 08)
+ *   L4 Roomy runs out too: "No Claude account has room: Roomy is out until <reset>. What you send waits and goes then.", no
+ *      Switch; two messages wait (shot 05). atlas stopped: both kept "Not delivered" (shot 06, the owner's screen). Roomy has
+ *      room again (Check usage now); Send all now restarts atlas once and sends both: "Sending 1 of 2…" (shot 07), then each
+ *      message's result at the bar (shot 08)
+ *   L5 Settings → Providers: "When the active account runs out", Ask me / Switch to the account with the most room (shot 09)
  */
 import { mainWindow } from './cdp-main-window.mjs';
 import { closeWhatsNew } from './cdp-whats-new.mjs';
@@ -176,24 +178,46 @@ try {
     check('L3g', !(await page.evaluate(`Boolean(document.querySelector(${q(`${CHAT} [data-chat-active-out]`)}))`)), 'the active-out line is gone once Roomy is active');
     await shot('04-delivered-after-move');
 
-    // L4: Send all now, with progress and a result each.
-    await page.evaluate(`window.genieTest.stopAgent(${q(atlas.id)}); true`);
-    await maybe('atlas stopped', () => page.evaluate(`Boolean(document.querySelector('[data-action="start-agent"]'))`), 30_000);
-    await sleep(1_000);
+    // L4: Roomy runs out too — nothing has room, said plainly — and two messages wait. The agent is stopped, so they are kept
+    // "Not delivered. Kept for you to send again." (the owner's screen). Roomy gets room back; Send all now sends both, with
+    // progress and a result each.
+    const status = JSON.parse(readFileSync(join(stubDir, 'status.json'), 'utf8'));
+    status[roomyDir] = { ...status[roomyDir], spent: true };
+    writeFileSync(join(stubDir, 'status.json'), JSON.stringify(status));
+    await type('L1089 hold again');
+    const noRoom = await maybe('the no-room line', async () => { const t = await text(`${CHAT} [data-chat-active-out]`); return t && /^No Claude account has room: Roomy is out until .+\. What you send waits and goes then\.$/.test(t) ? t : null; }, 60_000);
+    check('L4a', Boolean(noRoom), 'no account with room: said plainly, with the reset, and no Switch', noRoom ?? await text(`${CHAT} [data-chat-active-out]`));
+    check('L4a2', !(await page.evaluate(`Boolean(document.querySelector(${q(`${CHAT} [data-chat-active-out] [data-action="switch-account"]`)}))`)), 'nothing to switch to');
     await type('L1089 first kept');
     await type('L1089 second kept');
-    const kept = await maybe('two not delivered', async () => /2 not delivered/.test((await text(`${CHAT} [data-chat-queue="undelivered"]`)) ?? '') || null, 20_000);
-    check('L4a', Boolean(kept), 'two messages kept "Not delivered", one Send all now', await text(`${CHAT} [data-chat-queue]`));
-    await shot('05-kept-not-delivered');
-    check('L4b', await press(`${CHAT} [data-action="send-all"]`), 'Send all now takes a click');
+    const queued = await maybe('two waiting', () => page.evaluate(`document.querySelectorAll(${q(`${CHAT} [data-chat-queued]`)}).length === 2 || null`), 15_000);
+    check('L4b', Boolean(queued), 'both wait while it is held');
+    await shot('05-no-room-messages-wait');
+    await page.evaluate(`window.genieTest.stopAgent(${q(atlas.id)}); true`);
+    const kept = await maybe('two not delivered', async () => /2 not delivered/.test((await text(`${CHAT} [data-chat-queue="undelivered"]`)) ?? '') || null, 30_000);
+    check('L4c', Boolean(kept), 'stopped: both kept "Not delivered", one Send all now', await text(`${CHAT} [data-chat-queue]`));
+    // Roomy has room again: its usage read at once, by the panel's own "Check usage now".
+    status[roomyDir] = { ...status[roomyDir], spent: false };
+    writeFileSync(join(stubDir, 'status.json'), JSON.stringify(status));
+    const CHIP = '[data-title-bar] [data-account-chip="claude"]', POP = '[data-account-popover="claude"]';
+    if (!(await page.evaluate(`Boolean(document.querySelector(${q(POP)}))`))) await press(CHIP);
+    await maybe('the popover', () => page.evaluate(`Boolean(document.querySelector(${q(POP)}))`), 10_000);
+    await press(`${POP} [data-account="${ROOMY}"] [data-action="check-usage"]`);
+    const roomy = await maybe('Roomy has room', async () => { const t = await text(`${POP} [data-account="${ROOMY}"]`); return t && /35% used/.test(t) ? t : null; }, 60_000);
+    check('L4d', Boolean(roomy), 'Roomy read again: it has room', roomy);
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await sleep(500);
+    await shot('06-kept-not-delivered');
+    check('L4e', await press(`${CHAT} [data-action="send-all"]`), 'Send all now takes a click');
     const progress = await maybe('the progress', () => text(`${CHAT} [data-send-all-progress="running"]`), 10_000);
-    check('L4c', /Sending \d of 2…/.test(progress ?? ''), 'it says how far it is', progress);
-    if (progress) await shot('06-sending');
+    check('L4f', /Sending \d of 2…/.test(progress ?? ''), 'it says how far it is', progress);
+    if (progress) await shot('07-sending');
     const done = await maybe('the results', () => page.evaluate(`(() => { const r = [...document.querySelectorAll(${q(`${CHAT} [data-send-all-result]`)})]; return r.length === 2 ? r.map((e) => [e.getAttribute('data-outcome'), e.textContent]) : null; })()`), 90_000);
-    check('L4d', Array.isArray(done) && done.every(([o]) => o === 'sent'), 'each message\'s result at the bar: both sent', done);
-    const both = await maybe('both received', async () => (said(roomyDir, 'L1089 first kept') && said(roomyDir, 'L1089 second kept')) || null, 30_000);
-    check('L4e', Boolean(both), 'atlas received both, on Roomy');
-    await shot('07-send-all-results');
+    check('L4g', Array.isArray(done) && done.every(([o]) => o === 'sent'), 'each message\'s result at the bar: both sent', done);
+    const both = await maybe('both received', async () => (said(roomyDir, 'L1089 first kept') && said(roomyDir, 'L1089 second kept')) || null, 60_000);
+    check('L4h', Boolean(both), 'atlas received both, on Roomy');
+    await shot('08-send-all-results');
 
     // L5: the setting.
     await page.evaluate(`window.location.hash = '#genie://settings'; true`);
@@ -202,7 +226,7 @@ try {
     check('L5a', /When the active account runs out/.test(setting ?? '') && /Ask me/.test(setting ?? '') && /Switch to the account with the most room/.test(setting ?? ''), 'Settings → Providers: When the active account runs out — Ask me / Switch to the account with the most room', setting);
     await page.evaluate(`document.querySelector('[data-when-active-out]')?.scrollIntoView({ block: 'center' }); true`);
     await sleep(300);
-    await shot('08-setting');
+    await shot('09-setting');
     code = checks.every((c) => c.ok) ? 0 : 1;
 } catch (error) {
     failure = error instanceof Error ? error.message : String(error);

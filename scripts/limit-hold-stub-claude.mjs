@@ -47,7 +47,7 @@ async function answer(n, said) {
     const id = `msg_1089_${n}`;
     send({ type: 'system', subtype: 'init', session_id: SESSION, claude_code_version: CLI_VERSION, model: 'claude-opus-5-5', tools: [], mcp_servers: [], cwd: process.cwd() });
     const s = mine();
-    if (!probe && s.spent === true) {
+    if (s.spent === true) {
         send({ type: 'rate_limit_event', session_id: SESSION, rate_limit_info: { status: 'rejected', rateLimitType: 'seven_day', resetsAt: WEEK_RESET(), isUsingOverage: false, unifiedWindows: { seven_day: { utilization: 1, resetsAt: WEEK_RESET() } } } });
         send({ type: 'assistant', session_id: SESSION, parent_tool_use_id: null, error: 'rate_limit', message: { id, model: '<synthetic>', content: [{ type: 'text', text: WEEKLY }], usage: { input_tokens: 0, output_tokens: 0 } } });
         send({ type: 'result', subtype: 'success', is_error: true, stop_reason: 'stop_sequence', session_id: SESSION, num_turns: 1, result: WEEKLY, usage: { input_tokens: 0, output_tokens: 0 } });
