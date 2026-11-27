@@ -51,9 +51,9 @@ describe('the release workflow publishes a DRAFT first', () => {
     it('every platform job publishes with EP_DRAFT — electron-publish\'s highest-precedence switch — and nothing turns it off', () => {
         const publish = job('publish');
         expect(publish).toMatch(/EP_DRAFT:\s*'true'/);
-        // Tynn #413: built with --publish never, its feed told which host it carries, then uploaded with gh into the guard's
-        // draft, refused when that release is not a draft (as Windows is).
-        expect(publish).toMatch(/npx electron-builder --publish never/);
+        // Tynn #413, and the bridge since L9 (test/release-bridge-l9.test.ts): built with publish 'never', its feed told
+        // which host it carries, then uploaded with gh into the guard's draft, refused when that release is not a draft.
+        expect(publish).toMatch(/build-track-packages\.mjs bridge/);
         expect(publish).toMatch(/--json isDraft[\s\S]*::error::Linux upload requires an existing draft release[\s\S]*gh release upload/);
         // EP_PRE_RELEASE would be read AFTER EP_DRAFT, but no step may set it, nor pick a public type on the command line.
         expect(code()).not.toMatch(/EP_PRE_?RELEASE/);
