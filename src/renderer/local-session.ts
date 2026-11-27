@@ -325,6 +325,7 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             install: () => read((bridge) => bridge.updates.install()),
             forceDrain: () => read((bridge) => bridge.updates.forceDrain?.() ?? Promise.resolve(false)),
             notes: () => read((bridge) => bridge.updates.notes!()),
+            openLauncher: () => read((bridge) => bridge.updates.openLauncher?.() ?? Promise.resolve(false)),
             subscribe: (listener) => subscribe((bridge) => bridge.updates.subscribe(listener)),
         },
         activity: {

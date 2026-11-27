@@ -473,3 +473,19 @@ fn a_host_update_with_no_window_open_opens_none() {
     std::thread::sleep(Duration::from_secs(2));
     assert!(!r.data.join("client-args.txt").exists(), "nobody had Genie open, so it is not opened");
 }
+
+#[test]
+fn a_client_windows_updates_pill_opens_the_launchers_updates_window() {
+    // The title bar's "Updates (N)" under the launcher (src/core/update-chip.ts) asks the host, which asks the launcher:
+    // `launcher.openUpdates` is answered (its window opens once the answer is sent; with no window loop here, Genie opens
+    // at its Settings instead, as the tray's Updates does).
+    let _one = one_at_a_time();
+    let (base, r, key) = setup("u-open");
+    install_fakes(&r, &key, &base);
+    let feed = Feed::start(&base.join("feed"));
+    let _l = start_with(&r, &key, launcher_reading(&r, &key, &feed, None, &[]));
+    let mut w = Wire::hello(&r);
+    let v = w.call("launcher.openUpdates", json!([]));
+    assert_ne!(v["code"], "unsupported", "{v}");
+    assert_eq!(ok(&v)["opening"], true, "{v}");
+}

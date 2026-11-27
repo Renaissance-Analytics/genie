@@ -1480,6 +1480,7 @@ async function boot(): Promise<void> {
      */
     {
         const replica = agentEngineLink.client.updates();
+        if (launcherLink(process.env) !== null) replica.tellAtStart();
         // A CLIENT-ONLY INSTALL (P6-1, Tynn #1036) keeps genie-host and its agents: this window exits and stops nothing of
         // them (core/quit.ts installQuit). Measured on Windows before: the window shut everything down, the host with it.
         replica.onInstalling((scope) => {

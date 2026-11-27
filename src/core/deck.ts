@@ -312,7 +312,7 @@ export function earlierRuns(items: readonly DeckItem[]): DeckItem[] {
 export type SignalKind = 'flows' | 'mail' | 'github' | 'os-agent' | 'update';
 
 /** The one kind of door that is an action rather than a place: the update's next step. */
-export type SignalAction = 'update-check' | 'update-download' | 'update-install';
+export type SignalAction = 'update-check' | 'update-download' | 'update-install' | 'launcher-updates';
 
 export interface Signal {
     kind: SignalKind;
@@ -339,6 +339,8 @@ export interface UpdateSignalInput {
     userInitiated?: boolean;
     /** What is in the update (core/update-notes.ts): `null` = fetching, `'unavailable'` = offline. */
     changelog?: import('./update-notes.js').UpdateChangelog | 'unavailable' | null;
+    /** Under the launcher (Tynn #1058 L6): how many updates it has ready. Absent = no launcher (the old pill and screen). */
+    launcher?: { ready: number };
 }
 
 export interface SignalState {

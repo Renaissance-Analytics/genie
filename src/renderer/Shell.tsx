@@ -687,7 +687,11 @@ export function Shell({
                 paletteKey={bindingsFrom(features.settings.values).commandWindow ?? undefined}
                 update={scoped ? null : updateNotice}
                 version={scoped ? null : features.version ?? null}
-                onOpenUpdate={() => { setUpdateOpen(true); void updates.notes?.(); }}
+                onOpenUpdate={() => {
+                    // Under the launcher (L6) the pill is its offer: its own Updates window opens, never Genie's download.
+                    if (updateNotice?.action === 'launcher-updates') { void updates.openLauncher?.(); return; }
+                    setUpdateOpen(true); void updates.notes?.();
+                }}
                 // THE AGENTINBOX among the header's system icons (beta.33 item 19): it opens and closes the flyout.
                 inbox={featureAsk && !scoped ? { unread: features.inbox ? features.inbox.unread.length : null, open: inboxOpen, onToggle: () => openInbox(inboxOpen ? null : '') } : undefined}
                 workspace={onScreen ? { name: onScreen.name ?? folderName(onScreen.path), color: onScreen.color ?? null } : null}
@@ -715,6 +719,7 @@ export function Shell({
                         if (action === 'update-download') void updates.download();
                         else if (action === 'update-install') askInstall();
                         else if (action === 'update-check') void updates.check();
+                        else if (action === 'launcher-updates') void updates.openLauncher?.();
                     }}
                 />
             ) : null}
@@ -928,6 +933,7 @@ export function Shell({
                                 onSignalAction: (action) => {
                                     if (action === 'update-download') void updates.download();
                                     else if (action === 'update-install') askInstall();
+                                    else if (action === 'launcher-updates') void updates.openLauncher?.();
                                 },
                             }}
                         />

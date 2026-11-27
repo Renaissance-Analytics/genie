@@ -1067,7 +1067,10 @@ async function main(): Promise<void> {
     const launcherForUpdates = launcherWire(runtime, 'host', build);
     const updatesService = new UpdatesService({
         ...(capabilities.window ? {} : { unavailable: NO_UPDATES_HERE }),
-        ...(updatesFromLauncher ? { port: launcherUpdaterPort((method, args) => callLauncher(launcherForUpdates, method, args ?? []), process.pid) } : {}),
+        ...(updatesFromLauncher ? {
+            port: launcherUpdaterPort((method, args) => callLauncher(launcherForUpdates, method, args ?? []), process.pid),
+            openLauncher: async () => (await callLauncher(launcherForUpdates, 'launcher.openUpdates', [])).ok,
+        } : {}),
         host: {
             // The install the updater replaces, never this host's own copy (Tynn #1036 P6-1).
             installDir: hostInstallDir(process.env, process.execPath),

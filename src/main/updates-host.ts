@@ -105,6 +105,8 @@ export interface UpdatesServiceOptions {
      * never starts the `--updater` helper. Absent = the helper's port (the bridge release, a dev run).
      */
     readonly port?: UpdaterPort;
+    /** Under the launcher (L6): open its Updates window (`launcher.openUpdates`). Absent = no launcher here. */
+    readonly openLauncher?: () => Promise<boolean>;
 }
 
 /** Why the last install did not happen, for the next window (`<home>/runtime/update-failed.json`). */
@@ -255,6 +257,11 @@ export class UpdatesService {
                 if (!clientOnly) await this.#options.exit();
             },
         };
+    }
+
+    /** The launcher's Updates window, asked for by a window's "Updates (N)"; `false` with no launcher. */
+    openLauncher(): Promise<boolean> {
+        return this.#options.openLauncher ? this.#options.openLauncher().catch(() => false) : Promise.resolve(false);
     }
 
     get updates(): UpdateHost {
@@ -552,5 +559,6 @@ export function remoteUpdatesPort(service: UpdatesService): NonNullable<HostApiD
         install: () => service.call('install', [], caller) as Promise<{ report: string }>,
         forceDrain: async () => (await service.call('forceDrain', [], caller)) === true,
         notes: () => service.call('notes', [], caller) as Promise<UpdateState | null>,
+        openLauncher: () => service.openLauncher(),
     };
 }

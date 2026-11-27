@@ -405,6 +405,11 @@ pub fn handle_line(ctx: &Context, conn: &mut Connection, line: &str) -> Vec<Valu
             started
         }
         "launcher.updates" => Ok(crate::updates::view(&ctx.updates, roots)),
+        // A client window's "Updates (N)" (L6): the launcher's Updates window, opened once this answer is sent.
+        "launcher.openUpdates" => {
+            conn.tray_act = Some(crate::tray::Action::Updates);
+            Ok(json!({"opening": true}))
+        }
         "launcher.check" => crate::updates::check_now(&ctx.updates, roots),
         "launcher.channel" => crate::updates::set_channel(roots, args.first().unwrap_or(&Value::Null)),
         "launcher.apply" => apply(ctx, conn, args.first().cloned().unwrap_or(Value::Null)),

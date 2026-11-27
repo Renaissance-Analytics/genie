@@ -350,6 +350,8 @@ export interface HostApiDeps {
         install(): Promise<{ report: string }> | null;
         forceDrain?(): boolean | Promise<boolean>;
         notes?(): Promise<UpdateState | null>;
+        /** Under the launcher (L6): its Updates window opened; `false` = no launcher here, or it did not. */
+        openLauncher?(): Promise<boolean>;
         /** Abandon a drain in progress (§7.5); `false` when there is none. */
         onChange(listener: (state: UpdateState) => void): () => void;
     } | null;
@@ -906,6 +908,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.updates?.forceDrain?.() ?? false;
             case 'updates.notes':
                 return deps.updates?.notes?.() ?? null;
+            case 'updates.openLauncher':
+                return deps.updates?.openLauncher?.() ?? false;
             case 'headroom':
                 return deps.headroom ? deps.headroom.view() : null;
             case 'accountRetry': {

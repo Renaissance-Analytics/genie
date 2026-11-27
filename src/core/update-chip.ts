@@ -27,6 +27,11 @@ export function updateChip(u: UpdateSignalInput | null | undefined): UpdateChip 
 }
 
 function phaseChip(u: UpdateSignalInput): Omit<UpdateChip, 'version' | 'changelog'> | null {
+    // UNDER THE LAUNCHER (Tynn #1058 L6) the launcher downloads, verifies and offers every update; the person never downloads
+    // anything (the owner). The pill says how many it has ready and opens its Updates window.
+    if (u.launcher && (u.phase === 'available' || u.phase === 'downloaded')) {
+        return { phase: u.phase, label: `Updates (${u.launcher.ready})`, action: 'launcher-updates' };
+    }
     switch (u.phase) {
         case 'checking':
             return { phase: 'checking', label: 'Checking for Genie updates…', action: null };

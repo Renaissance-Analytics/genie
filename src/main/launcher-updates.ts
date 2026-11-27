@@ -52,12 +52,15 @@ export function launcherUpdaterPort(call: LauncherCall, ownPid: number): Updater
         // The channel is the launcher's (state.json, `launcher.channel`); the host's own setting is told to it.
         configure: (config) => { void call('launcher.channel', [{ channel: config.allowPrerelease ? 'dev' : 'stable' }]); },
         check: async () => {
-            offered = ready(await rows(call, 'launcher.check'));
+            const list = await rows(call, 'launcher.check');
+            offered = ready(list);
             if (offered === null) return null;
+            // How many the launcher has ready (its Updates window's "N ready"): the title bar's "Updates (N)".
+            const launcher = { ready: list.filter((r) => r.state === 'ready').length };
             const scope: UpdateScope = offered.track === 'host'
                 ? { kind: 'full', why: 'a host update (it comes with its client)' }
                 : { kind: 'client-only' };
-            return { version: offered.build, scope };
+            return { version: offered.build, scope, launcher };
         },
         download: async (onProgress) => { onProgress(100); },
         prepareInstall: async () => {
