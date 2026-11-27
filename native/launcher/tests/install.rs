@@ -19,12 +19,29 @@ fn client_files() -> Vec<(String, Vec<u8>)> {
     vec![(client_executable_name().to_string(), b"client program".to_vec()), ("resources/app.asar".to_string(), vec![1u8; 5000])]
 }
 
+/// The browser's package: no second copy of the app, only what is browser-only (the coordinator, 2026-11-26).
+fn browser_files() -> Vec<(String, Vec<u8>)> {
+    vec![("browser.json".to_string(), br#"{"runs":"client","args":["--genie-browser"]}"#.to_vec())]
+}
+
+/// The browser beside a test's own client: every profile installs it (its own track, the owner 2026-11-26). It runs on
+/// the client of the same build unless `with_browser_on` names another.
+fn with_browser(dir: &Path, key: &ed25519_dalek::SigningKey, build: &str) {
+    write_package(dir, key, &Package::new("browser", build, browser_files()));
+}
+fn with_browser_on(dir: &Path, key: &ed25519_dalek::SigningKey, build: &str, client: &str) {
+    let mut p = Package::new("browser", build, browser_files());
+    p.with_client = Some(client);
+    write_package(dir, key, &p);
+}
+
 fn options(from: &Path, profile: Profile, channel: &str) -> InstallOptions {
     InstallOptions { from: from.to_path_buf(), profile, channel: channel.to_string(), launcher_build: "2026.11.25-1".to_string() }
 }
 
 fn both(dir: &Path, key: &ed25519_dalek::SigningKey, build: &str) {
     write_package(dir, key, &Package::new("client", build, client_files()));
+    with_browser(dir, key, build);
     write_package(dir, key, &Package::new("host", build, host_files()));
 }
 
@@ -67,15 +84,19 @@ fn state_json_is_written_whole_and_points_current_and_previous() {
 }
 
 #[test]
-fn install_from_lays_out_both_tracks_verified_and_points_at_them() {
+fn install_from_lays_out_every_track_verified_and_points_at_them() {
     let base = temp_dir("install");
     let r = roots(&base);
     let key = throwaway_key();
     let from = base.join("from");
     both(&from, &key, "2026.11.25-1");
     let done = install_from(&r, &options(&from, Profile::Both, "stable"), &[verifying(&key)]).expect("installs");
-    assert_eq!(done, vec![Installed { track: Track::Client, build: "2026.11.25-1".into() }, Installed { track: Track::Host, build: "2026.11.25-1".into() }]);
-    for (track, files) in [(Track::Client, client_files()), (Track::Host, host_files())] {
+    assert_eq!(done, vec![
+        Installed { track: Track::Client, build: "2026.11.25-1".into() },
+        Installed { track: Track::Browser, build: "2026.11.25-1".into() },
+        Installed { track: Track::Host, build: "2026.11.25-1".into() },
+    ]);
+    for (track, files) in [(Track::Client, client_files()), (Track::Browser, browser_files()), (Track::Host, host_files())] {
         let dir = r.build_dir(track, "2026.11.25-1").unwrap();
         for (path, bytes) in files {
             assert_eq!(std::fs::read(dir.join(&path)).unwrap(), bytes, "{path}");
@@ -88,10 +109,11 @@ fn install_from_lays_out_both_tracks_verified_and_points_at_them() {
     assert_eq!(s.profile.as_deref(), Some("both"));
     assert_eq!(s.track("host").unwrap().current.as_deref(), Some("2026.11.25-1"));
     assert_eq!(s.track("client").unwrap().current.as_deref(), Some("2026.11.25-1"));
+    assert_eq!(s.track("browser").unwrap().current.as_deref(), Some("2026.11.25-1"));
 }
 
 #[test]
-fn the_client_profile_installs_no_host() {
+fn the_client_profile_installs_the_client_and_the_browser_and_no_host() {
     let base = temp_dir("client-profile");
     let r = roots(&base);
     let key = throwaway_key();
@@ -102,6 +124,61 @@ fn the_client_profile_installs_no_host() {
     let s = state::read(&r.state_file()).unwrap();
     assert_eq!(s.profile.as_deref(), Some("client"));
     assert!(s.track("host").is_none());
+    assert_eq!(s.track("client").unwrap().current.as_deref(), Some("2026.11.25-1"));
+    assert_eq!(s.track("browser").unwrap().current.as_deref(), Some("2026.11.25-1"));
+}
+
+#[test]
+fn a_host_installs_only_with_the_client_it_ships_with() {
+    // A host update always comes with its client (the owner, 2026-11-26): a host whose withClient is not the client being
+    // installed beside it, or already current, installs nothing.
+    let base = temp_dir("host-client");
+    let r = roots(&base);
+    let key = throwaway_key();
+    let from = base.join("from");
+    write_package(&from, &key, &Package::new("client", "2026.11.25-1", client_files()));
+    with_browser(&from, &key, "2026.11.25-1");
+    let mut host = Package::new("host", "2026.11.25-1", host_files());
+    host.with_client = Some("2026.11.24-1");
+    write_package(&from, &key, &host);
+    let why = install_from(&r, &options(&from, Profile::Both, "stable"), &[verifying(&key)]).unwrap_err();
+    assert!(why.contains("ships with client 2026.11.24-1") && why.contains("2026.11.25-1"), "{why}");
+    // The browser alike: it installs only beside the client it runs on.
+    let b = base.join("browser-other");
+    write_package(&b, &key, &Package::new("client", "2026.11.25-1", client_files()));
+    with_browser_on(&b, &key, "2026.11.25-1", "2026.11.23-1");
+    let why = install_from(&r, &options(&b, Profile::Client, "stable"), &[verifying(&key)]).unwrap_err();
+    assert!(why.contains("runs on client 2026.11.23-1"), "{why}");
+    for t in [Track::Client, Track::Browser, Track::Host] {
+        assert_nothing_landed(&r, t);
+    }
+    // Its own client beside it (another build than the host's): installs.
+    let ok = base.join("ok");
+    write_package(&ok, &key, &Package::new("client", "2026.11.24-1", client_files()));
+    with_browser_on(&ok, &key, "2026.11.25-1", "2026.11.24-1");
+    write_package(&ok, &key, &host);
+    install_from(&r, &options(&ok, Profile::Both, "stable"), &[verifying(&key)]).expect("a host with its own client installs");
+}
+
+#[test]
+fn a_client_or_browser_package_alone_never_touches_the_host() {
+    // Each part updates on its own (the owner, 2026-11-26): a client and a browser newer than the host's stay beside the
+    // host already installed, which keeps its current build and its folder.
+    let base = temp_dir("client-alone");
+    let r = roots(&base);
+    let key = throwaway_key();
+    let one = base.join("one");
+    both(&one, &key, "2026.11.25-1");
+    install_from(&r, &options(&one, Profile::Both, "stable"), &[verifying(&key)]).unwrap();
+    let two = base.join("two");
+    write_package(&two, &key, &Package::new("client", "2026.11.26-1", client_files()));
+    with_browser_on(&two, &key, "2026.11.26-2", "2026.11.26-1");
+    install_from(&r, &options(&two, Profile::Client, "stable"), &[verifying(&key)]).expect("the client and browser install alone");
+    let s = state::read(&r.state_file()).unwrap();
+    assert_eq!(s.track("host").unwrap().current.as_deref(), Some("2026.11.25-1"));
+    assert_eq!(s.track("client").unwrap().current.as_deref(), Some("2026.11.26-1"));
+    assert_eq!(s.track("browser").unwrap().current.as_deref(), Some("2026.11.26-2"));
+    verify_build(&r, Track::Host, "2026.11.25-1", &[verifying(&key)], HashScope::All).expect("the host's folder is untouched");
 }
 
 #[test]
@@ -139,6 +216,7 @@ fn a_tampered_file_refuses_and_leaves_nothing() {
     // A good client beside it: the profile installs both, and the host's refusal must leave neither (the run
     // 1125-060418-1c2da8 refused with "no client package" instead, which is not the check this names).
     write_package(&from, &key, &Package::new("client", "2026.11.25-1", client_files()));
+    with_browser(&from, &key, "2026.11.25-1");
     let p = Package::new("host", "2026.11.25-1", host_files());
     let manifest = manifest_bytes(&p);
     let mut archived = host_files();
@@ -161,6 +239,7 @@ fn an_unlisted_or_missing_file_refuses() {
         let r = roots(&base);
         let from = base.join("from");
         write_package(&from, &key, &Package::new("client", "2026.11.25-1", client_files()));
+        with_browser(&from, &key, "2026.11.25-1");
         let p = Package::new("host", "2026.11.25-1", host_files());
         write_package_with(&from, &key, &p, &manifest_bytes(&p), &archived);
         let why = install_from(&r, &options(&from, Profile::Both, "stable"), &[verifying(&key)]).unwrap_err();
@@ -179,6 +258,7 @@ fn a_package_signed_by_another_key_installs_nothing() {
     let why = install_from(&r, &options(&from, Profile::Both, "stable"), &[verifying(&throwaway_key())]).unwrap_err();
     assert!(why.contains("This update's signature is not Genie's. Nothing was installed."), "{why}");
     assert_nothing_landed(&r, Track::Client);
+    assert_nothing_landed(&r, Track::Browser);
     assert_nothing_landed(&r, Track::Host);
 }
 
@@ -191,6 +271,9 @@ fn a_dev_package_does_not_install_on_stable() {
     let mut p = Package::new("client", "2026.11.25-1", client_files());
     p.channel = "dev";
     write_package(&from, &key, &p);
+    let mut b = Package::new("browser", "2026.11.25-1", browser_files());
+    b.channel = "dev";
+    write_package(&from, &key, &b);
     assert!(install_from(&r, &options(&from, Profile::Client, "stable"), &[verifying(&key)]).is_err());
     assert!(install_from(&r, &options(&from, Profile::Client, "dev"), &[verifying(&key)]).is_ok());
 }
@@ -205,6 +288,7 @@ fn both_archive_formats_install_on_every_os() {
         let mut p = Package::new("client", "2026.11.25-1", client_files());
         p.format = format;
         write_package(&from, &key, &p);
+        with_browser(&from, &key, "2026.11.25-1");
         install_from(&r, &options(&from, Profile::Client, "stable"), &[verifying(&key)]).unwrap_or_else(|e| panic!("{format:?}: {e}"));
     }
 }
@@ -224,6 +308,7 @@ fn a_link_in_a_tar_refuses() {
     let mut entries: Vec<(String, u8, Vec<u8>)> = client_files().into_iter().map(|(n, d)| (n, b'0', d)).collect();
     entries.push(("link".into(), b'2', vec![]));
     std::fs::write(from.join(format!("{stem}.tar.zst")), zstd_raw(&tar_entries(&entries))).unwrap();
+    with_browser(&from, &key, "2026.11.25-1");
     assert!(install_from(&r, &options(&from, Profile::Client, "stable"), &[verifying(&key)]).is_err());
     assert_nothing_landed(&r, Track::Client);
 }
@@ -279,6 +364,7 @@ fn a_next_key_in_a_trusted_manifest_is_trusted_after_it() {
     let mut p = Package::new("client", "2026.11.25-1", client_files());
     p.next_key = Some(public_b64(&next));
     write_package(&one, &key, &p);
+    with_browser(&one, &key, "2026.11.25-1");
     let before = keys::trusted_keys(&r);
     assert!(!before.contains(&verifying(&next)));
     install_from(&r, &options(&one, Profile::Client, "stable"), &[verifying(&key)]).unwrap();
@@ -331,6 +417,7 @@ fn install_from_the_command_line_needs_the_signature_and_reports_status() {
     assert_eq!(status["tracks"]["host"]["current"], "2026.11.25-1");
     assert_eq!(status["tracks"]["host"]["verified"], true);
     assert_eq!(status["tracks"]["client"]["verified"], true);
+    assert_eq!(status["tracks"]["browser"]["verified"], true);
     assert_eq!(status["host"]["running"], false);
     // Another key: the same packages refuse.
     let other = temp_dir("cli-other");

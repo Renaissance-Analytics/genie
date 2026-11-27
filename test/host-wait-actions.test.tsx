@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { ENGINE_PROTOCOL } from '../src/core/engine-protocol.js';
-import { linkToHost, type EngineLaunchPorts } from '../src/main/engine-launch.js';
+// The single-app install's own start (Tynn #1058 L4: quarantined until the bridge, L9); a launched client starts none.
+import { legacyLinkToHost as linkToHost, type LegacyLaunchPorts as EngineLaunchPorts } from '../src/main/legacy-host-start.js';
 import { HOST_WAIT_ACTIONS_AFTER_MS, HOST_WAIT_SHOW_AFTER_MS, HostRestart, HostWait, type HostWaitView } from '../src/main/host-wait-window.js';
 import { HostWaitScreen } from '../src/renderer/components/HostWaitScreen.js';
 

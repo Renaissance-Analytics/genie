@@ -13,7 +13,7 @@ import { drivablePages } from './page-navigation-electron.js';
 import { livenessOf } from '../core/liveness.js';
 import { CallerBook, sessionCallerOf } from './mcp-callers.js';
 import type { Caller } from './mcp-tools.js';
-import { BrowserWindow, ClipboardItem, Menu, Notification, Tray, app, clipboard, dialog, ipcMain, net, powerMonitor, safeStorage, session, shell, webContents } from 'electron';
+import { BrowserWindow, ClipboardItem, Menu, Notification, Tray, app, clipboard, dialog, ipcMain, nativeTheme, net, powerMonitor, safeStorage, session, shell, webContents } from 'electron';
 import { configureWindowPages, loadWindowPage } from './window-pages.js';
 import { electronClipboardPort, registerClipboardIpc } from './clipboard-ipc.js';
 import { localProtocolDoor } from './local-protocol-door.js';
@@ -41,9 +41,8 @@ import { readThingSignal } from '../core/thing-sounds.js';
 import { readIssueWatchSound } from '../core/issue-watch-signal.js';
 import { installQuit, leaveForInstall, quitAnswer, quitPlan, quitSequence, runQuit, type QuitPorts } from '../core/quit.js';
 import { windowLaunchFlags } from '../core/launch-flags.js';
-import { hostDownAnswer, hostDownPlan } from '../core/host-down.js';
 import { hostHashOf } from '../core/update-kind.js';
-import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision, type LaunchDecision } from '../core/quit-flag.js';
+import { QUIT_DATA, answerSecondInstance, asksToQuit, hostAsked, launchDecision, type LaunchDecision } from '../core/quit-flag.js';
 import { ActivationLedger, bringUp, onceShowable, showWhenReady, traceFirstShow, windowLabelOf, type Activation, type ActivationRequest } from '../core/window-activation.js';
 import { viewDelivery, viewReaches, type ViewRequest } from '../core/view-requests.js';
 import { genieUrlIn, signInCodeFrom, workstationOpenFrom } from '../core/tynn-sign-in.js';
@@ -79,8 +78,12 @@ import { setPrivateCredentialFailureLog } from './private-credentials.js';
 import { systemProcessTree } from '../core/process-tree.js';
 import { loginTerminalOf } from './login-host.js';
 import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
-import { hostBuild } from './engine-launch.js';
+import { hostBuild, pidAlive } from './engine-launch.js';
+import { legacyHostFinder } from './legacy-host-start.js';
+import { HostDirectory, localHostState, readPairedHosts } from './host-directory-window.js';
+import { callLauncher, launcherReachable, launcherWire } from './launcher-control.js';
 import { materializeHostRuntime } from './host-runtime.js';
+import { launcherLink } from '../core/launcher-link.js';
 import { HostRestart, HostWait } from './host-wait-window.js';
 import { readStartupProgress } from './startup-updates-file.js';
 import { scheduleScratchSweep } from './scratch-area.js';
@@ -95,7 +98,7 @@ import { readV1Settings } from './v1-settings.js';
 import { readV1Catalog } from './v1-import.js';
 import { planV1Import, v1DefaultAgents } from '../core/v1-import.js';
 import { v1Leftovers } from '../core/v1-reap.js';
-import { TITLE_BAR_HEIGHT, mainWindowOptions, overlayColorsOk } from '../core/window.js';
+import { TITLE_BAR_HEIGHT, hostDirectoryWindowOptions, mainWindowOptions, overlayColorsOk } from '../core/window.js';
 import { createTray, loginName, trayImages as buildTrayImages, trayMenuTemplate, trayTooltip, trayUpdate, type TrayHandlers, type TrayItem } from './tray.js';
 import { needsYouCount, type DeckItem } from '../core/deck.js';
 import { limitWords } from '../core/limit-words.js';
@@ -519,18 +522,49 @@ let host: AgentEngine | null = null;
  * SAFE MODE AS THIS WINDOW READS IT (Tynn #386; window-safe-mode.ts): genie-host's, over the link. Opened once the link is known.
  */
 let windowSafe: WindowSafeMode | null = null;
-/** No genie-host could start: say what is wrong and how to fix it, then try again or leave. The window runs nothing itself (Tynn #415). */
-async function stopForNoHost(reason: string | null): Promise<void> {
-    const logFile = join(genieRoot(), 'logs', 'genie-host.log');
-    const plan = hostDownPlan({ reason, logFile });
-    for (;;) {
-        const { response } = await dialog.showMessageBox({ type: 'error', title: plan.title, message: plan.message, detail: plan.detail, buttons: [...plan.buttons], defaultId: 0, cancelId: 2, noLink: true });
-        const answer = hostDownAnswer(response);
-        if (answer === 'open-log') { void shell.openPath(logFile); continue; }
-        if (answer === 'retry') app.relaunch();
-        app.exit(0);
-        return;
-    }
+/** The host directory's window while it is open (Tynn #1058 L4): a second launch focuses it until there is a host. */
+let hostDirectoryWindow: BrowserWindow | null = null;
+/**
+ * NO HOST TO LINK TO: THE HOST DIRECTORY (Tynn #1058 L4; replaces the "could not start its host" dialog). The window runs
+ * nothing itself (Tynn #415) and starts no host: Start asks the launcher (`launcher.ensureHost`), and the boot links once it
+ * has answered (`linked`). Closing the directory ends the client (`closed`).
+ *
+ * `launchedHostBuild`: the host build the launcher named (`both`), `null` when it named none (`client`), `undefined` when
+ * no launcher started this process (the single-app install, whose own start failed: `legacyFailure`).
+ */
+async function openHostDirectory(launchedHostBuild: string | null | undefined, legacyFailure: string | null, log: (line: string) => void): Promise<'linked' | 'closed'> {
+    const runtime = runtimeDir(genieRoot());
+    const wire = launcherWire(runtime, 'client');
+    const directory = new HostDirectory({
+        input: () => ({ ...localHostState({ launchedHostBuild, legacyFailure, runtimeDir: runtime, alive: pidAlive }), paired: readPairedHosts(runtime), launcher: launcherReachable(wire) }),
+        ensureHost: () => callLauncher(wire, 'launcher.ensureHost'),
+        openLog: () => shell.openPath(join(genieRoot(), 'logs', 'genie-host.log')).then((failed) => failed || null),
+        push: (state) => { if (hostDirectoryWindow && !hostDirectoryWindow.isDestroyed()) hostDirectoryWindow.webContents.send('host-directory:show', state); },
+    });
+    log(`host directory shown: ${JSON.stringify(directory.current().view.hosts.map((h) => `${h.id}:${h.state}`))}${directory.current().view.empty ? ' (empty)' : ''}`);
+    ipcMain.handle('host-directory:current', () => directory.current());
+    ipcMain.handle('host-directory:act', (_event, action: unknown) => (action === 'start' || action === 'open-log' || action === 'add-host' ? directory.act(action) : undefined));
+    const win = new BrowserWindow({
+        ...genieWindowIcon(here),
+        // Genie's frame and title bar (the coordinator's review, 2026-11-27): the main window's, its overlay in the page's theme.
+        ...hostDirectoryWindowOptions(process.platform, nativeTheme.shouldUseDarkColors),
+        title: 'Genie', backgroundColor: nativeTheme.shouldUseDarkColors ? '#0a0a0c' : '#ffffff', autoHideMenuBar: true, show: false,
+        webPreferences: { preload: join(here, 'host-directory-preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false },
+    });
+    hostDirectoryWindow = win;
+    guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
+    onceShowable(win, process.platform, () => showWhenReady(win, { activation: 'user-gesture', reason: 'host directory', ledger: activationLedger, label: 'host-directory' }));
+    void loadWindowPage(win.webContents, 'host-directory').catch((error: unknown) => console.error(`[window-pages] ${String(error)}`));
+    const closed = new Promise<'closed'>((resolve) => win.on('closed', () => resolve('closed')));
+    const outcome = await Promise.race([directory.untilLinked().then(() => 'linked' as const), closed]);
+    // Start's result stays on its row a moment (running, green) before the host's own window takes over.
+    if (outcome === 'linked') await new Promise<void>((resolve) => setTimeout(resolve, 1200));
+    ipcMain.removeHandler('host-directory:current');
+    ipcMain.removeHandler('host-directory:act');
+    hostDirectoryWindow = null;
+    if (!win.isDestroyed()) win.destroy();
+    log(`host directory ${outcome}`);
+    return outcome;
 }
 const windowSafeNow = (): boolean => windowSafe?.active() === true;
 /** The link to `genie-host` (the host split, phase 1); `null` only before it is made, because a window with no host stops. */
@@ -880,6 +914,9 @@ const remoteWindowAccount = new Map<BrowserWindow, string | null>();
 /** The Tynn account genie-host is signed in to, as its summary says (Tynn #954, 2g-3a); `null` = signed out. */
 const tynnAccountKeyNow = (): string | null => hostSummaryNow.tynnAccountKey;
 function openRemoteWindow(url: string, name?: string | null): void {
+    // Another host's window is dialled through this computer's host today (its deviceLink and Tynn grants); with no host
+    // linked yet the directory is what there is to show (a client's own way to other hosts is step 4 of the split).
+    if (agentEngineLink === null) { revealMainWindow(`open ${url} with no host linked`); return; }
     // The machine's NAME rides with the window (Genie 1's openWorkstationById: "The display name drives the host window
     // title"): its connecting screen says it, never the raw `relay:<id>`.
     const search = remoteWindowSearch(url, name);
@@ -933,6 +970,8 @@ const activationLedger = new ActivationLedger();
  * `attractMainWindow`. `reason` names the gesture in the focus log.
  */
 function revealMainWindow(reason: string): void {
+    // No host linked yet (Tynn #1058 L4): the host directory is this client's window.
+    if (hostDirectoryWindow && !hostDirectoryWindow.isDestroyed()) { bringUp(hostDirectoryWindow, { activation: 'user-gesture', reason, ledger: activationLedger, label: 'host-directory' }); return; }
     leftRunning.set(false);
     // Tray-only (P1b, "Just close the UI"): the person asked for Genie — the window is built again, the same host.
     if (!window || window.isDestroyed()) { mountMainWindow(true, reason); return; }
@@ -1276,12 +1315,19 @@ async function boot(): Promise<void> {
     {
         // P6: the host runs from a copy under Genie's home, so an update doesn't have to end it. Only the first run of a new
         // Electron copies the runtime; every failure answers the install, with the reason.
-        const hostBuildNow = hostBuild(app.getVersion(), join(here, 'host.js'));
+        // A CLIENT THE LAUNCHER STARTED (Tynn #1058 L3) carries no host bundle: it makes no copy, and links to the host build
+        // the launcher named (the host track's own build, never a hash of a host.js it does not have).
+        const launched = launcherLink(process.env);
+        const hostBuildNow = launched?.hostBuild ?? hostBuild(app.getVersion(), join(here, 'host.js'));
+        if (launched) lifecycleLog(`started by the launcher ${launched.launcherExe}; its host build ${launched.hostBuild ?? '(none)'}`);
         const hostCopyInput = { packaged: app.isPackaged, platform: process.platform, execPath: process.execPath, electronVersion: process.versions.electron ?? 'unknown', appRoot: app.getAppPath(), unpackedRoot: `${app.getAppPath()}.unpacked`, hostHash: hostHashOf(hostBuildNow) ?? hostBuildNow.replace(/[^A-Za-z0-9._-]/g, '_'), genieHome: genieRoot(), log: lifecycleLog };
-        const hostRuntime = await materializeHostRuntime(hostCopyInput);
+        // A launched client never starts a host (Tynn #1058 L4), so it has no host copy to make either.
+        const hostRuntime = launched ? null : await materializeHostRuntime(hostCopyInput);
         // Its own Deck item (Tynn #693): the error alone is the item's folded detail; the words are core/main-errors.ts's.
-        if (hostRuntime.error !== null) mainErrors.record('host-copy', new Error(hostRuntime.cause ?? hostRuntime.error));
-        remakeHostCopy = () => materializeHostRuntime(hostCopyInput).then((made) => (made.error === null ? null : made.cause ?? made.error));
+        if (hostRuntime !== null && hostRuntime.error !== null) mainErrors.record('host-copy', new Error(hostRuntime.cause ?? hostRuntime.error));
+        /** Why the single-app install's own start failed, for the directory (legacy-host-start.ts). */
+        let legacyFailure: string | null = hostRuntime?.error ?? null;
+        if (!launched) remakeHostCopy = () => materializeHostRuntime(hostCopyInput).then((made) => (made.error === null ? null : made.cause ?? made.error));
         // STARTING GENIE'S HOST, SAID (Tynn #700): a slow first start shows a window of its own that says so, until the link
         // is up; from 60 s it also offers Open the log and Restart Genie's host (host-wait-window.ts).
         let hostWaitWindow: BrowserWindow | null = null;
@@ -1308,56 +1354,61 @@ async function boot(): Promise<void> {
         });
         ipcMain.handle('host-wait:current', () => hostWait.current());
         ipcMain.handle('host-wait:act', (_event, action: unknown) => (action === 'open-log' || action === 'restart' ? hostWait.act(action) : undefined));
-        agentEngineLink = await connectAgentEngine({
-            // WHAT THE OS SAYS ABOUT PROXIES, handed to the host each time this window links to it (host-https-fetch.ts).
-            onLinked: (client) => {
-                handProxyAnswers = () => reportProxies(client, lifecycleLog);
-                void handProxyAnswers();
-                publishBrowserFacts();
-                // How the host starts its updater helper (P5b): this executable, in a dev run this app's path, and the switches this
-                // window was started with that an Electron needs to start at all here (the sandbox, the display, the password store).
-                // This window says it is one (Tynn #898): genie-host's install, whoever asks it, spares it and waits for it to go.
-                void client.updates().announce().catch(() => {});
-                void client.updates().publishLaunch({ file: process.execPath, args: [...(app.isPackaged ? [] : [app.getAppPath()]), '--updater', ...windowLaunchFlags(process.argv)] }).catch(() => {});
-                void client.browserCall('whoami', []).then((id) => { browserConnection = String(id); }, () => {});
-                cookieBridge?.relinked();
-                client.onBrowserEvent((event) => {
-                    if (event.kind === 'pages') browserPages.apply(event.pages);
-                    if (event.kind === 'browserUp') browserLinked = event.up;
-                    if (event.kind === 'cookies' || event.kind === 'cookiesWanted') cookieBridge?.onEvent(event);
-                    if (event.kind === 'poppedBack' && window && !window.isDestroyed()) window.webContents.send('site-panel:popped-back', event.panelKey);
-                });
-                void client.browserCall('browserUp', []).then((up) => { browserLinked = up === true; }, () => {});
-                void client.browserCall('pagesNow', []).then((pages) => { browserPages.apply(pages as BrowserPage[]); }, () => {});
-            },
-            callbacks: engineCallbacks,
-            launch: {
-                runtimeDir: runtimeDir(genieRoot()),
-                logsDir: join(genieRoot(), 'logs'),
-                // The host's build: this version, and the host bundle's own bytes — a rebuilt host is a new host.
-                build: hostBuildNow,
-                hostScript: hostRuntime.hostScript,
-                execPath: hostRuntime.execPath,
-                genieHome: genieRoot(),
-                // What only Electron knows, for the host's hosting (hosting-inputs.ts): Genie 1's folder (its database, CA and
-                // toolchain), the app data folder, and the resources folder with the bundled Caddy.
-                env: { ...process.env, GENIE_V1_USERDATA: app.getPath('userData'), GENIE_APPDATA: app.getPath('appData'), GENIE_RESOURCES: process.resourcesPath, GENIE_INSTALL_EXEC: process.execPath },
+        // THE CLIENT LINKS AND NEVER STARTS A HOST (Tynn #1058 L4): with no host to link to it shows the host directory, and
+        // links once the launcher has started one (Start). Only a process no launcher started (a dev tree, the single-app
+        // install until the bridge, L9) still starts its own, through legacy-host-start.ts.
+        for (;;) {
+            agentEngineLink = await connectAgentEngine({
+                // WHAT THE OS SAYS ABOUT PROXIES, handed to the host each time this window links to it (host-https-fetch.ts).
+                onLinked: (client) => {
+                    handProxyAnswers = () => reportProxies(client, lifecycleLog);
+                    void handProxyAnswers();
+                    publishBrowserFacts();
+                    // How the host starts its updater helper (P5b): this executable, in a dev run this app's path, and the switches this
+                    // window was started with that an Electron needs to start at all here (the sandbox, the display, the password store).
+                    // This window says it is one (Tynn #898): genie-host's install, whoever asks it, spares it and waits for it to go.
+                    void client.updates().announce().catch(() => {});
+                    void client.updates().publishLaunch({ file: process.execPath, args: [...(app.isPackaged ? [] : [app.getAppPath()]), '--updater', ...windowLaunchFlags(process.argv)] }).catch(() => {});
+                    void client.browserCall('whoami', []).then((id) => { browserConnection = String(id); }, () => {});
+                    cookieBridge?.relinked();
+                    client.onBrowserEvent((event) => {
+                        if (event.kind === 'pages') browserPages.apply(event.pages);
+                        if (event.kind === 'browserUp') browserLinked = event.up;
+                        if (event.kind === 'cookies' || event.kind === 'cookiesWanted') cookieBridge?.onEvent(event);
+                        if (event.kind === 'poppedBack' && window && !window.isDestroyed()) window.webContents.send('site-panel:popped-back', event.panelKey);
+                    });
+                    void client.browserCall('browserUp', []).then((up) => { browserLinked = up === true; }, () => {});
+                    void client.browserCall('pagesNow', []).then((pages) => { browserPages.apply(pages as BrowserPage[]); }, () => {});
+                },
+                callbacks: engineCallbacks,
+                launch: { runtimeDir: runtimeDir(genieRoot()), log: lifecycleLog },
+                find: launched === null ? legacyHostFinder({
+                    runtimeDir: runtimeDir(genieRoot()),
+                    logsDir: join(genieRoot(), 'logs'),
+                    // The host's build: this version, and the host bundle's own bytes — a rebuilt host is a new host.
+                    build: hostBuildNow,
+                    hostScript: hostRuntime?.hostScript ?? join(here, 'host.js'),
+                    execPath: hostRuntime?.execPath ?? process.execPath,
+                    genieHome: genieRoot(),
+                    // What only Electron knows, for the host's hosting (hosting-inputs.ts): Genie 1's folder (its database, CA and
+                    // toolchain), the app data folder, and the resources folder with the bundled Caddy.
+                    env: { ...process.env, GENIE_V1_USERDATA: app.getPath('userData'), GENIE_APPDATA: app.getPath('appData'), GENIE_RESOURCES: process.resourcesPath, GENIE_INSTALL_EXEC: process.execPath },
+                    log: lifecycleLog,
+                    onWaiting: (elapsedMs) => hostWait.progress(elapsedMs),
+                    restart: hostRestart,
+                }, (reason) => { legacyFailure = reason; }) : undefined,
+                onError: (kind, error) => mainErrors.record(kind, error),
+                agentName: (id) => registry?.find(id)?.name ?? id,
                 log: lifecycleLog,
-                onWaiting: (elapsedMs) => hostWait.progress(elapsedMs),
-                restart: hostRestart,
-            },
-            onError: (kind, error) => mainErrors.record(kind, error),
-            agentName: (id) => registry?.find(id)?.name ?? id,
-            log: lifecycleLog,
-        });
+            });
+            if (agentEngineLink !== null) break;
+            hostWait.done();
+            // THE WINDOW NEVER RUNS HOST WORK (Tynn #415): with no host it shows the host directory, and links once there is one.
+            if ((await openHostDirectory(launched?.hostBuild, legacyFailure, lifecycleLog)) === 'closed') { app.exit(0); return; }
+        }
         hostWait.done();
         ipcMain.removeHandler('host-wait:current');
         ipcMain.removeHandler('host-wait:act');
-        // THE WINDOW NEVER RUNS HOST WORK (Tynn #415): with no host it says what is wrong and how to fix it, and stops here.
-        if (agentEngineLink === null) {
-            await stopForNoHost(hostRuntime.error);
-            return;
-        }
         host = agentEngineLink.client;
         // THE HEARTBEAT (Tynn #386): every second, its pid and RSS, a notification; the client drops it while unlinked.
         heartbeatNow = startHeartbeat({
@@ -1669,6 +1720,9 @@ async function boot(): Promise<void> {
     // A sign-in that came back before main's own client could reach genie-host's account (this launch's argv, an early second launch).
     ownProtocolTunnelled = true;
     if (pendingGenieUrl !== null) { const url = pendingGenieUrl; pendingGenieUrl = null; openGenieUrl(url); }
+    // A FIRST LAUNCH FOR ONE HOST (Tynn #1058 L4: the launcher's openWindow {host}, `--host <address>`): that host's window too.
+    const askedHost = hostAsked(process.argv);
+    if (askedHost !== null) openRemoteWindow(askedHost);
     windowTunnelNow = windowTunnel;
     // Browser/UI facts this window owns: its pane and its notice are said down the tunnel, where genie-host reads its
     // features again (genie-host's own sources invalidate them too: its Tynn and GitHub accounts, its relay role, …).
@@ -2229,7 +2283,8 @@ app.on('browser-window-focus', (_event, focused) => {
 });
 
 app.on('second-instance', (_event, argv, _workingDirectory, additionalData) => {
-    answerSecondInstance(argv, additionalData, { quit: requestQuit, reveal: () => { revealMainWindow('second launch'); }, defer: (run) => { setImmediate(run); }, open: openGenieUrl });
+    // ONE WINDOW PER HOST (Tynn #1058 L4): the launcher's openWindow {host} arrives here as `--host <address>`.
+    answerSecondInstance(argv, additionalData, { quit: requestQuit, reveal: () => { revealMainWindow('second launch'); }, defer: (run) => { setImmediate(run); }, open: openGenieUrl, openHost: (address) => { openRemoteWindow(address); } });
 });
 
 /**

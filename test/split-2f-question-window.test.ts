@@ -419,7 +419,10 @@ describe('host-wait:act is the host-wait window’s own (the coordinator, 2026-1
         const registrations = [...main.matchAll(/ipcMain\.handle\('host-wait:act'/g)].map((m) => m.index!);
         expect(registrations).toHaveLength(1);
         const link = main.indexOf('agentEngineLink = await connectAgentEngine(');
-        const done = main.indexOf('hostWait.done();', link);
+        // After the link loop (Tynn #1058 L4: with no host the directory is shown, and the link is asked again).
+        const loopEnd = main.indexOf("=== 'closed') { app.exit(0); return; }", link);
+        expect(loopEnd).toBeGreaterThan(link);
+        const done = main.indexOf('hostWait.done();', loopEnd);
         const removed = main.indexOf("ipcMain.removeHandler('host-wait:act');", link);
         expect(link).toBeGreaterThan(registrations[0]!);
         expect(done).toBeGreaterThan(link);

@@ -45,6 +45,7 @@ ROWS=(
     trust-step accounts-popover claude-accounts sound-picker sound-cues esc-unsend question-maximize site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash quit-keeps-host rebuilt-machine cli-drain
     flows zip64 host-plain-node mailpit launcher-unit
     package package-fuse
+    package-tracks packed-tree-client packed-tree-browser packed-tree-host track-manifest launcher-install client-no-host
     logon
     toolchain
     client-only-update
@@ -679,8 +680,24 @@ need_rust() {
     command -v cc >/dev/null 2>&1 || { rust_ready='no C linker (cc) on this machine for cargo'; block "$rust_ready"; return 1; }
     rust_ready=ok
 }
+# THE LAUNCHER'S WINDOW (Tynn #1058 L3: the setup window, direction C) is WebKitGTK: wry links webkit2gtk-4.1 and GTK 3.
+# Installed with pacman when its development files are not here (Arch ships headers in the package itself).
+webkit_ready=''
+need_webkit() {
+    [ "$webkit_ready" = ok ] && return 0
+    [ -n "$webkit_ready" ] && { blocked="$webkit_ready"; return 1; }
+    webkit_ready='webkit2gtk-4.1 could not be installed (see ci-out/setup/pacman-webkit.log)'
+    need_cmd pkg-config pkgconf || { webkit_ready="$blocked"; return 1; }
+    if ! pkg-config --exists webkit2gtk-4.1 gtk+-3.0; then
+        echo "--- webkit2gtk-4.1 is missing: installing it with pacman"
+        sudo -n pacman -Sy --needed --noconfirm webkit2gtk-4.1 gtk3 >"$SETUP/pacman-webkit.log" 2>&1 || { tail -20 "$SETUP/pacman-webkit.log"; block "$webkit_ready"; return 1; }
+        pkg-config --exists webkit2gtk-4.1 gtk+-3.0 || { block "$webkit_ready"; return 1; }
+    fi
+    echo "--- webkit2gtk-4.1 $(pkg-config --modversion webkit2gtk-4.1), gtk+-3.0 $(pkg-config --modversion gtk+-3.0)"
+    webkit_ready=ok
+}
 row_launcher-unit() {
-    need_rust || return 1
+    need_rust && need_webkit || return 1
     echo "--- $(cargo --version), $(rustc --version), linker $(command -v cc)"
     local locked=''
     [ -f native/launcher/Cargo.lock ] && locked=--locked
@@ -689,6 +706,37 @@ row_launcher-unit() {
     cp native/launcher/Cargo.lock "$OUT/launcher-Cargo.lock" 2>/dev/null || true
     echo "LAUNCHER SIZE linux $(stat -c %s native/launcher/target/release/genie) bytes"
 }
+# THE PACKAGES PER TRACK (Tynn #1058 L3): the client (electron-builder's unpacked app named genie-client, no host bundle),
+# the browser (browser.json, its own track, run on that client build: no second copy of the app), the host (P6-1's copy laid out at build time) and the launcher,
+# each packed with its manifest (scripts/build-track-packages.mjs), signed with a THROWAWAY key made here and deleted with
+# the VM (scripts/ci/throwaway-manifest-key.mjs), and the launcher built trusting that key. Never the release key.
+row_package-tracks() {
+    need_build && need_rust && need_webkit || return 1
+    npx tsx scripts/fetch-caddy.ts || return 1
+    local build pub locked=''
+    [ -f native/launcher/Cargo.lock ] && locked=--locked
+    build="$(date -u +%Y.%m.%d)-1"
+    pub="$(node scripts/ci/throwaway-manifest-key.mjs "$SETUP")" || return 1
+    echo "--- track build $build; the launcher trusts the run's throwaway key $pub"
+    ( cd native/launcher && GENIE_TRACK_BUILD="$build" GENIE_MANIFEST_PUBLIC_KEYS="$pub" cargo build $locked --release --bin genie --target-dir target-l3 ) || return 1
+    # Stable: what a person's install reads (the setup window refused a dev build: item 1126-102126-14ccd0).
+    node scripts/build-track-packages.mjs packages --build "$build" --channel stable --launcher native/launcher/target-l3/release/genie || return 1
+    GENIE_MANIFEST_SIGNING_KEY="$(cat "$SETUP/THROWAWAY-manifest-signing-key.pem")" GENIE_MANIFEST_PUBLIC_KEY="$pub" node scripts/sign-manifest.mjs release/tracks/packages/*.manifest.json || return 1
+    echo "$build" >release/tracks/build.txt
+    ls -l release/tracks/packages
+}
+need_tracks() { [ -f release/tracks/build.txt ] || block 'nothing was packaged per track (no release/tracks/build.txt): see the package-tracks row'; }
+# WHAT EACH PACKAGE HOLDS (Tynn #1058 L3; scripts/track-tree-check.mjs): the client and the browser no host.js in their
+# app.asar, no launcher and no Caddy; the host no app.asar and none of Tynn #437's leftovers, and all it runs with.
+row_packed-tree-client() { need_tracks && node scripts/track-tree-check.mjs release/tracks/trees client --asar-files release/tracks/packages/asar-files.json; }
+row_packed-tree-browser() { need_tracks && node scripts/track-tree-check.mjs release/tracks/trees browser --asar-files release/tracks/packages/asar-files.json; }
+row_packed-tree-host() { need_tracks && node scripts/track-tree-check.mjs release/tracks/trees host; }
+# EVERY PACKAGE'S MANIFEST VERIFIES, EVERY FILE'S HASH MATCHES, A FLIPPED BYTE REFUSES (was update-metadata; the spec's track-manifest).
+row_track-manifest() { need_tracks && need_install && npx tsx scripts/track-manifest-check.mts release/tracks/packages "$SETUP/THROWAWAY-manifest-public-key.txt"; }
+# THE LAUNCHER INSTALLS GENIE (Tynn #1058 L3; was packaged-launcher): scripts/vm-launcher-install-linux.sh, a home of its own.
+row_launcher-install() { need_tracks && need_display && timeout 840 bash scripts/vm-launcher-install-linux.sh; }
+# A CLIENT WITH NO HOST (Tynn #1058 L4): a client-only home and a both home on one machine; the host directory photographed.
+row_client-no-host() { need_tracks && need_display && timeout 840 bash scripts/vm-client-no-host-linux.sh; }
 row_client-only-update() { need_install && need_electron && need_display && timeout 2300 bash scripts/vm-client-only-update-linux.sh; }
 # LOGON START, READ AT THE OS (Tynn #1036 P6-3): the packaged AppImage (the package row's) in a home of its own; its
 # autostart file read back (Exec, Hidden, and what systemd's xdg-autostart generator makes of it), the setting switched
@@ -756,6 +804,10 @@ ceiling() {
         toolchain) echo 2700 ;;
         logon) echo 900 ;;
         launcher-unit) echo 1500 ;;
+        package-tracks) echo 2400 ;;
+        packed-tree-client|packed-tree-browser|packed-tree-host|track-manifest) echo 300 ;;
+        launcher-install) echo 900 ;;
+        client-no-host) echo 900 ;;
         client-only-update) echo 2400 ;;
         host-update) echo 2400 ;;
         *) echo 600 ;;
@@ -945,7 +997,7 @@ run_rows() {
     for name in "${selected[@]}"; do
         echo "=== $name"
         machine_line "$name"
-        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover trust-step accounts-popover claude-accounts sound-picker sound-cues esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash quit-keeps-host cli-drain host-late-ready package-fuse logon toolchain client-only-update host-update " in
+        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover trust-step accounts-popover claude-accounts sound-picker sound-cues esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash quit-keeps-host cli-drain host-late-ready package-fuse launcher-install client-no-host logon toolchain client-only-update host-update " in
             *" $name "*) reap_leftovers "$name" ;;
         esac
         from="$(now_ms)"

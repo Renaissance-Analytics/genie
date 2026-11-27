@@ -5,6 +5,14 @@
 //! Each file is checked (listed, size, sha256) as it is unpacked into `<build>.partial`; then the folder is renamed to
 //! `<build>`, its manifest and signature are written in, `.complete` LAST, and `state.json` points at it. Any failure
 //! deletes the partial folder and says why in words.
+//!
+//! Every profile installs the client and the browser (each its own track); `both` adds the host. A host installs only
+//! beside the client build it ships with (its manifest's `withClient`): the one installed in the same pass, or the client
+//! already current. A client or browser package alone never touches the host (the owner, 2026-11-26).
+//!
+//! On Linux a launcher package in the folder installs the launcher itself, at `<code root>/launcher/<build>/genie`, with
+//! `~/.local/bin/genie` and the desktop entry pointing at it (`desktop`). On Windows the NSIS installer puts the launcher
+//! at the Genie.exe path every shortcut already uses, so a launcher package is not read there.
 
 use crate::layout::{Roots, Track};
 use ed25519_dalek::VerifyingKey;
@@ -12,9 +20,9 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Profile {
-    /// The launcher, the client and a local host (the default; the owner, 2026-11-25).
+    /// The launcher, the client, the browser and a local host (the default; the owner, 2026-11-25).
     Both,
-    /// The launcher and the client: no host folder, no host at logon.
+    /// The launcher, the client and the browser: no host folder, no host at logon.
     Client,
 }
 
@@ -34,8 +42,8 @@ impl Profile {
     }
     pub fn tracks(self) -> &'static [Track] {
         match self {
-            Profile::Both => &[Track::Client, Track::Host],
-            Profile::Client => &[Track::Client],
+            Profile::Both => &[Track::Client, Track::Browser, Track::Host],
+            Profile::Client => &[Track::Client, Track::Browser],
         }
     }
 }
@@ -120,7 +128,26 @@ fn files_refusal(why: impl Into<String>) -> String {
     Refusal::Files(why.into()).to_string()
 }
 
-fn stage(roots: &Roots, options: &InstallOptions, keys: &[VerifyingKey], current: &state::State, track: Track) -> Result<Staged, String> {
+/// One track's package found in the `--from` folder with its manifest checked (signature, shape, the package asked for,
+/// newer, minLauncher), not yet unpacked.
+struct Checked {
+    track: Track,
+    manifest: Manifest,
+    manifest_bytes: Vec<u8>,
+    sig: Vec<u8>,
+    archive: PathBuf,
+    partial: PathBuf,
+    target: PathBuf,
+}
+
+/// What an install has done so far, for the setup window (`ui`): every manifest checked, then each file unpacked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Progress {
+    Checked { files: usize },
+    File { track: Track, done: usize, of: usize },
+}
+
+fn check_package(roots: &Roots, options: &InstallOptions, keys: &[VerifyingKey], current: &state::State, track: Track) -> Result<Checked, String> {
     let (build, stem) = find_package(&options.from, track)?;
     let manifest_bytes = std::fs::read(options.from.join(format!("{stem}.manifest.json"))).map_err(|e| format!("{stem}.manifest.json: {e}"))?;
     let sig = std::fs::read(options.from.join(format!("{stem}.manifest.json.sig"))).map_err(|e| format!("{stem}.manifest.json.sig: {e}"))?;
@@ -139,13 +166,20 @@ fn stage(roots: &Roots, options: &InstallOptions, keys: &[VerifyingKey], current
     let archive = [".zip", ".tar.zst"].iter().map(|ext| options.from.join(format!("{stem}{ext}"))).find(|p| p.is_file()).ok_or_else(|| format!("{stem}: no .zip or .tar.zst beside its manifest"))?;
     let target = roots.build_dir(track, &build).ok_or("not a track build")?;
     let partial = roots.track_dir(track).join(format!("{build}{PARTIAL_SUFFIX}"));
+    Ok(Checked { track, manifest, manifest_bytes, sig, archive, partial, target })
+}
+
+/// Unpacks a checked package into its partial folder, each file checked (listed, size, sha256) as it lands.
+fn unpack(c: Checked, progress: &mut dyn FnMut(Progress)) -> Result<Staged, String> {
+    let partial = c.partial.clone();
     if partial.exists() {
         std::fs::remove_dir_all(&partial).map_err(|e| format!("{} could not be cleared: {e}", partial.display()))?;
     }
     std::fs::create_dir_all(&partial).map_err(|e| format!("{} could not be made: {e}", partial.display()))?;
-    let listed: BTreeMap<String, &crate::manifest::ManifestFile> = manifest.files.iter().map(|f| (name_key(&f.path), f)).collect();
+    let listed: BTreeMap<String, &crate::manifest::ManifestFile> = c.manifest.files.iter().map(|f| (name_key(&f.path), f)).collect();
+    let of = listed.len();
     let mut seen = std::collections::BTreeSet::new();
-    let unpacked = for_each_file(&archive, &mut |name, data| {
+    let unpacked = for_each_file(&c.archive, &mut |name, data| {
         let key = name_key(name);
         let f = listed.get(&key).ok_or_else(|| files_refusal(format!("{name} is in the package but not in its manifest")))?;
         if !seen.insert(key) {
@@ -154,7 +188,9 @@ fn stage(roots: &Roots, options: &InstallOptions, keys: &[VerifyingKey], current
         if data.len() as u64 != f.size || sha256_hex(data) != f.sha256 {
             return Err(files_refusal(format!("{name} is not the file its manifest names")));
         }
-        write_file(&partial.join(&f.path), data).map_err(|e| format!("{name} could not be written: {e}"))
+        write_file(&partial.join(&f.path), data).map_err(|e| format!("{name} could not be written: {e}"))?;
+        progress(Progress::File { track: c.track, done: seen.len(), of });
+        Ok(())
     });
     let unpacked = unpacked.and_then(|_| match listed.iter().find(|(k, _)| !seen.contains(*k)) {
         Some((_, f)) => Err(files_refusal(format!("{} is missing from the package", f.path))),
@@ -164,7 +200,7 @@ fn stage(roots: &Roots, options: &InstallOptions, keys: &[VerifyingKey], current
         let _ = std::fs::remove_dir_all(&partial);
         return Err(why);
     }
-    Ok(Staged { track, manifest, manifest_bytes, sig, partial, target })
+    Ok(Staged { track: c.track, manifest: c.manifest, manifest_bytes: c.manifest_bytes, sig: c.sig, partial: c.partial, target: c.target })
 }
 
 fn commit(s: &Staged) -> std::io::Result<()> {
@@ -178,12 +214,49 @@ fn commit(s: &Staged) -> std::io::Result<()> {
     write_file(&s.target.join(COMPLETE), s.manifest.build.as_bytes())
 }
 
+/// A host's or a browser's `withClient` is the client checked beside it, or else the client already current. Before
+/// anything unpacks: a host ships with its client, and a browser runs on it.
+fn host_ships_with_its_client(checked: &[Checked], st: &state::State) -> Result<(), String> {
+    let client = checked
+        .iter()
+        .find(|s| s.track == Track::Client)
+        .map(|s| s.manifest.build.clone())
+        .or_else(|| st.track(Track::Client.as_str()).and_then(|t| t.current.clone()));
+    for c in checked.iter().filter(|c| c.track == Track::Host || c.track == Track::Browser) {
+        let (name, verb) = if c.track == Track::Host { ("host", "ships with") } else { ("browser", "runs on") };
+        let Some(wanted) = c.manifest.with_client.as_deref() else {
+            return Err(format!("The {name} {} names no client build. Nothing was installed.", c.manifest.build));
+        };
+        match &client {
+            Some(have) if have == wanted => {}
+            Some(have) => return Err(format!("The {name} {} {verb} client {wanted}, and the client here is {have}: it is installed only with that client. Nothing was installed.", c.manifest.build)),
+            None => return Err(format!("The {name} {} {verb} client {wanted}, and there is no client here. Nothing was installed.", c.manifest.build)),
+        }
+    }
+    Ok(())
+}
+
 pub fn install_from(roots: &Roots, options: &InstallOptions, keys: &[VerifyingKey]) -> Result<Vec<Installed>, String> {
+    install_from_with(roots, options, keys, &mut |_| {})
+}
+
+/// `install_from`, saying how far it is: every manifest is checked first, then each package unpacks.
+pub fn install_from_with(roots: &Roots, options: &InstallOptions, keys: &[VerifyingKey], progress: &mut dyn FnMut(Progress)) -> Result<Vec<Installed>, String> {
     sweep(roots);
     let mut st = state::read(&roots.state_file())?;
+    let mut tracks: Vec<Track> = options.profile.tracks().to_vec();
+    if cfg!(unix) && find_package(&options.from, Track::Launcher).is_ok() {
+        tracks.push(Track::Launcher);
+    }
+    let mut checked: Vec<Checked> = Vec::new();
+    for track in &tracks {
+        checked.push(check_package(roots, options, keys, &st, *track)?);
+    }
+    host_ships_with_its_client(&checked, &st)?;
+    progress(Progress::Checked { files: checked.iter().map(|c| c.manifest.files.len()).sum() });
     let mut staged: Vec<Staged> = Vec::new();
-    for track in options.profile.tracks() {
-        match stage(roots, options, keys, &st, *track) {
+    for c in checked {
+        match unpack(c, progress) {
             Ok(s) => staged.push(s),
             Err(why) => {
                 for s in &staged {
@@ -209,5 +282,9 @@ pub fn install_from(roots: &Roots, options: &InstallOptions, keys: &[VerifyingKe
     }
     st.profile = Some(options.profile.as_str().to_string());
     state::write_atomic(&roots.state_file(), &st).map_err(|e| format!("state.json could not be written: {e}"))?;
+    #[cfg(unix)]
+    if let Some(l) = done.iter().find(|d| d.track == Track::Launcher) {
+        crate::desktop::write_entries(roots, &l.build)?;
+    }
     Ok(done)
 }

@@ -9,12 +9,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildManifest, checkManifest, manifestBytes, packTrack, readArchive } from '../scripts/pack-track.mjs';
 import { publicKeyOf, signManifestBytes } from '../scripts/sign-manifest.mjs';
 import {
-    ARCHES, CHANNELS, PACKAGE_TRACKS, PLATFORMS, parseManifest, parseTrackTag, semverOf, trackBuildFromEnv, trackTag,
+    ARCHES, CHANNELS, PACKAGE_TRACKS, PLATFORMS, clientOf, hostClient, parseManifest, parseTrackTag, restartsHost, semverOf, trackBuildFromEnv, trackTag,
     trustedKeysAfter, verifyManifest, verifyTree, type ManifestExpect, type TrackManifest,
 } from '../src/core/track-manifest.js';
 
 /*
- * THE SIGNED RELEASE MANIFEST (Tynn #1058 L1). Every package of every track (client, host, launcher) carries a
+ * THE SIGNED RELEASE MANIFEST (Tynn #1058 L1; format 2 since L3). Every package of every track (client, host, browser,
+ * launcher) carries a
  * manifest.json signed with Ed25519, and nothing is run before it verifies: the signature, then the shape, then that it is
  * the track, platform, architecture and channel asked for, then that it is newer than what is installed, then every
  * file. The release side is scripts/pack-track.mjs (package + manifest) and scripts/sign-manifest.mjs (the signature);
@@ -53,14 +54,14 @@ async function source(files: Record<string, string> = FILES): Promise<string> {
     return from;
 }
 
-const META = { track: 'host', build: '2026.11.25-1', channel: 'dev', platform: 'linux', arch: 'x64', minLauncher: '2026.11.25-1', notes: 'Fixes.' } as const;
+const META = { track: 'host', build: '2026.11.25-1', channel: 'dev', platform: 'linux', arch: 'x64', withClient: '2026.11.25-1', minLauncher: '2026.11.25-1', notes: 'Fixes.' } as const;
 const EXPECT: ManifestExpect = { track: 'host', platform: 'linux', arch: 'x64', channel: 'dev', current: '2026.11.18-2', launcher: '2026.11.25-1' };
 
 /** A manifest object as the release side writes it, its exact bytes, and its signature by `key`. */
 function signed(key: Pair, change: (m: Record<string, unknown>) => void = () => {}): { bytes: Buffer; sig: string; manifest: Record<string, unknown> } {
     const manifest: Record<string, unknown> = {
-        format: 1, track: 'host', build: '2026.11.25-1', schema: '2026.11.25', channel: 'dev', platform: 'linux', arch: 'x64',
-        minLauncher: '2026.11.25-1', files: [{ path: 'LICENSE', size: 4, sha256: sha('MIT\n') }, { path: 'genie-host', size: 3, sha256: sha('abc') }], notes: '',
+        format: 2, track: 'host', build: '2026.11.25-1', schema: '2026.11.25', channel: 'dev', platform: 'linux', arch: 'x64',
+        withClient: '2026.11.25-1', minLauncher: '2026.11.25-1', files: [{ path: 'LICENSE', size: 4, sha256: sha('MIT\n') }, { path: 'genie-host', size: 3, sha256: sha('abc') }], notes: '',
     };
     change(manifest);
     const bytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
@@ -80,7 +81,8 @@ describe('track builds and tags', () => {
             expect(parseTrackTag(trackTag(track, '2026.11.25-1.1'))).toEqual({ track, build: '2026.11.25-1.1' });
         }
         expect(parseTrackTag('v2.0.0')).toBeNull(); // the bridge is the old updater's tag, not a track's
-        expect(parseTrackTag('browser-v2026.11.25-1')).toBeNull();
+        expect(parseTrackTag('browser-v2026.11.25-1')).toEqual({ track: 'browser', build: '2026.11.25-1' });
+        expect(parseTrackTag('gapp-v2026.11.25-1')).toBeNull();
         expect(parseTrackTag('host-v2026.02.30-1')).toBeNull();
     });
 
@@ -95,7 +97,7 @@ describe('the manifest\'s shape is the contract\'s', () => {
     const schema = JSON.parse(readFileSync(join(ROOT, 'contracts', 'track-manifest.schema.json'), 'utf8'));
 
     it('has the same fields, required fields and enums as contracts/track-manifest.schema.json', () => {
-        expect(schema.properties.format.const).toBe(1);
+        expect(schema.properties.format.const).toBe(2);
         expect(schema.properties.track.enum).toEqual([...PACKAGE_TRACKS]);
         expect(schema.properties.channel.enum).toEqual([...CHANNELS]);
         expect(schema.properties.platform.enum).toEqual([...PLATFORMS]);
@@ -105,20 +107,29 @@ describe('the manifest\'s shape is the contract\'s', () => {
         const parsed = parseManifest(manifest);
         expect(parsed.ok).toBe(true);
         expect(() => checkManifest(manifest)).not.toThrow();
-        expect(Object.keys(manifest).sort()).toEqual([...schema.required].sort());
+        // withClient is required of a host only (the schema's if/then); every other field of every track.
+        expect(Object.keys(manifest).sort()).toEqual([...schema.required, 'withClient'].sort());
         for (const field of schema.required as string[]) {
             const without = { ...manifest };
             delete without[field];
             expect(parseManifest(without), field).toMatchObject({ ok: false, code: 'format' });
             expect(() => checkManifest(without), field).toThrow();
         }
-        expect(Object.keys(schema.properties).sort()).toEqual([...schema.required, 'nextKey'].sort());
+        expect(Object.keys(schema.properties).sort()).toEqual([...schema.required, 'nextKey', 'withClient'].sort());
+        expect(schema.if).toEqual({ properties: { track: { enum: ['host', 'browser'] } } });
+        expect(schema.then).toEqual({ required: ['withClient'] });
+        expect(schema.else).toEqual({ not: { required: ['withClient'] } });
     });
 
     it.each<[string, (m: Record<string, unknown>) => void]>([
         ['an unknown field', (m) => { m.extra = 1; }],
-        ['format 2', (m) => { m.format = 2; }],
-        ['the browser track (not a package track)', (m) => { m.track = 'browser'; }],
+        ['format 1 (never published)', (m) => { m.format = 1; }],
+        ['a GApp track (it joins in a later format)', (m) => { m.track = 'gapp'; }],
+        ['a host that names no client', (m) => { delete m.withClient; }],
+        ['a host whose client is not a track build', (m) => { m.withClient = 'latest'; }],
+        ['a client that names a client', (m) => { m.track = 'client'; }],
+        ['a browser that names no client (it runs on one)', (m) => { m.track = 'browser'; delete m.withClient; }],
+        ['a launcher that names a client', (m) => { m.track = 'launcher'; }],
         ['a schema that is not the build\'s', (m) => { m.schema = '2026.11.24'; }],
         ['a build with +metadata', (m) => { m.build = '2026.11.25-1+ci'; }],
         ['the bridge\'s version as a build', (m) => { m.build = '2.0.0'; m.schema = '2.0.0'; }],
@@ -212,7 +223,10 @@ describe('verify before run', () => {
         const from = await source();
         await expect(packTrack({ ...META, build: '2.0.0', from, out: join(dir, 'o1') })).rejects.toThrow(/track build/);
         await expect(packTrack({ ...META, build: '2026.11.18-0', from, out: join(dir, 'o2') })).rejects.toThrow(/track build/);
-        await expect(packTrack({ ...META, track: 'browser' as 'host', from, out: join(dir, 'o3') })).rejects.toThrow(/track/);
+        await expect(packTrack({ ...META, track: 'gapp' as 'host', from, out: join(dir, 'o3') })).rejects.toThrow(/track/);
+        const { withClient: _none, ...noClient } = META;
+        await expect(packTrack({ ...noClient, from, out: join(dir, 'o5') })).rejects.toThrow(/withClient/);
+        await expect(packTrack({ ...META, track: 'client', from, out: join(dir, 'o6') })).rejects.toThrow(/withClient/);
         await expect(packTrack({ ...META, from: join(dir, 'empty'), out: join(dir, 'o4') })).rejects.toThrow();
     });
 
@@ -310,6 +324,50 @@ describe('verify before run', () => {
         expect(verifyManifest(bytes, sig, [genie.publicKey], { ...EXPECT, current: '2027.01.01-1' })).toMatchObject({ ok: false, code: 'signature' });
     });
 });
+
+describe('each part of Genie is its own track (the owner, 2026-11-26: each item updates on its own)', () => {
+    it('the client, the browser, the host and the launcher each pack and verify as their own track', async () => {
+        const key = keyPair();
+        const from = await source();
+        for (const track of ['client', 'browser', 'host', 'launcher'] as const) {
+            const meta = track === 'host' || track === 'browser' ? { ...META, track } : { ...META, track, withClient: undefined };
+            const packed = await packTrack({ ...meta, from, out: join(dir, `out-${track}`) });
+            expect(packed.base).toBe(`${track}-2026.11.25-1-linux-x64`);
+            const bytes = await readFile(packed.manifest);
+            const sig = signManifestBytes(bytes, key.privatePem);
+            expect(verifyManifest(bytes, sig, [key.publicKey], { ...EXPECT, track }), track).toMatchObject({ ok: true });
+            for (const other of ['client', 'browser', 'host', 'launcher'] as const) {
+                if (other !== track) expect(verifyManifest(bytes, sig, [key.publicKey], { ...EXPECT, track: other }), `${track} as ${other}`).toMatchObject({ ok: false, code: 'track' });
+            }
+        }
+        expect([...PACKAGE_TRACKS].sort()).toEqual(['browser', 'client', 'host', 'launcher']);
+    });
+
+    it('a host names the client build it ships with, a browser the one it runs on; nothing else names one', async () => {
+        const from = await source();
+        const host = await buildManifest(from, { ...META, withClient: '2026.11.24-2' });
+        expect(host.withClient).toBe('2026.11.24-2');
+        expect(hostClient(parseManifestOk(host))).toBe('2026.11.24-2');
+        const client = await buildManifest(from, { ...META, track: 'client', withClient: undefined });
+        expect('withClient' in client).toBe(false);
+        expect(hostClient(parseManifestOk(client))).toBeNull();
+        const browser = await buildManifest(from, { ...META, track: 'browser', withClient: '2026.11.24-2' });
+        expect(clientOf(parseManifestOk(browser))).toBe('2026.11.24-2');
+        expect(hostClient(parseManifestOk(browser))).toBeNull();
+        expect(clientOf(parseManifestOk(client))).toBeNull();
+    });
+
+    it('only a host update restarts the host: a client, browser or launcher package never does', () => {
+        expect(restartsHost('host')).toBe(true);
+        for (const track of ['client', 'browser', 'launcher'] as const) expect(restartsHost(track), track).toBe(false);
+    });
+});
+
+function parseManifestOk(m: unknown): TrackManifest {
+    const r = parseManifest(m);
+    if (!r.ok) throw new Error(r.reason);
+    return r.manifest;
+}
 
 describe('every file, none missing, none extra', () => {
     async function installed(): Promise<{ manifest: TrackManifest; root: string }> {

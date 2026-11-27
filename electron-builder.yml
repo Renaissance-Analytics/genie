@@ -152,7 +152,14 @@ win:
   # directory (macOS, Linux and Arm binaries; winpty's sources and .bat/.ps1/.py scripts; node-pty's sources and
   # tests), none ever loaded on Windows x64, and the .node files among them unsigned. The Windows build is x64 only:
   # an Arm build drops win32-arm64 here and the check names its prebuilds as missing.
+  # THE TOP-LEVEL PATTERNS COME FIRST. electron-builder 26.15.3 takes a platform's own `files` IN PLACE OF the top-level
+  # list for the app's files, so with exclusions alone this list meant `**/*`: v2.0.0-beta.66's app.asar held src/, test/,
+  # scripts/, docs/, contracts/, packages/, native/ and the build configs beside dist (measured on the published installer,
+  # Tynn #1058 L3). test/packed-tree.test.ts holds that this list starts with the top-level one, and the Windows packed-tree
+  # row refuses an archive holding anything but dist, package.json and node_modules.
   files:
+    - dist/**
+    - package.json
     - '!**/node_modules/node-pty/{deps,src,scripts,third_party}/**'
     - '!**/node_modules/node-pty/prebuilds/{darwin-*,linux-*,win32-arm64}/**'
     - '!**/node_modules/node-pty/lib/**/*.test.{js,js.map}'

@@ -1,6 +1,6 @@
 //! THE CONTROL WIRE AND THE HOST: one launcher per user, owner-only, a token and a negotiated hello; ensureHost starts
 //! the current host from its verified folder (detached, its log as its only output) or adopts the one running; stopHost
-//! is the graceful stop; openWindow and startBrowser start the client.
+//! is the graceful stop; openWindow starts the client and startBrowser the browser, each from its own track.
 mod common;
 
 use common::*;
@@ -22,7 +22,9 @@ fn install_fakes(r: &Roots, key: &ed25519_dalek::SigningKey, base: &std::path::P
     let from = base.join("from");
     let fake = fake_bytes();
     write_package(&from, key, &Package::new("host", "2026.11.25-1", vec![(host_executable_name().into(), fake.clone()), (HOST_ENTRY.into(), b"// host".to_vec())]));
-    write_package(&from, key, &Package::new("client", "2026.11.25-1", vec![(client_executable_name().into(), fake)]));
+    write_package(&from, key, &Package::new("client", "2026.11.25-1", vec![(client_executable_name().into(), fake.clone())]));
+    let _ = fake;
+    write_package(&from, key, &Package::new("browser", "2026.11.25-1", vec![("browser.json".into(), br#"{"runs":"client","args":["--genie-browser"]}"#.to_vec())]));
     let options = InstallOptions { from, profile: Profile::Both, channel: "stable".into(), launcher_build: "2026.11.25-1".into() };
     install_from(r, &options, &[verifying(key)]).expect("the fakes install");
 }
@@ -252,6 +254,11 @@ fn ensure_host_starts_the_current_host_detached_then_adopts_it_and_stop_host_end
     let folder = r.build_dir(Track::Host, "2026.11.25-1").unwrap();
     assert!(log.contains(&format!("cwd {}", folder.display())), "{log}");
     assert!(log.contains(HOST_ENTRY.rsplit('/').next().unwrap()), "started with its entry: {log}");
+    // What the host is handed: the launcher (genie-launch.exe's modes live in it now) and its own resources folder
+    // (the bundled Caddy), never the client's.
+    let me = std::path::PathBuf::from(env!("CARGO_BIN_EXE_genie"));
+    assert!(log.contains(&format!("launcher={}", me.display())), "the host is told where the launcher is: {log}");
+    assert!(log.contains(&format!("resources={}", folder.join("resources").display())), "{log}");
 
     let again = w.call("launcher.ensureHost", json!([]));
     assert_eq!(again["value"]["how"], "adopted", "{again}");
@@ -306,7 +313,7 @@ fn a_host_that_exits_at_boot_is_said_in_words_and_not_waited_for() {
 }
 
 #[test]
-fn open_window_and_start_browser_start_the_current_client() {
+fn open_window_starts_the_current_client_and_start_browser_the_current_browser() {
     let _one = one_at_a_time();
     let (base, r, key) = setup("client");
     install_fakes(&r, &key, &base);
@@ -328,4 +335,119 @@ fn open_window_and_start_browser_start_the_current_client() {
         assert!(t.elapsed() < Duration::from_secs(15), "the client never ran: {text}");
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+fn lines_of(file: &std::path::Path, n: usize) -> String {
+    let t = Instant::now();
+    loop {
+        let text = std::fs::read_to_string(file).unwrap_or_default();
+        if text.lines().count() >= n {
+            return text;
+        }
+        assert!(t.elapsed() < Duration::from_secs(20), "{} has {} of {n} lines: {text}", file.display(), text.lines().count());
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn the_client_and_the_browser_each_run_from_their_own_track_told_the_launcher_and_the_host_build() {
+    let _one = one_at_a_time();
+    let (base, r, key) = setup("programs");
+    install_fakes(&r, &key, &base);
+    let _l = start(&r, &key);
+    let mut w = Wire::hello(&r);
+    assert_eq!(w.call("launcher.openWindow", json!([]))["ok"], true);
+    assert_eq!(w.call("launcher.startBrowser", json!([]))["ok"], true);
+    let text = lines_of(&r.data.join("client-env.txt"), 2);
+    let me = std::path::PathBuf::from(env!("CARGO_BIN_EXE_genie"));
+    let client = r.build_dir(Track::Client, "2026.11.25-1").unwrap().join(client_executable_name());
+    // The browser is the client build its manifest names, run with --genie-browser: no second copy of the app.
+    let browser = client.clone();
+    let open = text.lines().find(|l| l.starts_with("--open-window |")).unwrap_or_else(|| panic!("{text}"));
+    assert!(open.contains(&format!("exe={}", client.display())), "the window is the client track's program: {open}");
+    assert!(open.contains(&format!("launcher={}", me.display())), "{open}");
+    assert!(open.contains("hostBuild=2026.11.25-1"), "the client is told the host it links to: {open}");
+    let b = text.lines().find(|l| l.starts_with("--genie-browser |")).unwrap_or_else(|| panic!("{text}"));
+    assert!(b.contains(&format!("exe={}", browser.display())), "the browser runs the installed client build: {b}");
+}
+
+#[test]
+fn the_registry_names_every_program_the_launcher_starts() {
+    use genie_launcher::components::{component, Kind, COMPONENTS};
+    let ids: Vec<&str> = COMPONENTS.iter().map(|c| c.id).collect();
+    assert_eq!(ids, vec!["host", "client", "browser"], "the launcher starts the host, the client and the browser by default");
+    let host = component("host").unwrap();
+    assert_eq!(host.kind, Kind::Service);
+    assert!(host.restarts_host, "a host update restarts the host");
+    assert_eq!(host.ships_with, Some(Track::Client), "a host update always comes with its client");
+    for id in ["client", "browser"] {
+        let c = component(id).unwrap();
+        assert!(!c.restarts_host, "{id} updates without the host restarting or stopping");
+        assert_eq!(c.ships_with, None);
+        assert_eq!(c.kind, Kind::Window);
+    }
+    assert_eq!(component("client").unwrap().track, Track::Client);
+    assert_eq!(component("browser").unwrap().track, Track::Browser);
+    assert_eq!(component("browser").unwrap().runs, Some(Track::Client), "the browser runs on the client its manifest names");
+    assert_eq!(component("client").unwrap().runs, None);
+    assert_eq!(component("browser").unwrap().args, &["--genie-browser"]);
+    assert!(component("client").unwrap().args.is_empty());
+    assert!(component("a-gapp").is_none(), "no GApp is registered yet; they join the registry later");
+    // Every component that runs a program of its own has it in its own track's folder.
+    let r = Roots { code: std::path::PathBuf::from(if cfg!(windows) { r"C:\code" } else { "/code" }), data: std::path::PathBuf::from(if cfg!(windows) { r"C:\data" } else { "/data" }) };
+    for c in COMPONENTS.iter().filter(|c| c.runs.is_none()) {
+        let p = r.program(c.track, "2026.11.25-1").expect("a program");
+        assert!(p.path().starts_with(r.build_dir(c.track, "2026.11.25-1").unwrap()), "{}", c.id);
+    }
+}
+
+#[test]
+fn genie_with_no_arguments_opens_genie_and_a_second_asks_the_first() {
+    let _one = one_at_a_time();
+    let (base, r, key) = setup("open");
+    install_fakes(&r, &key, &base);
+    // As the Start menu shortcut runs it: no arguments. It starts the host (profile both), then a client window.
+    let err = std::fs::File::create(r.data.join("open-stderr.log")).unwrap();
+    let child = genie_in(&r, &key).stdin(Stdio::null()).stdout(Stdio::null()).stderr(err).spawn().expect("the launcher starts");
+    let _l = Launcher { child, roots: r.clone() };
+    let args = lines_of(&r.data.join("client-args.txt"), 1);
+    assert_eq!(args.lines().next(), Some("--open-window"), "{args}");
+    let rec = genie_launcher::host::read_record(&r).expect("the host was started first");
+    assert!(pid_alive(rec.pid));
+    // A second `genie` (a second click) asks the running launcher for a window and exits: one launcher per user.
+    let out = run(&mut genie_in(&r, &key));
+    assert!(out.status.success(), "{}", text(&out));
+    let args = lines_of(&r.data.join("client-args.txt"), 2);
+    assert_eq!(args.lines().nth(1), Some("--open-window"), "{args}");
+    // Doctor mode (the Start menu's second entry) is the client's --doctor.
+    let out = run(genie_in(&r, &key).arg("--doctor"));
+    assert!(out.status.success(), "{}", text(&out));
+    let args = lines_of(&r.data.join("client-args.txt"), 3);
+    assert_eq!(args.lines().nth(2), Some("--doctor"), "{args}");
+}
+
+#[test]
+fn uninstall_stops_the_host_and_the_running_launcher_then_removes_the_programs() {
+    // The NSIS uninstaller runs `Genie.exe uninstall` while the launcher serves from Genie.exe: unless the launcher ends,
+    // its file cannot be removed (gate 1126-222922-9e0b4e: "the launcher is still installed after the uninstall").
+    let _one = one_at_a_time();
+    let (base, r, key) = setup("uninstall");
+    install_fakes(&r, &key, &base);
+    let mut l = start(&r, &key);
+    let mut w = Wire::hello(&r);
+    let host = w.call("launcher.ensureHost", json!([]));
+    let host_pid = host["value"]["pid"].as_u64().unwrap() as u32;
+    let out = run(genie_in(&r, &key).args(["uninstall", "--yes"]));
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(!pid_alive(host_pid), "the host stopped");
+    let t = Instant::now();
+    loop {
+        if let Ok(Some(_)) = l.child.try_wait() {
+            break;
+        }
+        assert!(t.elapsed() < Duration::from_secs(15), "the running launcher did not end");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(!r.code.exists(), "the programs folder is gone");
+    assert!(r.data.exists(), "the data root is kept");
 }

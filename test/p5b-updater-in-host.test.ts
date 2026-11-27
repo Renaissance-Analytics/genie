@@ -457,7 +457,7 @@ describe('the helper process', () => {
         expect(env.ELECTRON_RUN_AS_NODE).toBeUndefined();
         // The host has it from the window that started it, and starts the helper with it.
         // P6: the host script and executable are the runtime copy's (host-runtime.ts); the env is still the window's own.
-        expect(strip('src/main/main.ts')).toMatch(/hostScript: hostRuntime\.hostScript,\s+execPath: hostRuntime\.execPath,[\s\S]{0,600}env: \{ \.\.\.process\.env,/);
+        expect(strip('src/main/main.ts')).toMatch(/hostScript: hostRuntime\?\.hostScript \?\? join\(here, 'host\.js'\),\s+execPath: hostRuntime\?\.execPath \?\? process\.execPath,[\s\S]{0,600}env: \{ \.\.\.process\.env,/);
         const host = strip('src/main/genie-host.ts');
         expect(host).toMatch(/spawnUpdaterProcess\([\s\S]{0,200}updaterHelperEnv\(process\.env, home\)/);
         expect(host).toMatch(/new UpdatesService\(/);

@@ -94,9 +94,23 @@ describe('the close helper', () => {
 const code = (file: string) => readFileSync(join(__dirname, '..', 'scripts', file), 'utf8')
     .split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
 
+/**
+ * Drivers of windows that are not Genie's, so have no What's new to close: the launcher's setup window (Tynn #1058 L3,
+ * native/launcher/ui/setup.html, a page of its own in WebView2), and the host directory (Tynn #1058 L4, host-directory.html,
+ * shown when there is no host). Each names its window, and the test holds that it does.
+ */
+const NOT_GENIE_WINDOWS: Record<string, RegExp> = { 'launcher-setup-cdp.mjs': /Set up Genie/, 'host-directory-cdp.mjs': /host-directory\.html/ };
+
 describe('every row that clicks uses them', () => {
     const clickers = readdirSync(join(__dirname, '..', 'scripts')).filter((f) => f.endsWith('-cdp.mjs'))
-        .filter((f) => /\.click\(\)|mousePressed/.test(code(f)));
+        .filter((f) => /\.click\(\)|mousePressed/.test(code(f)))
+        .filter((f) => !(f in NOT_GENIE_WINDOWS));
+
+    it('a driver let off the rule drives a window that is not Genie\'s, and says which', () => {
+        for (const [file, window] of Object.entries(NOT_GENIE_WINDOWS)) expect(code(file), file).toMatch(window);
+        expect(readFileSync(join(__dirname, '..', 'native', 'launcher', 'ui', 'setup.html'), 'utf8')).not.toMatch(/What.s new/i);
+        expect(readFileSync(join(__dirname, '..', 'src', 'renderer', 'components', 'HostDirectoryScreen.tsx'), 'utf8')).not.toMatch(/What.s new|WhatsNew/i);
+    });
 
     it('finds the rows that click (a control: the sweep is not empty)', () => {
         expect(clickers).toEqual(expect.arrayContaining(['sound-picker-cdp.mjs', 'accounts-popover-cdp.mjs', 'smoke-cdp.mjs', 'ui-lag-cdp.mjs']));

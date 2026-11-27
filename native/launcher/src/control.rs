@@ -5,8 +5,11 @@
 //!
 //! Methods (L2): `launcher.status`, `launcher.ensureHost`, `launcher.stopHost`, `launcher.openWindow {host}`,
 //! `launcher.startBrowser`. `launcher.updates`, `.check`, `.apply` and `.channel` answer `unsupported` until the
-//! launcher's updates exist.
+//! launcher's updates exist. Each program is a component of the registry (`components`), run from its own track: the
+//! window is the client's, the browser the browser's (L3). Every one is told where the launcher is (GENIE_LAUNCHER_EXE)
+//! and the host build to link to (GENIE_LAUNCHER_HOST_BUILD): `src/core/launcher-link.ts` reads them.
 
+use crate::components::{component, Component};
 use crate::folder::{verify_build, HashScope};
 use crate::layout::{Roots, Track};
 use crate::local::{LocalListener, LocalStream};
@@ -75,15 +78,50 @@ fn unsupported(id: &Value, method: &str) -> Value {
     json!({"kind": "result", "id": id, "ok": false, "reason": format!("{method} is not something this launcher does"), "code": "unsupported"})
 }
 
-/// The current client, verified, started with `args`.
-fn start_client(roots: &Roots, args: Vec<String>) -> Result<Value, String> {
+/// This launcher's own program, as its programs are told it (GENIE_LAUNCHER_EXE): their way to its Windows modes.
+pub fn launcher_exe() -> Result<String, String> {
+    std::env::current_exe().map(|p| p.display().to_string()).map_err(|e| format!("this launcher's own path could not be read: {e}"))
+}
+
+/// The host build a client links to: the running host's, else the installed current one.
+fn host_build_for_clients(roots: &Roots, st: &state::State) -> Option<String> {
+    match host::read_record(roots).filter(|r| pid_alive(r.pid)) {
+        Some(r) => Some(r.build),
+        None => st.track(Track::Host.as_str()).and_then(|t| t.current.clone()),
+    }
+}
+
+/// A window component's current build, verified, started with its own arguments and then `extra`.
+pub fn start_component(roots: &Roots, c: &Component, extra: Vec<String>) -> Result<Value, String> {
     let st = state::read(&roots.state_file())?;
-    let build = st.track(Track::Client.as_str()).and_then(|t| t.current.clone()).ok_or("No client is installed on this computer.")?;
-    verify_build(roots, Track::Client, &build, &keys::trusted_keys(roots), HashScope::Executables)?;
-    let program = roots.client_program(&build).ok_or("the client's build is not a track build")?;
-    let env = [("GENIE_HOME".to_string(), roots.data.display().to_string())];
-    let pid = start_window(&program, &args, &env, &roots.logs_dir().join("genie-client.log"))?;
-    Ok(json!({"pid": pid, "build": build}))
+    let name = c.track.as_str();
+    let build = st.track(name).and_then(|t| t.current.clone()).ok_or_else(|| format!("No {name} is installed on this computer."))?;
+    let keys = keys::trusted_keys(roots);
+    let manifest = verify_build(roots, c.track, &build, &keys, HashScope::Executables)?;
+    let program = match c.runs {
+        None => roots.program(c.track, &build).ok_or_else(|| format!("the {name}'s build is not a track build"))?,
+        // It runs another track's program at the build its own manifest names (the browser on the client).
+        Some(on) => {
+            let at = manifest.with_client.clone().ok_or_else(|| format!("the {name} {build} names no {} build to run on", on.as_str()))?;
+            verify_build(roots, on, &at, &keys, HashScope::Executables).map_err(|why| format!("the {name} runs on {} {at}, which is not here to run: {why}", on.as_str()))?;
+            roots.program(on, &at).ok_or_else(|| format!("{} {at} is not a track build", on.as_str()))?
+        }
+    };
+    let mut args: Vec<String> = c.args.iter().map(|a| a.to_string()).collect();
+    args.extend(extra);
+    let mut env = vec![
+        ("GENIE_HOME".to_string(), roots.data.display().to_string()),
+        ("GENIE_LAUNCHER_EXE".to_string(), launcher_exe()?),
+    ];
+    if let Some(h) = host_build_for_clients(roots, &st) {
+        env.push(("GENIE_LAUNCHER_HOST_BUILD".to_string(), h));
+    }
+    let pid = start_window(&program, &args, &env, &roots.logs_dir().join(format!("genie-{}.log", c.id)))?;
+    Ok(json!({"pid": pid, "build": build, "component": c.id}))
+}
+
+fn start_client(roots: &Roots, args: Vec<String>) -> Result<Value, String> {
+    start_component(roots, component("client").ok_or("no client component")?, args)
 }
 
 /// The frames that answer one line.
@@ -148,7 +186,7 @@ pub fn handle_line(ctx: &Context, conn: &mut Connection, line: &str) -> Vec<Valu
         }
         "launcher.startBrowser" => {
             let _g = busy();
-            start_client(roots, vec!["--genie-browser".to_string()])
+            component("browser").ok_or_else(|| "no browser component".to_string()).and_then(|c| start_component(roots, c, Vec::new()))
         }
         other => return vec![unsupported(&id, other)],
     };
@@ -256,6 +294,11 @@ fn serve_connection(ctx: &Context, stream: LocalStream) {
 /// Run the launcher: one per user (a second answers that one is running), the token and `launcher.json` written,
 /// connections served until the process ends.
 pub fn serve(roots: Roots) -> Result<(), String> {
+    serve_then(roots, |_| {})
+}
+
+/// The same, with `ready` run on its own thread once the wire answers (what `genie` alone does: open Genie).
+pub fn serve_then(roots: Roots, ready: impl FnOnce(&Roots) + Send + 'static) -> Result<(), String> {
     let runtime = roots.runtime_dir();
     private_dir(&runtime)?;
     #[cfg(unix)]
@@ -270,6 +313,13 @@ pub fn serve(roots: Roots) -> Result<(), String> {
     let record = json!({"pid": std::process::id(), "endpoint": endpoint, "build": LAUNCHER_BUILD, "schema": LAUNCHER_SCHEMA});
     write_private(&runtime.join("launcher.json"), record.to_string().as_bytes())?;
     let ctx = Arc::new(Context { roots, token, busy: Mutex::new(()) });
+    {
+        let ctx = Arc::clone(&ctx);
+        std::thread::spawn(move || {
+            let _g = ctx.busy.lock().unwrap_or_else(|p| p.into_inner());
+            ready(&ctx.roots);
+        });
+    }
     loop {
         match listener.accept() {
             Ok(stream) => {
@@ -325,4 +375,47 @@ pub fn status(roots: &Roots) -> Value {
         "host": host,
         "launcher": launcher,
     })
+}
+
+/// One call to the launcher already running for this user (a second `genie`, a shortcut clicked again): its answer, or
+/// why there is none. `Ok(None)` when no launcher is running.
+pub fn call_running(roots: &Roots, method: &str, args: Value) -> Result<Option<Value>, String> {
+    let runtime = roots.runtime_dir();
+    let Some(record) = std::fs::read_to_string(runtime.join("launcher.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) else {
+        return Ok(None);
+    };
+    match record["pid"].as_u64() {
+        Some(pid) if pid_alive(pid as u32) && pid as u32 != std::process::id() => {}
+        _ => return Ok(None),
+    }
+    let endpoint = record["endpoint"].as_str().ok_or("launcher.json names no endpoint")?.to_string();
+    let token = std::fs::read_to_string(runtime.join("launcher.token")).map_err(|_| "the running launcher left no token".to_string())?;
+    let stream = match LocalStream::connect(&endpoint, std::time::Duration::from_secs(5)) {
+        Ok(s) => s,
+        Err(_) => return Ok(None),
+    };
+    let mut out = stream.try_clone().map_err(|e| e.to_string())?;
+    let mut lines = BufReader::new(stream);
+    let mine = launcher_offer();
+    let hello = json!({"kind": "hello", "auth": {"kind": "token", "token": token.trim()}, "label": "genie", "track": "launcher",
+        "build": LAUNCHER_BUILD, "schema": LAUNCHER_SCHEMA, "minSchema": mine.min_schema, "capabilities": mine.capabilities});
+    let mut read = || -> Result<Value, String> {
+        let mut line = String::new();
+        match lines.read_line(&mut line) {
+            Ok(0) | Err(_) => Err("the running launcher closed the link".to_string()),
+            Ok(_) => serde_json::from_str(&line).map_err(|_| "the running launcher's answer is not JSON".to_string()),
+        }
+    };
+    writeln!(out, "{hello}").and_then(|_| out.flush()).map_err(|e| e.to_string())?;
+    let welcome = read()?;
+    if welcome["kind"] != "welcome" {
+        return Err(format!("the running launcher refused: {}", welcome["reason"].as_str().unwrap_or("no reason given")));
+    }
+    writeln!(out, "{}", json!({"kind": "call", "id": 1, "method": method, "args": args})).and_then(|_| out.flush()).map_err(|e| e.to_string())?;
+    loop {
+        let v = read()?;
+        if v["kind"] == "result" && v["id"] == 1 {
+            return if v["ok"] == true { Ok(Some(v["value"].clone())) } else { Err(v["reason"].as_str().unwrap_or("it failed").to_string()) };
+        }
+    }
 }

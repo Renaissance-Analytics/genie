@@ -65,9 +65,9 @@ fn verdict_of(r: &Result<Manifest, genie_launcher::manifest::Refusal>) -> Value 
 }
 
 #[test]
-fn the_table_is_format_1_and_its_seeds_sign_a_good_manifest() {
+fn the_table_is_format_2_and_its_seeds_sign_a_good_manifest() {
     let t = table();
-    assert_eq!(t["format"], 1);
+    assert_eq!(t["format"], 2);
     let a = key(&t, "a");
     let b = key(&t, "b");
     assert_ne!(a.verifying_key(), b.verifying_key());
@@ -159,6 +159,7 @@ fn verify_tree_gives_every_tree_cases_verdict() {
             channel: "stable".into(),
             platform: "linux".into(),
             arch: "x64".into(),
+            with_client: Some("2026.11.25-1".into()),
             min_launcher: None,
             files,
             notes: String::new(),

@@ -151,6 +151,8 @@ import { resolveAddress as resolveOnRoster } from '../core/inbox.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import { createThroughAddAgent } from './mcp-tools-agents.js';
 import { pidAlive } from './engine-launch.js';
+import { hostBrowserStart } from './host-browser-start.js';
+import { callLauncher, launcherReachable, launcherWire } from './launcher-control.js';
 import { FilesWatchHub } from './files-watch-hub.js';
 import { workerWatchSource } from './files-watch-worker.js';
 import { openHostKeychain, type HostKeychain } from './host-keychain.js';
@@ -984,10 +986,17 @@ async function main(): Promise<void> {
             here();
         });
     };
-    const browserService = new BrowserService({ ...(capabilities.browser ? {} : { unavailable: NO_BROWSER_HERE }), startBrowser: (launch) => {
-        const here = () => { spawnBrowserProcess(launch, { logsDir: join(home, 'logs'), env: process.env }); };
-        startOwnDetached('genie browser', launch, process.env, 'genie-browser.log', false, here);
-    } });
+    // THE LAUNCHER STARTS THE GENIE BROWSER (Tynn #1058 L4): asked on its control wire; started here only with no launcher.
+    const launcher = launcherWire(runtime, 'host', build);
+    const startBrowserNow = hostBrowserStart({
+        launcher: { reachable: () => launcherReachable(launcher), call: (method) => callLauncher(launcher, method) },
+        here: (launch) => {
+            const here = () => { spawnBrowserProcess(launch, { logsDir: join(home, 'logs'), env: process.env }); };
+            startOwnDetached('genie browser', launch, process.env, 'genie-browser.log', false, here);
+        },
+        log: (line) => { lifecycleLog(line); },
+    });
+    const browserService = new BrowserService({ ...(capabilities.browser ? {} : { unavailable: NO_BROWSER_HERE }), startBrowser: (launch) => { void startBrowserNow(launch); } });
     // WHAT THE GENIE BROWSER NEEDS OF THIS HOST'S FRONT DOOR (Tynn #1046 D2): its port, Genie's CA, the hosts and each site's
     // workspace and label, said by this host from its own hosting, with or without a window, again when the front door
     // changes (frontDoorWatch) or a workspace's name may have (a registry write). A window says only how to start it.

@@ -3,13 +3,12 @@ import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { hostDownAnswer, hostDownPlan } from '../src/core/host-down.js';
 import { composeServices } from './helpers/compose-alone.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 
 /**
- * THE WINDOW NEVER RUNS HOST WORK (Tynn #415, host split P6, forward-only). With no genie-host it says what is wrong and how
- * to fix it, and stops: no in-process engine, no MCP server of its own, no plugin host of its own, no safe mode of its own.
+ * THE WINDOW NEVER RUNS HOST WORK (Tynn #415, host split P6, forward-only). With no genie-host it shows the host directory
+ * (Tynn #1058 L4; its words are test/host-directory.test.ts's) and runs nothing: no in-process engine, no MCP server of its own, no plugin host of its own, no safe mode of its own.
  */
 const code = (path: string) => readFileSync(path, 'utf8').split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
 
@@ -38,37 +37,15 @@ describe('source: nothing in the window can start them', () => {
         expect(code('src/main/window-safe-mode.ts')).not.toMatch(/SafeMode\.open\(/);
     });
 
-    it('a host that cannot start stops the window', () => {
-        expect(main).toMatch(/if \(agentEngineLink === null\) \{\s*await stopForNoHost\(/);
+    it('with no host the window shows the host directory and runs nothing itself (Tynn #1058 L4)', () => {
+        expect(main).toMatch(/if \(agentEngineLink !== null\) break;[\s\S]{0,400}if \(\(await openHostDirectory\(/);
+        expect(main).not.toMatch(/stopForNoHost/);
         expect(main).not.toMatch(/agents run inside the window/);
     });
 
     it('CONTROL: the patterns read the window’s real sources', () => {
         expect(main).toMatch(/connectAgentEngine\(/);
         expect(compose).toMatch(/input\.hosting/);
-    });
-});
-
-describe('what the person is told', () => {
-    const logFile = 'C:/g/logs/genie-host.log';
-
-    it('what is wrong, the reason when there is one, and how to fix it', () => {
-        const plan = hostDownPlan({ reason: 'the runtime could not be copied', logFile });
-        expect(plan.title).toBe('Genie could not start its host');
-        expect(plan.detail).toContain('the runtime could not be copied');
-        expect(plan.detail).toContain('Try again');
-        expect(plan.detail).toContain(logFile);
-        expect(plan.buttons).toEqual(['Try again', 'Open the log', 'Quit']);
-    });
-
-    it('with no reason known it points at the log', () => {
-        const plan = hostDownPlan({ reason: null, logFile });
-        expect(plan.detail).toContain(logFile);
-        expect(plan.detail).not.toContain('null');
-    });
-
-    it('each button means what it says; anything else quits', () => {
-        expect([0, 1, 2, -1].map((i) => hostDownAnswer(i))).toEqual(['retry', 'open-log', 'quit', 'quit']);
     });
 });
 

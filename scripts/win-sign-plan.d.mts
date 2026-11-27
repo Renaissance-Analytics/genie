@@ -3,3 +3,5 @@ export const OUR_PUBLISHER: string;
 export function shouldSignFile(file: string, signExts: readonly string[] | null | undefined, fallbackValue?: boolean): boolean;
 export function signPlan(root: string, config: { productFilename: string; signExts: readonly string[] | null }): string[];
 export function classify(status: string, subject: string): { kind: 'ours' | 'third-party' | 'unsigned' | 'invalid'; signer: string | null; status?: string };
+/** What the release signs in a package it lays out itself (the host's, the launcher's): every file shouldSignFile accepts. */
+export function packagePlan(files: readonly string[], signExts: readonly string[] | null): string[];

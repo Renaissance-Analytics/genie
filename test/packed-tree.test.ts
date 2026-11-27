@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import { windowsFunction, windowsRows } from './helpers/ci-scripts.js';
-import { leftovers, required } from '../scripts/packed-tree-check.mjs';
+import { asarTopProblems, leftovers, required } from '../scripts/packed-tree-check.mjs';
 import { shouldSignFile } from '../scripts/win-sign-plan.mjs';
 
 /*
@@ -60,6 +60,41 @@ describe('what the Windows install directory holds', () => {
         expect(windowsFunction('Row-package')).toContain('npx electron-builder --publish never');
         expect(windowsFunction('Row-packed-tree')).toContain('node scripts/packed-tree-check.mjs release/win-unpacked');
         expect(windowsRows.indexOf('packed-tree'), 'after the build').toBeGreaterThan(windowsRows.indexOf('package'));
+    });
+});
+
+describe('what the app\'s archive holds: the app and its modules, never the repository (Tynn #1058 L3)', () => {
+    // Measured (the coordinator, 2026-11-26, on the published v2.0.0-beta.66 installer): its app.asar held src/ (15.6 MiB),
+    // test/ (16.6 MiB), scripts/, docs/, contracts/, packages/, native/, the vite and vitest configs, AGENTS.md and README.md
+    // beside dist and node_modules. electron-builder 26.15.3 takes a platform's own `files` IN PLACE OF the top-level list
+    // for the app's files (the client track's builder-debug.yml, item 1126-191543-b3aa95), so win.files' exclusions alone
+    // left `**/*`.
+    const beta66Top = ['/dist/main/main.js', '/node_modules/react/index.js', '/package.json', '/src/main/main.ts', '/test/a.test.ts', '/scripts/x.mjs',
+        '/docs/a.md', '/contracts/x.json', '/packages/p/index.ts', '/native/launcher/Cargo.toml', '/vite.config.ts', '/vitest.flows.config.mts', '/AGENTS.md', '/README.md'];
+
+    it('CONTROL: beta.66\'s archive is refused, naming everything at its top but the app and its modules', () => {
+        expect(asarTopProblems(beta66Top).map((p: { file: string }) => p.file)).toEqual([
+            'resources/app.asar:/src', 'resources/app.asar:/test', 'resources/app.asar:/scripts', 'resources/app.asar:/docs', 'resources/app.asar:/contracts',
+            'resources/app.asar:/packages', 'resources/app.asar:/native', 'resources/app.asar:/vite.config.ts', 'resources/app.asar:/vitest.flows.config.mts',
+            'resources/app.asar:/AGENTS.md', 'resources/app.asar:/README.md',
+        ]);
+    });
+
+    it('an archive of the app and its modules passes, on either path separator', () => {
+        expect(asarTopProblems(['/dist/main/main.js', '/node_modules/react/index.js', '/package.json'])).toEqual([]);
+        expect(asarTopProblems(['\\dist\\main\\main.js', '\\package.json'])).toEqual([]);
+    });
+
+    it('electron-builder.yml\'s win.files carries the top-level patterns first, so Windows packs the app alone', () => {
+        const config = yaml('electron-builder.yml');
+        const top = config.files as string[];
+        const win = config.win.files as string[];
+        expect(win.slice(0, top.length)).toEqual(top);
+        expect(top.slice(0, 2)).toEqual(['dist/**', 'package.json']);
+    });
+
+    it('the Windows gate checks the built archive (packed-tree reads resources/app.asar)', () => {
+        expect(read('scripts/packed-tree-check.mjs')).toContain("join(root, 'resources', 'app.asar')");
     });
 });
 

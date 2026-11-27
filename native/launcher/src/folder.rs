@@ -21,7 +21,7 @@ pub enum HashScope {
     Executables,
 }
 
-use crate::layout::{client_executable_name, host_executable_name, HOST_ENTRY};
+use crate::layout::{client_executable_name, host_executable_name, launcher_executable_name, HOST_ENTRY};
 use crate::manifest::{parse_manifest, sha256_hex, this_arch, this_platform, verify_signature};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -35,7 +35,7 @@ fn is_executable(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     let file = lower.rsplit('/').next().unwrap_or("");
     lower.ends_with(".exe") || lower.ends_with(".dll") || lower.ends_with(".node") || lower.ends_with(".so") || file.contains(".so.")
-        || path == host_executable_name() || path == client_executable_name() || path == HOST_ENTRY
+        || path == host_executable_name() || path == client_executable_name() || path == "browser.json" || path == launcher_executable_name() || path == HOST_ENTRY
 }
 
 /// Every file under `dir`, by its '/'-joined relative path. A link refuses (nothing in a build folder is one).

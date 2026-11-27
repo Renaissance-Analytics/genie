@@ -2,7 +2,10 @@
 /**
  * WHAT A SIGNED WINDOWS BUILD WOULD SIGN, AND WHO SIGNED EACH FILE ALREADY.
  *
- *   node scripts/win-sign-plan.mjs <win-unpacked dir> [electron-builder.yml] [--json <out.json>] [--check]
+ *   node scripts/win-sign-plan.mjs <win-unpacked dir> [electron-builder.yml] [--json <out.json>] [--check] [--package]
+ *
+ * --package: a package the release lays out itself (Tynn #1058 L3: the host's, the launcher's), whose plan is every file
+ * shouldSignFile accepts by the same signExts (packagePlan), not electron-builder's app rule.
  *
  * Windows only (Get-AuthenticodeSignature), on an UNSIGNED package (`--config.win.signExecutable=false`, as CI's
  * "it packages" builds), so each file still carries only the signature it was shipped with. Never run on the owner's
@@ -48,6 +51,14 @@ function walk(dir) {
         else out.push(p);
     }
     return out;
+}
+
+/**
+ * What the release signs in a package it lays out itself, not electron-builder (the host's, the launcher's; Tynn #1058
+ * L3): every file shouldSignFile accepts, by the same signExts, so a file another publisher signed is never signed again.
+ */
+export function packagePlan(files, signExts) {
+    return files.filter((f) => shouldSignFile(f, signExts));
 }
 
 /** The files electron-builder would sign in this package, by its rule (see the header), as paths relative to `root`. */
@@ -113,7 +124,8 @@ if (isMain) {
     const configFile = args[1] && !args[1].startsWith('--') ? args[1] : 'electron-builder.yml';
     const jsonAt = args.indexOf('--json');
     const config = readConfig(configFile);
-    const plan = new Set(signPlan(root, config));
+    // --package: a package the release lays out itself (the host's, the launcher's), signed by its own step by the same rule.
+    const plan = new Set(args.includes('--package') ? packagePlan(walk(root).map((p) => relative(root, p).replace(/\\/g, '/')), config.signExts) : signPlan(root, config));
     // Every .exe/.dll/.node in the package, signed by the plan or not, so the report is the whole picture.
     const all = walk(root).map((p) => relative(root, p).replace(/\\/g, '/')).filter((f) => /\.(exe|dll|node)$/i.test(f));
     const rows = signatures(root, all).map((r) => ({ ...r, wouldSign: plan.has(r.file) }));

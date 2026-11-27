@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseHostRecord } from '../core/engine-protocol.js';
+import { ENGINE_PROTOCOL, parseHostRecord } from '../core/engine-protocol.js';
 import type { AgentId } from '../core/identity.js';
 import { linkToHost, pidAlive, type EngineLaunchPorts, type EngineLink } from './engine-launch.js';
 import { SessionEngineClient, type EngineClientOptions } from './session-engine-client.js';
@@ -18,7 +18,13 @@ export const RECONNECT_BACKOFF_MS: readonly number[] = [1_000, 2_000, 4_000, 8_0
 
 export interface AgentEngineLinkOptions {
     readonly callbacks: EngineClientOptions;
-    readonly launch: Omit<EngineLaunchPorts, 'askShutdown' | 'kill'>;
+    readonly launch: EngineLaunchPorts;
+    /**
+     * How the host is found (Tynn #1058 L4). Absent: the client's own link, which adopts the running host whatever its build
+     * and starts none. main.ts gives the single-app install's quarantined start (legacy-host-start.ts) only to a process no
+     * launcher started.
+     */
+    readonly find?: (() => Promise<EngineLink | null>) | undefined;
     /** A stop the host could not verify, or the host itself lost: main says it on the Deck. */
     readonly onError: (kind: 'stop-unverified' | 'agent-host', error: Error) => void;
     readonly agentName: (id: AgentId) => string;
@@ -40,15 +46,16 @@ export interface AgentEngineLink {
     readonly live: boolean;
 }
 
-const killPid = (pid: number): void => {
+/**
+ * Find the host (`find`: the running one, adopted; Tynn #1058 L4) and connect to it. `null` when there is none: the caller
+ * shows the host directory (main.ts `openHostDirectory`), and the window runs nothing itself (Tynn #415). There is no in-process engine to fall back to
+ * (the owner, 2026-11-01: "we split host from UI for good"; removed in P6-4, Tynn #1036).
+ */
+/** A quit's "Shut down everything" ends a host that would not exit (the launcher's stopHost takes this over in L5). */
+const endPid = (pid: number): void => {
     try { process.kill(pid); } catch { /* already gone */ }
 };
 
-/**
- * Find (adopt, replace or start) the host and connect to it. `null` when it cannot be had at all: the caller says what is
- * wrong and how to fix it, and stops (main.ts `stopForNoHost`, Tynn #415). There is no in-process engine to fall back to
- * (the owner, 2026-11-01: "we split host from UI for good"; removed in P6-4, Tynn #1036).
- */
 export async function connectAgentEngine(options: AgentEngineLinkOptions & { readonly onLinked?: (client: SessionEngineClient) => void }): Promise<AgentEngineLink | null> {
     const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     let stopping = false;
@@ -61,21 +68,11 @@ export async function connectAgentEngine(options: AgentEngineLinkOptions & { rea
         onDisconnected: (reason) => { if (!stopping) { options.log(`agent host link lost: ${reason}`); reconnect(); } },
         log: options.log,
     });
-    const launchPorts: EngineLaunchPorts = {
-        ...options.launch,
-        kill: killPid,
-        // A host of another build: told to stop gracefully through its own token, before a new one starts.
-        askShutdown: async (record) => {
-            const old = await linkToHost({ ...options.launch, build: record.build, spawnHost: () => null, startTimeoutMs: 1 }).catch(() => null);
-            if (!old) return;
-            const peer = new SessionEngineClient();
-            if ((await peer.connect(old.transport, old.token)).ok) await peer.shutdown();
-            peer.disconnect();
-        },
-    };
+    const find = options.find ?? (() => linkToHost(options.launch));
     const link = async (): Promise<EngineLink['how'] | null> => {
         try {
-            const found = await linkToHost(launchPorts);
+            const found = await find();
+            if (found === null) return null;
             const connected = await client.connect(found.transport, found.token);
             if (!connected.ok) { options.log(`agent host refused this window: ${connected.reason}`); found.transport.close(); return null; }
             options.log(`agent host ${found.how} pid=${found.record.pid} build=${found.record.build}`);
@@ -107,7 +104,8 @@ export async function connectAgentEngine(options: AgentEngineLinkOptions & { rea
     const liveHostPid = (): number | null => {
         const read = options.launch.readFile ?? ((file: string) => { try { return readFileSync(file, 'utf8'); } catch { return null; } });
         const record = parseHostRecord(read(join(options.launch.runtimeDir, 'host.json')));
-        return record !== null && (options.launch.alive ?? pidAlive)(record.pid) ? record.pid : null;
+        // A host of another engine protocol is not this client's to reach (Tynn #1058 L4): the directory says it needs an update.
+        return record !== null && record.protocol === ENGINE_PROTOCOL && (options.launch.alive ?? pidAlive)(record.pid) ? record.pid : null;
     };
     const found = await link();
     let how: AgentEngineLink['how'];
@@ -140,7 +138,7 @@ export async function connectAgentEngine(options: AgentEngineLinkOptions & { rea
             await Promise.race([client.shutdown().catch(() => false), new Promise<void>((r) => { bound = setTimeout(r, waitMs); })]);
             clearTimeout(bound);
             while (pid !== null && pidAlive(pid) && Date.now() < until) await sleep(100);
-            if (pid !== null && pidAlive(pid)) { options.log(`agent host pid=${pid} did not exit within ${waitMs} ms; ending it`); killPid(pid); }
+            if (pid !== null && pidAlive(pid)) { options.log(`agent host pid=${pid} did not exit within ${waitMs} ms; ending it`); endPid(pid); }
             client.disconnect();
         },
     };

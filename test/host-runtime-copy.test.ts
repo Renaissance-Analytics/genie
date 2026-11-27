@@ -223,10 +223,10 @@ describe('a development run', () => {
 });
 
 describe('the wire', () => {
-    it('the window starts the host from the copy, and awaits it before linking', () => {
+    it('the single-app window starts the host from the copy, and awaits it before linking; a launched client makes none (Tynn #1058 L4)', () => {
         const main = readFileSync('src/main/main.ts', 'utf8');
-        expect(main).toMatch(/await materializeHostRuntime\(/);
-        expect(main).toMatch(/hostScript: hostRuntime\.hostScript/);
-        expect(main).toMatch(/execPath: hostRuntime\.execPath/);
+        expect(main).toMatch(/launched \? null : await materializeHostRuntime\(/);
+        expect(main).toMatch(/hostScript: hostRuntime\?\.hostScript/);
+        expect(main).toMatch(/execPath: hostRuntime\?\.execPath/);
     });
 });

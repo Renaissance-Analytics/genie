@@ -5,7 +5,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { systemProcessTree, type ProcessInfo } from '../src/core/process-tree.js';
 import { LoginHost } from '../src/main/login-host.js';
 import { nodeEnvelopePorts } from '../src/main/envelope-fs.js';
-import * as launch from '../src/main/engine-launch.js';
+import * as legacyLaunch from '../src/main/legacy-host-start.js';
 import * as paths from '../src/main/paths.js';
 
 /**
@@ -281,7 +281,7 @@ describe('the window wires its scratch from its root, and stops the sweep on qui
  * default (`genieHome()`, ~/.genie) when it started the host.
  */
 interface HostSpawnSpec { file: string; args: readonly string[]; options: { env: Record<string, string | undefined>; detached: boolean } }
-const hostSpawnSpec = (launch as unknown as { hostSpawnSpec(ports: { execPath: string; hostScript: string; env: Record<string, string | undefined>; genieHome: string; build: string }): HostSpawnSpec }).hostSpawnSpec;
+const hostSpawnSpec = (legacyLaunch as unknown as { hostSpawnSpec(ports: { execPath: string; hostScript: string; env: Record<string, string | undefined>; genieHome: string; build: string }): HostSpawnSpec }).hostSpawnSpec;
 
 describe('the window’s root is genieRoot(), and the host is started on that same root (#1605)', () => {
     const fakeHome = resolve('/', 'p7-fake-home', 'wish');
@@ -316,8 +316,8 @@ describe('the window’s root is genieRoot(), and the host is started on that sa
     });
 
     it('spawnHostProcess starts the host from hostSpawnSpec, the one place its environment is made', () => {
-        const src = readFileSync('src/main/engine-launch.ts', 'utf8');
-        const body = src.slice(src.indexOf('export async function spawnHostProcess'), src.indexOf('export async function linkToRunningHost'));
+        const src = readFileSync('src/main/legacy-host-start.ts', 'utf8');
+        const body = src.slice(src.indexOf('export async function spawnHostProcess'), src.indexOf('export async function legacyLinkToHost'));
         // CONTROL: the slice is the function (an empty one matches nothing and proves nothing).
         expect(body).toMatch(/^export async function spawnHostProcess/);
         expect(body).toMatch(/hostSpawnSpec\(ports\)/);
