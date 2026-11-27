@@ -65,11 +65,25 @@ export class ClaudeAccountsLive {
         if (this.#running === null && now - this.#at >= maxAgeMs) void this.refresh();
     }
 
+    /**
+     * Read every account's state again. A refresh asked while one is under way READS AGAIN AFTER IT (Tynn #1081): the one under
+     * way may have described a folder before what asked (a sign-in that just finished) changed it, and handing that run back
+     * showed the old state, told no window and stamped the view fresh. Any number asked meanwhile make ONE more read, and each
+     * of them resolves once that read is done.
+     */
     refresh(): Promise<void> {
-        if (this.#running) return this.#running;
+        if (this.#running) {
+            // On either outcome of the one under way: a failed read is no reason to skip the one asked for.
+            const next = (): Promise<void> => { this.#again = null; return this.refresh(); };
+            this.#again ??= this.#running.then(next, next);
+            return this.#again;
+        }
         this.#running = this.#refresh().finally(() => { this.#running = null; this.#at = Date.now(); });
         return this.#running;
     }
+
+    /** The one read more that refreshes asked while one was under way are waiting for. */
+    #again: Promise<void> | null = null;
 
     async #refresh(): Promise<void> {
         const claude = this.#p.accounts().filter((a) => a.provider === 'claude');

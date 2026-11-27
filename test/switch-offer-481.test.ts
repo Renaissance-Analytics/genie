@@ -128,8 +128,8 @@ describe('S8: which account the offer suggests (decision 3, and the coordinator 
     it('another known account of the same provider with more room in the same window, best first; a window reset since counts as full', () => {
         const readings = [reading(A, [live('5h', 5, T0 + HOUR)]), reading(B, [live('5h', 40, T0 + 2 * HOUR)]), reading(C, [refreshed('5h')])];
         expect(switchTargets({ provider: 'claude', accountId: A, window: '5h', leftPct: 5 }, readings, KNOWN)).toEqual([
-            { accountId: C, label: 'ada@example.invalid', room: 'reset', leftPct: null, resetsAtMs: null },
-            { accountId: B, label: 'Personal Pro', room: 'reported', leftPct: 40, resetsAtMs: T0 + 2 * HOUR },
+            { accountId: C, label: 'ada@example.invalid', room: 'reset', leftPct: null, resetsAtMs: null, window: null },
+            { accountId: B, label: 'Personal Pro', room: 'reported', leftPct: 40, resetsAtMs: T0 + 2 * HOUR, window: '5h' },
         ]);
     });
     it('CONTROL: not one also near, the account itself or another provider\'s', () => {
@@ -139,14 +139,15 @@ describe('S8: which account the offer suggests (decision 3, and the coordinator 
         ];
         expect(switchTargets({ provider: 'claude', accountId: A, window: '5h', leftPct: 5 }, readings, KNOWN).map((t) => t.accountId)).toEqual([B]);
     });
-    it('an account with no reading of that window (not used yet) is offered AFTER those with room, marked room unknown; a spent one is not', () => {
+    it('an account never read is offered AFTER those with room, marked room unknown; a spent one is not', () => {
         const readings = [reading(A, [live('5h', 5, T0 + HOUR)]), reading(B, [live('5h', 40, T0 + 2 * HOUR)])];
         expect(switchTargets({ provider: 'claude', accountId: A, window: '5h', leftPct: 5 }, readings, KNOWN)).toEqual([
-            { accountId: B, label: 'Personal Pro', room: 'reported', leftPct: 40, resetsAtMs: T0 + 2 * HOUR },
-            { accountId: C, label: 'ada@example.invalid', room: 'unknown', leftPct: null, resetsAtMs: null },
+            { accountId: B, label: 'Personal Pro', room: 'reported', leftPct: 40, resetsAtMs: T0 + 2 * HOUR, window: '5h' },
+            { accountId: C, label: 'ada@example.invalid', room: 'unknown', leftPct: null, resetsAtMs: null, window: null },
         ]);
-        expect(switchTargets({ provider: 'claude', accountId: A, window: '7d opus', leftPct: 5 }, readings, KNOWN).map((t) => [t.accountId, t.room]))
-            .toEqual([[B, 'unknown'], [C, 'unknown']]);
+        // Tynn #1070: a target is judged by its OWN windows, whatever they are: B has no 7d opus window, and its 5 h has room.
+        expect(switchTargets({ provider: 'claude', accountId: A, window: '7d opus', leftPct: 5 }, readings, KNOWN).map((t) => [t.accountId, t.room, t.window]))
+            .toEqual([[B, 'reported', '5h'], [C, 'unknown', null]]);
         const spent = [reading(A, [live('5h', 5, T0 + HOUR)]), reading(B, [live('5h', 50, T0 + HOUR, true)])];
         expect(switchTargets({ provider: 'claude', accountId: A, window: '5h', leftPct: 5 }, spent, KNOWN).map((t) => [t.accountId, t.room])).toEqual([[C, 'unknown']]);
     });

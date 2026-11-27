@@ -2,8 +2,8 @@ import { Avatar, Badge, Button, Callout, Icon, Input, Popover, Progress } from '
 import { useState } from 'react';
 import { activeAccountOf, chooseWords, type AccountView, type AccountWindowRow, type ProviderAccountsView } from '../../core/accounts-view.js';
 import { shortDateTime } from '../../core/clock-words.js';
-import { limitLevel, resetsIn, windowWords, type LimitLevel, type WindowReading } from '../../core/headroom.js';
-import type { SwitchOffer, SwitchTarget } from '../../core/switch-offer.js';
+import { limitLevel, usedPct, usedWords, resetsIn, windowWords, type LimitLevel, type WindowReading } from '../../core/headroom.js';
+import { offerWords, targetWords, type SwitchOffer } from '../../core/switch-offer.js';
 import { rankSwitchNext } from '../../core/switch-next.js';
 import { DesignAuthRow } from './DesignAuthRow.js';
 import type { AccountsAction, AccountsActResult } from '../../core/account-settings.js';
@@ -54,12 +54,6 @@ function tightest(account: AccountView): LiveWindow | null {
     return live.reduce((a, b) => ((b.over ? -1 : b.leftPct) < (a.over ? -1 : a.leftPct) ? b : a));
 }
 
-function targetWords(t: SwitchTarget): string {
-    if (t.room === 'unknown') return `${t.label} (not used yet)`;
-    if (t.room === 'reset') return `${t.label} (window reset)`;
-    return `${t.label} (${t.leftPct}% left)`;
-}
-
 export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, design, onDesignSignIn, onAccountsAct, signIns }: AccountsChipProps) {
     const [open, setOpen] = useState(false);
     const active = activeAccountOf(view);
@@ -106,13 +100,13 @@ export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, desig
                     {...(offer ? { 'data-offer': offer.id } : {})}
                     aria-haspopup="dialog"
                     aria-expanded={open}
-                    aria-label={`${name}: signed in as ${active.label}${tight ? `, ${tight.over ? 'over the limit' : `${tight.leftPct}% left`} ${windowWords(tight.window)}` : ''}${offer ? '. A switch is offered' : ''}`}
+                    aria-label={`${name}: signed in as ${active.label}${tight ? `, ${tight.over ? 'over the limit' : `${usedPct(tight)}% used`} ${windowWords(tight.window)}` : ''}${offer ? '. A switch is offered' : ''}`}
                     onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(!open); } }}
                     className={`gap-1 hover:bg-[var(--bg-2)] ${open ? 'bg-[var(--bg-2)]' : ''} ${offer ? 'ring-1 ring-[var(--warning)]' : ''}`}
                 >
                     <ProviderLogo provider={provider} size="xs" className="text-[var(--fg-3)]" />
                     <span data-account-chip-label="" className="max-w-[10rem] truncate text-[var(--fg-2)]">{active.label}</span>
-                    {tight ? <span className={`tabular-nums ${LEVEL_TEXT[level]}`}>{tight.over ? 'over' : `${tight.leftPct}%`}</span> : null}
+                    {tight ? <span className={`tabular-nums ${LEVEL_TEXT[level]}`}>{usedWords(tight)}</span> : null}
                     {tight ? <span className="text-[11px] text-[var(--fg-4)]">{tight.window}</span> : null}
                     {offer ? <Icon name="arrow-right-left" size="xs" className="text-[var(--warning)]" /> : null}
                 </Button>
@@ -129,7 +123,7 @@ export function AccountsChip({ view, offer, now, onSwitch, onDismissOffer, desig
                     </div>
                     {offer ? (
                         <Callout color="amber" icon={<Icon name="arrow-right-left" size="sm" />} data-switch-offer={offer.id}>
-                            <p>{offer.label}: {offer.over ? 'spent' : `${offer.leftPct}% left`} of its {windowWords(offer.window)} window.</p>
+                            <p>{offerWords(offer)}</p>
                             {offer.targets.length > 0
                                 ? <p className="text-[var(--fg-3)]">Room: {offer.targets.map(targetWords).join(', ')}</p>
                                 : <p className="text-[var(--fg-3)]">No other {name} account has room.</p>}
@@ -202,6 +196,7 @@ function ActiveAccount({ account, now, onSignIn }: { account: AccountView; now: 
             </div>
             {onSignIn ? <Button type="button" size="sm" icon="log-in" data-action="account-sign-in" className="self-start" onClick={onSignIn}>Sign in</Button> : null}
             <div className="flex flex-col gap-2.5 border-t border-[var(--border-1)] pt-3">
+                {account.read === false ? <UsageUnknown /> : null}
                 {account.windows.map((w) => <WindowRow key={w.window} w={w} now={now} />)}
             </div>
         </section>
@@ -218,6 +213,7 @@ function OtherAccount({ account, rank, now, action }: { account: AccountView; ra
                 <PlanChip plan={account.plan} />
             </div>
             {account.live ? <div className="flex flex-wrap gap-1"><LiveBadge live={account.live} /><BillingChip live={account.live} /></div> : null}
+            {account.read === false ? <UsageUnknown /> : null}
             {account.windows.map((w) => <CompactWindow key={w.window} w={w} now={now} />)}
             {action.kind === 'switch'
                 ? <Button type="button" size="xs" icon="arrow-right-left" data-action="account-switch" aria-label={`Switch to ${account.label}`} className="self-end" onClick={action.run}>Switch</Button>
@@ -273,6 +269,16 @@ function BillingChip({ live }: { live: ClaudeAccountLive }) {
     return words ? <Badge size="sm" variant="soft" color="zinc" data-account-billing="">{words}</Badge> : null;
 }
 
+/** Tynn #1070: an account with no reading of its own yet. Its usage is unknown; no other account's figures stand in for it. */
+function UsageUnknown() {
+    return (
+        <div data-account-usage-unknown="" className="flex items-center gap-2 text-[11px] text-[var(--fg-3)]">
+            <Icon name="circle-help" size="xs" />
+            <span>Usage unknown: not read yet</span>
+        </div>
+    );
+}
+
 function CompactWindow({ w, now }: { w: AccountWindowRow; now: number }) {
     if ('unknown' in w) {
         return <div data-account-window={w.window} data-level="unknown" className="flex gap-2 text-[11px] text-[var(--fg-3)]"><span className="w-10 shrink-0">{w.window}</span><span>unknown</span></div>;
@@ -285,8 +291,8 @@ function CompactWindow({ w, now }: { w: AccountWindowRow; now: number }) {
         <div data-account-window={w.window} data-level={level} className="flex flex-col text-[11px]">
             <div className="flex items-center gap-2">
                 <span className="w-10 shrink-0 text-[var(--fg-2)]">{w.window}</span>
-                <Progress value={w.leftPct} max={100} size="sm" color={LEVEL_COLOR[level]} aria-label={`${w.window} left`} className="flex-1" />
-                <span className={`w-8 shrink-0 text-right tabular-nums ${LEVEL_TEXT[level]}`}>{w.over ? 'over' : `${w.leftPct}%`}</span>
+                <Progress value={usedPct(w)} max={100} size="sm" color={LEVEL_COLOR[level]} aria-label={`${w.window} used`} className="flex-1" />
+                <span className={`w-14 shrink-0 text-right tabular-nums ${LEVEL_TEXT[level]}`}>{usedWords(w)}</span>
             </div>
             {/* The reset is half of the switch-next rule, so it is read in full, not cut short. */}
             <span data-account-reset-in="" className="pl-12 text-[var(--fg-4)]" title={shortDateTime(w.resetsAtMs)}>{resetsIn(w.resetsAtMs, now)}</span>
@@ -317,8 +323,8 @@ function WindowRow({ w, now }: { w: AccountWindowRow; now: number }) {
         <div data-account-window={w.window} data-level={level} className="flex flex-col gap-0.5">
             <div className="flex items-center gap-2">
                 <span className="w-12 shrink-0 text-[var(--fg-2)]">{w.window}</span>
-                <Progress value={w.leftPct} max={100} size="sm" color={LEVEL_COLOR[level]} aria-label={`${w.window} left`} className="flex-1" />
-                <span className={`w-9 shrink-0 text-right tabular-nums ${LEVEL_TEXT[level]}`}>{w.over ? 'over' : `${w.leftPct}%`}</span>
+                <Progress value={usedPct(w)} max={100} size="sm" color={LEVEL_COLOR[level]} aria-label={`${w.window} used`} className="flex-1" />
+                <span className={`w-16 shrink-0 text-right tabular-nums ${LEVEL_TEXT[level]}`}>{usedWords(w)}</span>
             </div>
             <div className="flex gap-2 pl-14 text-[11px]">
                 <span className="text-[var(--fg-2)]">{resetsIn(w.resetsAtMs, now)}</span>

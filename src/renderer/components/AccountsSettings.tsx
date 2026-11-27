@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { chooseWords, type AccountView, type AccountsSnapshot, type AccountWindowRow } from '../../core/accounts-view.js';
 import { forgetRefusal, SWITCH_OFFER_WINDOW_CHOICES, type AccountsAction, type AccountsActResult } from '../../core/account-settings.js';
 import { shortDateTime } from '../../core/clock-words.js';
+import { usedWords } from '../../core/headroom.js';
 import { parseSwitchOfferWindows } from '../../core/switch-offer.js';
 import { ProviderLogo } from './ProviderLogo.js';
 import { DesignAuthRow } from './DesignAuthRow.js';
@@ -57,7 +58,7 @@ export function AccountsSettings({ snapshot, offerWindows, onSetOfferWindows, on
 function usageWords(w: AccountWindowRow, now: number): string {
     if ('unknown' in w) return 'unknown';
     if (w.refreshed || w.resetsAtMs <= now) return 'Refreshed';
-    return `${w.over ? 'over' : `${w.leftPct}%`} · ${shortDateTime(w.resetsAtMs)}`;
+    return `${usedWords(w)} · ${shortDateTime(w.resetsAtMs)}`;
 }
 
 function AccountRow({ account, now, onSwitch, onAct }: { account: AccountView; now: number; onSwitch: AccountsSettingsProps['onSwitch']; onAct: AccountsSettingsProps['onAct'] }) {
@@ -108,6 +109,8 @@ function AccountRow({ account, now, onSwitch, onAct }: { account: AccountView; n
                 </span>
             </div>
             <div className="flex flex-wrap gap-3 pl-7 text-xs text-[var(--fg-3)]">
+                {/* Tynn #1070: an account never read says so; one read lists the windows IT has, and only those. */}
+                {account.read === false ? <span data-account-usage-unknown="">Usage unknown: not read yet</span> : null}
                 {account.windows.map((w) => <span key={w.window} data-account-usage={w.window}><span className="text-[var(--fg-2)]">{w.window}</span> {usageWords(w, now)}</span>)}
             </div>
             {said ? <p role="alert" data-account-refused="" className="pl-7 text-xs text-[var(--warning)]">{said}</p> : null}
