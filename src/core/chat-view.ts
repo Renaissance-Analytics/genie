@@ -65,6 +65,8 @@ export interface ChatMessage {
     queuedForProvider?: boolean;
     /** The agent is still starting (q_04ce323c: its first message started it); it goes the moment it is up. */
     queuedForStart?: boolean;
+    /** Tynn #1089: carried for the agent's next run while none is up: "Waiting · sent when <agent> is back". */
+    queuedForReturn?: boolean;
     /** Tynn #1089: held for the agent's move to this account (its label): "Waiting · moving to <account>". */
     movingTo?: string;
     /**
@@ -295,14 +297,17 @@ export function chatMessages(detail: ChatDetail, _rows: readonly AgentRow[] = []
         const from = who === 'you' ? 'you' : who === 'peer' ? `${e.peerName ?? 'peer'} → ${detail.agent.name}` : detail.agent.name;
         const delivered = delivery === undefined || delivery === 'sent';
         // `carried` (Tynn #702): kept across the restart an unconfirmed interrupt made, waiting for the new run like a queued one.
-        const queued = (delivery === 'queued' || delivery === 'carried') && detail.session?.running === true;
+        // Carried with NO run up (the moment of a move, a restart starting; Tynn #1089) still waits: any start delivers it.
+        const queued = ((delivery === 'queued' || delivery === 'carried') && detail.session?.running === true) || delivery === 'carried';
+        const awaitsReturn = delivery === 'carried' && detail.session?.running !== true;
         // Taken back by the person while it waited (Tynn #843): kept, marked, never delivered and never owed.
         const withdrawn = delivery === 'withdrawn';
         const waits = who === 'you' && delivered ? waiting.get(row.id) : undefined;
         out.push({ id: row.id, who, from, text: e.text, delivered, at: row.at,
             ...(withdrawn ? { withdrawn: true } : {}),
             ...(e.pending ? { promptId: e.pending.id, queued, resend: detail.session?.running && detail.session.turnState !== 'failed' ? 'send' as const : 'restart' as const } : {}),
-            ...(queued && detail.session?.starting === true ? { queuedForStart: true }
+            ...(awaitsReturn ? { queuedForReturn: true }
+                : queued && detail.session?.starting === true ? { queuedForStart: true }
                 : queued && detail.session?.turnState === 'idle' && detail.session.inTurn !== true ? { queuedForProvider: true } : {}),
             ...(queued ? { silentSince: lastOutputAt } : {}),
             // Waiting for its move (Tynn #1089): the run it waits in is on another account than the active one.

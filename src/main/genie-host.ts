@@ -1864,7 +1864,7 @@ async function main(): Promise<void> {
      * switch) or Switch (the normal switch, `accountsAct` switch, made once per reset, and said). Whether an account has
      * room is `roomOf` alone: its own last reading today; Tynn #1091's turn-free read can feed it later.
      */
-    const roomOf = (accountId: string): AccountRoom => accountRoom(headroomFeed.accounts().find((r) => r.accountId === accountId)?.room ?? null, Date.now());
+    const roomOf = (accountId: string): AccountRoom => accountRoom(headroomFeed.accounts().find((r) => r.accountId === accountId)?.room ?? null, Date.now(), activeOutHost?.refusedUntil('claude', accountId) ?? null);
     const activeOut = new ActiveOutService({
         providers: () => ['claude'],
         known: () => accounts.list().map((a) => ({ id: a.id, provider: a.provider, label: a.label })),
@@ -1907,6 +1907,8 @@ async function main(): Promise<void> {
         onAccountUsed: (account) => { void usageProbes.request(account); accountsChangedNow?.(); },
         // An agent turned out to stay on its account (or stopped): the Accounts panel's count changes (Tynn #1084).
         onMovesChanged: () => { accountsChangedNow?.(); },
+        // An agent held on the limit, or let go (Tynn #1089): the active-out rule looks again.
+        onHeldChanged: () => { checkActiveOut(); },
         userData: home,
         ...engineHostOptions,
         // The servers Genie provides to every agent (Tynn #1017; the Fancy Dev Kit's fancy-ui), each switchable off per workspace.

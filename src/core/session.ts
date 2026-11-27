@@ -1419,6 +1419,9 @@ export class AgentSession {
         // Withdrawn by the person while the record that owes it was being read (Tynn #843): never handed over.
         if (this.hasQueuedPrompt(id) || this.#withdrawn.has(id)) return;
         this.#afterTurn.push({ id, text, by, sent, context });
+        // WAITING IN THIS RUN (Tynn #1089): handed over, it is no longer "undelivered" — the owner's message read "Not
+        // delivered. Kept for you to send again." while it waited here. `sent` follows when it goes.
+        void this.#emitRow({ kind: 'prompt_delivery', id, status: 'carried' });
         this.#changed();
         // `hold`: more are being handed over (`deliverOwed`); `flushOwed` sends them all together, in order (Tynn #702).
         if (options.hold !== true) this.#flushAfterTurn();

@@ -66,7 +66,7 @@ import { WorkspaceSwatch, useAgentColor, wsStyle } from '../workspace-colors.js'
  */
 
 /** One message as the chat draws it (`core/chat-view.ts`'s `ChatMessage`, its optional parts optional). */
-export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'queuedForStart' | 'silentSince' | 'attachmentRefs' | 'promptId' | 'draftProblem' | 'carried' | 'withdrawn' | 'movingTo'>>;
+export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'queuedForStart' | 'silentSince' | 'attachmentRefs' | 'promptId' | 'draftProblem' | 'carried' | 'withdrawn' | 'movingTo' | 'queuedForReturn'>>;
 
 export interface ChatThread {
     /** Tynn #1084: the account the agent is really on, and the one it moves to at its next idle. */
@@ -566,6 +566,14 @@ function ChatFlyoutBody({
         const undelivered = yours.filter((m) => !m.delivered && !m.queued && !m.withdrawn);
         return { waiting: yours.filter((m) => m.queued || (m.waiting !== undefined && m.delivered)).length, undelivered, sendable: undelivered.filter((m) => !m.reason) };
     })();
+    // SEND ALL'S RESULTS SAY WHAT THE CHAT SAYS NOW (Tynn #1089): one handed over but waiting in the run (held on a limit)
+    // reads Waiting; one delivered reads Sent. A failure stays as reported.
+    const liveSending = sending ? { ...sending, results: sending.results.map((r) => {
+        if (r.outcome === 'failed') return r;
+        const m = messages.find((x) => x.id === r.id);
+        if (!m) return r;
+        return { id: r.id, text: r.text, outcome: m.delivered ? 'sent' as const : m.queued ? 'waiting' as const : r.outcome };
+    }) } : sending;
     const restartOn = [...messages].reverse().find((m) => (m.who ?? (m.from === 'you' ? 'you' : 'agent')) === 'you' && !m.delivered && !m.queued && !m.withdrawn && !m.reason && m.resend !== 'send')?.id ?? null;
     /** The scroll height before a page of history was added: the reader stays on the message they were reading. */
     const anchorRef = useRef<number | null>(null);
@@ -931,7 +939,7 @@ function ChatFlyoutBody({
                     waiting={queue.waiting}
                     undelivered={queue.undelivered.length}
                     onInterruptAndSend={onInterruptAndSend}
-                    sending={sending}
+                    sending={liveSending}
                     onSendAll={queue.sendable.length > 0 && (onSendAllKept || onRestartAndSend) ? () => {
                         // Tynn #1089: each in the order written, with progress and a result each, at the bar.
                         if (onSendAllKept) { onSendAllKept(queue.sendable.map((m) => ({ id: m.id, text: m.text }))); return; }
@@ -1231,8 +1239,8 @@ export function ChatMessages({ messages, thread, refs: replyRefs, mailOnly, onOp
                         {mailOnly && m.read !== undefined ? (
                             <span data-chat-read={m.id} className="font-mono text-[11px] text-[var(--fg-4)]">{m.read === null ? 'not read yet' : `read ${clock(m.read)}`}</span>
                         ) : null}
-                        {m.queued ? (m.movingTo || m.queuedForStart || m.queuedForProvider
-                            ? <span data-chat-queued={m.id} className="flex items-center justify-end gap-1.5 font-mono text-[11px] text-[var(--fg-3)]"><span>{m.movingTo ? `Waiting · moving to ${m.movingTo}` : m.queuedForStart ? `Starting ${thread?.name ?? 'the agent'} · sent when it is up` : 'Queued · waiting for the provider to resume'}</span>{onQueuedAction && m.promptId ? <ChatQueuedActions id={m.id} busy={queuedBusy?.has(m.id) === true} onAction={onQueuedAction} /> : null}</span>
+                        {m.queued ? (m.movingTo || m.queuedForReturn || m.queuedForStart || m.queuedForProvider
+                            ? <span data-chat-queued={m.id} className="flex items-center justify-end gap-1.5 font-mono text-[11px] text-[var(--fg-3)]"><span>{m.movingTo ? `Waiting · moving to ${m.movingTo}` : m.queuedForReturn ? `Waiting · sent when ${thread?.name ?? 'the agent'} is back` : m.queuedForStart ? `Starting ${thread?.name ?? 'the agent'} · sent when it is up` : 'Queued · waiting for the provider to resume'}</span>{onQueuedAction && m.promptId ? <ChatQueuedActions id={m.id} busy={queuedBusy?.has(m.id) === true} onAction={onQueuedAction} /> : null}</span>
                             : <ChatQueuedNoteLive id={m.id} agentName={thread?.name ?? 'the agent'} silentSince={m.silentSince ?? null} actions={onQueuedAction && m.promptId ? <ChatQueuedActions id={m.id} busy={queuedBusy?.has(m.id) === true} onAction={onQueuedAction} /> : null} />) : null}
                         {/* A Withdraw / Edit that lost to the turn's end (Tynn #843): the host's words, on the message. */}
                         {queuedProblems?.[m.id] ? <span role="alert" className="text-[12px] text-[var(--warning)]">{queuedProblems[m.id]}</span> : null}

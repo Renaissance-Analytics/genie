@@ -636,6 +636,8 @@ export class SessionHost {
     readonly #launchBlocked: ((account: AccountRecord) => string | null) | undefined;
     readonly #onAccountUsed: ((account: AccountRecord) => void) | undefined;
     readonly #onMovesChanged: (() => void) | undefined;
+    /** Tynn #1089: an agent's limit hold began or ended (what the active-out rule acts on). */
+    readonly #onHeldChanged: ((provider: string) => void) | undefined;
     /** Starts a sign-in in their account's folder refused (Tynn #1011), as they were asked: started when the sign-in is over (`launchUnblocked`). */
     readonly #blockedStarts = new Map<AgentId, { readonly record: AgentRecord; readonly cwd: string; readonly how: StartHow; readonly reason: string }>();
     /** The Claude folder of each run that is stopping, or that a stop could not end: its process is in that folder until it has ended. */
@@ -815,6 +817,7 @@ export class SessionHost {
         onAccountUsed?: (account: AccountRecord) => void;
         /** An agent turned out to stay on its account, or stopped staying (Tynn #1084): the Accounts panel's count changed. */
         onMovesChanged?: () => void;
+        onHeldChanged?: (provider: string) => void;
         /** The person wrote to an agent (a message of their own starts a turn): the plan keepalive's count starts again. */
         onPersonTurn?: (agentId: AgentId) => void;
         /** Each agent's headroom reading, with its provider: the Dashboard header's one-per-provider indicator (main buffers). */
@@ -872,6 +875,7 @@ export class SessionHost {
         this.#launchBlocked = options.launchBlocked;
         this.#onAccountUsed = options.onAccountUsed;
         this.#onMovesChanged = options.onMovesChanged;
+        this.#onHeldChanged = options.onHeldChanged;
         this.#mcpServersFor = options.mcpServersFor;
         this.#untrustedFilesFor = options.untrustedFilesFor;
         this.#endToolCalls = options.endToolCalls;
@@ -1353,6 +1357,7 @@ export class SessionHost {
         if (record.plan && record.plan.length > 0) entry.readings.seedPlan(record.plan);
 
         let reportedTurns = record.lastTurn ?? 0;
+        let heldBefore = false;
         let numberedTurn = record.lastTurn ?? 0;
         const session: AgentSession = new AgentSession({
             agentId: record.id,
@@ -1410,6 +1415,11 @@ export class SessionHost {
              * happened to arrive, and a blocked agent produces no further rows by definition.
              */
             onStateChange: () => {
+                // HELD, OR NOT ANY MORE (Tynn #1089): said once per change, after the gate has the reading that held it.
+                if (session.held !== heldBefore) {
+                    heldBefore = session.held;
+                    try { this.#onHeldChanged?.(record.provider); } catch { /* a listener's failure is its own */ }
+                }
                 // A turn that ended: once per turn.
                 const turns = session.turns;
                 if (turns > reportedTurns) {
@@ -1696,6 +1706,12 @@ export class SessionHost {
 
     /** Tynn #1089: what the held agents on each provider's spent ACTIVE account are shown (core/active-out.ts); absent = nothing. */
     readonly #activeOut = new Map<string, import('../core/active-out.js').ActiveOutView>();
+
+    /** The reset until which the provider refuses this login by its own reading (the gate), or `null` (Tynn #1089). */
+    refusedUntil(provider: string, accountId: string): number | null {
+        const view = this.#gate.view(this.#loginOf(provider, accountId), this.#clock());
+        return view.state === 'paused' ? view.resetsAtMs : null;
+    }
 
     /** Whether an agent of this provider is held on the limit on the ACTIVE account (the one a switch would move it off). */
     heldOnActive(provider: string): boolean {

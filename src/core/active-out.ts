@@ -25,7 +25,10 @@ export type AccountRoom =
  * An account's room, from its own reading: its TIGHTEST window decides (98 % of the 5 h left is nothing with the week spent).
  * No reading, or a spent window already past its reset, is `unknown`: never guessed as room.
  */
-export function accountRoom(reading: Headroom | null | undefined, nowMs: number): AccountRoom {
+export function accountRoom(reading: Headroom | null | undefined, nowMs: number, refusedUntil: number | null = null): AccountRoom {
+    // THE PROVIDER'S OWN REFUSAL (the limit gate: a rejected window, until its reset) decides first: a login it refuses is
+    // spent, whatever its last reading said (a read of its usage can lag the refusal).
+    if (refusedUntil !== null && refusedUntil > nowMs) return { state: 'spent', resetsAtMs: refusedUntil };
     if (!reading) return { state: 'unknown' };
     const windows = reading.windows.length > 0 ? reading.windows : [{ window: reading.window, leftPct: reading.leftPct, resetsAtMs: reading.resetsAtMs, over: reading.over, usedPct: 100 - reading.leftPct }];
     const spent = windows.filter((w) => w.leftPct <= 0 || w.over);

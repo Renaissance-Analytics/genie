@@ -16,8 +16,8 @@
  *   L4 Roomy runs out too: "No Claude account has room: Roomy is out until <reset>. What you send waits and goes then.", no
  *      Switch; two messages wait (shot 05). atlas stopped: both kept "Not delivered" (shot 06, the owner's screen). Roomy has
  *      room again (Check usage now); Send all now restarts atlas once and sends both: "Sending 1 of 2…" (shot 07), then each
- *      message's result at the bar (shot 08)
- *   L5 Settings → Providers: "When the active account runs out", Ask me / Switch to the account with the most room (shot 09)
+ *      message's result at the bar, waiting while held (shot 08); Resume now, and both are Sent (shot 09)
+ *   L5 Settings → Providers: "When the active account runs out", Ask me / Switch to the account with the most room (shot 10)
  */
 import { mainWindow } from './cdp-main-window.mjs';
 import { closeWhatsNew } from './cdp-whats-new.mjs';
@@ -213,11 +213,19 @@ try {
     const progress = await maybe('the progress', () => text(`${CHAT} [data-send-all-progress="running"]`), 10_000);
     check('L4f', /Sending \d of 2…/.test(progress ?? ''), 'it says how far it is', progress);
     if (progress) await shot('07-sending');
+    // atlas starts again, still held by Roomy's refusal: both handed over and WAITING — said so at the bar, never "Sent".
     const done = await maybe('the results', () => page.evaluate(`(() => { const r = [...document.querySelectorAll(${q(`${CHAT} [data-send-all-result]`)})]; return r.length === 2 ? r.map((e) => [e.getAttribute('data-outcome'), e.textContent]) : null; })()`), 90_000);
-    check('L4g', Array.isArray(done) && done.every(([o]) => o === 'sent'), 'each message\'s result at the bar: both sent', done);
-    const both = await maybe('both received', async () => (said(roomyDir, 'L1089 first kept') && said(roomyDir, 'L1089 second kept')) || null, 60_000);
-    check('L4h', Boolean(both), 'atlas received both, on Roomy');
+    check('L4g', Array.isArray(done) && done.every(([o]) => o === 'waiting' || o === 'sent'), "each message's result at the bar, as the chat has it (held: waiting)", done);
+    check('L4g2', !/Not delivered/.test((await chatText()) ?? ''), 'neither is "Not delivered" any more');
     await shot('08-send-all-results');
+    // The person: Roomy has room again, so Resume now. Both go, and the bar says Sent.
+    await maybe('Resume now', () => page.evaluate(`Boolean(document.querySelector(${q(`${CHAT} [data-action="resume-limit"]`)}))`), 30_000);
+    check('L4h', await press(`${CHAT} [data-action="resume-limit"]`), 'Resume now takes a click');
+    const both = await maybe('both received', async () => (said(roomyDir, 'L1089 first kept') && said(roomyDir, 'L1089 second kept')) || null, 60_000);
+    check('L4i', Boolean(both), 'atlas received both, on Roomy');
+    const sentNow = await maybe('both sent', () => page.evaluate(`(() => { const r = [...document.querySelectorAll(${q(`${CHAT} [data-send-all-result]`)})]; return r.length === 2 && r.every((e) => e.getAttribute('data-outcome') === 'sent') ? r.map((e) => e.textContent) : null; })()`), 30_000);
+    check('L4j', Boolean(sentNow), 'the bar now says Sent for each', sentNow);
+    await shot('09-send-all-delivered');
 
     // L5: the setting.
     await page.evaluate(`window.location.hash = '#genie://settings'; true`);
@@ -226,7 +234,7 @@ try {
     check('L5a', /When the active account runs out/.test(setting ?? '') && /Ask me/.test(setting ?? '') && /Switch to the account with the most room/.test(setting ?? ''), 'Settings → Providers: When the active account runs out — Ask me / Switch to the account with the most room', setting);
     await page.evaluate(`document.querySelector('[data-when-active-out]')?.scrollIntoView({ block: 'center' }); true`);
     await sleep(300);
-    await shot('09-setting');
+    await shot('10-setting');
     code = checks.every((c) => c.ok) ? 0 : 1;
 } catch (error) {
     failure = error instanceof Error ? error.message : String(error);
