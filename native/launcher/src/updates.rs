@@ -65,6 +65,9 @@ pub struct Shared {
     pub attaches: AtomicU64,
     /// Programs started by this launcher, with the track and build they run from (retention keeps those folders).
     started: Mutex<Vec<(u32, Track, String)>>,
+    /// How many client windows were open when the host update in flight was asked for: they leave when the host installs
+    /// (src/core/quit.ts installQuit), and Genie is opened again after the swap when there were any.
+    pub windows_at_update: std::sync::atomic::AtomicUsize,
 }
 
 fn now() -> u64 {
@@ -374,7 +377,8 @@ pub fn watch_client(shared: std::sync::Arc<Shared>, roots: Roots, pid: u32, buil
 
 /// A host update asked for by a person (no host pid yet): a running host is asked to install, through its own drain; with
 /// no host running the pointers move and the next start runs it.
-pub fn ask_host(shared: &Shared, roots: &Roots) -> Result<Value, String> {
+pub fn ask_host(shared: &Shared, roots: &Roots, windows_open: usize) -> Result<Value, String> {
+    shared.windows_at_update.store(windows_open, Ordering::SeqCst);
     let keys = keys::trusted_keys(roots);
     let st = state::read(&roots.state_file())?;
     let from = current_of(&st, Track::Host);

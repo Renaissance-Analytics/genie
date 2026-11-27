@@ -43,7 +43,7 @@ async function windowQuitsForInstall(scope: UpdateScope | undefined) {
     const replica = new UpdatesReplica(async () => null, 4000);
     const seq = quitSequence();
     const told: Array<UpdateScope | undefined> = [];
-    replica.onInstalling((s) => { told.push(s); seq.markRecorded(); seq.choose(installQuit(s)); });
+    replica.onInstalling((s) => { told.push(s); seq.markRecorded(); seq.choose(installQuit(s, false)); });
     replica.rebase(installing(scope));
     const { calls, p } = ports();
     const steps: QuitStep[] = [];
@@ -83,9 +83,9 @@ describe('the window’s quit for an install the host runs', () => {
 
 describe('installQuit: how the window quits for the install, by what the update changes', () => {
     it('client-only → exit the window; full or unknown → shut down', () => {
-        expect(installQuit(CLIENT_ONLY)).toBe('exit-window');
-        expect(installQuit(FULL)).toBe('shut-down');
-        expect(installQuit(undefined)).toBe('shut-down');
+        expect(installQuit(CLIENT_ONLY, false)).toBe('exit-window');
+        expect(installQuit(FULL, false)).toBe('shut-down');
+        expect(installQuit(undefined, false)).toBe('shut-down');
     });
 });
 

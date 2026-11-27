@@ -205,7 +205,11 @@ export async function runQuit(ports: QuitPorts, options: { readonly drainMs?: nu
  * asked" before the installer ran. Only the window: it exits, and genie-host and its agents keep running. Anything else,
  * or a scope the window was never told: the shut-down it always was.
  */
-export function installQuit(scope: import('./update-kind.js').UpdateScope | undefined): 'shut-down' | 'exit-window' {
+export function installQuit(scope: import('./update-kind.js').UpdateScope | undefined, launched: boolean): 'shut-down' | 'exit-window' {
+    // UNDER THE LAUNCHER (Tynn #1058 L6) the launcher stops and swaps the host, and opens Genie again after: the window only
+    // leaves. "Shut down everything" here would be `launcher.shutDown`, which stopped the host the launcher had just started
+    // again and made the launcher exit (Linux host-update-rollback, 1127-143956-fffa82).
+    if (launched) return 'exit-window';
     return scope?.kind === 'client-only' ? 'exit-window' : 'shut-down';
 }
 

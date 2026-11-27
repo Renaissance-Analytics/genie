@@ -446,12 +446,15 @@ fn apply(ctx: &Context, conn: &mut Connection, a: Value) -> Result<Value, String
         Track::Host => match a["afterPid"].as_u64().and_then(|p| u32::try_from(p).ok()) {
             // The host that drained, going: the swap runs once this answer is sent.
             Some(pid) => {
+                // An install a window asked of the host itself: its windows are still attached as the host goes.
+                ctx.updates.windows_at_update.fetch_max(attached_pids(ctx).len(), Ordering::SeqCst);
                 conn.host_swap = Some(pid);
                 Ok(json!({"accepted": true}))
             }
             None => {
+                let windows = attached_pids(ctx).len();
                 let _g = ctx.busy.lock().unwrap_or_else(|p| p.into_inner());
-                crate::updates::ask_host(&ctx.updates, roots)
+                crate::updates::ask_host(&ctx.updates, roots, windows)
             }
         },
         Track::Launcher => {
@@ -611,6 +614,14 @@ fn serve_connection(ctx: &Arc<Context>, stream: LocalStream) {
                 };
                 if let Some(event) = told {
                     tell_clients(&ctx, &event);
+                }
+                // "Drain and swap the host, then refresh the UI" (the owner): the windows left when the host installed, so
+                // Genie is opened again, on the client the host came with (or the one it went back to).
+                if ctx.updates.windows_at_update.swap(0, Ordering::SeqCst) > 0 && attached_pids(&ctx).is_empty() {
+                    match open_window(&ctx) {
+                        Ok(v) => eprintln!("genie: Genie opened again after the host's update ({v})"),
+                        Err(why) => eprintln!("genie: Genie could not be opened again after the host's update: {why}"),
+                    }
                 }
             });
         }

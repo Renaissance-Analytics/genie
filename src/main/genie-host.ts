@@ -159,6 +159,9 @@ import { hostBrowserStart } from './host-browser-start.js';
 import { callLauncher, launcherReachable, launcherWire } from './launcher-control.js';
 import { launcherHostUpdate, launcherUpdaterPort } from './launcher-updates.js';
 import { launcherLink } from '../core/launcher-link.js';
+import { restoresAtBoot } from './boot-restore-owner.js';
+import { restoreAfterRelaunch } from './relaunch-restore.js';
+import { RESUME_AFTER_RESTART } from '../core/upgrade-drain.js';
 import { FilesWatchHub } from './files-watch-hub.js';
 import { workerWatchSource } from './files-watch-worker.js';
 import { openHostKeychain, type HostKeychain } from './host-keychain.js';
@@ -3041,6 +3044,29 @@ async function main(): Promise<void> {
     const record: HostRecord = { pid: process.pid, endpoint, protocol: ENGINE_PROTOCOL, build, startedAt: Date.now() };
     await writeTextPrivate(recordFile, JSON.stringify(record));
     say(`serving ${endpoint} (protocol ${ENGINE_PROTOCOL}, build ${build})`);
+    // THE AGENTS COME BACK HERE when the launcher started this host (Tynn #1058 L6, boot-restore-owner.ts): it swaps hosts
+    // with no window open, so the record the drain wrote is this host's to restore, once, as the window's boot does
+    // without a launcher (§7.6, relaunch-restore.ts: spaced starts, the mid-turn ones resumed, each kept until it started).
+    if (restoresAtBoot('host', process.env)) {
+        void restoreAfterRelaunch({
+            safeMode: safeNow,
+            pending: () => registryStore.beginRestore(),
+            started: async (agentId) => { await registryStore.restoreStarted(agentId); },
+            name: (agentId) => hostRegistry.find(agentId)?.name ?? agentId,
+            schedule: (fn, ms) => { setTimeout(fn, ms); },
+            start: async (agentId, resume) => {
+                const record = hostRegistry.find(agentId);
+                if (!record) return;
+                const started = host.start(record, phoneCwd(record));
+                if (!started.ok) {
+                    if (resume) await host.recordOwed(record.id, RESUME_AFTER_RESTART, 'genie');
+                    throw new Error(started.reason);
+                }
+                if (resume && !host.prompt(record.id, RESUME_AFTER_RESTART, 'genie')) await host.recordOwed(record.id, RESUME_AFTER_RESTART, 'genie');
+            },
+            log: (line) => { say(line); lifecycleLog(line); },
+        });
+    }
 
     async function shutdown(why: string): Promise<void> {
         if (shuttingDown) return;

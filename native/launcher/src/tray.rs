@@ -340,7 +340,7 @@ pub fn act(ctx: Arc<Context>, action: Action) {
             Action::InstallHostUpdate => {
                 let asked = {
                     let _g = ctx.busy.lock().unwrap_or_else(|p| p.into_inner());
-                    crate::updates::ask_host(&ctx.updates, &ctx.roots)
+                    crate::updates::ask_host(&ctx.updates, &ctx.roots, control::attached_pids(&ctx).len())
                 };
                 match asked {
                     Ok(v) => eprintln!("genie: tray: the host's update: {v}"),

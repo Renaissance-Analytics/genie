@@ -128,6 +128,7 @@ import { omarchyFacts } from './omarchy-skills.js';
 import { killProcessAsync, listProcessesAsync } from './process-list.js';
 import { RESUME_AFTER_RESTART } from '../core/upgrade-drain.js';
 import { restoreAfterRelaunch } from './relaunch-restore.js';
+import { restoresAtBoot } from './boot-restore-owner.js';
 import { WindowSafeMode } from './window-safe-mode.js';
 import { recordShutdown } from './shutdown-record.js';
 import { FilesHost } from './files-host.js';
@@ -1482,7 +1483,7 @@ async function boot(): Promise<void> {
         // A CLIENT-ONLY INSTALL (P6-1, Tynn #1036) keeps genie-host and its agents: this window exits and stops nothing of
         // them (core/quit.ts installQuit). Measured on Windows before: the window shut everything down, the host with it.
         replica.onInstalling((scope) => {
-            const how = installQuit(scope);
+            const how = installQuit(scope, launcherLink(process.env) !== null);
             lifecycleLog(how === 'exit-window' ? 'update: only the window is updated; this window exits, genie-host keeps running' : 'update: the host is installing; this window quits');
             updateQuitReady = true;
             quit.markRecorded();
@@ -1835,7 +1836,7 @@ async function boot(): Promise<void> {
     // The agents a shutdown cut off mid-turn are resumed WHATEVER the setting (Genie cancelled their turn, not you) and
     // told to continue; the rest only with the setting on, unprompted.
     // SAFE MODE (Tynn #386): genie-host said so before ready; then nobody is started or resumed and both lists are KEPT.
-    void restoreAfterRelaunch({
+    if (restoresAtBoot('window', process.env)) void restoreAfterRelaunch({
         safeMode: windowSafeNow,
         pending: () => registry!.beginRestore(),
         started: (agentId) => registry!.restoreStarted(agentId as AgentId),
