@@ -2,9 +2,9 @@ import type { AskerState } from '../core/deck-sources.js';
 import type { AgentId } from '../core/identity.js';
 
 /**
- * IS THE AGENT THAT ASKED STILL WAITING: its live session (the agent engine) or its Take Over terminal. A question whose
- * agent has neither, or whose running session started after it was asked, is STALE on the Deck. Read for every Deck
- * item on every Deck refresh.
+ * THE ASKING AGENT'S SESSION: its live session (the agent engine) or its Take Over terminal, read for every Deck item on
+ * every Deck refresh. The Deck reads it only to know liveness has been heard (`undefined` = not yet): a session that ended
+ * or restarted never makes a question stale, since its answer is mailed (Tynn #1085); only an agent gone from the roster does.
  */
 export interface AskerLiveDeps {
     /** Not heard yet: nothing is judged (`undefined`), never "gone" or "ended". */

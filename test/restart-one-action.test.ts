@@ -6,7 +6,7 @@ import { restartAgent, type AgentOpsPorts } from '../src/main/agent-ops-host.js'
 
 /**
  * ONE RESTART (genie#1238; the owner, 2026-10-26: "We have so many restart buttons across so many views and some of
- * them don't even work at all"). Every Restart and Start control calls `restartAgent(…, 'graceful')`, and it works from
+ * them don't even work at all"). Every Restart and Start control calls `restartAgent(…, 'graceful', 'restart')`, and it works from
  * EVERY state the agent can be in: a running or idle agent is stopped and started again on its conversation; a Broken
  * one (a crash, a failed preparation) and a stopped or never-started one is STARTED. After a start that went ahead it
  * delivers what the agent is owed (`deliverOwed`): the resume prompt and drafts that were never sent.
@@ -62,7 +62,7 @@ describe('Restart works from every state', () => {
     for (const s of STATES) {
         it(`${s.name}: the agent is started on its conversation, then what it is owed is delivered`, async () => {
             const f = fakes({ probe: s.probe, record: record(s.threadId !== undefined ? { threadId: s.threadId } : {}) });
-            expect(await restartAgent(f.ports, 'agent_a', 'graceful')).toEqual({ ok: true, kind: 'graceful' });
+            expect(await restartAgent(f.ports, 'agent_a', 'graceful', 'restart')).toEqual({ ok: true, kind: 'graceful' });
             const thread = s.threadId === undefined ? THREAD : s.threadId;
             // Stop (a no-op with no session), wait for the old run to end, start on the SAME thread, then the owed prompts —
             // and, when the Restart cut a turn short, the word to carry on (below).
@@ -74,12 +74,12 @@ describe('Restart works from every state', () => {
     it('a Restart that CUT A TURN tells the agent so, and to carry on — as Genie 1 told every relaunched agent (relaunch-prompt.ts); an idle one is not prompted', async () => {
         // Red before: a mid-turn agent was stopped and resumed with nothing said; its turn was simply gone.
         const working = fakes({ probe: live({ turnState: 'working', inTurn: true }) });
-        await restartAgent(working.ports, 'agent_a', 'graceful');
+        await restartAgent(working.ports, 'agent_a', 'graceful', 'restart');
         expect(working.calls.at(-1)).toBe(`then:genie:${RESUME_AFTER_USER_RESTART}`);
         expect(RESUME_AFTER_USER_RESTART).toMatch(/restarted/i);
         expect(RESUME_AFTER_USER_RESTART).toMatch(/continue/i);
         const idle = fakes({ probe: live({}) });
-        await restartAgent(idle.ports, 'agent_a', 'graceful');
+        await restartAgent(idle.ports, 'agent_a', 'graceful', 'restart');
         expect(idle.calls.some((c) => c.startsWith('then:'))).toBe(false);
     });
 });
@@ -87,30 +87,30 @@ describe('Restart works from every state', () => {
 describe('the rules a start always had still hold', () => {
     it('an asleep workspace or a full agent cap refuses a stopped agent — by name, before anything is touched', async () => {
         const f = fakes({ probe: null, refusal: 'Tynn.ai is hibernating: nothing starts here until you wake it.' });
-        expect(await restartAgent(f.ports, 'agent_a', 'graceful')).toEqual({ ok: false, reason: 'Tynn.ai is hibernating: nothing starts here until you wake it.' });
+        expect(await restartAgent(f.ports, 'agent_a', 'graceful', 'restart')).toEqual({ ok: false, reason: 'Tynn.ai is hibernating: nothing starts here until you wake it.' });
         expect(f.calls).toEqual([]);
     });
 
     it('a running agent is not refused by the cap it is already counted in', async () => {
         const f = fakes({ probe: live({}), refusal: 'the workspace already runs 4 of 4 agents' });
-        expect(await restartAgent(f.ports, 'agent_a', 'graceful')).toEqual({ ok: true, kind: 'graceful' });
+        expect(await restartAgent(f.ports, 'agent_a', 'graceful', 'restart')).toEqual({ ok: true, kind: 'graceful' });
     });
 
     it('a start the host refuses is said with its reason, and nothing is delivered into a session that is not there', async () => {
         const f = fakes({ probe: null, startResult: { ok: false, reason: 'the folder is not there' } });
-        expect(await restartAgent(f.ports, 'agent_a', 'graceful')).toEqual({ ok: false, reason: 'the folder is not there' });
+        expect(await restartAgent(f.ports, 'agent_a', 'graceful', 'restart')).toEqual({ ok: false, reason: 'the folder is not there' });
         expect(f.calls).not.toContain('deliverOwed:agent_a');
     });
 
     it('a stored thread id Genie will not hand to the provider is still refused — never a silent new chat', async () => {
         const f = fakes({ probe: null, record: record({ threadId: 'not a thread; rm -rf /' }) });
-        expect(await restartAgent(f.ports, 'agent_a', 'graceful')).toMatchObject({ ok: false, reason: expect.stringMatching(/thread id/) });
+        expect(await restartAgent(f.ports, 'agent_a', 'graceful', 'restart')).toMatchObject({ ok: false, reason: expect.stringMatching(/thread id/) });
         expect(f.calls).toEqual([]);
     });
 
     it('Restart fresh is the separate, named way to drop the conversation, and owes nothing to the old one', async () => {
         const f = fakes({ probe: live({ running: false, turnState: 'failed', failure: { reason: 'x', fixes: [] } as never }) });
-        expect(await restartAgent(f.ports, 'agent_a', 'fresh')).toEqual({ ok: true, kind: 'fresh', discarded: THREAD });
+        expect(await restartAgent(f.ports, 'agent_a', 'fresh', 'fresh')).toEqual({ ok: true, kind: 'fresh', discarded: THREAD });
         expect(f.calls).not.toContain('deliverOwed:agent_a');
     });
 });

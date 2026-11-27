@@ -90,7 +90,7 @@ describe('restart through the port main.ts builds waits for the old run to end',
         const w = world();
         expect(w.host.start(w.record(), w.dir)).toEqual({ ok: true });
 
-        const result = await restartAgent(w.ports, w.record().id, 'graceful');
+        const result = await restartAgent(w.ports, w.record().id, 'graceful', 'restart');
 
         // Red before the fix: { ok: false, reason: '"fancy" is still stopping; it starts once its previous run has ended.' }
         expect(result).toEqual({ ok: true, kind: 'graceful' });
@@ -107,7 +107,7 @@ describe('restart through the port main.ts builds waits for the old run to end',
         const w = world({ cwdForRestart: missing });
         expect(w.host.start(w.record(), w.dir)).toEqual({ ok: true });
 
-        const result = await restartAgent(w.ports, w.record().id, 'fresh');
+        const result = await restartAgent(w.ports, w.record().id, 'fresh', 'fresh');
 
         expect(result.ok).toBe(false);
         // The start's own reason — the folder — not "still stopping": the restart waited for the old run first.
@@ -121,7 +121,7 @@ describe('restart through the port main.ts builds waits for the old run to end',
         const w = world();
         expect(w.host.start(w.record(), w.dir)).toEqual({ ok: true });
 
-        const result = await restartAgent(w.ports, w.record().id, 'fresh');
+        const result = await restartAgent(w.ports, w.record().id, 'fresh', 'fresh');
 
         expect(result).toEqual({ ok: true, kind: 'fresh', discarded: THREAD });
         expect(w.record().threadId).toBeNull();

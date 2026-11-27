@@ -43,7 +43,7 @@ const questionOf = (agentId: string, name: string, id = 'q_1', over: Partial<Dec
 const APPROVAL = item('appr_1');
 const QUESTION = questionOf('a_ember', 'ember');
 const MAIL = item('msg_1', { source: 'unread-dm', agentId: 'a_quill', agentName: 'quill', answer: { kind: 'inline', options: [{ id: 'done', label: 'Collect', tone: 'neutral' }] }, blocking: false });
-const STALE = questionOf('a_cobalt', 'cobalt', 'q_stale', { stale: 'earlier-run', at: NOW - 3 * DAY_MS });
+const STALE = questionOf('a_cobalt', 'cobalt', 'q_stale', { stale: 'agent-gone', at: NOW - 3 * DAY_MS });
 const FLOW = item('genie:flow', { source: 'genie', agentId: null, agentName: null, workspaceId: null, blocking: false, answer: { kind: 'inline', options: [{ id: 'open', label: 'Open', tone: 'neutral' }] } });
 const ITEMS = [APPROVAL, QUESTION, MAIL, STALE, FLOW];
 
@@ -127,7 +127,7 @@ describe('opening a row shows its items with their own actions', () => {
         // cobalt sleeps and is hidden by default, so its item is on the Genie row (nothing is unreachable).
         expect(html).not.toContain('data-waiting-items="a_cobalt"');
         const genie = ssr(waiting({ initiallyOpen: ['genie:'], onDismiss: noop }));
-        expect(genie).toContain('data-deck-item-stale="earlier-run"');
+        expect(genie).toContain('data-deck-item-stale="agent-gone"');
         expect(genie).toContain('data-deck-dismiss="q_stale"');
     });
 

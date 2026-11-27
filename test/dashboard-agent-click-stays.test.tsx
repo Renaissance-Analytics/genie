@@ -103,7 +103,7 @@ describe('a Dashboard agent click', () => {
     });
 
     it('an agent whose question is STALE (it no longer waits): the same', () => {
-        const r = clickRow('a_kai', [question({ stale: 'session-ended' })]);
+        const r = clickRow('a_kai', [question({ stale: 'agent-gone' })]);
         expect(r.navigated).toEqual([]);
         expect(r.surface).toBe('dashboard');
         expect(r.subject).toBe('a_kai');

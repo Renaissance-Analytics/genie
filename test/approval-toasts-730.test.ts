@@ -28,7 +28,7 @@ describe('which Deck items are toasts', () => {
             approval(3, { id: 'q_1', answer: { kind: 'form', fields: 1 } }),
             approval(4, { id: 'q_2' }),
             approval(5, { forwardedFrom: 'host.example' }),
-            approval(6, { stale: 'earlier-run' }),
+            approval(6, { stale: 'agent-gone' }),
             approval(7, { id: 'msg_1', source: 'unread-dm' }),
         ];
         // COUNTED. A ForceTheQuestion (even a one-click one) has its own window; a forwarded one is answered on its host;

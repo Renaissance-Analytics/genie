@@ -9,6 +9,7 @@ import type { StreamEvent } from '../core/stream-event.js';
 import { withMcpServer } from '../core/agent-mcp.js';
 import { appWakeCapOf, parseAppWakeCap, type AppWakeCap } from '../core/app-inbox.js';
 import type { AgentPermissions, AgentRecord } from '../core/identity.js';
+import type { StartWhy } from '../core/start-why.js';
 import { parseIssueWatchSetting, type IssueWatchSetting } from '../core/issue-watch.js';
 import type { LiveSession } from '../core/roster.js';
 import type { StopVerdict } from '../core/session.js';
@@ -50,7 +51,7 @@ export interface AgentOpsPorts {
         setModel(id: AgentRecord['id'], model: string | null): Promise<AgentRecord | null>;
     };
     host: {
-        start(record: AgentRecord, cwd: string): ({ ok: true } | { ok: false; reason: string }) | Promise<{ ok: true } | { ok: false; reason: string }>;
+        start(record: AgentRecord, cwd: string, how?: { readonly why?: StartWhy }): ({ ok: true } | { ok: false; reason: string }) | Promise<{ ok: true } | { ok: false; reason: string }>;
         stop(id: AgentRecord['id']): boolean | Promise<boolean>;
         /**
          * How the last stop ended, once it has (`SessionHost.ended`): a restart starts only after it. REQUIRED: it was
@@ -142,7 +143,7 @@ export interface AgentRestartPorts {
     readonly cwdFor: AgentOpsPorts['cwdFor'];
 }
 
-export async function restartAgent(ports: AgentRestartPorts, agentId: string, kind: 'graceful' | 'fresh'): Promise<{ ok: true; kind: 'graceful' } | { ok: true; kind: 'fresh'; discarded: string | null } | Refusal> {
+export async function restartAgent(ports: AgentRestartPorts, agentId: string, kind: 'graceful' | 'fresh', why: StartWhy): Promise<{ ok: true; kind: 'graceful' } | { ok: true; kind: 'fresh'; discarded: string | null } | Refusal> {
     const record = ports.registry.find(agentId);
     if (!record) return UNKNOWN;
     const plan = restartPlan(kind, { threadId: record.threadId });
@@ -169,7 +170,7 @@ export async function restartAgent(ports: AgentRestartPorts, agentId: string, ki
         return { ok: false, reason: `${record.name}'s previous run did not end, so it was not started again: ${verdict.reason}` };
     }
     if (plan.kind === 'graceful') {
-        const started = await ports.host.start(record, ports.cwdFor(record));
+        const started = await ports.host.start(record, ports.cwdFor(record), { why });
         if (!started.ok) return started;
         await ports.host.deliverOwed(record.id, cutsTurn ? { text: RESUME_AFTER_USER_RESTART, by: 'genie' } : undefined);
         return { ok: true, kind: 'graceful' };
@@ -181,7 +182,7 @@ export async function restartAgent(ports: AgentRestartPorts, agentId: string, ki
      * nothing. Nothing can record the new run's thread before the clear: `onThreadId` fires from a provider update, never
      * inside `start()`, and `clearThread` changes the in-memory record before its first await — no await comes between.
      */
-    const started = await ports.host.start({ ...record, threadId: null }, ports.cwdFor(record));
+    const started = await ports.host.start({ ...record, threadId: null }, ports.cwdFor(record), { why });
     if (!started.ok) return started;
     const cleared = ports.registry.clearThread(record.id);
     return (await cleared) ? { ok: true, kind: 'fresh', discarded: plan.discards } : UNKNOWN;
@@ -510,7 +511,7 @@ export class SettingApplier {
     async #restart(id: AgentRecord['id']): Promise<void> {
         const record = this.#ports.registry.find(id);
         if (!record) return;
-        await restartAgent(this.#ports, record.id, record.threadId === null ? 'fresh' : 'graceful');
+        await restartAgent(this.#ports, record.id, record.threadId === null ? 'fresh' : 'graceful', 'settings');
     }
 }
 
@@ -624,10 +625,10 @@ export async function diagnose(ports: AgentOpsPorts, agentId: string): Promise<{
  * TRY AGAIN, for a login whose account the provider paused (core/account-pause.ts): every agent it stopped comes back, and
  * each one that does is told its account is back. One code for window main and genie-host (Tynn #898 step 2d-4a).
  */
-export async function retryPausedAgents(ports: { paused(provider: string): readonly string[]; restart(agentId: string): Promise<{ ok: boolean }>; prompt(agentId: string, text: string): void; touch(): void }, provider: string): Promise<void> {
+export async function retryPausedAgents(ports: { paused(provider: string): readonly string[]; restart(agentId: string, why: 'account-back'): Promise<{ ok: boolean }>; prompt(agentId: string, text: string): void; touch(): void }, provider: string): Promise<void> {
     await Promise.all(ports.paused(provider).map(async (id) => {
         try {
-            if ((await ports.restart(id)).ok) ports.prompt(id, ACCOUNT_BACK);
+            if ((await ports.restart(id, 'account-back')).ok) ports.prompt(id, ACCOUNT_BACK);
         } finally { ports.touch(); }
     }));
 }
