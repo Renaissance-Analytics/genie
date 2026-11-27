@@ -3,6 +3,15 @@ import { readLimitWindow, type Headroom, type ReadingStamp, type WindowReading }
 /** One account's last reading as saved (Tynn #485). */
 export interface SavedReading { readonly source: HeadroomSource; readonly runId: string; readonly room: Headroom }
 
+/**
+ * THE BOARD AS SAVED, with its format (Tynn #1070). Before #1070 a reading could be saved under another account's name (a run
+ * in its own account's directory was re-credited to the active account when a read of who is signed in ended), and the board
+ * then kept that copied window for good. Nothing in a reading says whose it really was, so a board saved before #1070 (a bare
+ * list) is not brought back: those accounts read unknown until they are read again.
+ */
+export interface SavedBoard { readonly format: typeof BOARD_FORMAT; readonly readings: readonly SavedReading[] }
+export const BOARD_FORMAT = 2;
+
 const isRec = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 function savedWindow(v: unknown): Headroom['windows'][number] | null {
@@ -67,8 +76,8 @@ export class HeadroomBoard {
     }
 
     /** Every account's last reading, as JSON, so a host restart still knows an idle account's room (Tynn #485). */
-    snapshot(): SavedReading[] {
-        return [...this.#shown.values()].map((s) => ({ source: { ...s.source }, runId: s.runId, room: s.room }));
+    snapshot(): SavedBoard {
+        return { format: BOARD_FORMAT, readings: [...this.#shown.values()].map((s) => ({ source: { ...s.source }, runId: s.runId, room: s.room })) };
     }
 
     /**
@@ -76,8 +85,8 @@ export class HeadroomBoard {
      * at once. A reading arriving before the restore wins over the saved one.
      */
     restore(saved: unknown): void {
-        if (!Array.isArray(saved)) return;
-        for (const raw of saved) {
+        if (!isRec(saved) || saved['format'] !== BOARD_FORMAT || !Array.isArray(saved['readings'])) return;
+        for (const raw of saved['readings']) {
             const r = savedReading(raw);
             if (!r) continue;
             const key = `${r.source.provider}:${r.source.accountId}`;
@@ -133,7 +142,7 @@ export class HeadroomFeed {
     }
 
     /** Every account's last reading, to save (Tynn #485). */
-    snapshot(): SavedReading[] {
+    snapshot(): SavedBoard {
         return this.#board.snapshot();
     }
 

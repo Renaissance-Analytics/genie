@@ -6,7 +6,7 @@ import { ActivityLight, Button, Dropdown, Icon, Popover } from '@particle-academ
 import { PlanHover } from './PlanHover.js';
 import { Fragment, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type RefObject } from 'react';
 import { useNow } from '../use-now.js';
-import { allRefreshed, limitLevel, limitRows, readLimitWindow, resetsIn, tightestWindow, windowWords, type Headroom, type LimitLevel } from '../../core/headroom.js';
+import { allRefreshed, limitLevel, limitRows, readLimitWindow, resetsIn, tightestWindow, usedPct, usedWords, windowWords, type Headroom, type LimitLevel } from '../../core/headroom.js';
 import { shortDateTime } from '../../core/clock-words.js';
 import type { MailSignal } from '../../core/mail-signals.js';
 import { MailSignalLayer } from './MailSignalLayer.js';
@@ -14,7 +14,7 @@ import { ProviderLogo, providerName } from './ProviderLogo.js';
 import { AccountsChip } from './AccountsChip.js';
 import type { AccountsSnapshot } from '../../core/accounts-view.js';
 import type { AccountsAction, AccountsActResult } from '../../core/account-settings.js';
-import type { SwitchOffer } from '../../core/switch-offer.js';
+import { offerWords, type SwitchOffer } from '../../core/switch-offer.js';
 import { WORKSPACE_PULSE } from './Sidebar.js';
 import { WorkspaceSwatch } from '../workspace-colors.js';
 import { agentStatusStyle } from '../agent-status-color.js';
@@ -335,8 +335,8 @@ function AgentRowView({ row, workspaceName, workspaceColor, workspaceFault, work
                 <ProviderLogo provider={row.provider} />
                 {switchOffer ? (
                     <Button type="button" size="xs" variant="ghost" icon="arrow-right-left" data-switch-offer-row={switchOffer.offer.id}
-                        aria-label={`${switchOffer.offer.label} is near its ${windowWords(switchOffer.offer.window)} limit: switch account`}
-                        title={`${switchOffer.offer.label}: ${switchOffer.offer.over ? 'spent' : `${switchOffer.offer.leftPct}% left`} ${windowWords(switchOffer.offer.window)}. Switch account`}
+                        aria-label={`${offerWords(switchOffer.offer)} Switch account`}
+                        title={`${offerWords(switchOffer.offer)} Switch account`}
                         className="shrink-0 px-1 text-[var(--warning)]"
                         onClick={(event) => { event.stopPropagation(); switchOffer.onSwitch(row.provider, switchOffer.offer.targets[0]?.label); }} />
                 ) : null}
@@ -961,13 +961,13 @@ function RateLimitPill({ provider, limit, now }: { provider: string; limit: Head
                     data-level={level}
                     aria-haspopup="dialog"
                     aria-expanded={open}
-                    aria-label={refreshed ? `${name} rate limits: refreshed` : `${name} rate limits: ${tight.over ? 'over the limit' : `${tight.leftPct}% left`} ${windowWords(tight.window)}`}
+                    aria-label={refreshed ? `${name} rate limits: refreshed` : `${name} rate limits: ${tight.over ? 'over the limit' : `${usedPct(tight)}% used`} ${windowWords(tight.window)}`}
                     // Enter and Space toggle here and cancel the click the browser would add, so one key press is one toggle.
                     onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(!open); } }}
                     className={`gap-1 hover:bg-[var(--bg-2)] ${open ? 'bg-[var(--bg-2)]' : ''}`}
                 >
                     <ProviderLogo provider={provider} size="xs" className="text-[var(--fg-3)]" />
-                    <span className={`tabular-nums ${LEVEL_TEXT[level]}`}>{refreshed ? 'Refreshed' : tight.over ? 'over' : `${tight.leftPct}%`}</span>
+                    <span className={`tabular-nums ${LEVEL_TEXT[level]}`}>{refreshed ? 'Refreshed' : usedWords(tight)}</span>
                     <span className="text-[11px] text-[var(--fg-4)]">{tight.window}</span>
                 </Button>
             </Popover.Trigger>
@@ -1006,10 +1006,10 @@ export function RateLimitDetail({ provider, limit, now }: { provider: string; li
                 <div key={w.window} data-rate-limit-window={w.window} data-level={limitLevel(w)} className="flex flex-col gap-1">
                     <div className="flex items-center gap-2">
                         <span className="w-12 shrink-0 text-[var(--fg-2)]">{w.window}</span>
-                        <span role="progressbar" aria-label={`${w.window} left`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={w.leftPct} className="block h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--bg-3)]">
-                            <span data-rate-limit-fill="" className={`block h-full rounded-full ${LEVEL_FILL[limitLevel(w)]}`} style={{ width: `${w.leftPct}%` }} />
+                        <span role="progressbar" aria-label={`${w.window} used`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={usedPct(w)} className="block h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--bg-3)]">
+                            <span data-rate-limit-fill="" className={`block h-full rounded-full ${LEVEL_FILL[limitLevel(w)]}`} style={{ width: `${usedPct(w)}%` }} />
                         </span>
-                        <span data-rate-limit-pct="" className={`w-9 shrink-0 text-right tabular-nums ${LEVEL_TEXT[limitLevel(w)]}`}>{w.over ? 'over' : `${w.leftPct}%`}</span>
+                        <span data-rate-limit-pct="" className={`w-16 shrink-0 text-right tabular-nums ${LEVEL_TEXT[limitLevel(w)]}`}>{usedWords(w)}</span>
                     </div>
                     <div className="flex flex-col pl-14">
                         <span data-rate-limit-reset="" className="text-[var(--fg-2)]">{resetsIn(w.resetsAtMs, now)}</span>

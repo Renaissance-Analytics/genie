@@ -914,6 +914,16 @@ export class AgentSession {
     }
 
     /**
+     * HELD ON THE LIMIT WITH NOTHING WORKING (the owner, 2026-11-26: switched off a spent account and the agent never moved).
+     * The provider refuses this account until its reset, so a turn the limit cut has nothing left to do and what waits is held
+     * for the next run: a move to another account cuts nothing. Not quiet (`quiet` is false while held), yet movable.
+     */
+    get limitIdle(): boolean {
+        if (!this.#held || !this.running || this.#starting || this.#needsNewDriver || this.#approval !== null) return false;
+        return !this.#inTurn || this.#cutByLimit || this.#limitThisTurn;
+    }
+
+    /**
      * QUIET: a restart now would cut nothing. Promptable, not on a limit, and past the Cooling wait, because
      * Claude can still open a turn of its own for a prompt it took mid-turn just after the last one ended (`#queued`).
      * For a restart Genie chooses by itself; the person's own Restart does not ask.
@@ -1900,11 +1910,13 @@ export class AgentSession {
      * account's reading is never delivered; its next turn opens with `note` (the account and its room), once; and a hold on the
      * limit goes, as when the limit resets.
      */
-    accountSwitched(note: string, headroom: Headroom | null): void {
+    accountSwitched(note: string, headroom: Headroom | null, resume = true): void {
         this.#latestHeadroom = headroom;
         this.#rateWarningPending = false;
         this.#accountNote = note;
-        if (this.#held) this.resumeAfterLimit();
+        // `resume: false`: this process is still in the spent account's directory and is about to move. Lifting the hold here
+        // would send what waited to the account that refuses it, re-hold the agent, and the move would never come.
+        if (this.#held && resume) this.resumeAfterLimit();
         this.#changed();
     }
 
@@ -2964,8 +2976,10 @@ export class AgentSession {
             if (readings.length > 0) {
                 const notice = update['notice'];
                 const said = typeof notice === 'object' && notice !== null ? (notice as Record<string, unknown>)['message'] : null;
-                this.#options.onRateLimit?.(readings, typeof said === 'string' ? said : null);
+                // Marked BEFORE the host is told (Tynn #1070): the hold it may put on this agent asks at once whether the agent
+                // can move off a refused account (`limitIdle`), and the answer depends on this turn having met the limit.
                 if (this.#inTurn && readings.some((r) => r.status !== 'allowed')) this.#limitThisTurn = true;
+                this.#options.onRateLimit?.(readings, typeof said === 'string' ? said : null);
             }
         }
 

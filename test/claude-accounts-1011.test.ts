@@ -264,6 +264,55 @@ describe('ClaudeAccountsLive: each account\'s live state, asked of the CLI in th
         await live.refresh();
         expect(live.view()[own.id]).toBeUndefined();
     });
+
+    /*
+     * A REFRESH ASKED WHILE ONE IS UNDER WAY READS AGAIN AFTER IT (Tynn #1081, the claude-accounts row's check 23, failed in gates
+     * 1125-084329-e9b61f and 1127-011906-956340 with the host saying "Team API is signed in."). The sign-in's end asks for a
+     * refresh; one already under way (asked when the CLI asked for the code, or by a window listing the accounts) had described
+     * the folder BEFORE the CLI wrote its sign-in. Handing back that run read "signed out", changed nothing, told no window, and
+     * stamped the view fresh: nothing read the folder again until a window listed the accounts 20 s later.
+     */
+    it('a refresh asked while one is under way reads again after it: the sign-in that finished meanwhile is shown, and the windows told', async () => {
+        const own = rec(`account_${'7'.repeat(32)}`, { configDir: '/team', method: 'console' });
+        let signedIn = false;
+        const held: { release: (() => void) | null } = { release: null };
+        let changes = 0;
+        const live = new ClaudeAccountsLive({
+            accounts: () => [own], defaultDir: () => null, recordIdentity: async () => {}, changed: () => { changes += 1; },
+            describe: async (dir) => {
+                // What the CLI says is read at the START of the describe; the first one is then held open.
+                const now = status({ requestedConfigDir: dir, configDirectory: dir ?? undefined, method: 'console', billing: 'apiUsage', cliAuthMethod: 'api_key', signedIn, ...(signedIn ? {} : { email: undefined }) });
+                if (held.release === null) await new Promise<void>((r) => { held.release = r; });
+                return now;
+            },
+        });
+        const first = live.refresh();
+        await Promise.resolve();
+        // The sign-in finishes while the first describe is out, and asks for a refresh.
+        signedIn = true;
+        const second = live.refresh();
+        held.release?.();
+        await first;
+        await second;
+        expect(live.view()[own.id]?.signedIn).toBe(true);
+        expect(changes).toBeGreaterThan(0);
+    });
+
+    it('CONTROL: refreshes asked together while one is under way read ONCE more, not once each', async () => {
+        const own = rec(`account_${'8'.repeat(32)}`, { configDir: '/one', method: 'subscription' });
+        let calls = 0;
+        const held: { release: (() => void) | null } = { release: null };
+        const live = new ClaudeAccountsLive({
+            accounts: () => [own], defaultDir: () => null, recordIdentity: async () => {}, changed: () => {},
+            describe: async (dir) => { calls += 1; if (calls === 1) await new Promise<void>((r) => { held.release = r; }); return status({ requestedConfigDir: dir, configDirectory: dir ?? undefined }); },
+        });
+        const first = live.refresh();
+        await Promise.resolve();
+        const asked = [live.refresh(), live.refresh(), live.refresh()];
+        held.release?.();
+        await Promise.all([first, ...asked]);
+        expect(calls).toBe(2);
+    });
 });
 
 describe('the default home\'s identity read never takes over a CHOSEN account with its own directory', () => {
