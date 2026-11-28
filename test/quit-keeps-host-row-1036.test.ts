@@ -124,6 +124,17 @@ describe('scripts/quit-keeps-host-cdp.mjs runs as a CI row', () => {
         expect(script).toMatch(/'25t\. Cancel stopped NOTHING: the launcher, the host and the providers all alive'/);
     });
 
+    it('a Linux tray menu the row opened is closed as it was opened, not with wtype, so the question gets its Escape (gate 1128-113206-1315d5)', () => {
+        // wtype's Escape goes to the focused window, not to the open GTK menu: the menu stayed open and took the Escape
+        // meant for "Shut down everything?". It is closed through ydotool's own device (Esc) and a click outside it.
+        const fn = script.slice(script.indexOf('function closeLinuxTrayMenu('), script.indexOf('function activeWindow('));
+        expect(fn).toMatch(/ydotool\(\['key', '1:1', '1:0'\]\)/);
+        expect(fn).toMatch(/ydotool\(\['click', '0xC0'\]\)/);
+        expect(script).toMatch(/if \(linuxMenu && !WIN\) closeLinuxTrayMenu\(\); else pressKey\('Escape'\);/);
+        // Where the question's Escape goes is said before it is pressed.
+        expect(script).toMatch(/the keyboard goes to: \$\{JSON\.stringify\(activeWindow\(\)\)\}/);
+    });
+
     it('L5 and Tynn #1079: Shut down everything is graceful (never ended), the launcher exits, and the next boot reads no crash', () => {
         expect(script).toMatch(/27g\. GRACEFULLY: the launcher waited for the host\\'s own stop and never ended it \(Tynn #1079\)/);
         expect(script).toMatch(/'27c\. the host wrote its clean-exit marker: its next boot reads no crash'/);
