@@ -538,13 +538,13 @@ function Row-host-update-rollback {
 # `unchanged`: the host adopted, every pid kept; `changed`: the bridge's host, every agent restored once. Both cases run.
 function Row-migrate-single-install {
     Need-Build; Need-Tracks; Need-TestMachine
-    $failed = @()
+    $migrateFailed = @()
     foreach ($case in @('unchanged', 'changed')) {
         $env:MIGRATE_ROW_OUT = Join-Path $Out "migrate-single-install-$case"; $env:CDP_PORT = '9422'; $env:MIGRATE_CLIENT_PORT = '9423'; $env:MIGRATE_ROW_DEADLINE_MS = '1500000'
-        try { node scripts/migrate-single-install-row.mjs --case $case; if ($LASTEXITCODE -ne 0) { $failed += $case } }
+        try { node scripts/migrate-single-install-row.mjs --case $case; if ($LASTEXITCODE -ne 0) { $migrateFailed += $case } }
         finally { foreach ($k in 'MIGRATE_ROW_OUT', 'CDP_PORT', 'MIGRATE_CLIENT_PORT', 'MIGRATE_ROW_DEADLINE_MS') { Remove-Item "Env:$k" -ErrorAction SilentlyContinue } }
     }
-    if ($failed.Count) { throw "migrate-single-install failed: $($failed -join ', ')" }
+    if ($migrateFailed.Count) { throw "migrate-single-install failed: $($migrateFailed -join ', ')" }
 }
 function Row-version-skew {
     Need-Build; Need-Tracks; Need-TestMachine
