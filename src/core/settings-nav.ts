@@ -103,6 +103,8 @@ const PLACE: Readonly<Record<string, SectionId>> = {
     track_cwd: 'terminals',
     // Drawn in Providers' Accounts block (Tynn #484), not as a generic row.
     switch_offer_windows: 'providers',
+    // Beside it (Tynn #1089).
+    when_active_account_out: 'providers',
 };
 
 /** The page a setting is on, or `null` when it is not drawn. Every alert sound (and its custom file) is under Notifications. */

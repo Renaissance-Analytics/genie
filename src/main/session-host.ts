@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import type { ListProviderModels } from '../core/provider-models.js';
 import type { SessionStore } from '@particle-academy/prism-harness';
 import { LiveReadings, planStepsOf } from '../core/live-readings.js';
-import { BackgroundCount } from '../core/background-count.js';
+import { BackgroundCount, touchesBackground } from '../core/background-count.js';
 import { agentActionOf, type AgentActionKind } from '../core/agent-actions.js';
 import { RateLimitGate, type GateView, type LimitReading } from '../core/rate-limit-gate.js';
 import { resetsIn, type Headroom, type ReadingStamp } from '../core/headroom.js';
@@ -636,6 +636,8 @@ export class SessionHost {
     readonly #launchBlocked: ((account: AccountRecord) => string | null) | undefined;
     readonly #onAccountUsed: ((account: AccountRecord) => void) | undefined;
     readonly #onMovesChanged: (() => void) | undefined;
+    /** Tynn #1089: an agent's limit hold began or ended (what the active-out rule acts on). */
+    readonly #onHeldChanged: ((provider: string) => void) | undefined;
     /** Starts a sign-in in their account's folder refused (Tynn #1011), as they were asked: started when the sign-in is over (`launchUnblocked`). */
     readonly #blockedStarts = new Map<AgentId, { readonly record: AgentRecord; readonly cwd: string; readonly how: StartHow; readonly reason: string }>();
     /** The Claude folder of each run that is stopping, or that a stop could not end: its process is in that folder until it has ended. */
@@ -815,6 +817,7 @@ export class SessionHost {
         onAccountUsed?: (account: AccountRecord) => void;
         /** An agent turned out to stay on its account, or stopped staying (Tynn #1084): the Accounts panel's count changed. */
         onMovesChanged?: () => void;
+        onHeldChanged?: (provider: string) => void;
         /** The person wrote to an agent (a message of their own starts a turn): the plan keepalive's count starts again. */
         onPersonTurn?: (agentId: AgentId) => void;
         /** Each agent's headroom reading, with its provider: the Dashboard header's one-per-provider indicator (main buffers). */
@@ -872,6 +875,7 @@ export class SessionHost {
         this.#launchBlocked = options.launchBlocked;
         this.#onAccountUsed = options.onAccountUsed;
         this.#onMovesChanged = options.onMovesChanged;
+        this.#onHeldChanged = options.onHeldChanged;
         this.#mcpServersFor = options.mcpServersFor;
         this.#untrustedFilesFor = options.untrustedFilesFor;
         this.#endToolCalls = options.endToolCalls;
@@ -1353,6 +1357,7 @@ export class SessionHost {
         if (record.plan && record.plan.length > 0) entry.readings.seedPlan(record.plan);
 
         let reportedTurns = record.lastTurn ?? 0;
+        let heldBefore = false;
         let numberedTurn = record.lastTurn ?? 0;
         const session: AgentSession = new AgentSession({
             agentId: record.id,
@@ -1410,6 +1415,11 @@ export class SessionHost {
              * happened to arrive, and a blocked agent produces no further rows by definition.
              */
             onStateChange: () => {
+                // HELD, OR NOT ANY MORE (Tynn #1089): said once per change, after the gate has the reading that held it.
+                if (session.held !== heldBefore) {
+                    heldBefore = session.held;
+                    try { this.#onHeldChanged?.(record.provider); } catch { /* a listener's failure is its own */ }
+                }
                 // A turn that ended: once per turn.
                 const turns = session.turns;
                 if (turns > reportedTurns) {
@@ -1490,6 +1500,13 @@ export class SessionHost {
                     rows.push({ id: `${record.id}:${entry.nextRowId++}`, event, at: this.#clock() });
                     rowAdded(entry);
                 }
+                /*
+                 * A BACKGROUND SHELL ENDED UNDER A HELD AGENT (Tynn #1089; the owner's coordinator sat 52 min on a spent week): the
+                 * move off a refused account waits while Claude's own background work runs, and that work ending is no state
+                 * change of the session, so nothing asked again until his message did. Asked again here, whenever a row can
+                 * change the count (cheap: `#awaitsMove` is false for an agent at work).
+                 */
+                if (touchesBackground(event) && this.#awaitsMove(entry)) this.#scheduleMove(record.id);
                 this.#emit(record.id);
             },
         });
@@ -1687,6 +1704,44 @@ export class SessionHost {
         return { account: { id: on.id, label: on.label, ...(to ? { movesTo: { id: to.id, label: to.label } } : {}) } };
     }
 
+    /** Tynn #1089: what the held agents on each provider's spent ACTIVE account are shown (core/active-out.ts); absent = nothing. */
+    readonly #activeOut = new Map<string, import('../core/active-out.js').ActiveOutView>();
+
+    /** The reset until which the provider refuses this login by its own reading (the gate), or `null` (Tynn #1089). */
+    refusedUntil(provider: string, accountId: string): number | null {
+        const view = this.#gate.view(this.#loginOf(provider, accountId), this.#clock());
+        return view.state === 'paused' ? view.resetsAtMs : null;
+    }
+
+    /** Whether an agent of this provider is held on the limit on the ACTIVE account (the one a switch would move it off). */
+    heldOnActive(provider: string): boolean {
+        for (const entry of this.#running.values()) if (this.#heldOnActiveRun(entry, provider)) return true;
+        return false;
+    }
+
+    #heldOnActiveRun(entry: Running, provider: string): boolean {
+        return entry.provider === provider && entry.session.held && entry.session.running && this.#movesTo(entry) === null;
+    }
+
+    /**
+     * WHEN THE ACTIVE ACCOUNT RUNS OUT (Tynn #1089): genie-host's ActiveOutService says what the held agents show — the line
+     * where each is held, with `Switch to` under Ask me — and, said once, as a line in each one's stream. `null`: nothing.
+     */
+    setActiveOut(provider: string, view: import('../core/active-out.js').ActiveOutView | null): void {
+        if (view === null) this.#activeOut.delete(provider);
+        else this.#activeOut.set(provider, view);
+        for (const [id, entry] of this.#running) {
+            if (entry.provider !== provider) continue;
+            if (view !== null && this.#heldOnActiveRun(entry, provider)) entry.session.notice(view.words);
+            this.#emit(id);
+        }
+    }
+
+    #activeOutOf(entry: Running): Pick<LiveSession, 'activeOut'> {
+        const view = this.#activeOut.get(entry.provider);
+        return view && this.#heldOnActiveRun(entry, entry.provider) ? { activeOut: view } : {};
+    }
+
     accountChanged(provider: string): void {
         for (const [id, entry] of this.#running) if (entry.provider === provider) this.#scheduleMove(id);
     }
@@ -1793,6 +1848,8 @@ export class SessionHost {
         const runRecord: AgentRecord = { ...record, threadId: fresh ? null : threadId };
         this.#moving.add(agentId);
         try {
+            // What waits goes to the new run (`deliverOwed` below): carried, never "undelivered" meanwhile (Tynn #1089).
+            session.carryToNextRun();
             this.stop(agentId, { graceful: false });
             const verdict = await this.ended(agentId);
             if (verdict && !verdict.verified && verdict.survivors.length > 0) return;
@@ -1813,6 +1870,8 @@ export class SessionHost {
             void (async () => {
                 if (this.#running.get(id)) { this.stop(id, { graceful: false }); await this.ended(id); }
                 const again = this.start(this.#currentRecord?.(id) ?? record, cwd, { account: from, quiet: true, why: 'account-move-back' });
+                // What the move carried goes to this run instead (Tynn #1089): carried is never left waiting for nobody.
+                if (again.ok) await this.deliverOwed(id);
                 if (again.ok && to) {
                     this.#stayedWhy.set(id, { to: to.id, why: `it could not start on ${to.label}` });
                     this.#tellStayed(id, from, to, `it could not start on ${to.label}`, true);
@@ -1954,7 +2013,7 @@ export class SessionHost {
     }
 
     /** A stopped run's queued input is durable. Only an explicit Send/Discard resolves its draft. */
-    resolvePrompt(agentId: AgentId, id: string, action: PromptAction): Promise<{ ok: true } | { ok: false; reason: string }> {
+    resolvePrompt(agentId: AgentId, id: string, action: PromptAction): Promise<{ ok: true; waiting?: true } | { ok: false; reason: string }> {
         // Edit on a message already WITHDRAWN (kept in the thread, Tynn #843): out of the thread, as Discard takes a draft —
         // decided by the record itself, below; anything else that is no longer queued answers why.
         let notQueued: { ok: false; reason: string } | null = null;
@@ -1964,7 +2023,7 @@ export class SessionHost {
             notQueued = taken;
             action = 'discard';
         }
-        const resolve = async (): Promise<{ ok: true } | { ok: false; reason: string }> => {
+        const resolve = async (): Promise<{ ok: true; waiting?: true } | { ok: false; reason: string }> => {
             await this.settled();
             const { rows } = await readPromptRows(this.#store(), agentId);
             const status = promptDeliveries(rows).get(id);
@@ -1974,7 +2033,9 @@ export class SessionHost {
             const session = this.#running.get(agentId)?.session;
             if (action === 'send') {
                 if (!session?.running) return { ok: false, reason: 'Restart the agent before sending this draft.' };
-                if (session.hasQueuedPrompt(id)) return { ok: false, reason: 'This message is already queued for the current turn.' };
+                // ALREADY WAITING IN THIS RUN (Tynn #1089): the person's Send is answered "waiting", never refused — the owner's
+                // Send all read this refusal as the button doing nothing at all.
+                if (session.hasQueuedPrompt(id)) return { ok: true, waiting: true };
                 // The person's Send is the person acting, whoever wrote the draft: a Stop's pause ends (genie#1565).
                 session.resumeAfterStop();
                 try {
@@ -2414,6 +2475,17 @@ export class SessionHost {
             if (!verdict.verified && verdict.survivors.length > 0) this.#leftovers.set(agentId, verdict.survivors);
             else { this.#leftovers.delete(agentId); this.#stoppingIn.delete(agentId); }
             this.#lifecycle?.ended(agentId, entry.run, verdict);
+            /*
+             * ITS LAST ROWS REACH THE WINDOW (Tynn #1089). The ledger of a stopped agent is its history, read once (`ledgerFor`),
+             * and the window asks for it the moment the stop is announced — before the run's last rows (what it kept
+             * "undelivered", a cancelled approval) are written. Read then, it stayed that way: the kept messages read as
+             * queued, never "Not delivered" with Send all now. Read again once they are written, unless a new run began.
+             */
+            void entry.session.settled().then(() => {
+                if (this.#running.has(agentId)) return;
+                this.#histories.delete(agentId);
+                this.#emit(agentId);
+            });
         };
         // Known at once when no grace and no retry was needed (and then a start right after is not refused).
         const known = entry.session.stopVerdict;
@@ -2727,7 +2799,9 @@ export class SessionHost {
         return {
             // The account it is really on, and where it moves at its next idle (Tynn #1084).
             ...this.#accountView(entry),
-            limit: this.#limitOf(this.#loginFor(entry.provider), entry.session.held),
+            ...this.#activeOutOf(entry),
+            // ITS OWN LOGIN'S limit (Tynn #1089): a run held on the spent account it is still in read the ACTIVE one's — open.
+            limit: this.#limitOf(this.#runLogin(entry), entry.session.held),
             signedOut: entry.session.signedOut,
             // The turn its provider stopped, explained and counted (Tynn #859): the red stop line's words.
             providerStop: entry.session.providerStop,

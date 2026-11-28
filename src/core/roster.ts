@@ -39,6 +39,11 @@ import type { RunningCall, StalledTurn } from './hung-call.js';
  */
 export interface LiveSession {
     /**
+     * Tynn #1089: the active account this agent waits on ran out — the line where it is held ("<active> is out until <reset> ·
+     * <other> has room.") and, under Ask me, the account `Switch to` names. Absent: nothing to say.
+     */
+    activeOut?: import('./active-out.js').ActiveOutView;
+    /**
      * The last turn its PROVIDER stopped (Tynn #859): the code verbatim, what it means and what to do
      * (core/provider-stops.ts), how many times this session has stopped for that reason, and the provider's own message and
      * details, kept apart for a quote (Tynn #921). Absent / `null` = none.
