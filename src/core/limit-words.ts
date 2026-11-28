@@ -1,4 +1,4 @@
-import { clockAmPm, fullDateTime } from './clock-words.js';
+import { clockAmPm, fullDateTime, shortDateTime } from './clock-words.js';
 import type { GateView } from './rate-limit-gate.js';
 
 /**
@@ -6,18 +6,28 @@ import type { GateView } from './rate-limit-gate.js';
  * Agent view. Until when it resumes; the next try on the no-reset backoff; or that it needs the person, in the
  * provider's own words when it gave any. `null` when the login is open or nothing was reported — never a guessed time.
  */
-export function limitWords(limit: GateView | null | undefined): string | null {
+export function limitWords(limit: GateView | null | undefined, nowMs: number = Date.now()): string | null {
     if (!limit) return null;
     switch (limit.state) {
         case 'paused':
-            return `rate limit · resumes ${clockAmPm(limit.resumeAtMs)}`;
+            return `rate limit · resumes ${when(limit.resumeAtMs, nowMs)}`;
         case 'retrying':
-            return `rate limit · next try ${clockAmPm(limit.nextTryAtMs)}`;
+            return `rate limit · next try ${when(limit.nextTryAtMs, nowMs)}`;
         case 'needs-person':
             return limit.message ? `rate limit · needs you: ${limit.message}` : 'rate limit · needs you';
         default:
             return null;
     }
+}
+
+/**
+ * WHEN, IN WORDS (Tynn #1089): the time alone today; with the day otherwise. A weekly limit's "resumes 7:15 PM" read as minutes
+ * away, six days early.
+ */
+function when(at: number, nowMs: number): string {
+    const a = new Date(at), n = new Date(nowMs);
+    const today = a.getFullYear() === n.getFullYear() && a.getMonth() === n.getMonth() && a.getDate() === n.getDate();
+    return today ? clockAmPm(at) : shortDateTime(at);
 }
 
 /**

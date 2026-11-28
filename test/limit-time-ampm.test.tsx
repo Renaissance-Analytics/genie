@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { statePill } from '../src/core/agent-view.js';
 import { chatContext } from '../src/core/chat-view.js';
 import { clockAmPm, fullDateTime } from '../src/core/clock-words.js';
@@ -20,6 +20,10 @@ import { ChatFlyout, type ChatThread } from '../src/renderer/components/ChatFlyo
 const at = (h: number, m: number) => new Date(2026, 9, 25, h, m).getTime(); // Sunday, October 25, 2026
 const paused = { state: 'paused' as const, window: 'five_hour', resetsAtMs: at(14, 29), resumeAtMs: at(14, 31), message: null };
 const retrying = { state: 'retrying' as const, nextTryAtMs: at(9, 5), attempt: 1, message: null };
+
+// THE FIXTURES' DAY (Tynn #1089): a resume on another day says the day, so "the same day" is pinned to this one.
+beforeAll(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(at(14, 0)); });
+afterAll(() => { vi.useRealTimers(); });
 
 describe('the two formatters', () => {
     it('am/pm, no leading zero, noon and midnight the standard way — never a 24-hour clock', () => {

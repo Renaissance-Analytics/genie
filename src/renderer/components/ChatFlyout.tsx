@@ -66,11 +66,13 @@ import { WorkspaceSwatch, useAgentColor, wsStyle } from '../workspace-colors.js'
  */
 
 /** One message as the chat draws it (`core/chat-view.ts`'s `ChatMessage`, its optional parts optional). */
-export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'queuedForStart' | 'silentSince' | 'attachmentRefs' | 'promptId' | 'draftProblem' | 'carried' | 'withdrawn'>>;
+export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'queuedForStart' | 'silentSince' | 'attachmentRefs' | 'promptId' | 'draftProblem' | 'carried' | 'withdrawn' | 'movingTo' | 'queuedForReturn'>>;
 
 export interface ChatThread {
     /** Tynn #1084: the account the agent is really on, and the one it moves to at its next idle. */
     account?: { readonly label: string; readonly movesTo?: string; readonly stays?: string } | undefined;
+    /** Tynn #1089: the active account ran out — the line, and under Ask me the account `Switch to` names. */
+    activeOut?: { readonly words: string; readonly switchTo?: { readonly id: string; readonly label: string } } | undefined;
     agentId: string;
     name: string;
     fidelity: Fidelity;
@@ -331,6 +333,11 @@ export interface ChatFlyoutProps {
     onDesignLogin?: (() => void) | undefined;
     /** Tynn #1084: `Restart on <active> now` on the context line, while the agent is still on another account. */
     onMoveNow?: (() => void) | undefined;
+    /** Tynn #1089: `Switch to <account>` on the active-out line — the normal switch (`accounts.act` switch). */
+    onSwitchAccount?: ((accountId: string) => void) | undefined;
+    /** Tynn #1089: Send all, one message at a time with a result each (core/send-all.ts); `sending` is how far it is. */
+    onSendAllKept?: ((items: readonly import('../../core/send-all.js').SendAllItem[]) => void) | undefined;
+    sending?: import('../../core/send-all.js').SendAllState | null | undefined;
     /** Where the width is remembered; absent = the window's localStorage (tests pass their own). */
     widthStorage?: Pick<Storage, 'getItem' | 'setItem'> | null | undefined;
     /** The width the dock gives the chat (the content row reserves the same; Tynn #798). Absent = the remembered width. */
@@ -427,7 +434,7 @@ export const ChatFlyout = stableView(ChatFlyoutBody, 'ChatFlyout');
 function ChatFlyoutBody({
     busy = false, onChooseProviderProgram,
     thread, onWindowLines, contextUsage = null, approval, approvalInToast = false, commands, answeringApproval, approvalRefusal, onAnswerApproval, onTrustWorkspace,
-    onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onResolveQueued, onStopTurn, onInterruptAndSend, loadAttachment, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onMoveNow, widthStorage, scope, dockWidth, onDockWidth, drafts, onTyping, peerTyping, insert, onInserted,
+    onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onResolveQueued, onStopTurn, onInterruptAndSend, loadAttachment, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onMoveNow, onSwitchAccount, onSendAllKept, sending, widthStorage, scope, dockWidth, onDockWidth, drafts, onTyping, peerTyping, insert, onInserted,
 }: ChatFlyoutProps) {
     countRender('ChatFlyout');
     const keeper = drafts === 'loading' ? undefined : drafts;
@@ -559,6 +566,14 @@ function ChatFlyoutBody({
         const undelivered = yours.filter((m) => !m.delivered && !m.queued && !m.withdrawn);
         return { waiting: yours.filter((m) => m.queued || (m.waiting !== undefined && m.delivered)).length, undelivered, sendable: undelivered.filter((m) => !m.reason) };
     })();
+    // SEND ALL'S RESULTS SAY WHAT THE CHAT SAYS NOW (Tynn #1089): one handed over but waiting in the run (held on a limit)
+    // reads Waiting; one delivered reads Sent. A failure stays as reported.
+    const liveSending = sending ? { ...sending, results: sending.results.map((r) => {
+        if (r.outcome === 'failed') return r;
+        const m = messages.find((x) => x.id === r.id);
+        if (!m) return r;
+        return { id: r.id, text: r.text, outcome: m.delivered ? 'sent' as const : m.queued ? 'waiting' as const : r.outcome };
+    }) } : sending;
     const restartOn = [...messages].reverse().find((m) => (m.who ?? (m.from === 'you' ? 'you' : 'agent')) === 'you' && !m.delivered && !m.queued && !m.withdrawn && !m.reason && m.resend !== 'send')?.id ?? null;
     /** The scroll height before a page of history was added: the reader stays on the message they were reading. */
     const anchorRef = useRef<number | null>(null);
@@ -810,6 +825,24 @@ function ChatFlyoutBody({
                     ) : null}
                 </div>
             ) : null}
+            {thread?.activeOut ? (
+                // THE ACTIVE ACCOUNT RAN OUT (Tynn #1089): a row of its own under the context line, the words whole (squeezed into
+                // that line it read "Spent is out…"), and under Ask me the one click to switch.
+                <div data-chat-active-out="row" role="status" className="flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] bg-[var(--warning)]/10 px-4 py-1.5 text-[12px] text-[var(--warning)]">
+                    <span className="min-w-0 flex-1">{thread.activeOut.words}</span>
+                    {thread.activeOut.switchTo && onSwitchAccount ? (
+                        <Button size="xs"
+                            type="button"
+                            data-action="switch-account"
+                            title={`Make ${thread.activeOut.switchTo.label} the active account: every agent continues on it, on its own conversation`}
+                            onClick={() => onSwitchAccount(thread.activeOut!.switchTo!.id)}
+                            className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--warning)] bg-[var(--warning)]/10 px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--warning)]/20"
+                        >
+                            {`Switch to ${thread.activeOut.switchTo.label}`}
+                        </Button>
+                    ) : null}
+                </div>
+            ) : null}
 
             {/*
              * THE SCROLLER and THE COLUMN are two elements (the owner could not scroll at all): one element that
@@ -907,10 +940,13 @@ function ChatFlyoutBody({
                     waiting={queue.waiting}
                     undelivered={queue.undelivered.length}
                     onInterruptAndSend={onInterruptAndSend}
-                    onSendAll={queue.sendable.length > 0 && onRestartAndSend ? () => {
+                    sending={liveSending}
+                    onSendAll={queue.sendable.length > 0 && (onSendAllKept || onRestartAndSend) ? () => {
+                        // Tynn #1089: each in the order written, with progress and a result each, at the bar.
+                        if (onSendAllKept) { onSendAllKept(queue.sendable.map((m) => ({ id: m.id, text: m.text }))); return; }
                         // While it runs, each in the order written; not running, the chat's one Restart, which sends them all.
-                        if (queue.sendable.some((m) => m.resend === 'send')) for (const m of queue.sendable) onRestartAndSend(m.id);
-                        else onRestartAndSend(restartOn ?? queue.sendable.at(-1)!.id);
+                        if (queue.sendable.some((m) => m.resend === 'send')) for (const m of queue.sendable) onRestartAndSend!(m.id);
+                        else onRestartAndSend!(restartOn ?? queue.sendable.at(-1)!.id);
                     } : undefined}
                     onDiscardAll={queue.undelivered.length > 0 && onDiscardDraft ? () => { for (const m of queue.undelivered) onDiscardDraft(m.id); } : undefined}
                 />
@@ -1204,8 +1240,8 @@ export function ChatMessages({ messages, thread, refs: replyRefs, mailOnly, onOp
                         {mailOnly && m.read !== undefined ? (
                             <span data-chat-read={m.id} className="font-mono text-[11px] text-[var(--fg-4)]">{m.read === null ? 'not read yet' : `read ${clock(m.read)}`}</span>
                         ) : null}
-                        {m.queued ? (m.queuedForStart || m.queuedForProvider
-                            ? <span data-chat-queued={m.id} className="flex items-center justify-end gap-1.5 font-mono text-[11px] text-[var(--fg-3)]"><span>{m.queuedForStart ? `Starting ${thread?.name ?? 'the agent'} · sent when it is up` : 'Queued · waiting for the provider to resume'}</span>{onQueuedAction && m.promptId ? <ChatQueuedActions id={m.id} busy={queuedBusy?.has(m.id) === true} onAction={onQueuedAction} /> : null}</span>
+                        {m.queued ? (m.movingTo || m.queuedForReturn || m.queuedForStart || m.queuedForProvider
+                            ? <span data-chat-queued={m.id} className="flex items-center justify-end gap-1.5 font-mono text-[11px] text-[var(--fg-3)]"><span>{m.movingTo ? `Waiting · moving to ${m.movingTo}` : m.queuedForReturn ? `Waiting · sent when ${thread?.name ?? 'the agent'} is back` : m.queuedForStart ? `Starting ${thread?.name ?? 'the agent'} · sent when it is up` : 'Queued · waiting for the provider to resume'}</span>{onQueuedAction && m.promptId ? <ChatQueuedActions id={m.id} busy={queuedBusy?.has(m.id) === true} onAction={onQueuedAction} /> : null}</span>
                             : <ChatQueuedNoteLive id={m.id} agentName={thread?.name ?? 'the agent'} silentSince={m.silentSince ?? null} actions={onQueuedAction && m.promptId ? <ChatQueuedActions id={m.id} busy={queuedBusy?.has(m.id) === true} onAction={onQueuedAction} /> : null} />) : null}
                         {/* A Withdraw / Edit that lost to the turn's end (Tynn #843): the host's words, on the message. */}
                         {queuedProblems?.[m.id] ? <span role="alert" className="text-[12px] text-[var(--warning)]">{queuedProblems[m.id]}</span> : null}

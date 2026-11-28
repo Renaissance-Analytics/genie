@@ -56,6 +56,7 @@ import type { UpdateState } from '../bridge.js';
 import { ProviderLogo } from './ProviderLogo.js';
 import { AccountsSettings, type AccountsSettingsProps } from './AccountsSettings.js';
 import { SWITCH_OFFER_WINDOWS_SETTING } from '../../core/switch-offer.js';
+import { ACTIVE_OUT_SETTING } from '../../core/active-out.js';
 import { CopyAnnounce, copyWords, useCopyText } from './CopyText.js';
 import { UNLOCK_WORDS } from '../../core/keyring-unlock.js';
 
@@ -2134,7 +2135,7 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
                             {active === 'appearance' ? <SetSection title="Appearance" desc="How Genie looks on this device.">{rows('appearance')}</SetSection> : null}
                             {active === 'tynn' ? <SetSection title="Tynn" desc="Optional: identity, your projects, and IssueWatch. Genie is fully usable signed out." data-settings-tynn=""><TynnBlock integrations={data.integrations} onAction={onAction} /></SetSection> : null}
                             {active === 'github' ? <SetSection title="GitHub" desc="Sign in to the Genie AOS app: who you are on GitHub, where the app is installed, and what it may do there." data-settings-github=""><GithubBlock integrations={data.integrations} onAction={onAction} /></SetSection> : null}
-                            {active === 'providers' ? <SetSection title="Providers" desc="The agent CLIs Genie runs, and whether each is signed in." data-settings-providers=""><ProvidersBlock providers={providers} onNavigate={onNavigate} />{accountsSettings ? <AccountsSettings {...accountsSettings} offerWindows={values === null ? undefined : values[SWITCH_OFFER_WINDOWS_SETTING]} onSetOfferWindows={(value) => onAction({ kind: 'settings.set', key: SWITCH_OFFER_WINDOWS_SETTING, value })} /> : null}</SetSection> : null}
+                            {active === 'providers' ? <SetSection title="Providers" desc="The agent CLIs Genie runs, and whether each is signed in." data-settings-providers=""><ProvidersBlock providers={providers} onNavigate={onNavigate} />{accountsSettings ? <AccountsSettings {...accountsSettings} offerWindows={values === null ? undefined : values[SWITCH_OFFER_WINDOWS_SETTING]} onSetOfferWindows={(value) => onAction({ kind: 'settings.set', key: SWITCH_OFFER_WINDOWS_SETTING, value })} whenOut={values === null ? undefined : values[ACTIVE_OUT_SETTING]} onSetWhenOut={(value) => onAction({ kind: 'settings.set', key: ACTIVE_OUT_SETTING, value })} /> : null}</SetSection> : null}
                             {active === 'workspace-defaults' ? <SetSection title="Defaults for workspaces" desc="What every workspace uses unless its own Settings override it.">{rows('workspace-defaults')}</SetSection> : null}
                             {active === 'prompts' ? <SavedPrompts raw={values === null ? undefined : values['saved_prompts']} bindings={bindingsFrom(values)} onAction={onAction} /> : null}
                             {active === 'agent-mcp' ? (

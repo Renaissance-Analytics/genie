@@ -50,6 +50,8 @@ export interface StillOnAccount {
 }
 
 export interface ProviderAccountsView {
+    /** Tynn #1089: the active account ran out while an agent waits on it — the line beside the chip, and its `Switch to`. */
+    readonly activeOut?: import('./active-out.js').ActiveOutView;
     readonly provider: string;
     readonly accounts: readonly AccountView[];
     /** Tynn #1084: agents still on another account than the active one; absent or empty = every agent is on it. */

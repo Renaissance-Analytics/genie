@@ -65,6 +65,10 @@ export interface ChatMessage {
     queuedForProvider?: boolean;
     /** The agent is still starting (q_04ce323c: its first message started it); it goes the moment it is up. */
     queuedForStart?: boolean;
+    /** Tynn #1089: carried for the agent's next run while none is up: "Waiting · sent when <agent> is back". */
+    queuedForReturn?: boolean;
+    /** Tynn #1089: held for the agent's move to this account (its label): "Waiting · moving to <account>". */
+    movingTo?: string;
     /**
      * Queued behind a turn: when the agent last showed anything (Tynn #699) — after two minutes of nothing the message
      * offers "Send now (stop the current turn)". `null`: nothing from the agent in this thread.
@@ -177,6 +181,8 @@ export interface ChatThreadView {
     arriving: string | null;
     /** Tynn #1084: the account the agent is really on, and the active one it moves to at its next idle. Absent = not known. */
     account?: { readonly label: string; readonly movesTo?: string; readonly stays?: string };
+    /** Tynn #1089: the active account ran out — its line, and the account `Switch to` names (Ask me). */
+    activeOut?: import('./active-out.js').ActiveOutView;
 }
 
 /** The slice of an agent's detail the thread reads (structurally `AgentDetail`, without binding core to the bridge). */
@@ -291,16 +297,23 @@ export function chatMessages(detail: ChatDetail, _rows: readonly AgentRow[] = []
         const from = who === 'you' ? 'you' : who === 'peer' ? `${e.peerName ?? 'peer'} → ${detail.agent.name}` : detail.agent.name;
         const delivered = delivery === undefined || delivery === 'sent';
         // `carried` (Tynn #702): kept across the restart an unconfirmed interrupt made, waiting for the new run like a queued one.
-        const queued = (delivery === 'queued' || delivery === 'carried') && detail.session?.running === true;
+        // WITH NO RUN UP (the moment of a move, a restart starting; Tynn #1089) a carried or queued message still waits: the next
+        // start delivers both (`deliverOwed`). Queued without its delivery row is the window's view before the stopped run's
+        // row has reached it; it read "Not delivered. Kept for you to send again." for that moment.
+        const awaitsReturn = (delivery === 'carried' || delivery === 'queued') && detail.session?.running !== true;
+        const queued = ((delivery === 'queued' || delivery === 'carried') && detail.session?.running === true) || awaitsReturn;
         // Taken back by the person while it waited (Tynn #843): kept, marked, never delivered and never owed.
         const withdrawn = delivery === 'withdrawn';
         const waits = who === 'you' && delivered ? waiting.get(row.id) : undefined;
         out.push({ id: row.id, who, from, text: e.text, delivered, at: row.at,
             ...(withdrawn ? { withdrawn: true } : {}),
             ...(e.pending ? { promptId: e.pending.id, queued, resend: detail.session?.running && detail.session.turnState !== 'failed' ? 'send' as const : 'restart' as const } : {}),
-            ...(queued && detail.session?.starting === true ? { queuedForStart: true }
+            ...(awaitsReturn ? { queuedForReturn: true }
+                : queued && detail.session?.starting === true ? { queuedForStart: true }
                 : queued && detail.session?.turnState === 'idle' && detail.session.inTurn !== true ? { queuedForProvider: true } : {}),
             ...(queued ? { silentSince: lastOutputAt } : {}),
+            // Waiting for its move (Tynn #1089): the run it waits in is on another account than the active one.
+            ...(queued && detail.session?.account?.movesTo && detail.session.account.stays === undefined ? { movingTo: detail.session.account.movesTo.label } : {}),
             ...(e.attachments && e.attachments.length > 0 ? { attachments: e.attachments } : {}),
             ...(e.attachmentRefs && e.attachmentRefs.length > 0 ? { attachmentRefs: e.attachmentRefs } : {}), ...(waits ? { waiting: waits } : {}) });
     }
@@ -425,6 +438,7 @@ export function chatThreadFrom(detail: ChatDetail | null, subjectId: string, row
         loaded: conversation !== null,
         earlier: start > 0,
         arriving: conversation ? arrivingMessageId(conversation, messages) : null,
+        ...(detail?.session?.activeOut ? { activeOut: detail.session.activeOut } : {}),
         ...(detail?.session?.account ? { account: { label: detail.session.account.label, ...(detail.session.account.movesTo ? { movesTo: detail.session.account.movesTo.label } : {}), ...(detail.session.account.stays ? { stays: detail.session.account.stays.why } : {}) } } : {}),
     };
 }

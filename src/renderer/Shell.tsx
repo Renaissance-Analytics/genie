@@ -300,6 +300,10 @@ export interface ShellProps {
     onDesignLogin?: ((agentId: string) => void) | undefined;
     /** Tynn #1084: `Restart on <active> now` for an agent still on another account. */
     onMoveNow?: ((agentId: string, options?: { readonly fresh?: boolean }) => void) | undefined;
+    /** Tynn #1089: Send all with a result each, how far it is, and the active-out line's `Switch to`. */
+    onSendAllKept?: ((items: readonly import('../core/send-all.js').SendAllItem[]) => void) | undefined;
+    sendAll?: import('../core/send-all.js').SendAllState | null | undefined;
+    onSwitchToAccount?: ((accountId: string) => void) | undefined;
     /** Start an agent that is not running (the Agent view's Start). */
     onStartAgent?: ((agentId: string) => void) | undefined;
     /** The safe-mode banner's Start for an agent (Tynn #386): the one Restart, with its answer, so the banner says it. */
@@ -469,6 +473,9 @@ export function Shell({
     onAccountRetry,
     onDesignLogin,
     onMoveNow,
+    onSendAllKept,
+    sendAll,
+    onSwitchToAccount,
     onStartAgent,
     onSafeModeStartAgent,
     onOpenPalette,
@@ -1255,6 +1262,9 @@ export function Shell({
                         onAccountRetry={chatThread && onAccountRetry && !scoped && chatSession?.accountPaused ? () => onAccountRetry(chatThread.agentId) : undefined}
                         onDesignLogin={chatThread && onDesignLogin && !scoped && chatSession?.designLogin ? () => onDesignLogin(chatThread.agentId) : undefined}
                         onMoveNow={chatThread && onMoveNow && !scoped && chatSession?.account?.movesTo ? () => onMoveNow(chatThread.agentId) : undefined}
+                        onSendAllKept={readOnly ? undefined : onSendAllKept}
+                        sending={sendAll ?? null}
+                        onSwitchAccount={scoped || readOnly ? undefined : onSwitchToAccount}
                     />
                     </ErrorBoundary>
                 </div>
