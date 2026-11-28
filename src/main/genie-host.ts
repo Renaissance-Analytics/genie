@@ -4,6 +4,7 @@ import './close-inherited-fds.js';
 import { BUILT_IN_MCP_SERVERS } from '../core/agent-mcp.js';
 import { featureDownload } from './feature-download.js';
 import { HostFeatures } from './features-host.js';
+import { launcherToolchain } from './launcher-toolchain.js';
 import { FeatureCallers } from './feature-callers.js';
 import { nativeFeatureToolchain, adoptFeatureEnvironment } from './feature-native-toolchain.js';
 import { applyStartupUpdates } from './startup-updates-host.js';
@@ -1808,6 +1809,8 @@ async function main(): Promise<void> {
         ...(gappBook && gappServer ? { gappSessions: gappSessions(gappBook, gappServer, gappPreviews ? { previews: gappPreviews, ask: gappAsk } : undefined) } : {}),
         browser: browserService,
         updates: updatesService,
+        // The host's tools in the launcher's Updates list (Tynn #1058 L7, #716): read and installed by this host's own toolchain.
+        toolchain: launcherToolchain(() => hostFeatures),
         remoteAccess: remoteAccessService,
         // THIS MACHINE'S KEY IS HERE (P3.4). The relay is the window's until P5, so it asks this to sign.
         workstation: workstationService,

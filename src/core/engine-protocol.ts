@@ -37,8 +37,11 @@ export const BROWSER_LINK_LABEL = 'genie browser';
  * may call these methods only.
  */
 export const LAUNCHER_LINK_LABEL = 'genie launcher';
-/** L6 (updates): the launcher may also ask the host's updater (`engine.updates`: `state`, `check`, `install`). */
-export const LAUNCHER_LINK_METHODS = ['engine.ping', 'engine.shutdown', 'engine.activity', 'engine.updates'] as const;
+/**
+ * L6 (updates): the launcher may also ask the host's updater (`engine.updates`: `state`, `check`, `install`). L7 (Tynn #716):
+ * and the host's toolchain for its Updates list (`engine.toolchain`: `state`, `check`, `update`), whose install is the host's.
+ */
+export const LAUNCHER_LINK_METHODS = ['engine.ping', 'engine.shutdown', 'engine.activity', 'engine.updates', 'engine.toolchain'] as const;
 
 export const ENGINE_METHODS = [
     // Commands (window → host): each answers with the session host's own answer.
@@ -117,6 +120,9 @@ export const ENGINE_METHODS = [
     // the helper's launch. Its state is sent as `updates.dump` before `engine.ready` and as `updates.event` on change, to
     // local windows only.
     'engine.updates',
+    // THE HOST'S TOOLS FOR THE LAUNCHER'S UPDATES (Tynn #1058 L7, #716: launcher-toolchain.ts): `[method, args]`, `state`, `check`
+    // and `update [{tool, version?, confirmed?}]`, answered from HostFeatures' toolchain (its own installer), local links only.
+    'engine.toolchain',
     // The host's safe mode (Tynn #386: safe-mode-host.ts): `['leave']`. Its view is sent as `safeMode.event` before
     // `engine.ready` and on every change, to EVERY window: the banner is on all of them.
     'engine.safeMode',

@@ -19,6 +19,10 @@
 //! - **The launcher itself**: see `control::self_update` (the pipe handed over, or the old launcher kept).
 //! - **Retention**: per track `current` and `previous` are kept, and whatever a running program runs from; anything older
 //!   is deleted once nothing runs from it.
+//! - **The host's tools** (L7, #716): `launcher.updates` carries `tools` beside `tracks`, read from the running host
+//!   (`engine.toolchain state`); a person's check asks the host to check them (`check`); `launcher.apply {tool}` is the
+//!   host's own installer (`update`). With no host they say "Start the host to check its tools." The launcher installs no
+//!   tool itself.
 
 use crate::components::of_track;
 use crate::feed::{self, Offer};
@@ -68,6 +72,9 @@ pub struct Shared {
     /// How many client windows were open when the host update in flight was asked for: they leave when the host installs
     /// (src/core/quit.ts installQuit), and Genie is opened again after the swap when there were any.
     pub windows_at_update: std::sync::atomic::AtomicUsize,
+    /// L7: the host's tools as last read, and when (the Updates window redraws every second; the host is asked at most
+    /// every TOOLS_FRESH).
+    tools: Mutex<Option<(Instant, Value)>>,
 }
 
 fn now() -> u64 {
@@ -226,12 +233,94 @@ pub fn check_now(shared: &Shared, roots: &Roots) -> Result<Value, String> {
     }
     *shared.rows.lock().unwrap_or_else(|p| p.into_inner()) = rows;
     *shared.checked_at.lock().unwrap_or_else(|p| p.into_inner()) = Some(now());
-    Ok(view(shared, roots))
+    Ok(view_tracks(shared, roots))
+}
+
+// --- L7 (Tynn #716): the host's tools ----------------------------------------------------------------------------------
+
+/// What the tool rows say when no host is running to tell them.
+pub const NO_HOST_TOOLS: &str = "Start the host to check its tools.";
+/// How long a read of the host's tools may take (`launcher.updates` is read whenever the Updates window draws).
+pub const TOOLS_READ: Duration = Duration::from_secs(5);
+/// How long the host's own check of its tools may take (it asks each tool's source for its newest version).
+pub const TOOLS_CHECK: Duration = Duration::from_secs(180);
+/// How long the host has to say an update has started (it is answered at its start, not at its end).
+pub const TOOLS_UPDATE: Duration = Duration::from_secs(30);
+
+fn host_running(roots: &Roots) -> bool {
+    host::read_record(roots).filter(|r| pid_alive(r.pid)).is_some()
+}
+
+/// THE HOST'S TOOLS, beside the tracks: `{host, rows, checkedAt, checking}` from the running host (`engine.toolchain
+/// state`, or `check` for its own forced check), or `{host: false, rows: [], why}`. The launcher reads them and asks; it
+/// never installs a tool itself.
+pub fn tools(roots: &Roots, how: &str, bound: Duration) -> Value {
+    if !host_running(roots) {
+        return json!({"host": false, "rows": [], "why": NO_HOST_TOOLS});
+    }
+    match host::call(roots, "engine.toolchain", json!([how, []]), bound) {
+        Ok(v) => json!({"host": true, "rows": v["rows"].as_array().cloned().unwrap_or_default(), "checkedAt": v["checkedAt"], "checking": v["checking"] == true}),
+        Err(why) => json!({"host": true, "rows": [], "why": format!("The host did not say what its tools are: {why}.")}),
+    }
+}
+
+/// `launcher.apply {tool, version?, confirmed?}`: the host's own installer asked to update that tool. With no host running,
+/// nothing is started for it and the person is told why.
+pub fn apply_tool(roots: &Roots, a: &Value) -> Result<Value, String> {
+    let tool = a["tool"].as_str().filter(|t| !t.is_empty()).ok_or("launcher.apply needs {track} or {tool}")?;
+    if !host_running(roots) {
+        return Err(NO_HOST_TOOLS.to_string());
+    }
+    let mut ask = json!({"tool": tool});
+    if let Some(v) = a["version"].as_str().filter(|v| !v.is_empty()) {
+        ask["version"] = json!(v);
+    }
+    if a["confirmed"] == true {
+        ask["confirmed"] = json!(true);
+    }
+    host::call(roots, "engine.toolchain", json!(["update", [ask]]), TOOLS_UPDATE)
+}
+
+/// Whether a caller of `launcher.updates` / `launcher.check` wants the host's tools: every caller but one that says
+/// `{tools: false}` (the host's own updater, which must not be asked about its tools while it asks about its build).
+pub fn wants_tools(args: &[Value]) -> bool {
+    args.first().map_or(true, |a| a["tools"] != false)
+}
+
+/// `launcher.check` for a person: the tracks checked, then the host asked to check its tools; the rows with both. A
+/// failed feed is still said, once the tools were checked.
+pub fn check_with_tools(shared: &Shared, roots: &Roots) -> Result<Value, String> {
+    let tracks = check_now(shared, roots);
+    let tools = tools(roots, "check", TOOLS_CHECK);
+    *shared.tools.lock().unwrap_or_else(|p| p.into_inner()) = Some((Instant::now(), tools.clone()));
+    let mut v = tracks?;
+    v["tools"] = tools;
+    Ok(v)
+}
+
+/// How long a read of the host's tools is shown before the host is asked again.
+pub const TOOLS_FRESH: Duration = Duration::from_secs(3);
+
+/// `launcher.updates` with the host's tools (read, never checked; at most every TOOLS_FRESH).
+pub fn view(shared: &Shared, roots: &Roots) -> Value {
+    let mut v = view_tracks(shared, roots);
+    let fresh = shared.tools.lock().unwrap_or_else(|p| p.into_inner()).as_ref().filter(|(at, _)| at.elapsed() < TOOLS_FRESH).map(|(_, t)| t.clone());
+    v["tools"] = fresh.unwrap_or_else(|| {
+        let t = tools(roots, "state", TOOLS_READ);
+        *shared.tools.lock().unwrap_or_else(|p| p.into_inner()) = Some((Instant::now(), t.clone()));
+        t
+    });
+    v
+}
+
+/// What was read of the host's tools is old once one is asked to update (its step is read at the next draw).
+pub fn tools_changed(shared: &Shared) {
+    *shared.tools.lock().unwrap_or_else(|p| p.into_inner()) = None;
 }
 
 /// `launcher.updates`: the last check's rows (with what is ready now, and why the launcher's own did not happen), the host
 /// update in flight or last done, and what the next window is told. No network.
-pub fn view(shared: &Shared, roots: &Roots) -> Value {
+pub fn view_tracks(shared: &Shared, roots: &Roots) -> Value {
     let keys = keys::trusted_keys(roots);
     let st = state::read(&roots.state_file()).unwrap_or_default();
     let last = shared.rows.lock().unwrap_or_else(|p| p.into_inner()).clone();

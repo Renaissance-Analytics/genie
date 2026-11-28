@@ -172,13 +172,49 @@ html,body{height:100%;overflow:hidden;user-select:none}
     return r;
   }
 
+  // THE HOST'S TOOLS (L7): one row per tool with an update; with no host (or none to update) one quiet row saying so.
+  function toolRows(tools) {
+    var rows = tools.rows || [];
+    if (rows.length === 0) {
+      var q = quietRow('i-tools', 'Tools', tools.why ? '' : (tools.checking ? 'checking…' : 'up to date · installed by your host'), null);
+      if (tools.why) q.querySelector('.grow').appendChild(el('div', 'why', tools.why));
+      return [q];
+    }
+    return rows.map(function (t) {
+      var busy = !!t.updating;
+      var r = el('div', 'urow' + (busy || t.updated ? ' quiet' : ''));
+      r.setAttribute('data-tool', t.tool);
+      var ico = el('div', 'ico'); ico.appendChild(icon('i-tools')); r.appendChild(ico);
+      var g = el('div', 'grow');
+      var title = el('div', 'row-title', (t.label || t.tool) + ' ');
+      title.appendChild(el('span', 'ver', t.updated ? 'updated to ' + t.updated : (t.installed || '') + ' → ' + (t.to || 'newer')));
+      g.appendChild(title);
+      if (busy) g.appendChild(el('div', 'note', t.updating + '…'));
+      else if (t.refused) g.appendChild(el('div', 'why', t.refused));
+      else if (t.warning) g.appendChild(el('div', 'why', t.warning));
+      else if (t.tone === 'security-update') g.appendChild(el('div', 'why', t.advisory || 'A security fix'));
+      else g.appendChild(el('div', 'note', 'Installed by your host · no restart'));
+      r.appendChild(g);
+      if (t.updated) {
+        var ok = el('span', 'st-ok'); ok.appendChild(icon('i-check')); r.appendChild(ok);
+      } else if (!busy) {
+        var b = el('button', 'btn sm' + (t.tone === 'security-update' ? ' primary' : ''), t.warning ? 'Update anyway' : 'Update');
+        var ask = { tool: t.tool, version: t.to || '' };
+        if (t.warning) ask.confirmed = true;
+        b.onclick = function () { b.disabled = true; b.textContent = 'Updating…'; say('applyTool', ask); };
+        r.appendChild(b);
+      }
+      return r;
+    });
+  }
+
   function renderList(d) {
     var list = $('ulist'); list.textContent = '';
     var tracks = d.tracks || [];
     var byTrack = {}; tracks.forEach(function (t) { byTrack[t.track] = t; });
     ['host', 'client', 'browser'].forEach(function (k) { if (byTrack[k]) list.appendChild(row(byTrack[k])); });
-    // The host's tools are its own (Tynn #716, L7): listed here once the launcher asks the host for them.
-    if (byTrack.host) list.appendChild(quietRow('i-tools', 'Tools', 'installed by your host · no restart', null));
+    // The host's tools (Tynn #716, L7): read from the host, each updated by the host's own installer, no restart.
+    if (byTrack.host) toolRows(d.tools || {}).forEach(function (r) { list.appendChild(r); });
     list.appendChild(quietRow('i-apps', 'Genie Apps', 'each app on its own · no restart of your host', 'Coming soon'));
     if (byTrack.launcher) list.appendChild(row(byTrack.launcher));
     var ready = tracks.filter(function (t) { return t.state === 'ready'; }).length;
