@@ -1,8 +1,13 @@
 //! THE LAUNCHER'S TRAY (Tynn #1058 L5; the spec's "The tray and residence"). The launcher owns the tray: Windows'
 //! notification area (`Shell_NotifyIconW`), Linux's StatusNotifierItem over D-Bus (`ksni`, no GTK). The client has none.
 //!
-//! The menu is the owner's direction C tray screen (sandbox/launcher-design/shots/direction-c-tray.png), as the platform's
-//! own menu draws it:
+//! WHAT A CLICK ON THE ICON OPENS IS THE TRAY PANEL (Tynn #1058, #1514): the owner's direction C tray screen
+//! (sandbox/launcher-design/shots/direction-c-tray.png) in the launcher's own webview, anchored to the tray and closing when
+//! it loses the focus (src/panel.rs says what it offers, ui/panel.html draws it, src/ui.rs holds its window). Its items run
+//! these same actions (`act`). The platform's own menu below is kept only where the panel cannot be: Linux's right click,
+//! whose menu the desktop's tray draws itself from DBusMenu, and a launcher with no window loop (no display, no webview).
+//!
+//! The platform menu, short (Waybar cuts long labels):
 //!
 //!   This computer's host · running · 3 agents
 //!   Needs you: 2                               (only while the host's Deck waits on the person: the icon has its dot)
@@ -41,10 +46,14 @@ pub enum Action {
     Updates,
     /// L6: the tray's offer, "Update host" (its build in the tooltip): the host's update, through its own drain.
     InstallHostUpdate,
+    /// #1515: the launch pad, the launcher's own window (the panel's header; `launcher.openPad`).
+    OpenPad,
+    /// #1514: the tray panel, as a click on the icon opens it (`launcher.trayPanel`, a VM row's probe).
+    OpenPanel,
 }
 
 impl Action {
-    pub const ALL: [Action; 11] = [
+    pub const ALL: [Action; 13] = [
         Action::OpenGenie,
         Action::OpenBrowser,
         Action::StartHost,
@@ -56,6 +65,8 @@ impl Action {
         Action::OpenTaskManager,
         Action::Updates,
         Action::InstallHostUpdate,
+        Action::OpenPad,
+        Action::OpenPanel,
     ];
     /// The client's route for an action that opens Genie at a place (src/core/launcher-link.ts LAUNCHER_SHOW_ROUTES).
     pub fn route(self) -> Option<&'static str> {
@@ -83,6 +94,8 @@ impl Action {
             "openTaskManager" => Some(Action::OpenTaskManager),
             "updates" => Some(Action::Updates),
             "installHostUpdate" => Some(Action::InstallHostUpdate),
+            "openPad" => Some(Action::OpenPad),
+            "openPanel" => Some(Action::OpenPanel),
             _ => None,
         }
     }
@@ -344,6 +357,31 @@ fn open_browser(ctx: &Context) {
     }
 }
 
+/// The tray panel opened for a click on the icon at `anchor` (physical pixels; the pointer when `None`): `false` where it
+/// cannot be shown (no window loop), and the caller falls back to the platform's menu.
+pub fn open_panel(ctx: Arc<Context>, anchor: Option<(i32, i32)>) -> bool {
+    #[cfg(feature = "ui")]
+    {
+        crate::ui::show_panel(ctx, anchor)
+    }
+    #[cfg(not(feature = "ui"))]
+    {
+        let _ = (ctx, anchor);
+        false
+    }
+}
+
+/// The launch pad; where the launcher has no window, Genie opens instead.
+fn open_pad(ctx: &Arc<Context>) {
+    #[cfg(feature = "ui")]
+    {
+        if crate::ui::show_pad(Arc::clone(ctx)) {
+            return;
+        }
+    }
+    open_genie(ctx);
+}
+
 /// One of the menu's actions, on its own thread (the menu's thread never waits on a host or a question).
 pub fn act(ctx: Arc<Context>, action: Action) {
     std::thread::spawn(move || {
@@ -375,6 +413,18 @@ pub fn act(ctx: Arc<Context>, action: Action) {
                 }
             }
             Action::Updates => open_updates(&ctx),
+            Action::OpenPad => open_pad(&ctx),
+            Action::OpenPanel => {
+                // Windows: as the icon's own click opens it (its handler, at the icon). Elsewhere: by the pointer, as a
+                // left click on the StatusNotifierItem opens it.
+                #[cfg(windows)]
+                let shown = win::post_show_panel();
+                #[cfg(not(windows))]
+                let shown = open_panel(Arc::clone(&ctx), None);
+                if !shown {
+                    eprintln!("genie: tray: the panel cannot be shown here (no window loop)");
+                }
+            }
             Action::InstallHostUpdate => {
                 let asked = {
                     let _g = ctx.busy.lock().unwrap_or_else(|p| p.into_inner());
@@ -554,6 +604,8 @@ mod win {
     static TASKBAR_CREATED: OnceLock<u32> = OnceLock::new();
     const WM_TRAY: u32 = WM_APP + 1;
     const WM_SHOW_MENU: u32 = WM_APP + 2;
+    /// `launcher.trayPanel` (a VM row's): the panel, as a click on the icon opens it.
+    const WM_SHOW_PANEL: u32 = WM_APP + 3;
     const ICON_ID: u32 = 1;
 
     fn wide(s: &str) -> Vec<u16> {
@@ -615,6 +667,11 @@ mod win {
         }
     }
 
+    pub fn post_show_panel() -> bool {
+        let hwnd = WINDOW.load(Ordering::SeqCst) as HWND;
+        !hwnd.is_null() && unsafe { PostMessageW(hwnd, WM_SHOW_PANEL, 0, 0) } != 0
+    }
+
     pub fn post_show_menu() -> bool {
         let hwnd = WINDOW.load(Ordering::SeqCst) as HWND;
         !hwnd.is_null() && unsafe { PostMessageW(hwnd, WM_SHOW_MENU, 0, 0) } != 0
@@ -672,10 +729,16 @@ mod win {
         match msg {
             WM_TRAY => {
                 match lparam as u32 {
-                    WM_RBUTTONUP | WM_CONTEXTMENU => show_menu(hwnd, true),
-                    WM_LBUTTONUP => {
+                    // Either button opens the panel at the icon (the owner's direction C); the platform's menu only when
+                    // the panel cannot be shown. The shell lets the icon's owner come forward on its click, so the panel
+                    // takes the focus (and closes when it loses it).
+                    WM_LBUTTONUP | WM_RBUTTONUP | WM_CONTEXTMENU => {
                         if let Some(ctx) = CTX.get() {
-                            act(Arc::clone(ctx), Action::OpenGenie);
+                            SetForegroundWindow(hwnd);
+                            let p = anchor(hwnd, false);
+                            if !super::open_panel(Arc::clone(ctx), Some((p.x, p.y))) {
+                                show_menu(hwnd, true);
+                            }
                         }
                     }
                     _ => {}
@@ -684,6 +747,17 @@ mod win {
             }
             WM_SHOW_MENU => {
                 show_menu(hwnd, false);
+                0
+            }
+            // The same as the icon's click above: forward, at the icon.
+            WM_SHOW_PANEL => {
+                if let Some(ctx) = CTX.get() {
+                    SetForegroundWindow(hwnd);
+                    let p = anchor(hwnd, false);
+                    if !super::open_panel(Arc::clone(ctx), Some((p.x, p.y))) {
+                        show_menu(hwnd, false);
+                    }
+                }
                 0
             }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
@@ -757,8 +831,15 @@ mod linux {
         fn tool_tip(&self) -> ksni::ToolTip {
             ksni::ToolTip { title: tooltip(&self.view), ..Default::default() }
         }
+        /// A left click: the panel, by the pointer (off D-Bus's thread: the panel's facts ask the host). The right click is
+        /// the desktop tray's own menu (`menu` below), which it draws itself.
         fn activate(&mut self, _x: i32, _y: i32) {
-            act(Arc::clone(&self.ctx), super::Action::OpenGenie);
+            let ctx = Arc::clone(&self.ctx);
+            std::thread::spawn(move || {
+                if !super::open_panel(Arc::clone(&ctx), None) {
+                    act(ctx, super::Action::OpenGenie);
+                }
+            });
         }
         fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
             menu(&self.view)

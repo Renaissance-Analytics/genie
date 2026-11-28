@@ -34,6 +34,7 @@ pub mod logon;
 pub mod manifest;
 pub mod migrate;
 pub mod negotiate;
+pub mod panel;
 pub mod secure;
 pub mod spawn;
 pub mod state;
