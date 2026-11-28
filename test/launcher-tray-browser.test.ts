@@ -33,7 +33,7 @@ const noDriver: DriverFor = () => (() => ({ start: () => {}, prompt: () => {}, k
 /** genie-host's engine server as it runs: its session host attached, a browser service whose door is up and launch said. */
 function rig() {
     const started: string[] = [];
-    const browser = new BrowserService({ startBrowser: (launch) => { started.push(launch.file); } });
+    const browser = new BrowserService({ startBrowser: (launch) => { started.push(launch?.file ?? 'no launch'); } });
     browser.door(DOOR);
     void browser.call('publish', [{ launch: { file: '/genie/client/genie-client', args: ['--genie-browser'] } }], 'window-1');
     const server = new SessionEngineServer({ token: TOKEN, build: 't', browser });

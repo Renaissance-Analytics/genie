@@ -13,9 +13,17 @@ export interface HostBrowserPorts {
     readonly log: (line: string) => void;
 }
 
-export function hostBrowserStart(ports: HostBrowserPorts): (launch: { readonly file: string; readonly args: readonly string[] }) => Promise<void> {
+/**
+ * `launch`: how a window said to start the Browser, or `null` when none has (a host no client window has spoken to): the
+ * launcher needs no word from a window; with no launcher and no launch, nothing can be started and that is said.
+ */
+export function hostBrowserStart(ports: HostBrowserPorts): (launch: { readonly file: string; readonly args: readonly string[] } | null) => Promise<void> {
     return async (launch) => {
-        if (!ports.launcher.reachable()) { ports.here(launch); return; }
+        if (!ports.launcher.reachable()) {
+            if (launch === null) { ports.log('genie browser: not started: there is no launcher, and no window has said how to start it'); return; }
+            ports.here(launch);
+            return;
+        }
         const answer = await ports.launcher.call('launcher.startBrowser').catch((error: unknown): LauncherAnswer => ({ ok: false, reason: error instanceof Error ? error.message : String(error) }));
         if (answer.ok) ports.log('genie browser: started by the launcher');
         else ports.log(`genie browser: the launcher did not start it: ${answer.reason}`);
