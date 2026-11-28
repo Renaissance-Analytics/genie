@@ -467,7 +467,7 @@ export class SessionEngineServer {
     }
 
     async #dispatch(conn: Connection, method: EngineMethod, args: unknown[]): Promise<unknown> {
-        if (conn.launcher && !(LAUNCHER_LINK_METHODS as readonly string[]).includes(method)) throw new Error('Genie’s launcher may ping this host, stop it, ask what it runs, and ask its updater and its tools; nothing else.');
+        if (conn.launcher && !(LAUNCHER_LINK_METHODS as readonly string[]).includes(method)) throw new Error('Genie’s launcher may ping this host, stop it, ask what it runs, and ask its updater and its tools, and open the Genie Browser; nothing else.');
         // The updater helper's link calls its own method and nothing else (P5b).
         if (conn.helper || method === 'engine.updater') return this.#updater(conn, method, args);
         if (method === 'engine.marketplace') return this.#marketplace(conn, args);
@@ -651,6 +651,8 @@ export class SessionEngineServer {
                 return this.#options.terminals.call(str(0), Array.isArray(args[1]) ? args[1] : [], String(conn.id));
             case 'engine.browser':
                 if (!this.#options.browser) throw new Error('This host has no browser service.');
+                // The launcher's tray opens the Browser as a window's Browser row does (Tynn #1058), and asks nothing else of it.
+                if (conn.launcher && str(0) !== 'open') throw new Error(`Genie’s launcher may not ask the browser for ${str(0)}.`);
                 return this.#options.browser.call(str(0), Array.isArray(args[1]) ? args[1] : [], String(conn.id));
             case 'engine.processes':
                 if (!this.#options.processes) throw new Error('This host keeps no process book.');

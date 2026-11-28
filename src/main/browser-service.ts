@@ -108,7 +108,14 @@ function launchOf(value: unknown): BrowserLaunch | null {
 }
 
 export interface BrowserServicePorts {
-    readonly startBrowser?: (launch: BrowserLaunch) => void;
+    /** `null`: no window has said how, and `startsWithoutLaunch` said the starter needs no word from one. */
+    readonly startBrowser?: (launch: BrowserLaunch | null) => void;
+    /**
+     * Whether the Browser can be started with no window's launch now: genie-host's launcher is reachable, and it starts the
+     * Browser's verified build itself (Tynn #1058). A host no client window has spoken to (restarted with the UI closed,
+     * started alone at logon) then still opens the Browser the tray asks for. Absent = a window's launch is needed.
+     */
+    readonly startsWithoutLaunch?: () => boolean;
     /** Why this host has no Genie browser (P10.1d: plain Node, no Electron to start it with). Absent = it has one. */
     readonly unavailable?: string;
     readonly now?: () => number;
@@ -135,7 +142,8 @@ export class BrowserService {
 
     /** Something is waiting for a browser and none is linked: start one, not twice while one is on its way. */
     #startIfWanted(): void {
-        if (this.#ports.unavailable !== undefined || this.#browser !== null || this.#held.length === 0 || this.#door === null || this.#launch === null || !this.#ports.startBrowser) return;
+        if (this.#ports.unavailable !== undefined || this.#browser !== null || this.#held.length === 0 || this.#door === null || !this.#ports.startBrowser) return;
+        if (this.#launch === null && !this.#ports.startsWithoutLaunch?.()) return;
         const now = (this.#ports.now ?? Date.now)();
         if (this.#startedAt !== null && now - this.#startedAt < START_PATIENCE_MS) return;
         this.#startedAt = now;

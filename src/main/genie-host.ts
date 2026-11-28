@@ -1010,7 +1010,7 @@ async function main(): Promise<void> {
         },
         log: (line) => { lifecycleLog(line); },
     });
-    const browserService = new BrowserService({ ...(capabilities.browser ? {} : { unavailable: NO_BROWSER_HERE }), startBrowser: (launch) => { void startBrowserNow(launch); } });
+    const browserService = new BrowserService({ ...(capabilities.browser ? {} : { unavailable: NO_BROWSER_HERE }), startBrowser: (launch) => { void startBrowserNow(launch); }, startsWithoutLaunch: () => launcherReachable(launcher) });
     // WHAT THE GENIE BROWSER NEEDS OF THIS HOST'S FRONT DOOR (Tynn #1046 D2): its port, Genie's CA, the hosts and each site's
     // workspace and label, said by this host from its own hosting, with or without a window, again when the front door
     // changes (frontDoorWatch) or a workspace's name may have (a registry write). A window says only how to start it.
