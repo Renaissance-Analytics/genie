@@ -10,6 +10,9 @@ only, In-Session as the standard user genie, never on a person's desktop. As a p
      mode) in the Start menu are the launcher.
   3. Genie opens: the launcher started the host from its own folder, then the client window, which ADOPTS that host; the
      host's supervisor is ready in the host's folder. A SCREENSHOT of Genie running.
+  3b. all three from the launcher (scripts/launcher-launch-check.mjs): the host from its folder, a client window attached
+     to the launcher, and the Genie Browser opened from the tray's "Open Genie Browser", started by the launcher, its
+     window on screen; the host and the client unchanged after it. Screenshots launch-{2,3,4}-*-windows.png.
   4. the client-only profile into a code root of its own: the client and the browser, no host.
   5. the uninstaller stops the host gracefully and removes the launcher and the programs; ~\.genie stays.
 
@@ -38,6 +41,8 @@ function Fail([string]$why) {
 function Cleanup {
     [Environment]::SetEnvironmentVariable('WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS', $null, 'User')
     Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue
+    [Environment]::SetEnvironmentVariable('GENIE_LAUNCHER_TRAY_PROBE', $null, 'User')
+    Remove-Item Env:GENIE_LAUNCHER_TRAY_PROBE -ErrorAction SilentlyContinue
     $roots = @()
     if ($script:HostPid) { $roots += @('--root', "$($script:HostPid)") }
     foreach ($p in @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and ($_.Path.StartsWith($Code, [StringComparison]::OrdinalIgnoreCase) -or $_.Path.StartsWith($Prog, [StringComparison]::OrdinalIgnoreCase)) })) {
@@ -89,6 +94,10 @@ if (Test-Path $Data) {
 # run-after-finish (a shell start, not a child of this script) reads. Taken away again in Cleanup.
 [Environment]::SetEnvironmentVariable('WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS', '--remote-debugging-port=9481', 'User')
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9481'
+# GENIE_LAUNCHER_TRAY_PROBE=1, the same way: the launcher the installer opens answers launcher.trayAct, so step 3b chooses
+# the tray's "Open Genie Browser" as a click does (tray::act). Taken away again in Cleanup; a person's launcher never has it.
+[Environment]::SetEnvironmentVariable('GENIE_LAUNCHER_TRAY_PROBE', '1', 'User')
+$env:GENIE_LAUNCHER_TRAY_PROBE = '1'
 $proc = Start-Process -FilePath $installer.FullName -PassThru
 $done = $proc.WaitForExit(240000)
 if (-not $done) { Shot 'installer-stuck.png'; Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue; Fail 'the installer did not finish within 4 minutes (see installer-stuck.png)' }
@@ -161,6 +170,13 @@ if (Test-Path (Join-Path $Data 'host')) { Fail "a host copy was made under ~\.ge
 Start-Sleep -Seconds 12
 Shot 'genie-running-windows.png'
 
+# --- 3b. all three from the launcher: the host, a client window attached to it, and the Genie Browser from the tray ----
+Write-Output "--- 3b. the launcher's host, its client window and the Genie Browser from the tray, side by side"
+$launchLog = Join-Path $Out 'launch-check.log'
+node scripts/launcher-launch-check.mjs --code $Code --data $Data --build $build --launcher (Join-Path $Prog 'Genie.exe') --out $Out *>&1 | Tee-Object -FilePath $launchLog
+$launched = Select-String -Path $launchLog -Pattern '^### launcher-launch=' | Select-Object -First 1
+if (-not $launched -or $launched.Line -notlike '### launcher-launch=PASS*') { Fail "the launcher did not launch all three: $(if ($launched) { $launched.Line } else { 'the check said nothing' })" }
+
 # --- 4. client only ----------------------------------------------------------------------------------------------------
 $coCode = Join-Path $env:LOCALAPPDATA 'GenieClientOnlyRow'
 $coHome = Join-Path $env:LOCALAPPDATA 'GenieClientOnlyRowHome'
@@ -212,5 +228,5 @@ if (-not (Test-Path $Data)) { Fail 'the data root ~\.genie was removed by the un
 $stopped = Select-String -Path (Join-Path $Data 'logs\genie-host.log') -Pattern 'shut|stopp' -Quiet
 Write-Output "the host's log says it stopped: $stopped"
 Cleanup
-Write-Output "### launcher-install=PASS the installer put the launcher at $Prog\Genie.exe alone, the launcher installed the client, browser and host ($build) verified, started the host from its own folder, the client window adopted it, client-only installed no host, and the uninstaller stopped the host and removed the programs"
+Write-Output "### launcher-install=PASS the installer put the launcher at $Prog\Genie.exe alone, the launcher installed the client, browser and host ($build) verified, started the host from its own folder, the client window adopted it, the tray opened the Genie Browser through the launcher beside them, client-only installed no host, and the uninstaller stopped the host and removed the programs"
 exit 0
