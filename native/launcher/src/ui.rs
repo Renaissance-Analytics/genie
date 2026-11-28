@@ -38,12 +38,6 @@ pub enum SetupOutcome {
     Closed,
 }
 
-enum UserEvent {
-    Ipc(String),
-    Eval(String),
-    Installed(Result<Profile, String>),
-}
-
 /// The steps as the window lists them, for this profile, and where the install is.
 struct Steps {
     profile: Profile,
@@ -175,12 +169,12 @@ pub fn failed_labels() -> Value {
     json!({"check": step_label("check", "failed"), "client": step_label("client", "failed"), "host": step_label("host", "failed"), "start": step_label("start", "failed")})
 }
 
-fn eval(proxy: &EventLoopProxy<UserEvent>, call: &str, arg: &Value) {
-    let _ = proxy.send_event(UserEvent::Eval(format!("window.genieSetup && window.genieSetup.{call}({arg})")));
+fn eval(proxy: &EventLoopProxy<Resident>, call: &str, arg: &Value) {
+    let _ = proxy.send_event(Resident::SetupEval(format!("window.genieSetup && window.genieSetup.{call}({arg})")));
 }
 
 /// The install in its own thread, its progress said in the window.
-fn install(proxy: EventLoopProxy<UserEvent>, roots: Roots, mut options: InstallOptions, keys: Vec<VerifyingKey>, profile: Profile) {
+fn install(proxy: EventLoopProxy<Resident>, roots: Roots, mut options: InstallOptions, keys: Vec<VerifyingKey>, profile: Profile) {
     options.profile = profile;
     std::thread::spawn(move || {
         let mut steps = Steps { profile, checked: false, files_total: 0, files_done: 0, host_files: (0, 0), window_files: (0, 0), starting_host: false };
@@ -219,7 +213,7 @@ fn install(proxy: EventLoopProxy<UserEvent>, roots: Roots, mut options: InstallO
                 Ok(())
             }
         });
-        let _ = proxy.send_event(UserEvent::Installed(result.map(|_| profile)));
+        let _ = proxy.send_event(Resident::Installed(result.map(|_| profile)));
     });
 }
 
@@ -234,7 +228,7 @@ pub fn run_setup(roots: &Roots, options: InstallOptions, keys: Vec<VerifyingKey>
             std::env::set_var(k, v);
         }
     }
-    let mut event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+    let mut event_loop = EventLoopBuilder::<Resident>::with_user_event().build();
     let window = WindowBuilder::new()
         .with_title("Set up Genie")
         .with_inner_size(LogicalSize::new(520.0, 640.0))
@@ -250,7 +244,7 @@ pub fn run_setup(roots: &Roots, options: InstallOptions, keys: Vec<VerifyingKey>
     let builder = WebViewBuilder::new_with_web_context(&mut context)
         .with_html(setup_html())
         .with_ipc_handler(move |req: wry::http::Request<String>| {
-            let _ = ipc.send_event(UserEvent::Ipc(req.body().clone()));
+            let _ = ipc.send_event(Resident::SetupIpc(req.body().clone()));
         });
     #[cfg(windows)]
     let webview = builder.build(&window).map_err(|e| format!("the setup window's webview (WebView2) could not start: {e}"))?;
@@ -276,10 +270,10 @@ pub fn run_setup(roots: &Roots, options: InstallOptions, keys: Vec<VerifyingKey>
                     *control_flow = ControlFlow::Exit;
                 }
             }
-            Event::UserEvent(UserEvent::Eval(js)) => {
+            Event::UserEvent(Resident::SetupEval(js)) => {
                 let _ = webview.evaluate_script(&js);
             }
-            Event::UserEvent(UserEvent::Installed(result)) => {
+            Event::UserEvent(Resident::Installed(result)) => {
                 installing = false;
                 match result {
                     Ok(p) => {
@@ -295,7 +289,7 @@ pub fn run_setup(roots: &Roots, options: InstallOptions, keys: Vec<VerifyingKey>
                     }
                 }
             }
-            Event::UserEvent(UserEvent::Ipc(body)) => {
+            Event::UserEvent(Resident::SetupIpc(body)) => {
                 let msg: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
                 match msg["kind"].as_str() {
                     Some("drag") => {
@@ -370,6 +364,21 @@ enum Resident {
     Reveal(Surface),
     /// Every open question answered Cancel (a VM row's tidy-up, `launcher.uiProbe {cancelAsks}`).
     CancelAsks,
+    // The setup window's (L3) and the moving card's (L9) events, in this one type: tao on Windows registers its thread
+    // event window class once per process, its procedure generic over the loop's user-event type, so a second loop of
+    // another type in the same process never receives its events (the launcher's own loop after its setup window: run
+    // 1128-095222-c1428f). tests/ui.rs holds every loop to this type.
+    /// The setup page said something (`window.ipc`).
+    SetupIpc(String),
+    /// Script for the setup page.
+    SetupEval(String),
+    /// The install finished: the profile installed, or why not.
+    Installed(Result<Profile, String>),
+    /// The card's page has loaded: the window may be shown.
+    CardLoaded,
+    /// Not loaded within `CARD_LOAD_WAIT`: shown anyway, so a slow WebView2 never hides the card altogether.
+    CardShowAnyway,
+    CardClose,
 }
 
 /// The launcher's UI log (`<data>/logs/genie-launcher-ui.log`): what the panel, the pad and the questions did, kept where a
@@ -980,14 +989,6 @@ pub fn moving_html() -> String {
     include_str!("../ui/moving.html").replace("/*GENIE_CSS*/", &css)
 }
 
-enum Card {
-    /// The page has loaded: the window may be shown.
-    Loaded,
-    /// Not loaded within `CARD_LOAD_WAIT`: shown anyway, so a slow WebView2 never hides the card altogether.
-    ShowAnyway,
-    Close,
-}
-
 /// How long the card waits, hidden, for its page to load before it is shown regardless.
 const CARD_LOAD_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 /// The card's own backdrop (theme-c.css's body colour), behind the page while it loads.
@@ -1009,7 +1010,7 @@ pub fn run_moving_card(roots: &Roots, work: Option<Box<dyn FnOnce() + Send>>) ->
         if std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_none() {
             return Err("no display".to_string());
         }
-        let event_loop = EventLoopBuilder::<Card>::with_user_event().build();
+        let event_loop = EventLoopBuilder::<Resident>::with_user_event().build();
         let window = WindowBuilder::new()
             .with_title("Genie")
             .with_inner_size(LogicalSize::new(460.0, 360.0))
@@ -1031,7 +1032,7 @@ pub fn run_moving_card(roots: &Roots, work: Option<Box<dyn FnOnce() + Send>>) ->
             .with_background_color(CARD_BACKDROP)
             .with_ipc_handler(move |req: wry::http::Request<String>| {
                 if req.body() == "loaded" {
-                    let _ = loaded.send_event(Card::Loaded);
+                    let _ = loaded.send_event(Resident::CardLoaded);
                 }
             });
         #[cfg(windows)]
@@ -1058,7 +1059,7 @@ pub fn run_moving_card(roots: &Roots, work: Option<Box<dyn FnOnce() + Send>>) ->
     let anyway = event_loop.create_proxy();
     std::thread::spawn(move || {
         std::thread::sleep(CARD_LOAD_WAIT);
-        let _ = anyway.send_event(Card::ShowAnyway);
+        let _ = anyway.send_event(Resident::CardShowAnyway);
     });
     let proxy = event_loop.create_proxy();
     let r = roots.clone();
@@ -1079,25 +1080,25 @@ pub fn run_moving_card(roots: &Roots, work: Option<Box<dyn FnOnce() + Send>>) ->
             }
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
-        let _ = proxy.send_event(Card::Close);
+        let _ = proxy.send_event(Resident::CardClose);
     });
     let mut shown = false;
     event_loop.run_return(|event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
-            Event::UserEvent(Card::Loaded) if !shown => {
+            Event::UserEvent(Resident::CardLoaded) if !shown => {
                 shown = true;
                 window.set_visible(true);
                 crate::migrate::log_line(roots, "the moving card is shown (its page loaded)");
                 println!("moving: shown");
             }
-            Event::UserEvent(Card::ShowAnyway) if !shown => {
+            Event::UserEvent(Resident::CardShowAnyway) if !shown => {
                 shown = true;
                 window.set_visible(true);
                 crate::migrate::log_line(roots, &format!("the moving card is shown before its page loaded ({} s)", CARD_LOAD_WAIT.as_secs()));
                 println!("moving: shown");
             }
-            Event::UserEvent(Card::Close) => *control_flow = ControlFlow::Exit,
+            Event::UserEvent(Resident::CardClose) => *control_flow = ControlFlow::Exit,
             _ => {}
         }
     });
