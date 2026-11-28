@@ -248,7 +248,7 @@ pub fn launcher_exe() -> Result<String, String> {
 fn host_build_for_clients(roots: &Roots, st: &state::State) -> Option<String> {
     match host::read_record(roots).filter(|r| pid_alive(r.pid)) {
         Some(r) => Some(r.build),
-        None => st.track(Track::Host.as_str()).and_then(|t| t.current.clone()),
+        None => st.installed(Track::Host.as_str()),
     }
 }
 

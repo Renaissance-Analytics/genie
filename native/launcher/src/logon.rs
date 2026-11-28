@@ -246,7 +246,7 @@ fn on(b: bool) -> &'static str {
 }
 
 #[cfg(windows)]
-mod reg {
+pub(crate) mod reg {
     use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
     use windows_sys::Win32::System::Registry::{RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ};
 

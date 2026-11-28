@@ -154,11 +154,13 @@ describe('the release feed says which host it carries', () => {
         expect(out.startsWith(yml)).toBe(true);
     });
 
-    it('both release jobs write it before their feed is uploaded', () => {
-        const wf = readFileSync('.github/workflows/release.yml', 'utf8');
-        // The Windows upload's file list continues on its next line (a `\` continuation): to the end of that command.
-        expect(wf).toMatch(/node scripts\/feed-host-identity\.mjs release\/latest\.yml[\s\S]*gh release upload[\s\S]*?release\/latest\.yml --clobber/);
-        expect(wf).toMatch(/node scripts\/feed-host-identity\.mjs release\/latest-linux\.yml[\s\S]*gh release upload[^\n]*release\/latest-linux\.yml/);
+    it('both release jobs write it before their feed is uploaded (since L9 the bridge build writes it: its host)', () => {
+        const wf = readFileSync('.github/workflows/release.yml', 'utf8').replace(/\r\n/g, '\n');
+        // The bridge build names the host the round's host package carries (scripts/build-track-packages.mjs `bridge`, which
+        // calls feedHostIdentity), then each job uploads that feed. The Windows upload's list continues on its next line.
+        expect(readFileSync('scripts/build-track-packages.mjs', 'utf8')).toMatch(/async function bridge\(a\)[\s\S]*feedHostIdentity\(/);
+        expect(wf).toMatch(/build-track-packages\.mjs bridge [^\n]*--host-script bridge-host\/app\/dist\/main\/host\.js --signed[\s\S]*gh release upload[\s\S]*?release\/tracks\/bridge\/latest\.yml --clobber/);
+        expect(wf).toMatch(/build-track-packages\.mjs bridge [^\n]*--host-script bridge-host\/app\/dist\/main\/host\.js\n[\s\S]*gh release upload[^\n]*release\/tracks\/bridge\/latest-linux\.yml/);
     });
 
     it('the updater passes what the feed says on to the host', async () => {

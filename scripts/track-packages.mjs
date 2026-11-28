@@ -97,6 +97,45 @@ export function launcherInstallerConfig(base, { version }) {
     };
 }
 
+/**
+ * THE BRIDGE (Tynn #1058 L9): the one release that moves today's single-app installs onto the launcher, built the old way
+ * so the outgoing Genie's own electron-updater installs it. The same names, version scheme and feed files as every
+ * single-app release (latest.yml with the installer's .blockmap; latest-linux.yml), published to the same draft:
+ *
+ *   win    the launcher's installer (launcherInstallerConfig: today's appId, folder and shape), under today's artifact
+ *          name. electron-updater runs it silently (`/S --updated --force-run`): build/launcher-installer.nsh installs
+ *          the packages beside it and the launcher migrates the logon entry; the launcher then opens Genie (`--updated`).
+ *   linux  an AppImage of the launcher (`genie`, its executable) and its packages. electron-updater puts it at the single
+ *          app's AppImage path and runs it; its first act is the install of what it carries (native/launcher main.rs
+ *          `cmd_bridge`), and from then on it only starts the installed launcher.
+ *
+ * `feed` names a test VM's local feed (the migrate-single-install row) and nothing else may.
+ */
+export function bridgeConfig(base, { version, os, feed }) {
+    let publish = clone(base.publish);
+    if (feed !== undefined) {
+        if (!/^http:\/\/127\.0\.0\.1:\d+\/$/.test(feed)) throw new Error(`a bridge's test feed is http://127.0.0.1:<port>/ only, not ${feed}`);
+        publish = { provider: 'generic', url: feed };
+    }
+    const common = {
+        appId: base.appId,
+        productName: base.productName,
+        copyright: base.copyright,
+        directories: { output: 'release/tracks/bridge', buildResources: base.directories?.buildResources ?? 'build' },
+        extraMetadata: { version },
+        protocols: clone(base.protocols ?? []),
+        publish,
+    };
+    if (os === 'win') {
+        const installer = launcherInstallerConfig(base, { version });
+        return { ...common, win: { ...installer.win, artifactName: base.win?.artifactName }, nsis: installer.nsis };
+    }
+    if (os === 'linux') {
+        return { ...common, linux: { icon: base.linux?.icon, category: base.linux?.category, target: ['AppImage'], executableName: 'genie', artifactName: '${productName}-${version}.${ext}' } };
+    }
+    throw new Error(`the bridge is built for win or linux, not ${os}`);
+}
+
 async function files(root) {
     const out = [];
     async function walk(rel) {

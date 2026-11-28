@@ -52,6 +52,7 @@ ROWS=(
     host-update
     host-update-rollback
     launcher-self-update
+    migrate-single-install
     version-skew
 )
 
@@ -780,6 +781,17 @@ row_launcher-self-update() {
 }
 # VERSION SKEW (Tynn #1058 L8): the INSTALLED client NEW against the host OLD, then the client OLD against the host NEW,
 # each a real program from its own build folder, a turn streamed both ways in each (scripts/launcher-updates-row.mjs).
+# THE MIGRATION FROM THE SINGLE APP (Tynn #1058 L9, the bridge): v2.0.0-beta.66.1 as GitHub serves it, its own updater
+# installing the bridge built here (scripts/migrate-single-install-row.mjs). `unchanged`: the host adopted, its pid and
+# every provider's kept, the ticks streamed through; `changed`: the bridge's host, every agent restored once. Both: one
+# logon entry, the launcher's, the settings carried over. Screenshots during and after under ci-out/migrate-single-install-*.
+row_migrate-single-install() {
+    need_build && need_tracks && need_display || return 1
+    local a=0 b=0
+    on_display timeout 1560 env MIGRATE_ROW_OUT="$OUT/migrate-single-install-unchanged" CDP_PORT=9422 MIGRATE_CLIENT_PORT=9423 MIGRATE_ROW_DEADLINE_MS=1500000 node scripts/migrate-single-install-row.mjs --case unchanged || a=1
+    on_display timeout 1560 env MIGRATE_ROW_OUT="$OUT/migrate-single-install-changed" CDP_PORT=9422 MIGRATE_CLIENT_PORT=9423 MIGRATE_ROW_DEADLINE_MS=1500000 node scripts/migrate-single-install-row.mjs --case changed || b=1
+    return $((a | b))
+}
 row_version-skew() { need_build && need_tracks && need_display && on_display timeout 1500 env LAUNCHER_ROW_OUT="$OUT/version-skew" LAUNCHER_ROW_KEY_DIR="$SETUP" CDP_PORT=9419 LAUNCHER_ROW_DEADLINE_MS=1380000 node scripts/launcher-updates-row.mjs --row version-skew; }
 row_toolchain() {
     need_build && need_display || return 1
@@ -848,6 +860,7 @@ ceiling() {
         client-no-host) echo 900 ;;
         client-only-update|host-update|host-update-rollback) echo 1500 ;;
         launcher-self-update) echo 2400 ;;
+        migrate-single-install) echo 3300 ;;
         version-skew) echo 1680 ;;
         *) echo 600 ;;
     esac
@@ -1036,7 +1049,7 @@ run_rows() {
     for name in "${selected[@]}"; do
         echo "=== $name"
         machine_line "$name"
-        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover ftq-survives-restart trust-step accounts-popover claude-accounts usage-on-switch sound-picker sound-cues esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash quit-keeps-host cli-drain host-late-ready package-fuse launcher-install client-no-host logon toolchain client-only-update host-update host-update-rollback launcher-self-update version-skew " in
+        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover ftq-survives-restart trust-step accounts-popover claude-accounts usage-on-switch sound-picker sound-cues esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash quit-keeps-host cli-drain host-late-ready package-fuse launcher-install client-no-host logon toolchain client-only-update host-update host-update-rollback launcher-self-update migrate-single-install version-skew " in
             *" $name "*) reap_leftovers "$name" ;;
         esac
         from="$(now_ms)"

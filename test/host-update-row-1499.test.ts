@@ -34,7 +34,7 @@ describe('registered as a row: the launcher’s since L6 (Tynn #1058), with its 
      * electron-updater scripts below stay on disk for the bridge release (L9), and no row runs them.
      */
     it('linux.sh: host-update then its rollback, after client-only-update, run by launcher-updates-row.mjs', () => {
-        expect(linuxRows.slice(-5)).toEqual(['client-only-update', 'host-update', 'host-update-rollback', 'launcher-self-update', 'version-skew']);
+        expect(linuxRows.slice(-6)).toEqual(['client-only-update', 'host-update', 'host-update-rollback', 'launcher-self-update', 'migrate-single-install', 'version-skew']);
         expect(linuxRow('host-update')).toBe('row_host-update() { need_build && need_tracks && need_display && on_display timeout 1320 env LAUNCHER_ROW_OUT="$OUT/host-update" LAUNCHER_ROW_KEY_DIR="$SETUP" CDP_PORT=9416 LAUNCHER_ROW_DEADLINE_MS=1200000 node scripts/launcher-updates-row.mjs --row host-update; }');
         expect(linuxRow('host-update-rollback')).toBe('row_host-update-rollback() { need_build && need_tracks && need_display && on_display timeout 1320 env LAUNCHER_ROW_OUT="$OUT/host-update-rollback" LAUNCHER_ROW_KEY_DIR="$SETUP" CDP_PORT=9417 LAUNCHER_ROW_DEADLINE_MS=1200000 node scripts/launcher-updates-row.mjs --row host-update-rollback; }');
         expect(linuxSh).toMatch(/\n\s*client-only-update\|host-update\|host-update-rollback\) echo 1500 ;;/);
@@ -45,7 +45,7 @@ describe('registered as a row: the launcher’s since L6 (Tynn #1058), with its 
     });
 
     it('windows.ps1: the same order, their functions, their ceiling; the old script is run by no row', () => {
-        expect(windowsRows.slice(-5)).toEqual(['client-only-update', 'host-update', 'host-update-rollback', 'launcher-self-update', 'version-skew']);
+        expect(windowsRows.slice(-6)).toEqual(['client-only-update', 'host-update', 'host-update-rollback', 'launcher-self-update', 'migrate-single-install', 'version-skew']);
         expect(windowsPs1).toContain("function Row-host-update {\n    Need-Build; Need-Tracks; Need-TestMachine\n    Invoke-LauncherUpdatesRow 'host-update' @{ LAUNCHER_ROW_OUT = (Join-Path $Out 'host-update'); LAUNCHER_ROW_KEY_DIR = $Setup; CDP_PORT = '9416'; LAUNCHER_ROW_DEADLINE_MS = '1620000' }\n}");
         expect(windowsPs1).toContain("function Row-host-update-rollback {\n    Need-Build; Need-Tracks; Need-TestMachine\n    Invoke-LauncherUpdatesRow 'host-update-rollback' @{ LAUNCHER_ROW_OUT = (Join-Path $Out 'host-update-rollback'); LAUNCHER_ROW_KEY_DIR = $Setup; CDP_PORT = '9417'; LAUNCHER_ROW_DEADLINE_MS = '1620000' }\n}");
         expect(windowsPs1).toMatch(/\n\s*\{ \$_ -in 'client-only-update', 'host-update', 'host-update-rollback' \} \{ return 1800 \}/);
@@ -106,10 +106,10 @@ describe('the mark never reaches a build that ships', () => {
     /** The environment variable by name (not the define, __GENIE_TEST_HOST_MARK__). */
     const ENV_NAME = /(?<![A-Z_])GENIE_TEST_HOST_MARK(?![A-Z_])/;
 
-    it('only vite.main.config.ts and the two row scripts name it: no workflow, CI runner, packaging config or source sets it', () => {
+    it('only vite.main.config.ts and the three row scripts name it (L9: the migrate row builds the changed host too): no workflow, CI runner, packaging config or source sets it', () => {
         const naming = files('scripts', '.github', 'src', 'package.json', 'electron-builder.yml', 'vite.main.config.ts')
             .filter((f) => ENV_NAME.test(readFileSync(join(root, f), 'utf8')));
-        expect(naming.sort()).toEqual(['scripts/vm-host-update-linux.sh', 'scripts/vm-windows-update.ps1', 'vite.main.config.ts']);
+        expect(naming.sort()).toEqual(['scripts/migrate-single-install-row.mjs', 'scripts/vm-host-update-linux.sh', 'scripts/vm-windows-update.ps1', 'vite.main.config.ts']);
         // CONTROL: the search reaches the workflows and the CI runners it clears.
         expect(files('.github')).toContain('.github/workflows/release.yml');
         expect(files('scripts')).toEqual(expect.arrayContaining(['scripts/ci/linux.sh', 'scripts/ci/windows.ps1']));

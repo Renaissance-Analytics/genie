@@ -11,6 +11,13 @@
  *     3. each is packed with its unsigned manifest (scripts/pack-track.mjs): the host's names the client of this build
  *   Then scripts/sign-manifest.mjs signs the manifests (the protected release job; a throwaway key in a test VM).
  *
+ *   node scripts/build-track-packages.mjs bridge --version <app semver> --launcher <Genie.exe|genie> [--from <packages>]
+ *        [--host-script <host.js>] [--feed http://127.0.0.1:<port>/] [--signed]
+ *     THE BRIDGE (L9), built the old way for the outgoing Genie's electron-updater, in release/tracks/bridge: on Windows
+ *     the launcher's installer under today's name (Genie-<version>-setup.exe, its .blockmap and latest.yml), on Linux an
+ *     AppImage of the launcher and this OS's four packages (Genie-<version>.AppImage and latest-linux.yml). The feed file
+ *     then names the host the bridge brings (scripts/feed-host-identity.mjs: dist/main/host.js, or --host-script).
+ *
  *   node scripts/build-track-packages.mjs installer --build <track build> --launcher <Genie.exe> [--from <packages>]
  *     Windows: the NSIS installer from a folder of Genie.exe and packages\ (this OS's client, browser and host packages,
  *     manifests and signatures), electron-builder --prepackaged: release/tracks/installer/Genie-<semver>-launcher-setup.exe
@@ -18,11 +25,12 @@
  * The dist/ of `npm run build` and build/runtime's Caddy (scripts/fetch-caddy.ts) must be there first.
  */
 import { createRequire } from 'node:module';
-import { copyFile, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { engineProtocolIn, feedHostIdentity } from './feed-host-identity.mjs';
 import { packTrack } from './pack-track.mjs';
-import { clientBuilderConfig, launcherInstallerConfig, layoutBrowser, layoutHost, layoutWindowApp, programName, treeOf, trackTreeProblems } from './track-packages.mjs';
+import { bridgeConfig, clientBuilderConfig, launcherInstallerConfig, layoutBrowser, layoutHost, layoutWindowApp, programName, treeOf, trackTreeProblems } from './track-packages.mjs';
 
 const require = createRequire(import.meta.url);
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -200,13 +208,53 @@ async function installer(a) {
     for (const o of outputs) console.log(`[tracks] installer: ${o}`);
 }
 
+async function bridge(a) {
+    for (const k of ['version', 'launcher']) if (!a[k]) throw new Error(`--${k} is required`);
+    if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/.test(a.version)) throw new Error(`the bridge's version is the app's semver (2.0.0), not ${a.version}`);
+    const os = platform === 'win32' ? 'win' : 'linux';
+    const from = resolve(a.from ?? join(ROOT, 'release', 'tracks', 'packages'));
+    const dir = join(ROOT, 'release', 'tracks', 'bridge-dir');
+    await rm(dir, { recursive: true, force: true });
+    await rm(join(ROOT, 'release', 'tracks', 'bridge'), { recursive: true, force: true });
+    await mkdir(join(dir, 'packages'), { recursive: true });
+    // On Windows the installer puts the launcher at Genie.exe and carries the other three; on Linux the AppImage carries
+    // the launcher's own package too, which `install --from` puts in its track's folder.
+    const tracks = os === 'win' ? ['client', 'browser', 'host'] : ['client', 'browser', 'host', 'launcher'];
+    const ext = os === 'win' ? 'zip' : 'tar\\.zst';
+    const wanted = new RegExp(`^(${tracks.join('|')})-.*-${platform}-${arch}\\.(${ext}|manifest\\.json|manifest\\.json\\.sig)$`);
+    let n = 0;
+    for (const name of await readdir(from)) {
+        if (!wanted.test(name)) continue;
+        await copyFile(join(from, name), join(dir, 'packages', name));
+        n++;
+    }
+    if (n !== tracks.length * 3) throw new Error(`the bridge carries a package, a manifest and a signature per track (${tracks.length * 3} files); ${from} gave ${n}`);
+    const program = join(dir, os === 'win' ? 'Genie.exe' : 'genie');
+    await copyFile(resolve(a.launcher), program);
+    if (os === 'linux') await chmod(program, 0o755);
+    const { build, Platform, Arch } = require('electron-builder');
+    const config = bridgeConfig(baseConfig(), { version: a.version, os, ...(a.feed ? { feed: a.feed } : {}) });
+    if (os === 'win' && !a.signed) config.win = { ...config.win, signExecutable: false };
+    const targets = os === 'win' ? Platform.WINDOWS.createTarget('nsis', Arch.x64) : Platform.LINUX.createTarget('AppImage', arch === 'arm64' ? Arch.arm64 : Arch.x64);
+    console.log(`[tracks] electron-builder --prepackaged: the bridge ${a.version} (${os})`);
+    const outputs = await build({ projectDir: ROOT, config: await configFile('bridge', config), prepackaged: dir, targets, publish: 'never' });
+    for (const o of outputs) console.log(`[tracks] bridge: ${o}`);
+    const feed = join(ROOT, 'release', 'tracks', 'bridge', os === 'win' ? 'latest.yml' : 'latest-linux.yml');
+    if (!(await exists(feed))) throw new Error(`electron-builder wrote no ${feed}`);
+    const hostScript = resolve(a['host-script'] ?? join(ROOT, 'dist', 'main', 'host.js'));
+    const protocol = engineProtocolIn(await readFile(join(ROOT, 'src', 'core', 'engine-protocol.ts'), 'utf8'));
+    await writeFile(feed, feedHostIdentity(await readFile(feed, 'utf8'), { hostScript, protocol }));
+    console.log(`[tracks] bridge: ${feed} names the host ${hostScript} (engine protocol ${protocol})`);
+}
+
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
     try {
         const a = args(process.argv.slice(2));
         const cmd = a._[0];
         if (cmd === 'packages') await packages(a);
         else if (cmd === 'installer') await installer(a);
-        else throw new Error('usage: build-track-packages.mjs packages|installer --build <track build> ...');
+        else if (cmd === 'bridge') await bridge(a);
+        else throw new Error('usage: build-track-packages.mjs packages|installer|bridge ...');
     } catch (e) {
         console.error(`build-track-packages: ${e instanceof Error ? e.stack ?? e.message : e}`);
         process.exit(1);

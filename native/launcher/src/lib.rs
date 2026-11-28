@@ -32,6 +32,7 @@ pub mod layout;
 pub mod local;
 pub mod logon;
 pub mod manifest;
+pub mod migrate;
 pub mod negotiate;
 pub mod secure;
 pub mod spawn;

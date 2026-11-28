@@ -14,6 +14,9 @@ pub fn start_detached(program: &Program, args: &[String], env: &[(String, String
 }
 
 /// Detached, with its windows shown as it shows them (the client).
+/// What an AppImage's runtime (and electron-updater's AppImage install) set: the bridge AppImage's alone (L9).
+pub const APPIMAGE_ENV: [&str; 7] = ["APPIMAGE", "APPDIR", "ARGV0", "OWD", "APPIMAGE_SILENT_INSTALL", "APPIMAGE_EXIT_AFTER_INSTALL", "APPIMAGE_EXTRACT_AND_RUN"];
+
 pub fn start_window(program: &Program, args: &[String], env: &[(String, String)], log: &Path) -> Result<u32, String> {
     start(program, args, env, log, false)
 }
@@ -33,6 +36,11 @@ fn start(program: &Program, args: &[String], env: &[(String, String)], log: &Pat
     let err = out.try_clone().map_err(|e| e.to_string())?;
     let mut cmd = Command::new(program.path());
     cmd.args(args).current_dir(program.folder()).stdin(Stdio::null()).stdout(Stdio::from(out)).stderr(Stdio::from(err));
+    // Nothing the launcher starts runs "inside" the bridge AppImage that may have started it (L9): its variables stay
+    // with it.
+    for k in APPIMAGE_ENV {
+        cmd.env_remove(k);
+    }
     for (k, v) in env {
         cmd.env(k, v);
     }

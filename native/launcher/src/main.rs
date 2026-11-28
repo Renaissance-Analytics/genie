@@ -1,3 +1,6 @@
+// A WINDOWS PROGRAM (Tynn #1058 L9; the coordinator, 2026-11-27): started from a shortcut, at logon or by the installer, no
+// console window is ever made for it. The command line attaches to its caller's console instead (attach_parent_console).
+#![cfg_attr(windows, windows_subsystem = "windows")]
 //! `Genie.exe` / `genie`: the launcher's command line (Tynn #1058 L2).
 //!
 //!   genie                         open Genie, as the Start menu and the desktop entry run it: with a launcher already
@@ -39,6 +42,12 @@ fn main() -> ExitCode {
     }
     let args: Vec<OsString> = std::env::args_os().collect();
     let first = args.get(1).and_then(|a| a.to_str()).unwrap_or("");
+    // The command line (and genie-launch.exe's modes) answer in the terminal that started them; what a person opens stays
+    // windowless.
+    if !shown_to_a_person(Some(first).filter(|f| !f.is_empty())) {
+        attach_parent_console();
+    }
+    console_probe();
     match first {
         "detach" | "job" | "pipe-owner-only" => return code(compat(first, &args)),
         _ => {}
@@ -51,8 +60,15 @@ fn main() -> ExitCode {
         Ok(r) => r,
         Err(why) => return fail(&why),
     };
+    // THE BRIDGE APPIMAGE (L9): run from its own mount, this launcher installs what it carries and hands over.
+    #[cfg(unix)]
+    if let Some(packages) = bridge_packages() {
+        return cmd_bridge(roots, packages, text);
+    }
     match text.first().map(String::as_str) {
-        None => cmd_open(roots),
+        // `--updated`: what electron-updater's NSIS run starts the installed app with (L9: the bridge's installer
+        // starts the launcher so), and Genie opens.
+        None | Some("--updated") => cmd_open(roots),
         Some("--doctor") => match genie_launcher::components::component("client").ok_or_else(|| "no client component".to_string()).and_then(|c| control::start_component(&roots, c, vec!["--doctor".to_string()])) {
             Ok(_) => ExitCode::SUCCESS,
             Err(why) => fail(&why),
@@ -79,6 +95,15 @@ fn main() -> ExitCode {
             }
         }
         Some("--logon") => cmd_logon(roots),
+        // THE MIGRATION'S CARD (L9): the Windows installer starts it on an update, before the packages install; it closes
+        // once the launcher has a client window attached.
+        Some("moving-card") => {
+            #[cfg(feature = "ui")]
+            if let Err(why) = genie_launcher::ui::run_moving_card(&roots, None) {
+                eprintln!("genie: {why}");
+            }
+            ExitCode::SUCCESS
+        }
         Some("serve") | Some("--hidden") => {
             if let Err(why) = private_code_root(&roots) {
                 return fail(&why);
@@ -169,6 +194,50 @@ fn main() -> ExitCode {
     }
 }
 
+/// The modes a person sees (Genie opened, the logon run, the resident launcher, the setup window, the doctor, the
+/// migration's card), as against the command line's (status, install, version, ...).
+/// Attach to the console of the program that started this one, when it has one (a terminal): the CLI's output goes
+/// there. Standard handles the caller already gave (a pipe, a file: the installer's log, a test) are kept; only missing
+/// ones are pointed at that console. With no console to attach to, nothing: the process stays windowless.
+fn attach_parent_console() {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING};
+        use windows_sys::Win32::System::Console::{AttachConsole, GetStdHandle, SetStdHandle, ATTACH_PARENT_PROCESS, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE};
+        let valid = |h: HANDLE| !h.is_null() && h != INVALID_HANDLE_VALUE;
+        let which = [(STD_INPUT_HANDLE, "CONIN$"), (STD_OUTPUT_HANDLE, "CONOUT$"), (STD_ERROR_HANDLE, "CONOUT$")];
+        let had: Vec<bool> = which.iter().map(|(k, _)| valid(GetStdHandle(*k))).collect();
+        if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
+            return;
+        }
+        for (i, (k, name)) in which.iter().enumerate() {
+            if had[i] {
+                continue;
+            }
+            let w: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+            let h = CreateFileW(w.as_ptr(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, std::ptr::null(), OPEN_EXISTING, 0, std::ptr::null_mut());
+            if valid(h) {
+                SetStdHandle(*k, h);
+            }
+        }
+    }
+}
+
+/// A test build's word on this process's console (GENIE_LAUNCHER_CONSOLE_PROBE names the file): `console=true|false`.
+fn console_probe() {
+    #[cfg(all(windows, feature = "test-keys"))]
+    if let Some(file) = std::env::var_os("GENIE_LAUNCHER_CONSOLE_PROBE") {
+        let has = unsafe { !windows_sys::Win32::System::Console::GetConsoleWindow().is_null() };
+        let _ = std::fs::write(file, format!("console={has}
+"));
+    }
+}
+
+fn shown_to_a_person(first: Option<&str>) -> bool {
+    matches!(first, None | Some("--updated" | "--logon" | "serve" | "--hidden" | "setup" | "--doctor" | "moving-card"))
+}
+
 /// Open Genie. A launcher already running is asked for a window; otherwise this one becomes the launcher, starts the host
 /// when this computer has one (profile both), then opens a client window. A host that cannot start is said in the client
 /// log's words and the window still opens (it shows the host as stopped: L4).
@@ -202,6 +271,7 @@ fn cmd_setup(roots: &Roots, from: PathBuf, channel: String, beside: bool) -> Res
     if beside {
         let _ = std::fs::remove_dir_all(&from);
     }
+    genie_launcher::migrate::carry_over_here(roots);
     Ok(())
 }
 
@@ -436,6 +506,106 @@ fn cmd_install(roots: &Roots, rest: &[String]) -> ExitCode {
             for d in done {
                 println!("installed {} {}", d.track.as_str(), d.build);
             }
+            // THE BRIDGE (L9): the bridge's installer runs this over the single-app install; its logon entry is replaced
+            // by the launcher's and its two settings carried over. On any other install there is nothing to replace.
+            genie_launcher::migrate::carry_over_here(roots);
+            ExitCode::SUCCESS
+        }
+        Err(why) => fail(&why),
+    }
+}
+
+/// The packages the bridge AppImage carries, when this launcher runs from its mount: `$APPDIR/packages` beside this
+/// program, with `$APPIMAGE` set by the AppImage's runtime.
+#[cfg(unix)]
+fn bridge_packages() -> Option<PathBuf> {
+    let appdir = PathBuf::from(std::env::var_os("APPDIR").filter(|v| !v.is_empty())?);
+    std::env::var_os("APPIMAGE").filter(|v| !v.is_empty())?;
+    let me = std::env::current_exe().ok()?;
+    if !me.starts_with(&appdir) {
+        return None;
+    }
+    packages_beside_me()
+}
+
+/// THE BRIDGE APPIMAGE (Tynn #1058 L9). electron-updater replaces the single app's AppImage with this one at the same
+/// path, so a pinned or remembered path keeps working, and runs it (`APPIMAGE_SILENT_INSTALL=true`). Its first act is the
+/// install of what it carries, the launcher included, as `genie install --from <its packages>` does: silent where Genie
+/// was already here (the update, or the data root there), the setup window for a person running it fresh. Then the
+/// installed launcher takes over with the same arguments; from then on this AppImage only starts it.
+#[cfg(unix)]
+fn cmd_bridge(roots: Roots, packages: PathBuf, text: Vec<String>) -> ExitCode {
+    let exit_after = std::env::var("APPIMAGE_EXIT_AFTER_INSTALL").as_deref() == Ok("true");
+    if bridge_installed(&roots).is_none() {
+        let silent = std::env::var("APPIMAGE_SILENT_INSTALL").as_deref() == Ok("true") || roots.runtime_dir().is_dir();
+        eprintln!("genie: the bridge AppImage installs Genie's programs from {} ({})", packages.display(), if silent { "Genie was here: silently" } else { "the setup window" });
+        if silent {
+            // THE MOVE IS NEVER A BLANK SCREEN (the coordinator, 2026-11-27): the card from this first act until the
+            // launcher's client window is up, the install and the hand-over on another thread meanwhile.
+            let code = std::sync::Arc::new(std::sync::Mutex::new(ExitCode::SUCCESS));
+            let out = code.clone();
+            let r = roots.clone();
+            let work: Box<dyn FnOnce() + Send> = Box::new(move || {
+                let c = bridge_install(&r, &packages, text, exit_after);
+                *out.lock().unwrap_or_else(|p| p.into_inner()) = c;
+            });
+            #[cfg(feature = "ui")]
+            if exit_after {
+                work();
+            } else if let Err(why) = genie_launcher::ui::run_moving_card(&roots, Some(work)) {
+                eprintln!("genie: the moving card: {why}");
+            }
+            #[cfg(not(feature = "ui"))]
+            work();
+            let c = *code.lock().unwrap_or_else(|p| p.into_inner());
+            return c;
+        }
+        let done = match cmd_setup(&roots, packages, "stable".to_string(), false) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(why) => fail(&why),
+        };
+        if bridge_installed(&roots).is_none() {
+            return done;
+        }
+    }
+    if exit_after {
+        return ExitCode::SUCCESS;
+    }
+    hand_over_from_bridge(&roots, text)
+}
+
+#[cfg(unix)]
+fn bridge_installed(r: &Roots) -> Option<String> {
+    genie_launcher::state::read(&r.state_file()).ok().and_then(|s| s.track("launcher").and_then(|t| t.current.clone()))
+}
+
+/// The bridge's silent install of what it carries, then the hand-over to the installed launcher (unless electron-updater
+/// asked it to exit after the install).
+#[cfg(unix)]
+fn bridge_install(roots: &Roots, packages: &std::path::Path, text: Vec<String>, exit_after: bool) -> ExitCode {
+    let done = cmd_install(roots, &["--from".to_string(), packages.display().to_string(), "--profile".to_string(), "both".to_string(), "--yes".to_string()]);
+    if bridge_installed(roots).is_none() {
+        genie_launcher::migrate::log_line(roots, "the bridge's install did not complete");
+        return done;
+    }
+    genie_launcher::migrate::log_line(roots, "the bridge installed Genie's programs");
+    if exit_after {
+        return ExitCode::SUCCESS;
+    }
+    hand_over_from_bridge(roots, text)
+}
+
+/// The installed launcher started with the bridge's arguments (less the Electron ones), and this bridge done.
+#[cfg(unix)]
+fn hand_over_from_bridge(roots: &Roots, text: Vec<String>) -> ExitCode {
+    let Some(build) = bridge_installed(roots) else { return fail("the bridge installed no launcher") };
+    let Some(program) = roots.program(genie_launcher::layout::Track::Launcher, &build) else { return fail("not a track build") };
+    // What the old updater and the AppImage's desktop entry add for an Electron app (`--updated`, `--no-sandbox`) means
+    // nothing to the launcher.
+    let args: Vec<String> = text.into_iter().filter(|a| a != "--updated" && a != "--no-sandbox").collect();
+    match genie_launcher::spawn::start_window(&program, &args, &[], &roots.logs_dir().join("genie-launcher.log")) {
+        Ok(pid) => {
+            genie_launcher::migrate::log_line(roots, &format!("the bridge handed over to the installed launcher {build} (pid {pid})"));
             ExitCode::SUCCESS
         }
         Err(why) => fail(&why),

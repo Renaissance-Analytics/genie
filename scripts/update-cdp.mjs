@@ -100,8 +100,12 @@ try {
     await cdp.evaluate('document.readyState');
     await waitForPageProbe(cdp);
 
-    const idle = await state(cdp);
-    check(idle.phase === 'idle' && idle.version === null, '1. the updater starts idle, claiming nothing', JSON.stringify(idle));
+    // UPDATE_CDP_SETTLED=1 (Tynn #1058 L9, the migrate-single-install row): an installed app checks the feed by itself soon
+    // after boot (measured: beta.66.1 on Windows was "checking" when the driver began, run 1127-223352-5d8720). Its own
+    // check is waited for, and a start that has already found exactly the expected version is a start too.
+    const settled = process.env.UPDATE_CDP_SETTLED === '1';
+    const idle = settled ? await until(cdp, (s) => s.phase !== 'checking', 60_000, "the app's own check to settle") : await state(cdp);
+    check((idle.phase === 'idle' && idle.version === null) || (settled && idle.phase === 'available' && idle.version === EXPECT), settled ? '1. the updater starts idle, or its own check found the expected version and nothing more' : '1. the updater starts idle, claiming nothing', JSON.stringify(idle));
 
     // AUTO_CHECK=1 (genie2#91): nobody calls check() — the installed app must find the feed BY ITSELF,
     // within the boot delay plus a margin. Otherwise the driver asks, as before.
