@@ -41,7 +41,12 @@ const samePath = (a, b) => (WIN ? String(a).toLowerCase() === String(b).toLowerC
 
 /** The desktop's own notifications dismissed before a photograph (mako on the Linux VM), as the migrate row does. */
 function clearNotifications() {
-    if (!WIN) spawnSync('makoctl', ['dismiss', '--all'], { timeout: 5_000 });
+    if (WIN) return;
+    for (const args of [['dismiss', '--all'], ['dismiss', '-a']]) {
+        const r = spawnSync('makoctl', args, { encoding: 'utf8', timeout: 5_000 });
+        if (r.status === 0) return;
+        console.log(`  (makoctl ${args.join(' ')}: exit ${r.status}${r.error ? `, ${r.error.message}` : ''} ${String(r.stderr ?? '').trim().slice(0, 160)})`);
+    }
 }
 function photograph(name) {
     clearNotifications();

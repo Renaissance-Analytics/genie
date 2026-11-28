@@ -158,6 +158,14 @@ fn main() {
                         };
                         let _ = writeln!(out, "{answer}");
                     }
+                    // The tray's "Open Genie Browser" (tests/tray_browser.rs): `engine.browser open [address, activation]`,
+                    // held as genie-host holds it for a Browser not yet linked; a line of `<GENIE_HOME>/browser.txt`.
+                    Some("engine.browser") => {
+                        let method = frame["args"][0].as_str().unwrap_or("-");
+                        let args = frame["args"].get(1).cloned().unwrap_or(json!([]));
+                        browser_journal(&home, &format!("browser-{method} {} {args}", std::process::id()));
+                        let _ = writeln!(out, "{}", json!({"kind": "result", "id": id, "ok": true, "value": {"browserUp": false}}));
+                    }
                     Some("engine.ping") => { let _ = writeln!(out, "{}", json!({"kind": "result", "id": id, "ok": true, "value": "pong"})); }
                     Some("engine.shutdown") => {
                         let _ = writeln!(out, "{}", json!({"kind": "result", "id": id, "ok": true, "value": true}));
@@ -238,6 +246,12 @@ fn stay_attached(home: &std::path::Path) {
 /// One line of `<GENIE_HOME>/journal.txt`.
 fn journal(home: &std::path::Path, line: &str) {
     let mut f = std::fs::OpenOptions::new().create(true).append(true).open(home.join("journal.txt")).unwrap();
+    writeln!(f, "{line}").unwrap();
+}
+
+/// One line of `<GENIE_HOME>/browser.txt`: what the launcher asked of the host's browser service.
+fn browser_journal(home: &std::path::Path, line: &str) {
+    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(home.join("browser.txt")).unwrap();
     writeln!(f, "{line}").unwrap();
 }
 
