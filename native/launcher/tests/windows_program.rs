@@ -11,10 +11,12 @@
 
 mod common;
 
+use common::live::wait_for;
 use common::*;
 use std::os::windows::process::CommandExt;
 use std::process::{Command, Stdio};
-use windows_sys::Win32::System::LibraryLoader::{FindResourceW, FreeLibrary, LoadLibraryExW, LOAD_LIBRARY_AS_DATAFILE, LOAD_LIBRARY_AS_IMAGE_RESOURCE};
+use windows_sys::Win32::Foundation::FreeLibrary;
+use windows_sys::Win32::System::LibraryLoader::{FindResourceW, LoadLibraryExW, LOAD_LIBRARY_AS_DATAFILE, LOAD_LIBRARY_AS_IMAGE_RESOURCE};
 use windows_sys::Win32::UI::WindowsAndMessaging::RT_GROUP_ICON;
 
 fn genie() -> std::path::PathBuf {
