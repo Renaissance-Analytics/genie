@@ -356,6 +356,110 @@ enum Resident {
     ShowUpdates(std::sync::Arc<crate::control::Context>),
     /// L6: what the open Updates window shows now.
     UpdatesView(Value),
+    /// #1514: the tray panel opened for a click at this point (physical; the pointer when `None`), or closed when open.
+    ShowPanel(std::sync::Arc<crate::control::Context>, Value, Option<(i32, i32)>),
+    /// #1515: the launch pad opened (or brought forward).
+    ShowPad(std::sync::Arc<crate::control::Context>, Value),
+    /// What the open panel or pad shows now.
+    View(Surface, Value),
+    /// A click on an element of the panel's or the pad's page (`launcher.uiProbe`).
+    Click(Surface, String),
+    /// The panel or the pad closed.
+    Close(Surface),
+    /// Shown even though its page never said it had loaded (a slow webview never hides it altogether).
+    Reveal(Surface),
+    /// Every open question answered Cancel (a VM row's tidy-up, `launcher.uiProbe {cancelAsks}`).
+    CancelAsks,
+}
+
+/// The questions open now, by title (`launcher.uiProbe`: the tray panel's Stop asks first, as the menu's did).
+static ASKING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn set_asking(titles: Vec<String>) {
+    if let Ok(mut held) = ASKING.lock() {
+        *held = titles;
+    }
+}
+
+/// The questions open now.
+pub fn asking() -> Vec<String> {
+    ASKING.lock().map(|a| a.clone()).unwrap_or_default()
+}
+
+/// Every open question answered Cancel.
+pub fn cancel_asks() -> bool {
+    resident().map_or(false, |p| p.send_event(Resident::CancelAsks).is_ok())
+}
+
+/// The tray panel or the launch pad, open.
+struct OpenSurface {
+    window: tao::window::Window,
+    webview: wry::WebView,
+    ctx: std::sync::Arc<crate::control::Context>,
+    anchor: Option<(i32, i32)>,
+    /// The window has had the focus (the panel closes when it loses it, not before it ever had it).
+    focused: bool,
+    shown: bool,
+    size: (f64, f64),
+}
+
+/// How long after the panel closed on losing the focus a click on the icon is that same click (the panel stays closed:
+/// the icon toggles it).
+const PANEL_TOGGLE: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// A window for the panel or the pad, hidden until its page has said how it looks.
+fn surface_window(target: &tao::event_loop::EventLoopWindowTarget<Resident>, context: &mut WebContext, proxy: &EventLoopProxy<Resident>, surface: Surface, html: String) -> Result<(tao::window::Window, wry::WebView), String> {
+    let mut builder = WindowBuilder::new().with_resizable(false).with_decorations(false).with_visible(false);
+    builder = match surface {
+        // The panel: frameless, over everything, out of the taskbar, its corners the page's own (transparent around them).
+        Surface::Panel => builder.with_title("Genie tray").with_inner_size(LogicalSize::new(300.0, 470.0)).with_always_on_top(true).with_transparent(true),
+        Surface::Pad => builder.with_title("Genie").with_inner_size(LogicalSize::new(520.0, 640.0)),
+    };
+    if surface == Surface::Panel {
+        #[cfg(windows)]
+        {
+            use tao::platform::windows::WindowBuilderExtWindows;
+            builder = builder.with_skip_taskbar(true);
+        }
+        #[cfg(unix)]
+        {
+            use tao::platform::unix::WindowBuilderExtUnix;
+            builder = builder.with_skip_taskbar(true);
+        }
+    }
+    let window = builder.build(target).map_err(|e| format!("{}'s window could not be made: {e}", surface.name()))?;
+    if surface == Surface::Pad {
+        if let Some(m) = window.current_monitor().or_else(|| window.primary_monitor()) {
+            let (ms, mp, ws) = (m.size(), m.position(), window.outer_size());
+            window.set_outer_position(tao::dpi::PhysicalPosition::new(mp.x + (ms.width.saturating_sub(ws.width) / 2) as i32, mp.y + (ms.height.saturating_sub(ws.height) / 2) as i32));
+        }
+    }
+    let id = window.id();
+    let ipc = proxy.clone();
+    let mut wb = WebViewBuilder::new_with_web_context(context).with_html(html).with_ipc_handler(move |req: wry::http::Request<String>| {
+        let _ = ipc.send_event(Resident::Ipc(id, req.body().clone()));
+    });
+    wb = if surface == Surface::Panel { wb.with_transparent(true) } else { wb.with_background_color(CARD_BACKDROP) };
+    #[cfg(windows)]
+    let webview = wb.build(&window).map_err(|e| format!("{}'s webview (WebView2) could not start: {e}", surface.name()))?;
+    #[cfg(unix)]
+    let webview = {
+        use tao::platform::unix::WindowExtUnix;
+        use wry::WebViewBuilderExtUnix;
+        let vbox = window.default_vbox().ok_or_else(|| format!("{}'s window has no GTK box for its webview", surface.name()))?;
+        wb.build_gtk(vbox).map_err(|e| format!("{}'s webview (WebKitGTK) could not start: {e}", surface.name()))?
+    };
+    // Shown regardless after 3 s, if its page never says it has loaded.
+    let reveal = proxy.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        let _ = reveal.send_event(Resident::Reveal(surface));
+    });
+    Ok((window, webview))
+}
+
+fn eval_model(webview: &wry::WebView, call: &str, arg: &Value) {
+    let _ = webview.evaluate_script(&format!("window.{call} && window.{call}({})", arg.to_string().replace('<', "\\u003c")));
 }
 
 // --- L6 (Tynn #1058): the Updates window -----------------------------------------------------------------------------
@@ -496,9 +600,138 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
     let mut open: std::collections::HashMap<tao::window::WindowId, (tao::window::Window, wry::WebView, std::sync::mpsc::Sender<bool>, String)> = Default::default();
     // L6: the Updates window, one at most, and the launcher it shows.
     let mut updates: Option<(tao::window::Window, wry::WebView, std::sync::Arc<crate::control::Context>)> = None;
+    // #1514/#1515: the tray panel and the launch pad, one of each at most.
+    let mut panel: Option<OpenSurface> = None;
+    let mut pad: Option<OpenSurface> = None;
+    let mut panel_closed_at: Option<std::time::Instant> = None;
+    fn close(slot: &mut Option<OpenSurface>, surface: Surface) {
+        if slot.take().is_some() {
+            surface.open_flag().store(false, std::sync::atomic::Ordering::SeqCst);
+            eprintln!("genie: {} closed", surface.name());
+        }
+    }
     event_loop.run_return(|event, target, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
+            Event::UserEvent(Resident::ShowPanel(ctx, model, anchor)) => {
+                if panel.is_some() {
+                    close(&mut panel, Surface::Panel);
+                    return;
+                }
+                if panel_closed_at.map_or(false, |t| t.elapsed() < PANEL_TOGGLE) {
+                    return;
+                }
+                match surface_window(target, &mut context, &proxy, Surface::Panel, panel_html(&model)) {
+                    Ok((window, webview)) => {
+                        Surface::Panel.open_flag().store(true, std::sync::atomic::Ordering::SeqCst);
+                        keep_current(Surface::Panel, std::sync::Arc::clone(&ctx), proxy.clone());
+                        panel = Some(OpenSurface { window, webview, ctx, anchor, focused: false, shown: false, size: (300.0, 470.0) });
+                    }
+                    Err(why) => eprintln!("genie: {why}"),
+                }
+            }
+            Event::UserEvent(Resident::ShowPad(ctx, model)) => {
+                if let Some(p) = &pad {
+                    eval_model(&p.webview, "render", &model);
+                    p.window.set_minimized(false);
+                    p.window.set_focus();
+                    return;
+                }
+                match surface_window(target, &mut context, &proxy, Surface::Pad, pad_html(&model)) {
+                    Ok((window, webview)) => {
+                        Surface::Pad.open_flag().store(true, std::sync::atomic::Ordering::SeqCst);
+                        keep_current(Surface::Pad, std::sync::Arc::clone(&ctx), proxy.clone());
+                        pad = Some(OpenSurface { window, webview, ctx, anchor: None, focused: false, shown: false, size: (520.0, 640.0) });
+                    }
+                    Err(why) => eprintln!("genie: {why}"),
+                }
+            }
+            Event::UserEvent(Resident::View(surface, model)) => {
+                let slot = if surface == Surface::Panel { &panel } else { &pad };
+                if let Some(s) = slot {
+                    eval_model(&s.webview, "render", &model);
+                }
+            }
+            Event::UserEvent(Resident::Click(surface, id)) => {
+                let slot = if surface == Surface::Panel { &panel } else { &pad };
+                if let Some(s) = slot {
+                    eval_model(&s.webview, "genieClick", &Value::String(id));
+                }
+            }
+            Event::UserEvent(Resident::Close(surface)) => {
+                if surface == Surface::Panel { close(&mut panel, surface) } else { close(&mut pad, surface) }
+            }
+            Event::UserEvent(Resident::Reveal(surface)) => {
+                let slot = if surface == Surface::Panel { &mut panel } else { &mut pad };
+                if let Some(s) = slot.as_mut().filter(|s| !s.shown) {
+                    s.shown = true;
+                    if surface == Surface::Panel {
+                        place_panel(&s.window, s.anchor, s.size);
+                    }
+                    s.window.set_visible(true);
+                    s.window.set_focus();
+                    eprintln!("genie: {} is shown before its page said it loaded", surface.name());
+                }
+            }
+            Event::UserEvent(Resident::Ipc(id, body)) if panel.as_ref().map_or(false, |s| s.window.id() == id) || pad.as_ref().map_or(false, |s| s.window.id() == id) => {
+                let surface = if panel.as_ref().map_or(false, |s| s.window.id() == id) { Surface::Panel } else { Surface::Pad };
+                let msg = serde_json::from_str::<Value>(&body).unwrap_or(Value::Null);
+                let slot = if surface == Surface::Panel { &mut panel } else { &mut pad };
+                match msg["kind"].as_str() {
+                    Some("shown") => {
+                        if let Ok(mut held) = SHOWN.lock() {
+                            held.retain(|(s, _)| *s != surface);
+                            held.push((surface, msg.clone()));
+                        }
+                        let Some(s) = slot.as_mut() else { return };
+                        let size = (msg["w"].as_f64().unwrap_or(s.size.0).max(1.0), msg["h"].as_f64().unwrap_or(s.size.1).max(1.0));
+                        if surface == Surface::Panel && (size != s.size || !s.shown) {
+                            s.size = size;
+                            s.window.set_inner_size(LogicalSize::new(size.0, size.1));
+                            place_panel(&s.window, s.anchor, size);
+                        }
+                        if !s.shown {
+                            s.shown = true;
+                            s.window.set_visible(true);
+                            s.window.set_focus();
+                            eprintln!("genie: {} is shown: {}", surface.name(), msg["text"].as_str().unwrap_or("").replace('\n', " | "));
+                        }
+                    }
+                    Some("drag") => {
+                        if let Some(s) = slot.as_ref() {
+                            let _ = s.window.drag_window();
+                        }
+                    }
+                    Some("minimize") => {
+                        if let Some(s) = slot.as_ref() {
+                            s.window.set_minimized(true);
+                        }
+                    }
+                    Some("close") => close(slot, surface),
+                    Some("pick") => {
+                        let Some(item) = msg["id"].as_str().map(str::to_string) else { return };
+                        let Some(ctx) = slot.as_ref().map(|s| std::sync::Arc::clone(&s.ctx)) else { return };
+                        // The panel closes once an item is chosen, as a menu does; "Start when I sign in" turns over in place.
+                        if surface == Surface::Panel && item != "logon" {
+                            close(slot, surface);
+                        }
+                        pick(surface, ctx, &item, proxy.clone());
+                    }
+                    _ => {}
+                }
+            }
+            Event::WindowEvent { window_id, event: WindowEvent::Focused(focused), .. } if panel.as_ref().map_or(false, |s| s.window.id() == window_id) => {
+                if focused {
+                    if let Some(s) = panel.as_mut() {
+                        s.focused = true;
+                    }
+                } else if panel.as_ref().map_or(false, |s| s.focused) {
+                    close(&mut panel, Surface::Panel);
+                    panel_closed_at = Some(std::time::Instant::now());
+                }
+            }
+            Event::WindowEvent { window_id, event: WindowEvent::CloseRequested, .. } if panel.as_ref().map_or(false, |s| s.window.id() == window_id) => close(&mut panel, Surface::Panel),
+            Event::WindowEvent { window_id, event: WindowEvent::CloseRequested, .. } if pad.as_ref().map_or(false, |s| s.window.id() == window_id) => close(&mut pad, Surface::Pad),
             Event::UserEvent(Resident::ShowUpdates(ctx)) => {
                 if let Some((window, _, _)) = &updates {
                     window.set_minimized(false);
@@ -588,6 +821,15 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
                 UPDATES_OPEN.store(false, std::sync::atomic::Ordering::SeqCst);
                 updates = None;
             }
+            Event::UserEvent(Resident::CancelAsks) => {
+                for (_, (window, webview, reply, title)) in open.drain() {
+                    eprintln!("genie: {title}: cancelled");
+                    let _ = reply.send(false);
+                    drop(webview);
+                    drop(window);
+                }
+                set_asking(Vec::new());
+            }
             Event::UserEvent(Resident::Ask(q, reply)) => {
                 let made = (|| -> Result<(tao::window::Window, wry::WebView), String> {
                     let window = WindowBuilder::new()
@@ -624,6 +866,7 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
                 match made {
                     Ok((window, webview)) => {
                         open.insert(window.id(), (window, webview, reply, q.title.clone()));
+                        set_asking(open.values().map(|o| o.3.clone()).collect());
                     }
                     Err(why) => {
                         eprintln!("genie: {why}; nothing was stopped");
@@ -641,6 +884,7 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
                     }
                     "confirm" | "cancel" => {
                         if let Some((window, webview, reply, title)) = open.remove(&id) {
+                            set_asking(open.values().map(|o| o.3.clone()).collect());
                             eprintln!("genie: {title}: {}", if kind == "confirm" { "confirmed" } else { "cancelled" });
                             let _ = reply.send(kind == "confirm");
                             drop(webview);
@@ -652,6 +896,7 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
             }
             Event::WindowEvent { window_id, event: WindowEvent::CloseRequested, .. } => {
                 if let Some((window, webview, reply, _)) = open.remove(&window_id) {
+                    set_asking(open.values().map(|o| o.3.clone()).collect());
                     let _ = reply.send(false);
                     drop(webview);
                     drop(window);
@@ -800,12 +1045,277 @@ pub fn run_moving_card(roots: &Roots, work: Option<Box<dyn FnOnce() + Send>>) ->
     Ok(())
 }
 
-// --- Tynn #1058 (#1514/#1515): the tray panel and the launch pad. RED STUB: the tests come first. --------------------
+// --- Tynn #1058 (#1514, #1515): the tray panel and the launch pad -----------------------------------------------------
 
-pub fn panel_html(_model: &Value) -> String {
-    String::new()
+/// A page with the mockup's CSS and its first model in place (a script literal: `<` escaped, so no text of the model can
+/// close the script element).
+fn page_with_model(html: &str, model: &Value) -> String {
+    let css = format!("{}\n{}", include_str!("../ui/base.css"), include_str!("../ui/theme-c.css"));
+    html.replace("/*GENIE_CSS*/", &css).replace("/*GENIE_MODEL*/null", &model.to_string().replace('<', "\\u003c"))
 }
 
-pub fn pad_html(_model: &Value) -> String {
-    String::new()
+/// The tray panel's page (`panel::panel`'s model), the mockup's tray screen.
+pub fn panel_html(model: &Value) -> String {
+    page_with_model(include_str!("../ui/panel.html"), model)
+}
+
+/// The launch pad's page (`panel::pad`'s model), the mockup's screen 0.
+pub fn pad_html(model: &Value) -> String {
+    page_with_model(include_str!("../ui/pad.html"), model)
+}
+
+/// The two windows: the tray panel and the launch pad.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Surface {
+    Panel,
+    Pad,
+}
+
+impl Surface {
+    pub fn parse(name: &str) -> Option<Surface> {
+        match name {
+            "panel" => Some(Surface::Panel),
+            "pad" => Some(Surface::Pad),
+            _ => None,
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            Surface::Panel => "the tray panel",
+            Surface::Pad => "the launch pad",
+        }
+    }
+    fn model(self, ctx: &crate::control::Context) -> Value {
+        let f = crate::panel::facts(ctx);
+        match self {
+            Surface::Panel => crate::panel::panel(&f),
+            Surface::Pad => crate::panel::pad(&f),
+        }
+    }
+    fn open_flag(self) -> &'static std::sync::atomic::AtomicBool {
+        match self {
+            Surface::Panel => &PANEL_OPEN,
+            Surface::Pad => &PAD_OPEN,
+        }
+    }
+}
+
+static PANEL_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static PAD_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// What each window's page last said it shows (its own words, read in the webview: `launcher.uiProbe`).
+static SHOWN: std::sync::Mutex<Vec<(Surface, Value)>> = std::sync::Mutex::new(Vec::new());
+
+fn resident() -> Option<EventLoopProxy<Resident>> {
+    RESIDENT.get().and_then(|p| p.lock().ok().map(|p| p.clone()))
+}
+
+/// Opens the tray panel for a click at `anchor` (physical pixels; the pointer when `None`), or closes it when it is open:
+/// `false` when this launcher has no window loop (the caller falls back to the platform's menu).
+pub fn show_panel(ctx: std::sync::Arc<crate::control::Context>, anchor: Option<(i32, i32)>) -> bool {
+    let Some(proxy) = resident() else { return false };
+    let model = Surface::Panel.model(&ctx);
+    proxy.send_event(Resident::ShowPanel(ctx, model, anchor)).is_ok()
+}
+
+/// Opens the launch pad, or brings it forward: `false` when this launcher has no window loop.
+pub fn show_pad(ctx: std::sync::Arc<crate::control::Context>) -> bool {
+    let Some(proxy) = resident() else { return false };
+    let model = Surface::Pad.model(&ctx);
+    proxy.send_event(Resident::ShowPad(ctx, model)).is_ok()
+}
+
+/// Whether the window is open now.
+pub fn is_open(surface: Surface) -> bool {
+    surface.open_flag().load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// What the window's page last said it shows: `{text, items: [{id, label, enabled}], …}`.
+pub fn shown(surface: Surface) -> Option<Value> {
+    SHOWN.lock().ok()?.iter().find(|(s, _)| *s == surface).map(|(_, v)| v.clone())
+}
+
+/// A click on the element `data-id=<id>` of the window's page, as the person's click (the page's own handler runs): the
+/// VM rows drive the windows with it (`launcher.uiProbe`, GENIE_LAUNCHER_TRAY_PROBE=1 only).
+pub fn click(surface: Surface, id: &str) -> bool {
+    resident().map_or(false, |p| p.send_event(Resident::Click(surface, id.to_string())).is_ok())
+}
+
+/// The window closed (a VM row's tidy-up).
+pub fn close_surface(surface: Surface) -> bool {
+    resident().map_or(false, |p| p.send_event(Resident::Close(surface)).is_ok())
+}
+
+/// Once every 2 s while the window is open: its model, from the launcher's own state, off the window's thread.
+fn keep_current(surface: Surface, ctx: std::sync::Arc<crate::control::Context>, proxy: EventLoopProxy<Resident>) {
+    std::thread::spawn(move || {
+        while surface.open_flag().load(std::sync::atomic::Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            if !surface.open_flag().load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            let _ = proxy.send_event(Resident::View(surface, surface.model(&ctx)));
+        }
+    });
+}
+
+/// A click on one of the windows' items or buttons, acted on off the window's thread.
+fn pick(surface: Surface, ctx: std::sync::Arc<crate::control::Context>, id: &str, proxy: EventLoopProxy<Resident>) {
+    use crate::panel::Pick;
+    eprintln!("genie: {}: {id}", surface.name());
+    match crate::panel::pick(id) {
+        Some(Pick::Act(action)) => crate::tray::act(ctx, action),
+        Some(Pick::Logon) => {
+            std::thread::spawn(move || {
+                match crate::panel::toggle_logon(&ctx.roots) {
+                    Ok(said) => eprintln!("genie: {}: start when I sign in: {said}", surface.name()),
+                    Err(why) => eprintln!("genie: {}: start when I sign in: {why}", surface.name()),
+                }
+                let _ = proxy.send_event(Resident::View(surface, surface.model(&ctx)));
+            });
+        }
+        Some(Pick::Pad) => {
+            std::thread::spawn(move || {
+                show_pad(ctx);
+            });
+        }
+        Some(Pick::Host(url)) => {
+            std::thread::spawn(move || {
+                // Only a host this computer paired with: the page names it, the launcher's own list decides.
+                if !crate::panel::read_paired(&ctx.roots.runtime_dir()).contains(&url) {
+                    eprintln!("genie: {}: {url} is not a paired host", surface.name());
+                    return;
+                }
+                if let Err(why) = crate::control::open_window_on(&ctx, &url) {
+                    eprintln!("genie: {}: a window on {url}: {why}", surface.name());
+                }
+            });
+        }
+        None => eprintln!("genie: {}: nothing is {id:?}", surface.name()),
+    }
+}
+
+/// The panel put where it belongs once its page says how big it is: against the tray it was opened from.
+fn place_panel(window: &tao::window::Window, anchor: Option<(i32, i32)>, size: (f64, f64)) {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::POINT;
+        use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+        let scale = window.scale_factor();
+        let at = anchor.unwrap_or_else(|| {
+            let mut p = POINT { x: 0, y: 0 };
+            unsafe { GetCursorPos(&mut p) };
+            (p.x, p.y)
+        });
+        let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        let monitor = unsafe { MonitorFromPoint(POINT { x: at.0, y: at.1 }, MONITOR_DEFAULTTONEAREST) };
+        if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
+            return;
+        }
+        let w = info.rcWork;
+        let work = crate::panel::Rect { left: w.left, top: w.top, right: w.right, bottom: w.bottom };
+        let px = ((size.0 * scale).round() as i32, (size.1 * scale).round() as i32);
+        let (x, y) = crate::panel::place(at, work, px, (12.0 * scale).round() as i32);
+        window.set_outer_position(tao::dpi::PhysicalPosition::new(x, y));
+    }
+    #[cfg(unix)]
+    {
+        if hypr::running() {
+            // Hyprland: a client cannot place its own window on Wayland; Hyprland's own socket does (no program run).
+            let title = window.title();
+            std::thread::spawn(move || hypr::place_panel(&title, (size.0.round() as i32, size.1.round() as i32)));
+            return;
+        }
+        // Elsewhere (X11; a Wayland desktop that ignores it): by the pointer, as the platform allows.
+        let at = anchor.or_else(|| window.cursor_position().ok().map(|p| (p.x as i32, p.y as i32)));
+        if let (Some(at), Some(m)) = (at, window.current_monitor().or_else(|| window.primary_monitor())) {
+            let (mp, ms) = (m.position(), m.size());
+            let scale = window.scale_factor();
+            let work = crate::panel::Rect { left: mp.x, top: mp.y, right: mp.x + ms.width as i32, bottom: mp.y + ms.height as i32 };
+            let px = ((size.0 * scale).round() as i32, (size.1 * scale).round() as i32);
+            let (x, y) = crate::panel::place(at, work, px, (8.0 * scale).round() as i32);
+            window.set_outer_position(tao::dpi::PhysicalPosition::new(x, y));
+        }
+    }
+}
+
+/// HYPRLAND'S OWN SOCKET (`$XDG_RUNTIME_DIR/hypr/<signature>/.socket.sock`): where the pointer is, the monitor's area
+/// less its bars (`reserved`), and the panel moved there (`movewindowpixel exact`). Spoken directly: no hyprctl is run.
+#[cfg(unix)]
+mod hypr {
+    use crate::panel::{place, Rect};
+    use serde_json::Value;
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    use std::path::PathBuf;
+
+    fn socket() -> Option<PathBuf> {
+        let sig = std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE")?;
+        let mut places = Vec::new();
+        if let Some(run) = std::env::var_os("XDG_RUNTIME_DIR") {
+            places.push(PathBuf::from(run).join("hypr").join(&sig).join(".socket.sock"));
+        }
+        places.push(PathBuf::from("/tmp/hypr").join(&sig).join(".socket.sock"));
+        places.into_iter().find(|p| p.exists())
+    }
+
+    pub fn running() -> bool {
+        socket().is_some()
+    }
+
+    fn ask(request: &str) -> Option<String> {
+        let mut s = UnixStream::connect(socket()?).ok()?;
+        s.set_read_timeout(Some(std::time::Duration::from_secs(2))).ok()?;
+        s.write_all(request.as_bytes()).ok()?;
+        let mut out = String::new();
+        s.read_to_string(&mut out).ok()?;
+        Some(out)
+    }
+
+    fn json(request: &str) -> Option<Value> {
+        serde_json::from_str(&ask(request)?).ok()
+    }
+
+    /// A monitor's area less what its bars reserve, in Hyprland's layout pixels.
+    fn work_area(m: &Value) -> Option<Rect> {
+        let scale = m["scale"].as_f64().filter(|s| *s > 0.0).unwrap_or(1.0);
+        let (x, y) = (m["x"].as_i64()? as i32, m["y"].as_i64()? as i32);
+        let (w, h) = ((m["width"].as_f64()? / scale) as i32, (m["height"].as_f64()? / scale) as i32);
+        let r: Vec<i32> = m["reserved"].as_array().map(|a| a.iter().map(|v| v.as_i64().unwrap_or(0) as i32).collect()).unwrap_or_default();
+        let g = |i: usize| r.get(i).copied().unwrap_or(0);
+        Some(Rect { left: x + g(0), top: y + g(1), right: x + w - g(2), bottom: y + h - g(3) })
+    }
+
+    pub fn place_panel(title: &str, size: (i32, i32)) {
+        let me = std::process::id() as u64;
+        // The window maps a moment after it is shown: looked for for up to 2 s.
+        let mut address = None;
+        for _ in 0..40 {
+            address = json("j/clients").and_then(|c| {
+                c.as_array()?.iter().find(|w| w["pid"].as_u64() == Some(me) && w["title"].as_str() == Some(title)).and_then(|w| w["address"].as_str().map(str::to_string))
+            });
+            if address.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let Some(address) = address else {
+            eprintln!("genie: the tray panel: Hyprland did not list its window, so it stays where Hyprland put it");
+            return;
+        };
+        let Some(cursor) = json("j/cursorpos") else { return };
+        let at = (cursor["x"].as_f64().unwrap_or(0.0) as i32, cursor["y"].as_f64().unwrap_or(0.0) as i32);
+        let list = json("j/monitors").and_then(|m| m.as_array().cloned()).unwrap_or_default();
+        let on = list.iter().find(|m| {
+            let Some(a) = work_area(m) else { return false };
+            let (x, y) = (m["x"].as_i64().unwrap_or(0) as i32, m["y"].as_i64().unwrap_or(0) as i32);
+            at.0 >= x && at.0 < a.right + 1 && at.1 >= y && at.1 < a.bottom + 1
+        });
+        let Some(work) = on.or_else(|| list.iter().find(|m| m["focused"] == true)).and_then(work_area) else { return };
+        let (x, y) = place(at, work, size, 8);
+        let said = ask(&format!("dispatch movewindowpixel exact {x} {y},address:{address}")).unwrap_or_default();
+        let _ = ask(&format!("dispatch focuswindow address:{address}"));
+        eprintln!("genie: the tray panel: at {x},{y} (pointer {},{}; work area {work:?}): {}", at.0, at.1, said.trim());
+    }
 }

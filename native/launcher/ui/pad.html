@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Genie</title>
+<!-- THE LAUNCH PAD (Tynn #1058, #1515), the launcher's own window in the owner's direction C, "Wish Orb": the mockup's
+     screen 0 (sandbox/launcher-design/src/screens.html s-pad), its markup as it is. base.css and theme-c.css are put in
+     place of the CSS marker by src/ui.rs, with the model (src/panel.rs `pad`) in place of the model marker; render(model)
+     redraws it every 2 s. The greeting is the computer's own time of day. A click answers through window.ipc.postMessage
+     (wry): pick {id}, drag, minimize, close; after each draw the page says its own words (shown {text, items}), which a VM
+     row reads. Nothing is fetched; no text is read as HTML. -->
+<style>/*GENIE_CSS*/
+html,body{height:100%;overflow:hidden;user-select:none}
+[hidden]{display:none!important}
+.win{width:100%;height:100%}
+.tb-ctl i{cursor:pointer}
+.body{position:relative;z-index:3;box-sizing:border-box;width:100%;max-width:520px;margin:0 auto}
+.link,.btn{cursor:pointer}
+.btn[disabled]{opacity:.5;cursor:default;transform:none}
+.pill.off{color:var(--muted)}
+.pill.off i{box-shadow:none;opacity:.6}
+</style>
+</head>
+<body class="only">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="lampfill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="var(--lamp-a)"/><stop offset="1" stop-color="var(--lamp-b)"/></linearGradient>
+    <symbol id="lamp" viewBox="0 0 72 44">
+      <path fill="url(#lampfill)" d="M12 27c0-5.5 7.6-8.6 19.5-8.6S51 21.5 51 27c0 0 5.8-.6 10.2-6 2.1-2.5 4.6-3.6 7.3-2.6-3.5 1.3-5.6 5.4-8.7 9.6-3.3 4.4-8 6.8-13.4 7.4H24.5C17 35.4 12 32 12 27z"/>
+      <path fill="none" stroke="url(#lampfill)" stroke-width="2.6" stroke-linecap="round" d="M12.4 25.5c-6.4.4-9.2-5.8-5.2-8.4 2.3-1.5 4.9-.4 6 1.8"/>
+      <path fill="url(#lampfill)" d="M21.5 19c2.2-4.4 6.2-5.8 10-5.8s7.8 1.4 10 5.8z"/>
+      <circle fill="url(#lampfill)" cx="31.5" cy="10.6" r="2.4"/>
+      <path fill="url(#lampfill)" d="M24 35.6h15l3.6 5H20.4z"/>
+    </symbol>
+    <symbol id="i-host" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6.5" rx="2"/><rect x="3" y="13.5" width="18" height="6.5" rx="2"/></g><circle cx="7" cy="7.2" r="1.2" fill="currentColor"/><circle cx="7" cy="16.8" r="1.2" fill="currentColor"/></symbol>
+    <symbol id="i-window" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M3 9h18"/></g><circle cx="6.2" cy="6.8" r=".9" fill="currentColor"/><circle cx="8.8" cy="6.8" r=".9" fill="currentColor"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.6 2.6 3.6 5.4 3.6 8.5s-1 5.9-3.6 8.5c-2.6-2.6-3.6-5.4-3.6-8.5s1-5.9 3.6-8.5z"/></g></symbol>
+    <symbol id="i-apps" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.8"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.8"/><path d="M16.75 14v5.5M14 16.75h5.5" stroke-linecap="round"/></g></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8" stroke-linecap="round"/></g></symbol>
+  </defs>
+</svg>
+<main class="board">
+  <div class="win">
+    <div class="tb" id="tb"><svg class="tb-lamp"><use href="#lamp"/></svg><span>Genie</span><div class="tb-ctl"><i data-act="minimize">–</i><i data-act="close">×</i></div></div>
+    <div class="body pad">
+      <div class="pad-top">
+        <div class="hero hero-sm" style="--p:100"><div class="glow"></div><div class="smoke"><i></i><i></i><i></i></div><div class="dust" data-n="10"></div><svg class="lamp"><use href="#lamp"/></svg></div>
+        <div>
+          <h1 id="greeting">Good evening</h1>
+          <p class="muted" id="sub"></p>
+        </div>
+      </div>
+
+      <div class="card host-card" id="host-card">
+        <div class="ico ok" id="host-ico"><svg><use href="#i-host"/></svg></div>
+        <div class="grow">
+          <div class="row-title"><span id="host-title"></span> <span class="pill ok" id="host-pill"><i></i><span id="host-pill-text"></span></span></div>
+          <div class="muted small" id="host-detail"></div>
+        </div>
+        <button class="btn ghost sm" id="host-btn"></button>
+      </div>
+
+      <div class="tiles">
+        <div class="tile">
+          <div class="ico"><svg><use href="#i-window"/></svg></div>
+          <div class="row-title">Genie</div>
+          <div class="muted small">Your workspaces and agents</div>
+          <button class="btn primary sm" id="genie-btn" data-id="openGenie">Open</button>
+        </div>
+        <div class="tile">
+          <div class="ico"><svg><use href="#i-globe"/></svg></div>
+          <div class="row-title">Genie Browser</div>
+          <div class="muted small">Browse alongside your agents</div>
+          <button class="btn sm" id="browser-btn" data-id="openBrowser">Open</button>
+        </div>
+      </div>
+
+      <div class="apps">
+        <div class="apps-head"><span><svg class="i14"><use href="#i-apps"/></svg> Genie Apps</span><span class="pill soft">Coming soon</span></div>
+        <div class="apps-grid">
+          <div class="slot"></div><div class="slot"></div><div class="slot"></div><div class="slot"></div>
+        </div>
+        <p class="muted small center">Apps you add to Genie will show up here, ready to open.</p>
+      </div>
+
+      <div class="foot split">
+        <a class="link" id="updates" data-id="updates"><span class="badge" id="updates-count"></span> <span id="updates-label"></span></a>
+        <a class="link" id="settings" data-id="openSettings"><svg class="i14"><use href="#i-gear"/></svg> Settings</a>
+      </div>
+    </div>
+  </div>
+</main>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var say = function (msg) { window.ipc.postMessage(JSON.stringify(msg)); };
+
+  // Deterministic stardust, as the mockup lays it out (the same sparkles on every load).
+  var seed = 7;
+  function rnd() { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; }
+  document.querySelectorAll('.dust').forEach(function (d) {
+    var n = +d.getAttribute('data-n') || 12;
+    for (var i = 0; i < n; i++) {
+      var s = document.createElement('span');
+      s.style.left = (8 + rnd() * 84).toFixed(1) + '%';
+      s.style.top = (rnd() * 90).toFixed(1) + '%';
+      s.style.setProperty('--d', (rnd() * 2.4).toFixed(2) + 's');
+      s.style.setProperty('--s', (0.5 + rnd() * 1.1).toFixed(2));
+      d.appendChild(s);
+    }
+  });
+
+  // The greeting by this computer's own time of day.
+  function greeting(h) { return h >= 5 && h < 12 ? 'Good morning' : h >= 12 && h < 18 ? 'Good afternoon' : 'Good evening'; }
+
+  function report() {
+    var items = [];
+    document.querySelectorAll('[data-id]').forEach(function (e) { items.push({ id: e.getAttribute('data-id'), label: e.textContent.trim(), enabled: !e.disabled }); });
+    say({ kind: 'shown', text: document.querySelector('.win').innerText, items: items, hour: new Date().getHours() });
+  }
+
+  window.render = function (d) {
+    if (!d) return;
+    $('greeting').textContent = greeting(new Date().getHours());
+    $('sub').textContent = d.sub;
+    var h = d.host || {};
+    $('host-title').textContent = h.title || '';
+    $('host-pill').hidden = !h.pill;
+    $('host-pill').className = 'pill ' + (h.ok ? 'ok' : 'off');
+    $('host-pill-text').textContent = h.pill || '';
+    $('host-ico').className = 'ico' + (h.ok ? ' ok' : '');
+    $('host-detail').textContent = h.detail || '';
+    var b = $('host-btn');
+    if (h.button) { b.hidden = false; b.textContent = h.button.label; b.setAttribute('data-id', h.button.id); }
+    else { b.hidden = true; b.removeAttribute('data-id'); }
+    var br = $('browser-btn');
+    br.disabled = !(d.browser && d.browser.enabled);
+    br.textContent = br.disabled ? 'Not installed' : 'Open';
+    var u = d.updates || { count: 0, label: 'Updates' };
+    $('updates-count').hidden = !(u.count > 0);
+    $('updates-count').textContent = String(u.count || 0);
+    $('updates-label').textContent = u.label;
+    requestAnimationFrame(report);
+  };
+
+  document.querySelectorAll('[data-id]').forEach(function (e) {
+    e.addEventListener('click', function () { var id = e.getAttribute('data-id'); if (id && !e.disabled) say({ kind: 'pick', id: id }); });
+  });
+  $('host-btn').addEventListener('click', function () { var id = $('host-btn').getAttribute('data-id'); if (id) say({ kind: 'pick', id: id }); });
+  // A VM row's click (launcher.uiProbe {click}): the element's own handler, as the person's click runs it.
+  window.genieClick = function (id) {
+    var found = null;
+    document.querySelectorAll('[data-id]').forEach(function (e) { if (e.getAttribute('data-id') === id) found = e; });
+    if (found) found.click();
+    return !!found;
+  };
+  document.querySelectorAll('[data-act]').forEach(function (i) { i.onclick = function (e) { e.stopPropagation(); say({ kind: i.getAttribute('data-act') }); }; });
+  $('tb').addEventListener('mousedown', function (e) { if (e.button === 0 && !e.target.closest('.tb-ctl')) say({ kind: 'drag' }); });
+  window.render(/*GENIE_MODEL*/null);
+})();
+</script>
+</body>
+</html>

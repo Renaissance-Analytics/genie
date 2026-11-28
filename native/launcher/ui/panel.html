@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Genie tray</title>
+<!-- THE TRAY PANEL (Tynn #1058, #1514), the owner's direction C, "Wish Orb": the mockup's tray screen (screen 4,
+     sandbox/launcher-design/src/screens.html s-tray), its .menu and nothing around it: the window is the panel, transparent
+     around its rounded corners. base.css and theme-c.css are put in place of the CSS marker by src/ui.rs, with the model
+     (src/panel.rs `panel`) in place of the model marker; render(model) redraws it every 2 s. A click answers through
+     window.ipc.postMessage (wry): pick {id}, close. After each draw the page says its size and its own words (shown {w, h,
+     text, items}): the window takes that size, and a VM row reads the words. Nothing is fetched; no text is read as HTML. -->
+<style>/*GENIE_CSS*/
+html,body{background:transparent!important;margin:0;overflow:hidden;user-select:none}
+body{display:block}
+.menu{position:static;width:300px;margin:0;cursor:default}
+.m-head{cursor:pointer;border-radius:10px}
+.m-head:hover{background:var(--chip)}
+.m-head .grow b{font-size:13px}
+.m-item{cursor:pointer}
+.m-item.off{opacity:.45;cursor:default}
+.m-item.off:hover{background:transparent}
+.m-item.strong.off{background:var(--chip)}
+.m-item .badge.alert{background:var(--bad);color:#fff}
+.m-head .pill{margin-left:0}
+.m-head .pill.off{color:var(--muted)}
+.m-head .pill.off i{box-shadow:none;opacity:.6}
+.tick:empty{display:inline-block}
+</style>
+</head>
+<body class="only">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="lampfill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="var(--lamp-a)"/><stop offset="1" stop-color="var(--lamp-b)"/></linearGradient>
+    <symbol id="lamp" viewBox="0 0 72 44">
+      <path fill="url(#lampfill)" d="M12 27c0-5.5 7.6-8.6 19.5-8.6S51 21.5 51 27c0 0 5.8-.6 10.2-6 2.1-2.5 4.6-3.6 7.3-2.6-3.5 1.3-5.6 5.4-8.7 9.6-3.3 4.4-8 6.8-13.4 7.4H24.5C17 35.4 12 32 12 27z"/>
+      <path fill="none" stroke="url(#lampfill)" stroke-width="2.6" stroke-linecap="round" d="M12.4 25.5c-6.4.4-9.2-5.8-5.2-8.4 2.3-1.5 4.9-.4 6 1.8"/>
+      <path fill="url(#lampfill)" d="M21.5 19c2.2-4.4 6.2-5.8 10-5.8s7.8 1.4 10 5.8z"/>
+      <circle fill="url(#lampfill)" cx="31.5" cy="10.6" r="2.4"/>
+      <path fill="url(#lampfill)" d="M24 35.6h15l3.6 5H20.4z"/>
+    </symbol>
+    <symbol id="i-check" viewBox="0 0 20 20"><path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M5 10.5l3.2 3.2L15 6.8"/></symbol>
+    <symbol id="i-host" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6.5" rx="2"/><rect x="3" y="13.5" width="18" height="6.5" rx="2"/></g><circle cx="7" cy="7.2" r="1.2" fill="currentColor"/><circle cx="7" cy="16.8" r="1.2" fill="currentColor"/></symbol>
+    <symbol id="i-window" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><path d="M3 9h18"/></g><circle cx="6.2" cy="6.8" r=".9" fill="currentColor"/><circle cx="8.8" cy="6.8" r=".9" fill="currentColor"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.6 2.6 3.6 5.4 3.6 8.5s-1 5.9-3.6 8.5c-2.6-2.6-3.6-5.4-3.6-8.5s1-5.9 3.6-8.5z"/></g></symbol>
+    <symbol id="i-rocket" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3c3.5 2 5 5.5 5 9.5l-2 3.5H9l-2-3.5C7 8.5 8.5 5 12 3z"/><circle cx="12" cy="10" r="1.8"/><path d="M9 16l-2.5 3M15 16l2.5 3" stroke-linecap="round"/></g></symbol>
+    <symbol id="i-seal" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5.5c0 4.5-3 7.8-7 9.5-4-1.7-7-5-7-9.5V6z"/><path d="M9.5 9.5l5 5M14.5 9.5l-5 5"/></g></symbol>
+  </defs>
+</svg>
+<div class="menu" id="menu">
+  <div class="m-head" id="head" data-id="pad" title="Open the launch pad">
+    <svg class="tb-lamp"><use href="#lamp"/></svg>
+    <div class="grow"><b id="head-title">Genie</b><div class="muted tiny" id="head-line"></div></div>
+    <span class="pill ok" id="head-pill"><i></i></span>
+  </div>
+  <div id="items"></div>
+</div>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var say = function (msg) { window.ipc.postMessage(JSON.stringify(msg)); };
+  var SVG = 'http://www.w3.org/2000/svg';
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function icon(id) { var s = document.createElementNS(SVG, 'svg'); var u = document.createElementNS(SVG, 'use'); u.setAttribute('href', '#' + id); s.appendChild(u); return s; }
+
+  function row(it) {
+    var kind = it.kind;
+    if (kind === 'sep') return el('div', 'm-sep');
+    if (kind === 'label') return el('div', 'm-label', it.label);
+    var cls = 'm-item' + (it.strong ? ' strong' : '') + (it.danger ? ' danger' : '') + (it.enabled === false ? ' off' : '');
+    var d = el('div', cls);
+    d.setAttribute('data-id', it.id);
+    if (it.title) d.title = it.title;
+    if (kind === 'host') {
+      d.appendChild(el('span', 'dot ' + (it.dot === 'ok' ? 'ok' : 'off')));
+      d.appendChild(document.createTextNode(it.label));
+      d.appendChild(el('span', 'm-right muted', it.right || ''));
+    } else if (kind === 'toggle') {
+      var t = el('span', 'tick');
+      if (it.on) t.appendChild(icon('i-check'));
+      d.appendChild(t);
+      d.appendChild(document.createTextNode(it.label));
+      d.setAttribute('aria-checked', it.on ? 'true' : 'false');
+    } else {
+      if (it.icon) d.appendChild(icon(it.icon));
+      d.appendChild(document.createTextNode(it.label));
+      if (it.badge != null) { var r = el('span', 'm-right'); r.appendChild(el('span', 'badge' + (it.alert ? ' alert' : ''), String(it.badge))); d.appendChild(r); }
+      else if (it.right) d.appendChild(el('span', 'm-right muted tiny', it.right));
+    }
+    if (it.enabled !== false) d.onclick = function () { say({ kind: 'pick', id: it.id }); };
+    return d;
+  }
+
+  function report() {
+    var m = $('menu').getBoundingClientRect();
+    var items = [];
+    document.querySelectorAll('[data-id]').forEach(function (e) { items.push({ id: e.getAttribute('data-id'), label: e.textContent.trim(), enabled: !e.classList.contains('off'), on: e.getAttribute('aria-checked') }); });
+    say({ kind: 'shown', w: Math.ceil(m.width), h: Math.ceil(m.height), text: $('menu').innerText, items: items });
+  }
+
+  window.render = function (p) {
+    if (!p) return;
+    $('head-title').textContent = p.head.title;
+    $('head-line').textContent = p.head.line;
+    $('head-pill').className = 'pill ' + (p.head.state === 'running' ? 'ok' : 'off');
+    $('head-pill').title = p.head.state === 'running' ? 'Running' : p.head.state === 'stopped' ? 'Stopped' : 'No host here';
+    var box = $('items'); box.textContent = '';
+    (p.items || []).forEach(function (it) { box.appendChild(row(it)); });
+    requestAnimationFrame(report);
+  };
+  // A VM row's click (launcher.uiProbe {click}): the element's own handler, as the person's click runs it.
+  window.genieClick = function (id) {
+    var found = null;
+    document.querySelectorAll('[data-id]').forEach(function (e) { if (e.getAttribute('data-id') === id) found = e; });
+    if (found) found.click();
+    return !!found;
+  };
+  $('head').onclick = function () { say({ kind: 'pick', id: 'pad' }); };
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') say({ kind: 'close' }); });
+  window.render(/*GENIE_MODEL*/null);
+})();
+</script>
+</body>
+</html>

@@ -8,9 +8,10 @@
  *   1. the host: the launcher's record names a live genie-host whose executable is <code>/host/<build>/genie-host;
  *   2. a client window: a pid attached to the launcher (launcher.status `clients`), its executable
  *      <code>/client/<build>/genie-client, not the browser, with its window on screen -> launch-2-client-<os>.png;
- *   3. the Genie Browser, opened as the person opens it: the tray's "Open Genie Browser" item (`launcher.trayAct
- *      openBrowser`, the item's own handler, tray::act; the launcher answers it only with GENIE_LAUNCHER_TRAY_PROBE=1, which
- *      the row gives it). A NEW process runs `--genie-browser`, its executable the client's program at <build> (the browser
+ *   3. the Genie Browser, opened as the person opens it: the tray panel (#1514), opened as a click on the icon opens it
+ *      (`launcher.trayPanel`), its words read in its own webview (`launcher.uiProbe`), photographed
+ *      -> launch-3-tray-panel-<os>.png, and its "Open Genie Browser" clicked in the page (the item's own handler, which
+ *      runs tray::act; the launcher answers these only with GENIE_LAUNCHER_TRAY_PROBE=1, which the row gives it). A NEW process runs `--genie-browser`, its executable the client's program at <build> (the browser
  *      component runs on the client's program, components.rs: its package carries no second copy of the app), its parent
  *      the launcher (never the host: a host that spawned Electron itself is what L4 removed), its window on screen
  *      -> launch-3-browser-<os>.png;
@@ -22,12 +23,19 @@
  *      -> launch-5-browser-no-client-<os>.png;
  *   6. a host no client window has spoken to: stopped (launcher.stopHost) and started from the tray ("Start this
  *      computer's host") with the UI closed; the tray's "Open Genie Browser" still opens a Browser window, started by the
- *      launcher, and no client window -> launch-6-browser-fresh-host-<os>.png.
+ *      launcher, and no client window -> launch-6-browser-fresh-host-<os>.png;
+ *   7. the launch pad (#1515, `launcher.openPad`): its words (the greeting by the hour, the host's agents and uptime, Genie,
+ *      the Genie Browser, Genie Apps, Updates, Settings) -> launch-pad-<os>.png; its Genie "Open" opens a client window and
+ *      its Browser "Open" a Browser started by the launcher; the tray panel with two paired hosts listed
+ *      -> launch-tray-panel-<os>.png; its "Start when I sign in" turns the logon setting over and back; its "Stop this
+ *      computer's host" asks first (-> launch-7-stop-asks-<os>.png) and Cancel leaves the host running; with the UI
+ *      closed its "Open Genie" opens a client window -> launch-7-panel-open-genie-<os>.png.
+ *      The two screenshots named for the mockup are compared with sandbox/launcher-design/shots/direction-c-{pad,tray}.png.
  *
  *   node scripts/launcher-launch-check.mjs --code <code root> --data <data root> --build <build> --launcher <exe> --out <dir>
  * Prints `### launcher-launch=PASS|FAIL <why>`; exits 1 on a failure.
  */
-import { existsSync, readFileSync, readdirSync, readlinkSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { WIN, OS, SYNC_MS, run, step, check, sleep, until, alive, executableOf, commandLine, processesNamed, parents, descends, shot, pressKey, wireCall, testMachineOrRefuse } from './launcher-row-lib.mjs';
@@ -148,6 +156,29 @@ async function closeBrowser(pid) {
     return Boolean(await until(() => !alive(pid), 10_000, 500));
 }
 
+/**
+ * THE TRAY PANEL AND THE LAUNCH PAD (#1514, #1515): what their pages say, read in their own webviews (`launcher.uiProbe`:
+ * the page's innerText and its items, as it reported them after its last draw), never the launcher's model alone.
+ */
+const PANEL_WORDS = ['Genie', 'This computer’s host · running', 'Open Genie', 'Open Genie Browser', 'Hosts', 'This computer', 'Stop this computer’s host', 'Updates', 'Start when I sign in', 'Close Genie', 'Shut down everything'];
+const panelText = (p) => String(p?.shown?.text ?? '');
+/** innerText applies the page's CSS (the HOSTS label is upper case on screen): compared without case. */
+const panelSays = (p, words) => panelText(p).toLowerCase().includes(words.toLowerCase());
+const panelItem = (p, id) => (p?.shown?.items ?? []).find((i) => i.id === id) ?? null;
+async function openSurface(method, surface) {
+    const asked = await wireCall(runtime, method);
+    if (!asked.ok) { console.log(`  ${method}: ${asked.reason}`); return null; }
+    if (method === 'launcher.trayPanel') console.log(`  the panel's items (the launcher's model): ${JSON.stringify(asked.value?.items)}`);
+    return until(async () => { const p = await wireCall(runtime, 'launcher.uiProbe', [{ surface }]); return p.ok && p.value?.open && p.value?.shown ? p.value : null; }, 20_000, 500);
+}
+const openPanel = () => openSurface('launcher.trayPanel', 'panel');
+/** Where the window system put the launcher's windows (Hyprland's own list; on Windows the screenshot says). */
+function launcherWindows(pid) {
+    if (WIN) return;
+    const r = spawnSync('hyprctl', ['-j', 'clients'], { encoding: 'utf8', timeout: SYNC_MS });
+    try { for (const c of JSON.parse(r.stdout).filter((c) => c.pid === pid)) console.log(`  window "${c.title}": at ${JSON.stringify(c.at)}, size ${JSON.stringify(c.size)}, floating ${c.floating}`); } catch { console.log('  (hyprctl clients said nothing)'); }
+}
+
 const fail = (why) => {
     dumpLogs();
     console.log(`### launcher-launch=FAIL ${why}`);
@@ -186,19 +217,17 @@ const before = new Set((await browserMains()).map((p) => p.key));
 console.log(`  browser processes before: ${before.size ? [...before].join(', ') : 'none'}`);
 const browserTrack = s.tracks?.browser;
 check(browserTrack?.verified === true && browserTrack?.current === build, `the browser track ${build} is installed and verifies`, JSON.stringify(browserTrack));
-const menu = await wireCall(runtime, 'launcher.trayMenu');
-console.log(`  the tray's menu: ${menu.ok ? JSON.stringify(menu.value?.items) : menu.reason}`);
-check(menu.ok && JSON.stringify(menu.value?.items ?? []).includes('Open Genie Browser'), 'the tray offers "Open Genie Browser"');
-// Windows shows the real menu at the icon for it (tray::show_menu); Linux's is drawn by the desktop's tray, which only a
-// pointer opens. Shown: photographed, then closed with Escape, so it covers nothing later.
-if (menu.ok && menu.value?.shown === true) {
-    await sleep(1_500);
-    photograph(`launch-3-tray-menu-${OS}.png`);
-    pressKey('Escape');
-    await sleep(1_000);
-}
-const acted = await wireCall(runtime, 'launcher.trayAct', [{ action: 'openBrowser' }]);
-check(acted.ok, 'the tray\'s "Open Genie Browser" was chosen', acted.ok ? JSON.stringify(acted.value) : acted.reason);
+// The tray panel (#1514), opened as a click on the icon opens it, its words read in its own webview, photographed, and its
+// "Open Genie Browser" clicked in the page as a person clicks it.
+const panel3 = await openPanel();
+check(Boolean(panel3), 'the tray panel opened and its page said what it shows', panel3 ? '' : 'nothing within 20 s');
+for (const words of PANEL_WORDS) check(panelSays(panel3, words), `the tray panel says "${words}"`, panelText(panel3));
+check(panelItem(panel3, 'openBrowser')?.enabled === true, 'the tray panel offers "Open Genie Browser"', JSON.stringify(panel3?.items ?? null));
+await sleep(1_200);
+photograph(`launch-3-tray-panel-${OS}.png`);
+const acted = await wireCall(runtime, 'launcher.uiProbe', [{ surface: 'panel', click: 'openBrowser' }]);
+check(acted.ok && acted.value?.clicked === true, 'the tray panel\'s "Open Genie Browser" was clicked', acted.ok ? JSON.stringify(acted.value?.clicked) : acted.reason);
+check(Boolean(await until(async () => { const p = await wireCall(runtime, 'launcher.uiProbe', [{ surface: 'panel' }]); return p.ok && p.value?.open === false ? true : null; }, 10_000, 500)), 'the tray panel closed once its item was chosen, as a menu does');
 const started = await until(async () => (await browserMains()).find((p) => !before.has(p.key)) ?? null, 30_000, 1_000);
 check(Boolean(started), 'a new Genie Browser process started within 30 s', started ? `pid ${started.pid}: ${commandLine(started.pid)}` : 'none');
 if (!started) {
@@ -296,6 +325,99 @@ const tree6 = parents();
 const windows6 = (await clientPrograms()).filter((p) => !(started6 && (p.pid === started6.pid || descends(p.pid, started6.pid, tree6))));
 check(windows6.length === 0, 'no client window was started for it', windows6.map((p) => p.pid).join(', '));
 photograph(`launch-6-browser-fresh-host-${OS}.png`);
+
+// ---------------------------------------------------------------- 7. the launch pad and the tray panel drive Genie
+// The launch pad (#1515), the launcher's own window (`launcher.openPad`, as the panel's header opens it): its words read in
+// its webview and photographed beside the mockup's; its Genie "Open" opens a client window and its Browser "Open" a
+// Browser. Then the tray panel (#1514), with two paired hosts on its list (addresses in device-hosts.json, as pairing
+// writes them; .invalid, so nothing is reached): its words, its photograph, its "Start when I sign in" turned over and
+// back (the logon setting), its "Stop this computer's host" asking first (Cancel leaves the host as it was), and its
+// "Open Genie" opening a client window with the UI closed.
+step(7, 'the launch pad and the tray panel open Genie and the Genie Browser');
+const hostNow = fresh ?? hostPid;
+const pad = await openSurface('launcher.openPad', 'pad');
+check(Boolean(pad), 'the launch pad opened and its page said what it shows', pad ? '' : 'nothing within 20 s');
+const padText = String(pad?.shown?.text ?? '');
+console.log(`  the launch pad says: ${padText.replace(/\s*\n\s*/g, ' | ')}`);
+const hour = Number(pad?.shown?.hour);
+const greeting = hour >= 5 && hour < 12 ? 'Good morning' : hour >= 12 && hour < 18 ? 'Good afternoon' : 'Good evening';
+check(padText.includes(greeting), `the launch pad greets by this computer's time of day ("${greeting}", hour ${hour})`, padText.split('\n')[1] ?? '');
+for (const words of ['Everything is running.', 'This computer’s host', 'Running', 'Genie', 'Your workspaces and agents', 'Genie Browser', 'Browse alongside your agents', 'Genie Apps', 'Coming soon', 'Apps you add to Genie will show up here, ready to open.', 'Settings']) {
+    check(padText.includes(words), `the launch pad says "${words}"`);
+}
+check(/(No agents working|\d+ agents? working) · up (less than a minute|\d+ min|\d+ hours?|\d+ days?)/.test(padText), 'the host card says its agents and its uptime, from the launcher', padText.match(/[^\n]*working[^\n]*/)?.[0] ?? '');
+check(/Updates?( ready)?/.test(padText), 'the launch pad offers its updates');
+for (const id of ['openGenie', 'openBrowser', 'stopHost', 'updates', 'openSettings']) check(Boolean((pad?.shown?.items ?? []).find((i) => i.id === id && i.enabled !== false)), `the launch pad offers ${id}`);
+launcherWindows(launcherPid);
+await sleep(1_500);
+photograph(`launch-pad-${OS}.png`);
+// The pad's Genie "Open": a client window, attached, on screen.
+const padGenie = await wireCall(runtime, 'launcher.uiProbe', [{ surface: 'pad', click: 'openGenie' }]);
+check(padGenie.ok && padGenie.value?.clicked === true, 'the launch pad\'s Genie "Open" was clicked');
+const client7 = await until(async () => { const st = await wireCall(runtime, 'launcher.status'); const pids = (st.ok ? st.value.clients ?? [] : []).map(Number).filter((p) => alive(p) && samePath(executableOf(p), exe('client', 'genie-client'))); return pids[0] ?? null; }, 60_000, 1_000);
+check(Boolean(client7), 'a client window opened from the launch pad, attached to the launcher', client7 ? `pid ${client7}` : 'none within 60 s');
+if (client7) check((await windowOnScreen(client7, 30_000)).windows.length > 0, 'its window is on screen');
+// The pad's Browser "Open": a new Browser, started by the launcher.
+if (started6) check(await closeBrowser(started6.pid), 'the Browser from step 6 closed', `pid ${started6.pid}`);
+const before7 = new Set((await browserMains()).map((p) => p.key));
+await wireCall(runtime, 'launcher.openPad');
+await sleep(1_000);
+const padBrowser = await wireCall(runtime, 'launcher.uiProbe', [{ surface: 'pad', click: 'openBrowser' }]);
+check(padBrowser.ok && padBrowser.value?.clicked === true, 'the launch pad\'s Genie Browser "Open" was clicked');
+const started7 = await until(async () => (await browserMains()).find((p) => !before7.has(p.key)) ?? null, 45_000, 1_000);
+check(Boolean(started7), 'a new Genie Browser started from the launch pad', started7 ? `pid ${started7.pid}` : 'none within 45 s');
+if (started7) {
+    check(started7.ppid === launcherPid, 'the Browser\'s parent is the launcher', `ppid ${started7.ppid}, launcher ${launcherPid}`);
+    check((await windowOnScreen(started7.pid, 45_000)).windows.length > 0, 'the Browser\'s window is on screen');
+}
+await wireCall(runtime, 'launcher.uiProbe', [{ surface: 'pad', close: true }]);
+// The panel, with the client window and the Browser open and two paired hosts listed.
+const pairedFile = join(runtime, 'device-hosts.json');
+const pairedBefore = existsSync(pairedFile) ? readFileSync(pairedFile, 'utf8') : null;
+writeFileSync(pairedFile, JSON.stringify({ hosts: ['https://studio-desktop.invalid:7443', 'https://build-box.invalid:7443'] }, null, 2));
+const panel7 = await openPanel();
+check(Boolean(panel7), 'the tray panel opened again');
+console.log(`  the tray panel says: ${panelText(panel7).replace(/\s*\n\s*/g, ' | ')}`);
+for (const words of [...PANEL_WORDS, 'studio-desktop.invalid', 'build-box.invalid', 'paired', 'agents keep running']) check(panelSays(panel7, words), `the tray panel says "${words}"`);
+launcherWindows(launcherPid);
+await sleep(1_200);
+photograph(`launch-tray-panel-${OS}.png`);
+// "Start when I sign in": the logon setting, turned over in place and back.
+const logonFile = join(runtime, 'logon.json');
+const logonOf = () => { try { return JSON.parse(readFileSync(logonFile, 'utf8')).setting === true; } catch { return false; } };
+const logonWas = logonOf();
+const toggleOn = () => wireCall(runtime, 'launcher.uiProbe', [{ surface: 'panel' }]).then((p) => (p.ok ? (p.value?.shown?.items ?? []).find((i) => i.id === 'logon')?.on : null));
+const shownWas = await toggleOn();
+check(shownWas === String(logonWas), 'the panel\'s "Start when I sign in" shows the logon setting', `shown ${shownWas}, setting ${logonWas}`);
+await wireCall(runtime, 'launcher.uiProbe', [{ surface: 'panel', click: 'logon' }]);
+check(Boolean(await until(() => (logonOf() !== logonWas ? true : null), 10_000, 300)), '"Start when I sign in" turned the logon setting over', `was ${logonWas}, now ${logonOf()}`);
+check(Boolean(await until(async () => ((await toggleOn()) === String(!logonWas) ? true : null), 10_000, 500)), 'the panel stayed open and shows the new setting');
+await wireCall(runtime, 'launcher.uiProbe', [{ surface: 'panel', click: 'logon' }]);
+check(Boolean(await until(() => (logonOf() === logonWas ? true : null), 10_000, 300)), '"Start when I sign in" turned it back', `now ${logonOf()}`);
+// "Stop this computer's host" asks first, as the menu's did; Cancel leaves the host running.
+await wireCall(runtime, 'launcher.uiProbe', [{ surface: 'panel', click: 'stopHost' }]);
+const asked7 = await until(async () => { const p = await wireCall(runtime, 'launcher.uiProbe', [{ surface: 'panel' }]); return p.ok && (p.value?.asking ?? []).length ? p.value.asking : null; }, 15_000, 500);
+check(Array.isArray(asked7) && asked7.some((t) => t.startsWith('Stop this computer')), 'the panel\'s "Stop this computer\'s host" asks first', JSON.stringify(asked7));
+await sleep(1_000);
+photograph(`launch-7-stop-asks-${OS}.png`);
+await wireCall(runtime, 'launcher.uiProbe', [{ surface: 'panel', cancelAsks: true }]);
+await sleep(2_000);
+check(alive(hostNow), 'Cancel left the host running, the same pid', `pid ${hostNow}`);
+// The panel's "Open Genie" with the UI closed: a client window.
+const closed7 = await wireCall(runtime, 'launcher.trayAct', [{ action: 'closeUi' }]);
+check(closed7.ok, 'the UI closed');
+if (client7) check(Boolean(await until(() => !alive(client7), 30_000, 500)), 'the client window closed', `pid ${client7}`);
+if (started7) await closeBrowser(started7.pid);
+const panel7b = await openPanel();
+check(Boolean(panel7b), 'the tray panel opened with the UI closed');
+check(panelSays(panel7b, 'Close Genie') && panelItem(panel7b, 'closeUi')?.enabled === false, 'with no window open, "Close Genie" has nothing to close', JSON.stringify(panelItem(panel7b, 'closeUi')));
+const panelGenie = await wireCall(runtime, 'launcher.uiProbe', [{ surface: 'panel', click: 'openGenie' }]);
+check(panelGenie.ok && panelGenie.value?.clicked === true, 'the tray panel\'s "Open Genie" was clicked');
+const client7b = await until(async () => { const st = await wireCall(runtime, 'launcher.status'); const pids = (st.ok ? st.value.clients ?? [] : []).map(Number).filter((p) => alive(p) && samePath(executableOf(p), exe('client', 'genie-client'))); return pids[0] ?? null; }, 60_000, 1_000);
+check(Boolean(client7b), 'a client window opened from the tray panel, attached to the launcher', client7b ? `pid ${client7b}` : 'none within 60 s');
+if (client7b) check((await windowOnScreen(client7b, 30_000)).windows.length > 0, 'its window is on screen');
+photograph(`launch-7-panel-open-genie-${OS}.png`);
+if (pairedBefore === null) rmSync(pairedFile, { force: true }); else writeFileSync(pairedFile, pairedBefore);
 
 if (run.failures.length) fail(run.failures.join('; '));
 console.log(`### launcher-launch=PASS the launcher's host (pid ${hostPid}) from ${join(code, 'host', build)}, a client window (pid ${clientPid}) attached to it from ${join(code, 'client', build)}, and the Genie Browser (pid ${browserPid}, parent the launcher ${launcherPid}) opened from the tray's item with its window on screen; the host and the client unchanged; with the UI closed the tray opened the Browser again (pid ${started5?.pid}) with no client, and for a host restarted with no client (pid ${started6?.pid})`);
