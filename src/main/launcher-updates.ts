@@ -31,7 +31,9 @@ interface Offered {
 }
 
 async function rows(call: LauncherCall, method: 'launcher.check' | 'launcher.updates'): Promise<Row[]> {
-    const answer = await call(method, []);
+    // Its tracks only (L7): the launcher's list also carries this host's tools, which it would ask this host for while
+    // this host waits on it.
+    const answer = await call(method, [{ tools: false }]);
     if (!answer.ok) throw new Error(answer.reason);
     const tracks = (answer.value as { tracks?: unknown } | null)?.tracks;
     return Array.isArray(tracks) ? (tracks as Row[]) : [];

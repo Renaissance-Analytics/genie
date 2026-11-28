@@ -33,6 +33,7 @@ import type { ProcessesService } from './processes-host.js';
 import type { BrowserService } from './browser-service.js';
 import type { TerminalsService } from './terminals-host.js';
 import { UPDATER_HELPER_LABEL, type UpdatesService } from './updates-host.js';
+import type { LauncherToolchain } from './launcher-toolchain.js';
 import type { SafeModeView } from '../core/safe-mode.js';
 import type { CrashStateView } from '../core/crash-record.js';
 import type { MarketplaceApi } from '../core/marketplace.js';
@@ -150,6 +151,8 @@ export interface EngineServerOptions {
     readonly terminals?: TerminalsService;
     /** The host's updater (P5b: updates-host.ts). Absent = `engine.updates` and `engine.updater` are refused. */
     readonly updates?: UpdatesService;
+    /** The host's tools for the launcher's Updates list (Tynn #1058 L7: launcher-toolchain.ts). Absent = refused. */
+    readonly toolchain?: LauncherToolchain;
     /** The host's safe mode (Tynn #386: safe-mode-host.ts): told to EVERY window before ready and on change; `engine.safeMode` leaves it. */
     readonly safeMode?: { view(): SafeModeView; leave(): SafeModeView; onChange(listener: (view: SafeModeView) => void): () => void };
     /** Other Tynn pages, resolved and read on the host's account. Absent = refused; local windows only. */
@@ -464,7 +467,7 @@ export class SessionEngineServer {
     }
 
     async #dispatch(conn: Connection, method: EngineMethod, args: unknown[]): Promise<unknown> {
-        if (conn.launcher && !(LAUNCHER_LINK_METHODS as readonly string[]).includes(method)) throw new Error('Genie’s launcher may ping this host, stop it, or ask what it runs; nothing else.');
+        if (conn.launcher && !(LAUNCHER_LINK_METHODS as readonly string[]).includes(method)) throw new Error('Genie’s launcher may ping this host, stop it, ask what it runs, and ask its updater and its tools; nothing else.');
         // The updater helper's link calls its own method and nothing else (P5b).
         if (conn.helper || method === 'engine.updater') return this.#updater(conn, method, args);
         if (method === 'engine.marketplace') return this.#marketplace(conn, args);
@@ -670,6 +673,10 @@ export class SessionEngineServer {
                 // Genie's launcher (L6) asks what is on offer and for the install; nothing else of the updater is its.
                 if (conn.launcher && !['state', 'check', 'install'].includes(str(0))) throw new Error(`Genie’s launcher may not ask the updater for ${str(0)}.`);
                 return this.#options.updates.call(str(0), Array.isArray(args[1]) ? args[1] : [], conn.launcher ? { window: false, launcher: true, connection: conn.id } : { window: true, connection: conn.id });
+            case 'engine.toolchain':
+                if (!this.#options.toolchain) throw new Error('This host has no toolchain to update from here.');
+                if (!conn.local) throw new Error('The host’s tools are updated from this machine only.');
+                return this.#options.toolchain.call(str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.tynnPage':
                 if (!conn.local) throw new Error('The Tynn pages are read from a local window only.');
                 if (!this.#options.tynnPages) throw new Error('This host reads no Tynn pages.');
