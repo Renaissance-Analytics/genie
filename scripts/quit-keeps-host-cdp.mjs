@@ -281,6 +281,28 @@ function openLinuxTrayMenu() {
     return click.status === 0;
 }
 let barBefore = null;
+/**
+ * THE LINUX TRAY'S MENU CLOSED AGAIN, as it was opened: Esc through ydotool's own device, then a click on the bar's empty
+ * middle (a GTK popup menu closes on a click outside it). wtype's Escape goes to the focused window, not to the menu, so
+ * a menu this row opened stayed open and took the Escape meant for the launcher's "Shut down everything?" (gate
+ * 1128-113206-1315d5, the first gate whose VM had ydotool when this row ran: the launcher-install row installs it). Says
+ * what each step answered.
+ */
+function closeLinuxTrayMenu() {
+    const esc = ydotool(['key', '1:1', '1:0']);
+    spawnSync('sleep', ['0.4']);
+    const w = screenPixels()?.w ?? 1280;
+    const at = { x: Math.round(w * 0.3), y: 13 };
+    const moved = moveCursor(at.x, at.y);
+    const click = moved ? ydotool(['click', '0xC0']) : null;
+    console.log(`  linux tray: the menu closed: Esc (ydotool exit ${esc.status}), a click on the bar's empty middle ${at.x},${at.y} (${moved ? `ydotool exit ${click.status}` : 'the cursor could not be moved there'})`);
+}
+/** The window Hyprland sends the keyboard to now (title, pid): where a pressed key goes. */
+function activeWindow() {
+    if (WIN) return null;
+    const r = spawnSync('hyprctl', ['-j', 'activewindow'], { encoding: 'utf8', timeout: SYNC_MS });
+    try { const a = JSON.parse(r.stdout); return { title: a.title, pid: a.pid, class: a.class }; } catch { return null; }
+}
 
 /** How many crash records the host's runtime holds. */
 const crashRecords = () => { try { return readdirSync(join(GENIE_HOME, 'runtime', 'crash')).length; } catch { return 0; } };
@@ -876,7 +898,7 @@ try {
     await sleep(1_500);
     shot(`tray-menu-${WIN ? 'windows' : 'linux'}.png`);
     console.log(`  the tray menu ${linuxMenu ? 'was opened for this screenshot' : 'could not be opened on this desktop: the screenshot shows the bar and its icon only'}`);
-    pressKey('Escape');
+    if (linuxMenu && !WIN) closeLinuxTrayMenu(); else pressKey('Escape');
 
     // -------------------------------------------------------------------------------- Genie opened again
     lifecycleAt = readOr(LIFECYCLE).length;
@@ -922,6 +944,7 @@ try {
     check(asking === true, '25r. the launcher ASKED "Shut down everything?" in its own window', readOr(LAUNCHER_LOG).slice(askAt).slice(-300));
     await sleep(2_000);
     shot(`quit-prompt-${WIN ? 'windows' : 'linux'}.png`);
+    console.log(`  the keyboard goes to: ${JSON.stringify(activeWindow())} (the launcher is pid ${launcherPid})`);
     pressKey('Escape');
     const cancelled = await until(() => /genie: Shut down everything\?: cancelled/.test(readOr(LAUNCHER_LOG).slice(askAt)) ? true : null, 15_000);
     check(cancelled === true, '25s. Escape CANCELLED it (the launcher said so)', readOr(LAUNCHER_LOG).slice(askAt).slice(-300));
