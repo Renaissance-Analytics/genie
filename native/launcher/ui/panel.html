@@ -26,6 +26,9 @@ body{display:block}
 .m-head .pill.off{color:var(--muted)}
 .m-head .pill.off i{box-shadow:none;opacity:.6}
 .tick:empty{display:inline-block}
+/* Windows: the window is the panel, opaque, its corners rounded by Windows itself (DWM); no transparent margin. */
+body.framed{background:#100c28!important}
+.framed .menu{border:0;border-radius:0;box-shadow:none;background:#100c28}
 </style>
 </head>
 <body class="only">

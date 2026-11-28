@@ -439,7 +439,8 @@ fn surface_window(target: &tao::event_loop::EventLoopWindowTarget<Resident>, con
     let mut builder = WindowBuilder::new().with_resizable(false).with_decorations(false).with_visible(start_visible);
     builder = match surface {
         // The panel: frameless, over everything, out of the taskbar, its corners the page's own (transparent around them).
-        Surface::Panel => builder.with_title("Genie tray").with_inner_size(LogicalSize::new(300.0, 470.0)).with_always_on_top(true).with_transparent(true),
+        // On Windows opaque, its corners rounded by DWM (a transparent WebView2 window never came up: run 1128-092400-b8b47e).
+        Surface::Panel => builder.with_title("Genie tray").with_inner_size(LogicalSize::new(300.0, 470.0)).with_always_on_top(true).with_transparent(cfg!(unix)),
         Surface::Pad => builder.with_title("Genie").with_inner_size(LogicalSize::new(520.0, 640.0)),
     };
     if surface == Surface::Panel {
@@ -455,6 +456,15 @@ fn surface_window(target: &tao::event_loop::EventLoopWindowTarget<Resident>, con
         }
     }
     let window = builder.build(target).map_err(|e| format!("{}'s window could not be made: {e}", surface.name()))?;
+    ui_say!("genie: {}: its window is made", surface.name());
+    #[cfg(windows)]
+    if surface == Surface::Panel {
+        use tao::platform::windows::WindowExtWindows;
+        use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND};
+        let round = DWMWCP_ROUND;
+        let hr = unsafe { DwmSetWindowAttribute(window.hwnd() as _, DWMWA_WINDOW_CORNER_PREFERENCE as u32, &round as *const _ as *const core::ffi::c_void, std::mem::size_of_val(&round) as u32) };
+        ui_say!("genie: the tray panel: rounded corners asked of Windows (HRESULT {hr:#x})");
+    }
     if surface == Surface::Pad {
         if let Some(m) = window.current_monitor().or_else(|| window.primary_monitor()) {
             let (ms, mp, ws) = (m.size(), m.position(), window.outer_size());
@@ -466,7 +476,7 @@ fn surface_window(target: &tao::event_loop::EventLoopWindowTarget<Resident>, con
     let mut wb = WebViewBuilder::new_with_web_context(context).with_html(html).with_ipc_handler(move |req: wry::http::Request<String>| {
         let _ = ipc.send_event(Resident::Ipc(id, req.body().clone()));
     });
-    wb = if surface == Surface::Panel { wb.with_transparent(true) } else { wb.with_background_color(CARD_BACKDROP) };
+    wb = if surface == Surface::Panel && cfg!(unix) { wb.with_transparent(true) } else if surface == Surface::Panel { wb.with_background_color(PANEL_BACKDROP) } else { wb.with_background_color(CARD_BACKDROP) };
     #[cfg(windows)]
     let webview = wb.build(&window).map_err(|e| format!("{}'s webview (WebView2) could not start: {e}", surface.name()))?;
     #[cfg(unix)]
@@ -476,6 +486,7 @@ fn surface_window(target: &tao::event_loop::EventLoopWindowTarget<Resident>, con
         let vbox = window.default_vbox().ok_or_else(|| format!("{}'s window has no GTK box for its webview", surface.name()))?;
         wb.build_gtk(vbox).map_err(|e| format!("{}'s webview (WebKitGTK) could not start: {e}", surface.name()))?
     };
+    ui_say!("genie: {}: its webview is made", surface.name());
     // Shown regardless after 3 s, if its page never says it has loaded.
     let reveal = proxy.clone();
     std::thread::spawn(move || {
@@ -642,6 +653,7 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
         *control_flow = ControlFlow::Wait;
         match event {
             Event::UserEvent(Resident::ShowPanel(ctx, model, anchor)) => {
+                ui_say!("genie: the tray panel: the window loop has the request");
                 if panel.is_some() {
                     ui_say!("genie: the tray panel was open: a click on the icon closes it");
                     close(&mut panel, Surface::Panel);
@@ -1096,10 +1108,15 @@ fn page_with_model(html: &str, model: &Value) -> String {
     html.replace("/*GENIE_CSS*/", &css).replace("/*GENIE_MODEL*/null", &model.to_string().replace('<', "\\u003c"))
 }
 
-/// The tray panel's page (`panel::panel`'s model), the mockup's tray screen.
+/// The tray panel's page (`panel::panel`'s model), the mockup's tray screen. On Windows the window is the panel itself
+/// (`framed`: opaque, its corners Windows' own).
 pub fn panel_html(model: &Value) -> String {
-    page_with_model(include_str!("../ui/panel.html"), model)
+    let page = page_with_model(include_str!("../ui/panel.html"), model);
+    if cfg!(windows) { page.replacen("<body class=\"only\">", "<body class=\"only framed\">", 1) } else { page }
 }
+
+/// The panel's own colour (theme-c's --menu over its night), behind its page on Windows.
+const PANEL_BACKDROP: (u8, u8, u8, u8) = (0x10, 0x0c, 0x28, 0xff);
 
 /// The launch pad's page (`panel::pad`'s model), the mockup's screen 0.
 pub fn pad_html(model: &Value) -> String {
@@ -1161,7 +1178,9 @@ pub fn show_panel(ctx: std::sync::Arc<crate::control::Context>, anchor: Option<(
     };
     ui_say!("genie: the tray panel asked for (anchor {anchor:?})");
     let model = Surface::Panel.model(&ctx);
-    proxy.send_event(Resident::ShowPanel(ctx, model, anchor)).is_ok()
+    let sent = proxy.send_event(Resident::ShowPanel(ctx, model, anchor)).is_ok();
+    ui_say!("genie: the tray panel: its model made, the request sent ({sent})");
+    sent
 }
 
 /// Opens the launch pad, or brings it forward: `false` when this launcher has no window loop.
