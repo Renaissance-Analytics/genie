@@ -1,8 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LAUNCHER_LINK_LABEL, LAUNCHER_LINK_METHODS } from '../src/core/engine-protocol.js';
 import { memoryPair } from '../src/core/line-transport.js';
+import type { ProcessTree } from '../src/core/process-tree.js';
+import type { SessionDriverFactory } from '../src/core/session.js';
 import { BrowserService } from '../src/main/browser-service.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
+import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 
 /*
  * THE TRAY'S "OPEN GENIE BROWSER" ASKS THE HOST TO OPEN IT (Tynn #1058). Measured in the launcher-install row's end-to-end
@@ -15,12 +21,23 @@ import { SessionEngineServer } from '../src/main/session-engine-server.js';
 const TOKEN = 'tray-browser';
 const DOOR = { frontDoorPort: 4443, caPem: 'CA', hosts: ['shop.gen'], workspaceOf: { 'shop.gen': 'ws_a' }, siteLabels: { 'shop.gen': 'Shop' } };
 
+let dir: string;
+const hosts: SessionHost[] = [];
+beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie2-tray-browser-')); });
+afterEach(async () => { await Promise.all(hosts.splice(0).map((h) => h.settled())); await rm(dir, { recursive: true, force: true }); });
+const tree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+const noDriver: DriverFor = () => (() => ({ start: () => {}, prompt: () => {}, kill: () => {}, get running() { return false; }, get cliSessionId() { return null; } })) as unknown as SessionDriverFactory;
+
+/** genie-host's engine server as it runs: its session host attached, a browser service whose door is up and launch said. */
 function rig() {
     const started: string[] = [];
     const browser = new BrowserService({ startBrowser: (launch) => { started.push(launch.file); } });
     browser.door(DOOR);
     void browser.call('publish', [{ launch: { file: '/genie/client/genie-client', args: ['--genie-browser'] } }], 'window-1');
     const server = new SessionEngineServer({ token: TOKEN, build: 't', browser });
+    const host = new SessionHost({ userData: dir, driverFor: noDriver, processTree: tree });
+    hosts.push(host);
+    server.attach(host);
     return { server, started };
 }
 
