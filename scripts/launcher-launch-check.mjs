@@ -68,13 +68,14 @@ let notifierSaid = false;
 function clearNotifications() {
     if (WIN) return;
     if (KEEP_NOTIFICATIONS) {
-        if (!notifierSaid) {
+        {
             for (const n of [1, 2, 3]) {
                 const r = spawnSync('busctl', ['--user', 'call', 'org.freedesktop.Notifications', '/org/freedesktop/Notifications', 'org.freedesktop.Notifications', 'Notify', 'susssasa{sv}i', 'genie-row', '0', '', `A toast left up (${n})`, 'The red run: drawn over the tray panel', '0', '0', '0'], { encoding: 'utf8', timeout: 5_000, env: sessionEnv() });
                 console.log(`  (a toast posted and left up: exit ${r.status} ${String(r.stdout || r.stderr || '').trim().slice(0, 80)})`);
             }
         }
         notifierSaid = true;
+        spawnSync('sleep', ['1']);
         return;
     }
     const said = [];
@@ -256,6 +257,7 @@ function winPanel() {
         '  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();',
         '  [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr h, uint cmd);',
         '  [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int a, out int v, int size);',
+        '  [DllImport("dwmapi.dll", EntryPoint = "DwmGetWindowAttribute")] public static extern int DwmGetWindowRect(IntPtr h, int a, out R v, int size);',
         '  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr h, System.Text.StringBuilder s, int n);',
         '  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, System.Text.StringBuilder s, int n);',
         '}',
@@ -267,6 +269,8 @@ function winPanel() {
         "$h = [GW]::FindWindow([NullString]::Value, 'Genie tray')",
         "if ($h -eq [IntPtr]::Zero) { 'none'; exit 0 }",
         '$r = New-Object GW+R; [GW]::GetWindowRect($h, [ref]$r) | Out-Null',
+        '$frame = "$($r.L),$($r.T)-$($r.Ri),$($r.B)"',
+        '$v = New-Object GW+R; if ([GW]::DwmGetWindowRect($h, 9, [ref]$v, 16) -eq 0 -and $v.Ri -gt $v.L) { $r = $v }',
         '$p = [uint32]0; [GW]::GetWindowThreadProcessId($h, [ref]$p) | Out-Null',
         '$wa = [System.Windows.Forms.Screen]::FromHandle($h).WorkingArea',
         '$over = @(); $o = [GW]::GetWindow($h, 3)',
@@ -282,7 +286,7 @@ function winPanel() {
         '  }',
         '  $o = [GW]::GetWindow($o, 3)',
         '}',
-        '@{ visible = [GW]::IsWindowVisible($h); left = $r.L; top = $r.T; right = $r.Ri; bottom = $r.B; topmost = (([GW]::GetWindowLong($h, -20) -band 8) -ne 0); pid = $p; foreground = ([GW]::GetForegroundWindow() -eq $h); over = $over; work = @{ left = $wa.Left; top = $wa.Top; right = $wa.Right; bottom = $wa.Bottom } } | ConvertTo-Json -Compress',
+        '@{ visible = [GW]::IsWindowVisible($h); left = $r.L; top = $r.T; right = $r.Ri; bottom = $r.B; topmost = (([GW]::GetWindowLong($h, -20) -band 8) -ne 0); pid = $p; foreground = ([GW]::GetForegroundWindow() -eq $h); over = $over; frame = $frame; work = @{ left = $wa.Left; top = $wa.Top; right = $wa.Right; bottom = $wa.Bottom } } | ConvertTo-Json -Compress',
     ].join('\r\n'));
     const r = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps], { encoding: 'utf8', timeout: 60_000, windowsHide: true });
     const out = String(r.stdout ?? '').trim();
@@ -306,6 +310,7 @@ async function panelOnScreen(label, page, click = null) {
         const layersMeeting = [];
         for (const m of Object.values(hypr(['layers']) ?? {})) for (const level of ['2', '3']) for (const l of m?.levels?.[level] ?? []) if (meet(l.x, l.y, l.w, l.h)) layersMeeting.push(`${l.namespace} ${l.x},${l.y} ${l.w}x${l.h}`);
         console.log(`  ${label}: layers above the windows whose rectangles meet the panel's: ${layersMeeting.join('; ') || 'none'}`);
+        clearNotifications(); // dismissed (or, in the red run, fresh toasts posted) right before the panel is measured
         const px = panelPixels(seen.at[0], seen.at[1], seen.size[0], seen.size[1]);
         check(px.ok && px.off <= px.n * 0.03, `${label}: nothing is drawn over the panel (its own edge pixels are its own colour)`, px.ok ? `${px.off} of ${px.n} edge pixels are not the panel's #100c28${px.first ? `, e.g. ${px.first}` : ''}` : px.why);
         check(Math.abs(seen.size[0] - want.w) <= 4 && Math.abs(seen.size[1] - want.h) <= 4, `${label}: the panel's window is its page's size`, `window ${seen.size}, page ${want.w}x${want.h}`);
