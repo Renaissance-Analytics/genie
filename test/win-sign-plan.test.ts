@@ -84,7 +84,9 @@ describe('the checks that hold it', () => {
     });
 
     it('the release\'s and sign-test\'s verifier takes the plan: what the build does not sign must keep its own publisher\'s valid signature', () => {
-        for (const workflow of ['.github/workflows/release.yml', '.github/workflows/sign-test.yml']) {
+        // release.yml builds the bridge since L9 (test/release-bridge-l9.test.ts): its programs were signed and verified in the
+        // round's tracks-windows job (scripts/verify-track-signatures.ps1), and the installer is checked before its upload.
+        for (const workflow of ['.github/workflows/sign-test.yml']) {
             const text = read(workflow);
             const build = text.indexOf('npx electron-builder --publish never');
             const plan = text.indexOf('node scripts/win-sign-plan.mjs release/win-unpacked electron-builder.yml --json release/signature-evidence/win-sign-plan.json');

@@ -8,6 +8,9 @@ use std::path::Path;
 
 pub const FORMAT: u32 = 1;
 
+/// `host.current` for a host the launcher adopted but did not start: the single-app install's, at the bridge (L9).
+pub const ADOPTED: &str = "adopted";
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrackState {
     pub current: Option<String>,
@@ -44,13 +47,58 @@ impl State {
     pub fn point(&mut self, track: &str, build: &str, channel: &str) {
         self.format = FORMAT;
         let t = self.tracks.entry(track.to_string()).or_default();
+        // An adopted host is never a rollback target (the launcher cannot start it again): `previous` stays the build the
+        // bridge installed.
+        let adopted = t.current.as_deref() == Some(ADOPTED);
+        if adopted {
+            t.current = None;
+        }
         if t.current.as_deref() != Some(build) {
-            t.previous = t.current.take();
+            if !adopted {
+                t.previous = t.current.take();
+            }
             t.trial = false;
             t.quick_exits = 0;
         }
+        if adopted && t.previous.as_deref() == Some(build) {
+            t.previous = None;
+        }
         t.current = Some(build.to_string());
         t.channel = channel.to_string();
+    }
+}
+
+impl State {
+    /// L9: the host running now is one the launcher did not start (the single-app install's): `host.current` is
+    /// `adopted`, and the build installed beside it waits as `previous`. `false` when it was already recorded.
+    pub fn adopt(&mut self, track: &str) -> bool {
+        self.format = FORMAT;
+        let t = self.tracks.entry(track.to_string()).or_default();
+        if t.current.as_deref() == Some(ADOPTED) {
+            return false;
+        }
+        if t.current.is_some() {
+            t.previous = t.current.take();
+        }
+        t.current = Some(ADOPTED.to_string());
+        t.trial = false;
+        t.quick_exits = 0;
+        true
+    }
+    /// L9: the adopted host has gone, so `current` is the installed build again (`previous`, which it leaves). The build,
+    /// or `None` when nothing was adopted.
+    pub fn settle_adopted(&mut self, track: &str) -> Option<String> {
+        let t = self.tracks.get_mut(track)?;
+        if t.current.as_deref() != Some(ADOPTED) {
+            return None;
+        }
+        t.current = t.previous.take();
+        t.current.clone()
+    }
+    /// The installed build of a track: `current`, or under an adoption the build waiting as `previous`.
+    pub fn installed(&self, track: &str) -> Option<String> {
+        let t = self.track(track)?;
+        if t.current.as_deref() == Some(ADOPTED) { t.previous.clone() } else { t.current.clone() }
     }
 }
 

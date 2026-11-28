@@ -49,6 +49,11 @@
   ClearErrors
   ${if} ${Silent}
     DetailPrint "Installing Genie's programs ($GenieProfile)..."
+    ; THE BRIDGE (Tynn #1058 L9): electron-updater runs this silently over the single app, whose window has just closed.
+    ; The launcher's card says what is happening until its client window is up, never a blank desktop.
+    ${if} ${isUpdated}
+      Exec '"$INSTDIR\Genie.exe" moving-card'
+    ${endif}
     nsExec::ExecToLog '"$INSTDIR\Genie.exe" install --profile $GenieProfile --from "$INSTDIR\packages" --yes'
     Pop $0
     RMDir /r "$INSTDIR\packages"

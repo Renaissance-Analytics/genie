@@ -85,3 +85,19 @@ fn a_steps_words_follow_its_state() {
         assert!(step_label(id, "now").ends_with('…'), "{id}: a running step says it is running");
     }
 }
+
+// --- L9: the migration's card (Tynn #1058, the coordinator 2026-11-27) ------------------------------------------------
+
+/// THE MOVE IS NEVER A BLANK SCREEN: from the moment the single app's window closes until the launcher's client opens, a
+/// small Wish Orb card says what is happening. Its words, the theme, nothing fetched.
+#[test]
+fn the_moving_card_says_genie_is_moving_and_the_agents_keep_working() {
+    let html = genie_launcher::ui::moving_html();
+    assert!(html.contains("Moving Genie to its new launcher…"), "its first words");
+    assert!(html.contains("your agents keep working"), "what the person needs to know");
+    assert!(!html.contains("/*GENIE_CSS*/") && html.contains("C: Wish Orb"), "direction C's CSS is bundled in");
+    assert!(html.contains("@media (prefers-reduced-motion: reduce)"), "reduce motion is honoured");
+    for bad in ["src=\"http", "href=\"http", "@import", "url(http", "fetch(", "XMLHttpRequest"] {
+        assert!(!html.contains(bad), "the card names {bad}");
+    }
+}

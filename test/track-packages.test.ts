@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-    COMPONENT_TRACKS, clientBuilderConfig, launcherInstallerConfig, layoutBrowser, layoutHost, layoutWindowApp, programName, trackTreeProblems,
+    COMPONENT_TRACKS, bridgeConfig, clientBuilderConfig, launcherInstallerConfig, layoutBrowser, layoutHost, layoutWindowApp, programName, trackTreeProblems,
 } from '../scripts/track-packages.mjs';
 import { packagePlan } from '../scripts/win-sign-plan.mjs';
 import { runtimeFiles } from '../src/main/host-runtime.js';
@@ -301,6 +301,54 @@ describe('the installer: the launcher at Genie.exe, and the packages it installs
         expect(nsh).toContain('(doctor mode).lnk" "$appExe" "--doctor"');
         // An upgrade runs the old uninstaller over the folder: only a real uninstall stops Genie and removes the code root.
         expect(nsh).toMatch(/\$\{ifNot\} \$\{isUpdated\}[\s\S]*Genie\.exe" uninstall --yes/);
+    });
+});
+
+describe('the bridge (Tynn #1058 L9): what every single-app install updates to through its own electron-updater', () => {
+    const base = yaml('electron-builder.yml');
+
+    it('Windows: the launcher\'s installer under today\'s name and version, its feed file written, published to the draft', () => {
+        const c = bridgeConfig(base, { version: '2.0.0', os: 'win' }) as Record<string, any>;
+        expect(c.appId).toBe('ai.tynn.genie');
+        expect(c.productName).toBe('Genie');
+        expect(c.nsis.include).toBe('build/launcher-installer.nsh');
+        expect(c.nsis.packElevateHelper).toBe(false);
+        expect(c.nsis.oneClick).toBe(true);
+        expect(c.nsis.perMachine).toBe(false);
+        // The name every single-app release had: electron-updater reads it from latest.yml, and release-check from the draft.
+        expect(c.win.artifactName).toBe((base.win as Record<string, unknown>).artifactName);
+        expect(c.win.target).toEqual(['nsis']);
+        expect(c.extraMetadata.version).toBe('2.0.0');
+        expect(c.directories.output).toBe('release/tracks/bridge');
+        // A publish target, so electron-builder writes latest.yml and the .blockmap: the release's, a draft only.
+        expect(c.publish).toEqual(base.publish);
+        expect(c.publish.releaseType).toBe('draft');
+    });
+
+    it('Linux: an AppImage of the launcher and its packages, run as genie, under today\'s name', () => {
+        const c = bridgeConfig(base, { version: '2.0.0', os: 'linux' }) as Record<string, any>;
+        expect(c.linux.target).toEqual(['AppImage']);
+        expect(c.linux.executableName).toBe('genie');
+        expect(c.linux.artifactName).toBe('${productName}-${version}.${ext}');
+        expect(c.linux.icon).toBe((base.linux as Record<string, unknown>).icon);
+        expect(c.extraMetadata.version).toBe('2.0.0');
+        expect(c.directories.output).toBe('release/tracks/bridge');
+        expect(c.protocols).toEqual(base.protocols);
+        expect(c.publish).toEqual(base.publish);
+    });
+
+    it('a test VM\'s bridge names its local feed instead (the migrate-single-install row), and nothing else', () => {
+        const c = bridgeConfig(base, { version: '2.0.0', os: 'linux', feed: 'http://127.0.0.1:8099/' }) as Record<string, any>;
+        expect(c.publish).toEqual({ provider: 'generic', url: 'http://127.0.0.1:8099/' });
+        expect(() => bridgeConfig(base, { version: '2.0.0', os: 'linux', feed: 'https://example.com/' })).toThrow(/127\.0\.0\.1/);
+    });
+
+    it('is built by build-track-packages.mjs bridge from the launcher and this OS\'s signed packages, its feed naming the host', () => {
+        const script = readFileSync('scripts/build-track-packages.mjs', 'utf8');
+        expect(script).toMatch(/cmd === 'bridge'\) await bridge\(a\)/);
+        expect(script).toMatch(/async function bridge\(a\)[\s\S]*bridgeConfig\(baseConfig\(\), \{ version: a\.version, os[\s\S]*prepackaged: dir/);
+        // The feed names the host the bridge brings: the outgoing Genie's update kind decides client-only or a drain.
+        expect(script).toMatch(/async function bridge\(a\)[\s\S]*feedHostIdentity\(/);
     });
 });
 

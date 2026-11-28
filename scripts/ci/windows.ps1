@@ -67,6 +67,7 @@ $Rows = @(
     'host-update',
     'host-update-rollback',
     'launcher-self-update',
+    'migrate-single-install',
     'version-skew'
 )
 
@@ -532,6 +533,19 @@ function Row-host-update-rollback {
 }
 # VERSION SKEW (Tynn #1058 L8): the INSTALLED client NEW against the host OLD, then the client OLD against the host NEW,
 # each a real program from its own build folder, a turn streamed both ways in each (scripts/launcher-updates-row.mjs).
+# THE MIGRATION FROM THE SINGLE APP (Tynn #1058 L9, the bridge): v2.0.0-beta.66.1 as GitHub serves it, installed into
+# this user's Programs\Genie, its own updater installing the bridge built here (scripts/migrate-single-install-row.mjs).
+# `unchanged`: the host adopted, every pid kept; `changed`: the bridge's host, every agent restored once. Both cases run.
+function Row-migrate-single-install {
+    Need-Build; Need-Tracks; Need-TestMachine
+    $migrateFailed = @()
+    foreach ($case in @('unchanged', 'changed')) {
+        $env:MIGRATE_ROW_OUT = Join-Path $Out "migrate-single-install-$case"; $env:CDP_PORT = '9422'; $env:MIGRATE_CLIENT_PORT = '9423'; $env:MIGRATE_ROW_DEADLINE_MS = '1500000'
+        try { node scripts/migrate-single-install-row.mjs --case $case; if ($LASTEXITCODE -ne 0) { $migrateFailed += $case } }
+        finally { foreach ($k in 'MIGRATE_ROW_OUT', 'CDP_PORT', 'MIGRATE_CLIENT_PORT', 'MIGRATE_ROW_DEADLINE_MS') { Remove-Item "Env:$k" -ErrorAction SilentlyContinue } }
+    }
+    if ($migrateFailed.Count) { throw "migrate-single-install failed: $($migrateFailed -join ', ')" }
+}
 function Row-version-skew {
     Need-Build; Need-Tracks; Need-TestMachine
     Invoke-LauncherUpdatesRow 'version-skew' @{ LAUNCHER_ROW_OUT = (Join-Path $Out 'version-skew'); LAUNCHER_ROW_KEY_DIR = $Setup; CDP_PORT = '9419'; LAUNCHER_ROW_DEADLINE_MS = '1800000' }
@@ -721,6 +735,7 @@ function Ceiling([string]$name) {
         'logon' { return 900 }
         { $_ -in 'client-only-update', 'host-update', 'host-update-rollback' } { return 1800 }
         'launcher-self-update' { return 2400 }
+        'migrate-single-install' { return 3300 }
         'version-skew' { return 2100 }
         default { return 600 }
     }

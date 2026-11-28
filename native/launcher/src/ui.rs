@@ -662,3 +662,140 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
     });
     Err("the launcher's window loop ended".to_string())
 }
+
+// --- L9 (Tynn #1058): the migration's card ---------------------------------------------------------------------------
+
+/// The card's page with the mockup's CSS in place: "Moving Genie to its new launcher… your agents keep working".
+pub fn moving_html() -> String {
+    let css = format!("{}
+{}", include_str!("../ui/base.css"), include_str!("../ui/theme-c.css"));
+    include_str!("../ui/moving.html").replace("/*GENIE_CSS*/", &css)
+}
+
+enum Card {
+    /// The page has loaded: the window may be shown.
+    Loaded,
+    /// Not loaded within `CARD_LOAD_WAIT`: shown anyway, so a slow WebView2 never hides the card altogether.
+    ShowAnyway,
+    Close,
+}
+
+/// How long the card waits, hidden, for its page to load before it is shown regardless.
+const CARD_LOAD_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+/// The card's own backdrop (theme-c.css's body colour), behind the page while it loads.
+const CARD_BACKDROP: (u8, u8, u8, u8) = (0x05, 0x04, 0x0f, 0xff);
+
+/// THE MIGRATION'S CARD, on this (the main) thread: shown at once, centred and on top; `work` (the bridge's install and
+/// hand-over) runs on another thread meanwhile; the card closes once the launcher has a client window attached
+/// (`migrate::card_may_close`), or after `migrate::CARD_LIMIT`. With no window possible here (no display, no webview)
+/// the work still runs, and the reason is the `Err`.
+pub fn run_moving_card(roots: &Roots, work: Option<Box<dyn FnOnce() + Send>>) -> Result<(), String> {
+    #[cfg(unix)]
+    for (k, v) in [("WEBKIT_DISABLE_DMABUF_RENDERER", "1"), ("WEBKIT_DISABLE_COMPOSITING_MODE", "1")] {
+        if std::env::var_os(k).is_none() {
+            std::env::set_var(k, v);
+        }
+    }
+    let shown = (|| -> Result<_, String> {
+        #[cfg(unix)]
+        if std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_none() {
+            return Err("no display".to_string());
+        }
+        let event_loop = EventLoopBuilder::<Card>::with_user_event().build();
+        let window = WindowBuilder::new()
+            .with_title("Genie")
+            .with_inner_size(LogicalSize::new(460.0, 360.0))
+            .with_resizable(false)
+            .with_decorations(false)
+            .with_always_on_top(true)
+            // Hidden until its page has loaded (run 1128-012125-5d34ca: an empty white window for a frame or more).
+            .with_visible(false)
+            .build(&event_loop)
+            .map_err(|e| format!("the card could not be made: {e}"))?;
+        if let Some(m) = window.current_monitor().or_else(|| window.primary_monitor()) {
+            let (ms, mp, ws) = (m.size(), m.position(), window.outer_size());
+            window.set_outer_position(tao::dpi::PhysicalPosition::new(mp.x + (ms.width.saturating_sub(ws.width) / 2) as i32, mp.y + (ms.height.saturating_sub(ws.height) / 2) as i32));
+        }
+        let mut context = WebContext::new(Some(roots.data.join("launcher").join("webview")));
+        let loaded = event_loop.create_proxy();
+        let builder = WebViewBuilder::new_with_web_context(&mut context)
+            .with_html(moving_html())
+            .with_background_color(CARD_BACKDROP)
+            .with_ipc_handler(move |req: wry::http::Request<String>| {
+                if req.body() == "loaded" {
+                    let _ = loaded.send_event(Card::Loaded);
+                }
+            });
+        #[cfg(windows)]
+        let webview = builder.build(&window).map_err(|e| format!("the card's webview (WebView2) could not start: {e}"))?;
+        #[cfg(unix)]
+        let webview = {
+            use tao::platform::unix::WindowExtUnix;
+            use wry::WebViewBuilderExtUnix;
+            let vbox = window.default_vbox().ok_or("the card has no GTK box for its webview")?;
+            builder.build_gtk(vbox).map_err(|e| format!("the card's webview (WebKitGTK) could not start: {e}"))?
+        };
+        Ok((event_loop, window, webview, context))
+    })();
+    let (mut event_loop, window, webview, context) = match shown {
+        Ok(s) => s,
+        Err(why) => {
+            crate::migrate::log_line(roots, &format!("the moving card could not be shown ({why}); the move goes on without it"));
+            if let Some(w) = work {
+                w();
+            }
+            return Err(why);
+        }
+    };
+    let anyway = event_loop.create_proxy();
+    std::thread::spawn(move || {
+        std::thread::sleep(CARD_LOAD_WAIT);
+        let _ = anyway.send_event(Card::ShowAnyway);
+    });
+    let proxy = event_loop.create_proxy();
+    let r = roots.clone();
+    std::thread::spawn(move || {
+        let started = std::time::Instant::now();
+        if let Some(w) = work {
+            w();
+        }
+        loop {
+            let status = crate::control::call_running(&r, "launcher.status", json!([])).ok().flatten();
+            if crate::migrate::card_may_close(status.as_ref()) {
+                crate::migrate::log_line(&r, "the moving card closed: a client window is attached to the launcher");
+                break;
+            }
+            if started.elapsed() >= crate::migrate::CARD_LIMIT {
+                crate::migrate::log_line(&r, "the moving card closed: no client window within its limit");
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+        let _ = proxy.send_event(Card::Close);
+    });
+    let mut shown = false;
+    event_loop.run_return(|event, _, control_flow| {
+        *control_flow = ControlFlow::Wait;
+        match event {
+            Event::UserEvent(Card::Loaded) if !shown => {
+                shown = true;
+                window.set_visible(true);
+                crate::migrate::log_line(roots, "the moving card is shown (its page loaded)");
+                println!("moving: shown");
+            }
+            Event::UserEvent(Card::ShowAnyway) if !shown => {
+                shown = true;
+                window.set_visible(true);
+                crate::migrate::log_line(roots, &format!("the moving card is shown before its page loaded ({} s)", CARD_LOAD_WAIT.as_secs()));
+                println!("moving: shown");
+            }
+            Event::UserEvent(Card::Close) => *control_flow = ControlFlow::Exit,
+            _ => {}
+        }
+    });
+    println!("moving: closed");
+    drop(webview);
+    drop(window);
+    drop(context);
+    Ok(())
+}

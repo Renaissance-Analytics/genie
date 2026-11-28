@@ -110,8 +110,9 @@ describe('Windows release signing', () => {
         for (const [input, variable] of [['client-id', 'AZURE_CLIENT_ID'], ['tenant-id', 'AZURE_TENANT_ID'], ['subscription-id', 'AZURE_SUBSCRIPTION_ID']]) {
             expect(steps[login].with[input!]).toBe('${{ vars.' + variable + ' }}');
         }
-        const build = steps.findIndex((s: any) => /electron-builder --publish never/.test(s.run ?? ''));
-        const verify = steps.findIndex((s: any) => /verify-windows-signatures.ps1/.test(s.run ?? ''));
+        // The bridge (Tynn #1058 L9): built and signed from the round's signed packages, its signatures read before upload.
+        const build = steps.findIndex((s: any) => /build-track-packages\.mjs bridge[^\n]*--signed/.test(s.run ?? ''));
+        const verify = steps.findIndex((s: any) => /Get-AuthenticodeSignature/.test(s.run ?? ''));
         const upload = steps.findIndex((s: any) => /gh release upload/.test(s.run ?? ''));
         expect(build).toBeGreaterThan(login);
         expect(verify).toBeGreaterThan(build);
@@ -149,12 +150,12 @@ describe('Windows release signing', () => {
 
     it('release also verifies the updater after signing and before uploading the three updater assets', () => {
         const steps = yaml('.github/workflows/release.yml').jobs['publish-windows'].steps;
-        const verify = steps.findIndex((s: any) => /verify-windows-signatures.ps1/.test(s.run ?? ''));
+        const verify = steps.findIndex((s: any) => /Get-AuthenticodeSignature/.test(s.run ?? ''));
         const updater = steps.findIndex((s: any) => /verify-windows-update.cjs/.test(s.run ?? ''));
         const upload = steps.findIndex((s: any) => /gh release upload/.test(s.run ?? ''));
         expect(updater).toBeGreaterThan(verify);
         expect(upload).toBeGreaterThan(updater);
-        for (const name of ['Genie-$tag-setup.exe', 'Genie-$tag-setup.exe.blockmap', 'release/latest.yml']) expect(steps[upload].run).toContain(name);
+        for (const name of ['release/tracks/bridge/Genie-$tag-setup.exe', 'release/tracks/bridge/Genie-$tag-setup.exe.blockmap', 'release/tracks/bridge/latest.yml']) expect(steps[upload].run).toContain(name);
     });
 
     it('the actual Windows upload script refuses a public or unreadable release at upload time', () => {
