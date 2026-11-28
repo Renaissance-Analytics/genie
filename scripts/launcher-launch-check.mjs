@@ -60,7 +60,7 @@ function clearNotifications() {
     if (WIN) return;
     // The first daemon's own command that answers is kept for the run's later shots. makoctl is not on the Omarchy image
     // (ENOENT in item 1128-035113-61152c), so each is tried, and when none answers the daemon that runs is named.
-    const tries = notifier ? [notifier] : [['makoctl', 'dismiss', '--all'], ['swaync-client', '--close-all'], ['dunstctl', 'close-all'], ['fnottctl', 'dismiss'], ['busctl', '--user', 'call', 'org.freedesktop.Notifications', '/fr/emersion/Mako', 'fr.emersion.Mako', 'DismissAllNotifications']];
+    const tries = notifier ? [notifier] : [...quickshellDismissers(), ['makoctl', 'dismiss', '--all'], ['swaync-client', '--close-all'], ['dunstctl', 'close-all'], ['fnottctl', 'dismiss'], ['busctl', '--user', 'call', 'org.freedesktop.Notifications', '/fr/emersion/Mako', 'fr.emersion.Mako', 'DismissAllNotifications']];
     const said = [];
     for (const [cmd, ...args] of tries) {
         const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: 5_000 });
@@ -69,6 +69,27 @@ function clearNotifications() {
     }
     const daemons = spawnSync('sh', ['-c', 'ps -eo comm | grep -iE "mako|swaync|dunst|fnott|notif|walker|hyprpanel|ags|quickshell" | sort -u | tr "\\n" " "'], { encoding: 'utf8', timeout: 5_000 }).stdout ?? '';
     console.log(`  (notifications not dismissed: ${said.join('; ')}; running: ${daemons.trim() || 'none of the known daemons'})`);
+}
+/** quickshell's own IPC calls that dismiss notifications, read from `qs ipc show` (a target named for notifications, a
+ * function that dismisses, clears or closes them, taking no argument). */
+let qsCalls = null;
+function quickshellDismissers() {
+    if (qsCalls) return qsCalls;
+    qsCalls = [];
+    for (const qs of ['qs', 'quickshell']) {
+        const r = spawnSync(qs, ['ipc', 'show'], { encoding: 'utf8', timeout: 5_000 });
+        if (r.status !== 0) continue;
+        console.log(`  (${qs} ipc show: ${String(r.stdout).replace(/\s+/g, ' ').slice(0, 600)})`);
+        let target = null;
+        for (const line of String(r.stdout).split('\n')) {
+            const t = /^\s*target\s+(\S+)/.exec(line);
+            if (t) { target = t[1]; continue; }
+            const f = /^\s*function\s+(\w+)\(\s*\)/.exec(line);
+            if (f && target && /notif/i.test(target) && /dismiss|clear|close/i.test(f[1])) qsCalls.push([qs, 'ipc', 'call', target, f[1]]);
+        }
+        break;
+    }
+    return qsCalls;
 }
 function photograph(name) {
     clearNotifications();
@@ -224,10 +245,13 @@ async function panelOnScreen(label, page, click = null) {
         check(active?.address === seen.address, `${label}: the tray panel is in front (Hyprland's active window)`, `active ${active?.title} ${active?.address}`);
         check(seen.floating === true, `${label}: the tray panel floats over the tiled windows`);
         check(Math.abs(seen.size[0] - want.w) <= 4 && Math.abs(seen.size[1] - want.h) <= 4, `${label}: the panel's window is its page's size`, `window ${seen.size}, page ${want.w}x${want.h}`);
+        const mon = (hypr(['monitors']) ?? []).find((m) => m.focused) ?? {};
+        const top = Number(mon.y ?? 0) + Number(mon.reserved?.[1] ?? 0);
+        const right = Number(mon.x ?? 0) + Number(mon.width ?? 0) / Number(mon.scale || 1);
+        const bottom = Number(mon.y ?? 0) + Number(mon.height ?? 0) / Number(mon.scale || 1);
+        const left = Number(mon.x ?? 0);
+        check(seen.at[0] >= left && seen.at[1] >= top && seen.at[0] + seen.size[0] <= right && seen.at[1] + seen.size[1] <= bottom, `${label}: the panel lies wholly on the screen, under the bar`, `panel ${seen.at} ${seen.size}, work ${left},${top}-${right},${bottom}`);
         if (click) {
-            const mon = (hypr(['monitors']) ?? []).find((m) => m.focused) ?? {};
-            const top = Number(mon.y ?? 0) + Number(mon.reserved?.[1] ?? 0);
-            const right = Number(mon.x ?? 0) + Number(mon.width ?? 0) / Number(mon.scale || 1);
             check(seen.at[1] >= top && seen.at[1] <= top + 24, `${label}: it opened just under the bar it was clicked in`, `top ${seen.at[1]}, the bar ends at ${top}`);
             const spans = click.x >= seen.at[0] - 8 && click.x <= seen.at[0] + seen.size[0] + 8;
             check(spans || seen.at[0] + seen.size[0] >= right - 24, `${label}: it opened by the click (over it, or against the screen's edge)`, `click ${click.x}, panel ${seen.at[0]}..${seen.at[0] + seen.size[0]}, screen right ${right}`);
@@ -248,6 +272,26 @@ async function panelOnScreen(label, page, click = null) {
     return w;
 }
 let launcherPidNow = 0;
+/** Mockup sample words that must never be in the panel unless the machine really has them (direction-c-tray.png). */
+const MOCKUP_SAMPLES = ['Studio desktop', 'Build box', 'studio-desktop', 'build-box', 'asleep'];
+/**
+ * THE PANEL'S HOSTS ARE THIS MACHINE'S OWN: "This computer" (it has a host) and each address it paired with
+ * (<runtime>/device-hosts.json, read here, not asked of the launcher), named by its address's host; nothing else. No
+ * mockup sample word anywhere in it, and no label cut short.
+ */
+function panelHostsAreReal(label, page) {
+    let paired = [];
+    try { paired = JSON.parse(readFileSync(join(runtime, 'device-hosts.json'), 'utf8')).hosts ?? []; } catch { paired = []; }
+    const nameOf = (u) => { try { return new URL(u.includes('://') ? u : `http://${u}`).hostname; } catch { return u; } };
+    const want = ['This computer', ...paired.filter((u) => typeof u === 'string' && u).map(nameOf)];
+    const got = (page?.shown?.items ?? []).filter((i) => String(i.id ?? '').startsWith('host:')).map((i) => i.name ?? i.label);
+    console.log(`  ${label}: the machine's hosts ${JSON.stringify(want)}; the panel lists ${JSON.stringify(got)}`);
+    check(JSON.stringify(got) === JSON.stringify(want), `${label}: the panel lists exactly this machine's hosts`, `machine ${JSON.stringify(want)}, panel ${JSON.stringify(got)}`);
+    const text = panelText(page);
+    const samples = MOCKUP_SAMPLES.filter((w) => text.includes(w));
+    check(samples.length === 0, `${label}: the panel says none of the mockup's sample hosts`, samples.join(', '));
+    check(Array.isArray(page?.shown?.clipped) && page.shown.clipped.length === 0, `${label}: no label of the panel is cut short`, JSON.stringify(page?.shown?.clipped));
+}
 /** Where the window system put the launcher's windows (Hyprland's own list; on Windows the screenshot says). */
 function launcherWindows(pid) {
     if (WIN) return;
@@ -300,6 +344,7 @@ const panel3 = await openPanel();
 check(Boolean(panel3), 'the tray panel opened and its page said what it shows', panel3 ? '' : 'nothing within 20 s');
 for (const words of PANEL_WORDS) check(panelSays(panel3, words), `the tray panel says "${words}"`, panelText(panel3));
 check(panelItem(panel3, 'openBrowser')?.enabled === true, 'the tray panel offers "Open Genie Browser"', JSON.stringify(panel3?.items ?? null));
+panelHostsAreReal('step 3', panel3);
 await sleep(1_200);
 await panelOnScreen('step 3', panel3);
 photograph(`launch-3-tray-panel-${OS}.png`);
@@ -425,6 +470,7 @@ for (const words of ['Everything is running.', 'This computer’s host', 'Runnin
 }
 check(/(No agents working|\d+ agents? working) · up (less than a minute|\d+ min|\d+ hours?|\d+ days?)/.test(padText), 'the host card says its agents and its uptime, from the launcher', padText.match(/[^\n]*working[^\n]*/)?.[0] ?? '');
 check(/Updates?( ready)?/.test(padText), 'the launch pad offers its updates');
+check(Array.isArray(pad?.shown?.clipped) && pad.shown.clipped.length === 0, 'no label of the launch pad is cut short', JSON.stringify(pad?.shown?.clipped));
 for (const id of ['openGenie', 'openBrowser', 'stopHost', 'updates', 'openSettings']) check(Boolean((pad?.shown?.items ?? []).find((i) => i.id === id && i.enabled !== false)), `the launch pad offers ${id}`);
 launcherWindows(launcherPid);
 await sleep(1_500);
@@ -450,10 +496,9 @@ if (started7) {
 }
 await wireCall(runtime, 'launcher.uiProbe', [{ surface: 'pad', close: true }]);
 // The panel, with the client window and the Browser open and two paired hosts listed.
-const pairedFile = join(runtime, 'device-hosts.json');
-const pairedBefore = existsSync(pairedFile) ? readFileSync(pairedFile, 'utf8') : null;
-writeFileSync(pairedFile, JSON.stringify({ hosts: ['https://studio-desktop.invalid:7443', 'https://build-box.invalid:7443'] }, null, 2));
-// On Linux as a person opens it: a left click on Genie's icon in Omarchy's Waybar tray (its drawer opened first).
+// On Linux as a person opens it: a left click on Genie's icon in Omarchy's Waybar tray (its drawer opened first). The
+// desktop's notifications (which draw over every window) are dismissed first, so the photograph shows the panel whole.
+clearNotifications();
 let panel7 = null;
 let click7 = null;
 if (!WIN) {
@@ -466,7 +511,8 @@ if (!WIN) {
 if (!panel7) panel7 = await openPanel();
 check(Boolean(panel7), 'the tray panel opened again');
 console.log(`  the tray panel says: ${panelText(panel7).replace(/\s*\n\s*/g, ' | ')}`);
-for (const words of [...PANEL_WORDS, 'studio-desktop.invalid', 'build-box.invalid', 'paired', 'agents keep running']) check(panelSays(panel7, words), `the tray panel says "${words}"`);
+for (const words of [...PANEL_WORDS, 'agents keep running']) check(panelSays(panel7, words), `the tray panel says "${words}"`);
+panelHostsAreReal('step 7', panel7);
 await sleep(1_200);
 await panelOnScreen('step 7', panel7, click7);
 launcherWindows(launcherPid);
@@ -506,7 +552,6 @@ const client7b = await until(async () => { const st = await wireCall(runtime, 'l
 check(Boolean(client7b), 'a client window opened from the tray panel, attached to the launcher', client7b ? `pid ${client7b}` : 'none within 60 s');
 if (client7b) check((await windowOnScreen(client7b, 30_000)).windows.length > 0, 'its window is on screen');
 photograph(`launch-7-panel-open-genie-${OS}.png`);
-if (pairedBefore === null) rmSync(pairedFile, { force: true }); else writeFileSync(pairedFile, pairedBefore);
 
 if (run.failures.length) fail(run.failures.join('; '));
 console.log(`### launcher-launch=PASS the launcher's host (pid ${hostPid}) from ${join(code, 'host', build)}, a client window (pid ${clientPid}) attached to it from ${join(code, 'client', build)}, and the Genie Browser (pid ${browserPid}, parent the launcher ${launcherPid}) opened from the tray's item with its window on screen; the host and the client unchanged; with the UI closed the tray opened the Browser again (pid ${started5?.pid}) with no client, and for a host restarted with no client (pid ${started6?.pid})`);

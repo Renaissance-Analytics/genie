@@ -72,6 +72,7 @@ body{display:block}
     d.setAttribute('data-id', it.id);
     if (it.title) d.title = it.title;
     if (kind === 'host') {
+      d.setAttribute('data-name', it.label);
       d.appendChild(el('span', 'dot ' + (it.dot === 'ok' ? 'ok' : 'off')));
       d.appendChild(document.createTextNode(it.label));
       d.appendChild(el('span', 'm-right muted', it.right || ''));
@@ -94,9 +95,10 @@ body{display:block}
   function report() {
     var m = $('menu').getBoundingClientRect();
     var items = [];
-    document.querySelectorAll('[data-id]').forEach(function (e) { items.push({ id: e.getAttribute('data-id'), label: e.textContent.trim(), enabled: !e.classList.contains('off'), on: e.getAttribute('aria-checked') }); });
+    document.querySelectorAll('[data-id]').forEach(function (e) { items.push({ id: e.getAttribute('data-id'), name: e.getAttribute('data-name'), label: e.textContent.trim(), enabled: !e.classList.contains('off'), on: e.getAttribute('aria-checked') }); });
     var text = $('menu').innerText || Array.prototype.map.call(document.querySelectorAll('#menu .m-head, #menu [data-id], #menu .m-label'), function (e) { return e.textContent.trim(); }).join('\n');
-    say({ kind: 'shown', w: Math.ceil(m.width), h: Math.ceil(m.height), text: text, items: items });
+    var clipped = []; document.querySelectorAll('[data-id], .m-head .grow > *, .row-title, h1, .muted').forEach(function (e) { if (e.offsetParent !== null && e.scrollWidth > e.clientWidth + 1) clipped.push(e.textContent.trim()); });
+    say({ kind: 'shown', w: Math.ceil(m.width), h: Math.ceil(m.height), text: text, items: items, clipped: clipped });
   }
 
   window.render = function (p) {

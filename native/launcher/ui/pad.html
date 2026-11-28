@@ -47,7 +47,7 @@ html,body{height:100%;overflow:hidden;user-select:none}
       <div class="pad-top">
         <div class="hero hero-sm" style="--p:100"><div class="glow"></div><div class="smoke"><i></i><i></i><i></i></div><div class="dust" data-n="10"></div><svg class="lamp"><use href="#lamp"/></svg></div>
         <div>
-          <h1 id="greeting">Good evening</h1>
+          <h1 id="greeting"></h1>
           <p class="muted" id="sub"></p>
         </div>
       </div>
@@ -118,7 +118,8 @@ html,body{height:100%;overflow:hidden;user-select:none}
     var items = [];
     document.querySelectorAll('[data-id]').forEach(function (e) { items.push({ id: e.getAttribute('data-id'), label: e.textContent.trim(), enabled: !e.disabled }); });
     var text = document.querySelector('.win').innerText || Array.prototype.filter.call(document.querySelectorAll('.win span, .win h1, .win p, .win div.muted, .win .row-title, .win button, .win a'), function (e) { return !e.closest('[hidden]') && !e.children.length; }).map(function (e) { return e.textContent.trim(); }).filter(Boolean).join('\n');
-    say({ kind: 'shown', text: text, items: items, hour: new Date().getHours() });
+    var clipped = []; document.querySelectorAll('[data-id], .m-head .grow > *, .row-title, h1, .muted').forEach(function (e) { if (e.offsetParent !== null && e.scrollWidth > e.clientWidth + 1) clipped.push(e.textContent.trim()); });
+    say({ kind: 'shown', text: text, items: items, hour: new Date().getHours(), clipped: clipped });
   }
 
   window.render = function (d) {
