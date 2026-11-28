@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +10,7 @@ import type { SessionDriverFactory } from '../src/core/session.js';
 import { BrowserService } from '../src/main/browser-service.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
+import { hostBrowserStart } from '../src/main/host-browser-start.js';
 
 /*
  * THE TRAY'S "OPEN GENIE BROWSER" ASKS THE HOST TO OPEN IT (Tynn #1058). Measured in the launcher-install row's end-to-end
@@ -90,5 +92,53 @@ describe('the tray’s "Open Genie Browser" over the launcher’s link', () => {
             expect(String(answer.reason)).toBe(`Genie’s launcher may not ask the browser for ${method}.`);
         }
         expect(r.started).toEqual([]);
+    });
+});
+
+/*
+ * A HOST NO CLIENT WINDOW HAS SPOKEN TO (Tynn #1058, step 6 of the launch check). Measured: Azure item 1128-045257-b95ba6,
+ * Linux: the host stopped and started from the tray with the UI closed, the tray's "Open Genie Browser" asked it
+ * (`{"browserUp":false}`, held) and no Browser started in 45 s. Its BrowserService started a Browser only once a window had
+ * published how (`launch`), which the launcher never needs: it starts the Browser's verified build itself. With a
+ * launcher to start it, a held open starts the Browser with no window's launch; with neither, nothing is started.
+ */
+describe('a Browser with no window’s launch, when the launcher starts it', () => {
+    it('a held open starts the Browser with no launch when the starter can do without one (the launcher is there)', async () => {
+        const started: unknown[] = [];
+        const service = new BrowserService({ startBrowser: (launch) => { started.push(launch); }, startsWithoutLaunch: () => true });
+        service.door(DOOR);
+        await service.call('open', [null, 'user-gesture'], 'genie launcher');
+        expect(started).toEqual([null]);
+    });
+
+    it('CONTROL: with no launcher to start it, a held open still waits for a window to say how', async () => {
+        const started: unknown[] = [];
+        const service = new BrowserService({ startBrowser: (launch) => { started.push(launch); }, startsWithoutLaunch: () => false });
+        service.door(DOOR);
+        await service.call('open', [null, 'user-gesture'], 'genie launcher');
+        expect(started).toEqual([]);
+    });
+
+    it('hostBrowserStart with no launch: asks the launcher when it is there', async () => {
+        const asked: string[] = [];
+        const spawned: string[] = [];
+        const start = hostBrowserStart({ launcher: { reachable: () => true, call: async (m) => { asked.push(m); return { ok: true, value: { pid: 5 } }; } }, here: (l) => { spawned.push(l.file); }, log: () => {} });
+        await start(null);
+        expect(asked).toEqual(['launcher.startBrowser']);
+        expect(spawned).toEqual([]);
+    });
+
+    it('hostBrowserStart with no launch and no launcher: starts nothing, and says why', async () => {
+        const lines: string[] = [];
+        const spawned: string[] = [];
+        const start = hostBrowserStart({ launcher: { reachable: () => false, call: async () => ({ ok: true, value: null }) }, here: (l) => { spawned.push(l.file); }, log: (l) => lines.push(l) });
+        await start(null);
+        expect(spawned).toEqual([]);
+        expect(lines.join('\n')).toContain('no launcher, and no window has said how to start it');
+    });
+
+    it('genie-host says its BrowserService may start the Browser without a window’s launch while the launcher is reachable', () => {
+        const src = readFileSync(join('src', 'main', 'genie-host.ts'), 'utf8');
+        expect(src).toContain('startBrowser: (launch) => { void startBrowserNow(launch); }, startsWithoutLaunch: () => launcherReachable(launcher) });');
     });
 });
