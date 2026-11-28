@@ -101,3 +101,18 @@ fn the_moving_card_says_genie_is_moving_and_the_agents_keep_working() {
         assert!(!html.contains(bad), "the card names {bad}");
     }
 }
+
+/// ONE USER-EVENT TYPE FOR EVERY WINDOW LOOP (Tynn #1058, #1514). tao on Windows registers its thread event window class
+/// ("Tao Thread Event Target") once per process, its window procedure generic over the loop's user-event type: a second
+/// loop of another type in the same process (the launcher after its setup window, or after the moving card) never gets
+/// its events. Measured: run 1128-095222-c1428f, the tray panel asked of the resident loop and never received; the Updates
+/// window and the questions are the same loop.
+#[test]
+fn every_window_loop_in_the_launcher_uses_one_user_event_type() {
+    let src = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ui.rs")).unwrap();
+    let mut kinds: Vec<&str> = src.match_indices("EventLoopBuilder::<").map(|(i, _)| src[i + "EventLoopBuilder::<".len()..].split('>').next().unwrap()).collect();
+    assert!(kinds.len() >= 3, "the setup window, the questions' loop and the moving card: {kinds:?}");
+    kinds.sort();
+    kinds.dedup();
+    assert_eq!(kinds.len(), 1, "every tao event loop in the process takes the same user-event type: {kinds:?}");
+}

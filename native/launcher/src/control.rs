@@ -355,6 +355,21 @@ pub fn handle_line(ctx: &Context, conn: &mut Connection, line: &str) -> Vec<Valu
             }
             None => Err("launcher.trayAct needs {action}".to_string()),
         },
+        // #1515: the launch pad, the launcher's own window, opened once this answer is sent.
+        "launcher.openPad" => {
+            conn.tray_act = Some(crate::tray::Action::OpenPad);
+            Ok(json!({"opening": true}))
+        }
+        // #1514 (GENIE_LAUNCHER_TRAY_PROBE=1, a VM row's): the tray panel opened as a click on the icon opens it, and what it
+        // offers now, as words.
+        "launcher.trayPanel" if crate::tray::probe_enabled() => {
+            conn.tray_act = Some(crate::tray::Action::OpenPanel);
+            Ok(json!({"opening": true, "items": crate::panel::panel_text(&crate::panel::panel(&crate::panel::facts(ctx)))}))
+        }
+        // #1514/#1515 (the probe's too): what the panel's or the pad's page says it shows, read in its webview; with
+        // {click: id} the element data-id=<id> clicked as the person clicks it; with {close: true} the window closed; `asking`,
+        // the questions open (the panel's Stop asks first), and {cancelAsks: true} answers them Cancel.
+        "launcher.uiProbe" if crate::tray::probe_enabled() => ui_probe(args.first().cloned().unwrap_or(Value::Null)),
         "launcher.trayMenu" if crate::tray::probe_enabled() => {
             let v = crate::tray::view(ctx);
             Ok(json!({"items": crate::tray::menu_text(&crate::tray::menu(&v)), "tooltip": crate::tray::tooltip(&v), "shown": crate::tray::show_menu()}))
@@ -502,6 +517,32 @@ pub fn open_window(ctx: &Context) -> Result<Value, String> {
     let v = start_client(&ctx.roots, vec!["--open-window".to_string()])?;
     started_window(ctx, &v);
     Ok(v)
+}
+
+/// A Genie window on a host this computer paired with (`launcher.openWindow {host}`): the tray panel's host rows.
+pub fn open_window_on(ctx: &Context, host: &str) -> Result<Value, String> {
+    let _g = ctx.busy.lock().unwrap_or_else(|p| p.into_inner());
+    opened(&ctx.roots);
+    let v = start_client(&ctx.roots, vec!["--host".to_string(), host.to_string()])?;
+    started_window(ctx, &v);
+    Ok(v)
+}
+
+/// `launcher.uiProbe {surface: panel|pad, click?, close?}`: the page's own words, and the window driven as a person does.
+fn ui_probe(a: Value) -> Result<Value, String> {
+    #[cfg(feature = "ui")]
+    {
+        let surface = a["surface"].as_str().and_then(crate::ui::Surface::parse).ok_or("launcher.uiProbe needs {surface: panel|pad}")?;
+        let clicked = a["click"].as_str().map(|id| crate::ui::click(surface, id));
+        let closed = (a["close"] == true).then(|| crate::ui::close_surface(surface));
+        let cancelled = (a["cancelAsks"] == true).then(crate::ui::cancel_asks);
+        Ok(json!({"open": crate::ui::is_open(surface), "shown": crate::ui::shown(surface), "clicked": clicked, "closed": closed, "asking": crate::ui::asking(), "cancelled": cancelled}))
+    }
+    #[cfg(not(feature = "ui"))]
+    {
+        let _ = a;
+        Err("this launcher has no windows".to_string())
+    }
 }
 
 /// Every attached client told `event` (their links are kept).

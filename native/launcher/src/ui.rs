@@ -38,12 +38,6 @@ pub enum SetupOutcome {
     Closed,
 }
 
-enum UserEvent {
-    Ipc(String),
-    Eval(String),
-    Installed(Result<Profile, String>),
-}
-
 /// The steps as the window lists them, for this profile, and where the install is.
 struct Steps {
     profile: Profile,
@@ -175,12 +169,12 @@ pub fn failed_labels() -> Value {
     json!({"check": step_label("check", "failed"), "client": step_label("client", "failed"), "host": step_label("host", "failed"), "start": step_label("start", "failed")})
 }
 
-fn eval(proxy: &EventLoopProxy<UserEvent>, call: &str, arg: &Value) {
-    let _ = proxy.send_event(UserEvent::Eval(format!("window.genieSetup && window.genieSetup.{call}({arg})")));
+fn eval(proxy: &EventLoopProxy<Resident>, call: &str, arg: &Value) {
+    let _ = proxy.send_event(Resident::SetupEval(format!("window.genieSetup && window.genieSetup.{call}({arg})")));
 }
 
 /// The install in its own thread, its progress said in the window.
-fn install(proxy: EventLoopProxy<UserEvent>, roots: Roots, mut options: InstallOptions, keys: Vec<VerifyingKey>, profile: Profile) {
+fn install(proxy: EventLoopProxy<Resident>, roots: Roots, mut options: InstallOptions, keys: Vec<VerifyingKey>, profile: Profile) {
     options.profile = profile;
     std::thread::spawn(move || {
         let mut steps = Steps { profile, checked: false, files_total: 0, files_done: 0, host_files: (0, 0), window_files: (0, 0), starting_host: false };
@@ -219,7 +213,7 @@ fn install(proxy: EventLoopProxy<UserEvent>, roots: Roots, mut options: InstallO
                 Ok(())
             }
         });
-        let _ = proxy.send_event(UserEvent::Installed(result.map(|_| profile)));
+        let _ = proxy.send_event(Resident::Installed(result.map(|_| profile)));
     });
 }
 
@@ -234,7 +228,7 @@ pub fn run_setup(roots: &Roots, options: InstallOptions, keys: Vec<VerifyingKey>
             std::env::set_var(k, v);
         }
     }
-    let mut event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
+    let mut event_loop = EventLoopBuilder::<Resident>::with_user_event().build();
     let window = WindowBuilder::new()
         .with_title("Set up Genie")
         .with_inner_size(LogicalSize::new(520.0, 640.0))
@@ -250,7 +244,7 @@ pub fn run_setup(roots: &Roots, options: InstallOptions, keys: Vec<VerifyingKey>
     let builder = WebViewBuilder::new_with_web_context(&mut context)
         .with_html(setup_html())
         .with_ipc_handler(move |req: wry::http::Request<String>| {
-            let _ = ipc.send_event(UserEvent::Ipc(req.body().clone()));
+            let _ = ipc.send_event(Resident::SetupIpc(req.body().clone()));
         });
     #[cfg(windows)]
     let webview = builder.build(&window).map_err(|e| format!("the setup window's webview (WebView2) could not start: {e}"))?;
@@ -276,10 +270,10 @@ pub fn run_setup(roots: &Roots, options: InstallOptions, keys: Vec<VerifyingKey>
                     *control_flow = ControlFlow::Exit;
                 }
             }
-            Event::UserEvent(UserEvent::Eval(js)) => {
+            Event::UserEvent(Resident::SetupEval(js)) => {
                 let _ = webview.evaluate_script(&js);
             }
-            Event::UserEvent(UserEvent::Installed(result)) => {
+            Event::UserEvent(Resident::Installed(result)) => {
                 installing = false;
                 match result {
                     Ok(p) => {
@@ -295,7 +289,7 @@ pub fn run_setup(roots: &Roots, options: InstallOptions, keys: Vec<VerifyingKey>
                     }
                 }
             }
-            Event::UserEvent(UserEvent::Ipc(body)) => {
+            Event::UserEvent(Resident::SetupIpc(body)) => {
                 let msg: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
                 match msg["kind"].as_str() {
                     Some("drag") => {
@@ -356,6 +350,171 @@ enum Resident {
     ShowUpdates(std::sync::Arc<crate::control::Context>),
     /// L6: what the open Updates window shows now.
     UpdatesView(Value),
+    /// #1514: the tray panel opened for a click at this point (physical; the pointer when `None`), or closed when open.
+    ShowPanel(std::sync::Arc<crate::control::Context>, Value, Option<(i32, i32)>),
+    /// #1515: the launch pad opened (or brought forward).
+    ShowPad(std::sync::Arc<crate::control::Context>, Value),
+    /// What the open panel or pad shows now.
+    View(Surface, Value),
+    /// A click on an element of the panel's or the pad's page (`launcher.uiProbe`).
+    Click(Surface, String),
+    /// The panel or the pad closed.
+    Close(Surface),
+    /// Shown even though its page never said it had loaded (a slow webview never hides it altogether).
+    Reveal(Surface),
+    /// Every open question answered Cancel (a VM row's tidy-up, `launcher.uiProbe {cancelAsks}`).
+    CancelAsks,
+    // The setup window's (L3) and the moving card's (L9) events, in this one type: tao on Windows registers its thread
+    // event window class once per process, its procedure generic over the loop's user-event type, so a second loop of
+    // another type in the same process never receives its events (the launcher's own loop after its setup window: run
+    // 1128-095222-c1428f). tests/ui.rs holds every loop to this type.
+    /// The setup page said something (`window.ipc`).
+    SetupIpc(String),
+    /// Script for the setup page.
+    SetupEval(String),
+    /// The install finished: the profile installed, or why not.
+    Installed(Result<Profile, String>),
+    /// The card's page has loaded: the window may be shown.
+    CardLoaded,
+    /// Not loaded within `CARD_LOAD_WAIT`: shown anyway, so a slow WebView2 never hides the card altogether.
+    CardShowAnyway,
+    CardClose,
+}
+
+/// The launcher's UI log (`<data>/logs/genie-launcher-ui.log`): what the panel, the pad and the questions did, kept where a
+/// launcher started by the installer's shell (no stderr anyone reads, on Windows) still leaves it. Set when one first opens.
+static UI_LOG: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// A line said on stderr and kept in the UI log.
+pub fn ui_log(line: &str) {
+    eprintln!("{line}");
+    if let Some(file) = UI_LOG.get() {
+        use std::io::Write;
+        if let Some(dir) = file.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(file) {
+            let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+            let _ = writeln!(f, "{ms} {line}");
+        }
+    }
+}
+
+macro_rules! ui_say {
+    ($($t:tt)*) => { $crate::ui::ui_log(&format!($($t)*)) };
+}
+
+/// The questions open now, by title (`launcher.uiProbe`: the tray panel's Stop asks first, as the menu's did).
+static ASKING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn set_asking(titles: Vec<String>) {
+    if let Ok(mut held) = ASKING.lock() {
+        *held = titles;
+    }
+}
+
+/// The questions open now.
+pub fn asking() -> Vec<String> {
+    ASKING.lock().map(|a| a.clone()).unwrap_or_default()
+}
+
+/// Every open question answered Cancel.
+pub fn cancel_asks() -> bool {
+    resident().map_or(false, |p| p.send_event(Resident::CancelAsks).is_ok())
+}
+
+/// The tray panel or the launch pad, open.
+struct OpenSurface {
+    window: tao::window::Window,
+    webview: wry::WebView,
+    ctx: std::sync::Arc<crate::control::Context>,
+    anchor: Option<(i32, i32)>,
+    /// The window has had the focus (the panel closes when it loses it, not before it ever had it).
+    focused: bool,
+    shown: bool,
+    size: (f64, f64),
+}
+
+/// How long after the panel closed on losing the focus a click on the icon is that same click (the panel stays closed:
+/// the icon toggles it).
+const PANEL_TOGGLE: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// A window for the panel or the pad, hidden until its page has said how it looks.
+fn surface_window(target: &tao::event_loop::EventLoopWindowTarget<Resident>, context: &mut WebContext, proxy: &EventLoopProxy<Resident>, surface: Surface, html: String) -> Result<(tao::window::Window, wry::WebView), String> {
+    // Hidden until its page has loaded on Windows (WebView2 paints white first). On Linux made visible: a GTK window made
+    // hidden comes up at its webview's natural size, not its own (630 wide whatever was asked: run 1128-091020-80a227),
+    // as the Updates window, made visible, never did; the panel is transparent until its page draws, and is placed at once.
+    let start_visible = cfg!(unix);
+    // On Linux resizable with its minimum and maximum its own size: GTK sizes a non-resizable window to its webview's
+    // natural size (630 wide whatever was asked, runs 1128-091020-80a227 and 1128-093247-055d6a), while a fixed minimum and
+    // maximum keep it exactly its size, and Hyprland floats a window whose minimum is its maximum as it floats a
+    // non-resizable one.
+    let size = if surface == Surface::Panel { LogicalSize::new(300.0, 470.0) } else { LogicalSize::new(520.0, 640.0) };
+    let mut builder = WindowBuilder::new().with_resizable(cfg!(unix)).with_decorations(false).with_visible(start_visible);
+    if cfg!(unix) {
+        builder = builder.with_min_inner_size(size).with_max_inner_size(size);
+    }
+    builder = match surface {
+        // The panel: frameless, over everything, out of the taskbar, its corners the page's own (transparent around them).
+        // On Windows opaque, its corners rounded by DWM (a transparent WebView2 window never came up: run 1128-092400-b8b47e).
+        Surface::Panel => builder.with_title("Genie tray").with_inner_size(LogicalSize::new(300.0, 470.0)).with_always_on_top(true).with_transparent(cfg!(unix)),
+        Surface::Pad => builder.with_title("Genie").with_inner_size(LogicalSize::new(520.0, 640.0)),
+    };
+    if surface == Surface::Panel {
+        #[cfg(windows)]
+        {
+            use tao::platform::windows::WindowBuilderExtWindows;
+            builder = builder.with_skip_taskbar(true);
+        }
+        #[cfg(unix)]
+        {
+            use tao::platform::unix::WindowBuilderExtUnix;
+            builder = builder.with_skip_taskbar(true);
+        }
+    }
+    let window = builder.build(target).map_err(|e| format!("{}'s window could not be made: {e}", surface.name()))?;
+    ui_say!("genie: {}: its window is made", surface.name());
+    #[cfg(windows)]
+    if surface == Surface::Panel {
+        use tao::platform::windows::WindowExtWindows;
+        use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND};
+        let round = DWMWCP_ROUND;
+        let hr = unsafe { DwmSetWindowAttribute(window.hwnd() as _, DWMWA_WINDOW_CORNER_PREFERENCE as u32, &round as *const _ as *const core::ffi::c_void, std::mem::size_of_val(&round) as u32) };
+        ui_say!("genie: the tray panel: rounded corners asked of Windows (HRESULT {hr:#x})");
+    }
+    if surface == Surface::Pad {
+        if let Some(m) = window.current_monitor().or_else(|| window.primary_monitor()) {
+            let (ms, mp, ws) = (m.size(), m.position(), window.outer_size());
+            window.set_outer_position(tao::dpi::PhysicalPosition::new(mp.x + (ms.width.saturating_sub(ws.width) / 2) as i32, mp.y + (ms.height.saturating_sub(ws.height) / 2) as i32));
+        }
+    }
+    let id = window.id();
+    let ipc = proxy.clone();
+    let mut wb = WebViewBuilder::new_with_web_context(context).with_html(html).with_ipc_handler(move |req: wry::http::Request<String>| {
+        let _ = ipc.send_event(Resident::Ipc(id, req.body().clone()));
+    });
+    wb = if surface == Surface::Panel && cfg!(unix) { wb.with_transparent(true) } else if surface == Surface::Panel { wb.with_background_color(PANEL_BACKDROP) } else { wb.with_background_color(CARD_BACKDROP) };
+    #[cfg(windows)]
+    let webview = wb.build(&window).map_err(|e| format!("{}'s webview (WebView2) could not start: {e}", surface.name()))?;
+    #[cfg(unix)]
+    let webview = {
+        use tao::platform::unix::WindowExtUnix;
+        use wry::WebViewBuilderExtUnix;
+        let vbox = window.default_vbox().ok_or_else(|| format!("{}'s window has no GTK box for its webview", surface.name()))?;
+        wb.build_gtk(vbox).map_err(|e| format!("{}'s webview (WebKitGTK) could not start: {e}", surface.name()))?
+    };
+    ui_say!("genie: {}: its webview is made", surface.name());
+    // Shown regardless after 3 s, if its page never says it has loaded.
+    let reveal = proxy.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        let _ = reveal.send_event(Resident::Reveal(surface));
+    });
+    Ok((window, webview))
+}
+
+fn eval_model(webview: &wry::WebView, call: &str, arg: &Value) {
+    let _ = webview.evaluate_script(&format!("window.{call} && window.{call}({})", arg.to_string().replace('<', "\\u003c")));
 }
 
 // --- L6 (Tynn #1058): the Updates window -----------------------------------------------------------------------------
@@ -388,27 +547,27 @@ fn updates_act(ctx: std::sync::Arc<crate::control::Context>, msg: Value, proxy: 
     use std::sync::atomic::Ordering;
     std::thread::spawn(move || {
         let kind = msg["kind"].as_str().unwrap_or("");
-        eprintln!("genie: updates window: {kind} {}", msg["track"].as_str().unwrap_or(""));
+        ui_say!("genie: updates window: {kind} {}", msg["track"].as_str().unwrap_or(""));
         match kind {
             "check" => {
                 CHECKING.store(true, Ordering::SeqCst);
                 let _ = proxy.send_event(Resident::UpdatesView(updates_data(&ctx, true)));
                 if let Err(why) = crate::updates::check_with_tools(&ctx.updates, &ctx.roots) {
-                    eprintln!("genie: updates window: the check failed: {why}");
+                    ui_say!("genie: updates window: the check failed: {why}");
                 }
                 CHECKING.store(false, Ordering::SeqCst);
             }
             "apply" => {
                 if let Some(track) = msg["track"].as_str().and_then(Track::parse) {
                     if let Err(why) = crate::control::apply_track(&ctx, track) {
-                        eprintln!("genie: updates window: {why}");
+                        ui_say!("genie: updates window: {why}");
                     }
                 }
             }
             // A host's tool (L7): the host's installer asked; the window redraws from the host's rows as it moves.
             "applyTool" => {
                 if let Err(why) = crate::updates::apply_tool(&ctx.roots, &msg) {
-                    eprintln!("genie: updates window: {why}");
+                    ui_say!("genie: updates window: {why}");
                 }
                 crate::updates::tools_changed(&ctx.updates);
             }
@@ -419,14 +578,14 @@ fn updates_act(ctx: std::sync::Arc<crate::control::Context>, msg: Value, proxy: 
                 for track in [Track::Client, Track::Browser, Track::Host, Track::Launcher] {
                     if ready(track.as_str()) {
                         if let Err(why) = crate::control::apply_track(&ctx, track) {
-                            eprintln!("genie: updates window: {why}");
+                            ui_say!("genie: updates window: {why}");
                         }
                     }
                 }
             }
             "openGenie" => {
                 if let Err(why) = crate::control::open_window(&ctx) {
-                    eprintln!("genie: updates window: Open Genie: {why}");
+                    ui_say!("genie: updates window: Open Genie: {why}");
                 }
             }
             "hostLog" => {
@@ -434,7 +593,7 @@ fn updates_act(ctx: std::sync::Arc<crate::control::Context>, msg: Value, proxy: 
                 let path = log.display().to_string().replace('\\', "/");
                 let uri = if path.starts_with('/') { format!("file://{path}") } else { format!("file:///{path}") };
                 if let Err(why) = open_with_the_os(&uri) {
-                    eprintln!("genie: updates window: the host's log: {why}");
+                    ui_say!("genie: updates window: the host's log: {why}");
                 }
             }
             _ => {}
@@ -496,9 +655,155 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
     let mut open: std::collections::HashMap<tao::window::WindowId, (tao::window::Window, wry::WebView, std::sync::mpsc::Sender<bool>, String)> = Default::default();
     // L6: the Updates window, one at most, and the launcher it shows.
     let mut updates: Option<(tao::window::Window, wry::WebView, std::sync::Arc<crate::control::Context>)> = None;
+    // #1514/#1515: the tray panel and the launch pad, one of each at most.
+    let mut panel: Option<OpenSurface> = None;
+    let mut pad: Option<OpenSurface> = None;
+    let mut panel_closed_at: Option<std::time::Instant> = None;
+    fn close(slot: &mut Option<OpenSurface>, surface: Surface) {
+        forget_shown(surface);
+        if slot.take().is_some() {
+            surface.open_flag().store(false, std::sync::atomic::Ordering::SeqCst);
+            ui_say!("genie: {} closed", surface.name());
+        }
+    }
     event_loop.run_return(|event, target, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
+            Event::UserEvent(Resident::ShowPanel(ctx, model, anchor)) => {
+                ui_say!("genie: the tray panel: the window loop has the request");
+                if panel.is_some() {
+                    ui_say!("genie: the tray panel was open: a click on the icon closes it");
+                    close(&mut panel, Surface::Panel);
+                    return;
+                }
+                if panel_closed_at.map_or(false, |t| t.elapsed() < PANEL_TOGGLE) {
+                    ui_say!("genie: the tray panel closed on this same click: it stays closed");
+                    return;
+                }
+                forget_shown(Surface::Panel);
+                match surface_window(target, &mut context, &proxy, Surface::Panel, panel_html(&model)) {
+                    Ok((window, webview)) => {
+                        Surface::Panel.open_flag().store(true, std::sync::atomic::Ordering::SeqCst);
+                        keep_current(Surface::Panel, std::sync::Arc::clone(&ctx), proxy.clone());
+                        panel = Some(OpenSurface { window, webview, ctx, anchor, focused: false, shown: false, size: (300.0, 470.0) });
+                    }
+                    Err(why) => ui_say!("genie: {why}"),
+                }
+            }
+            Event::UserEvent(Resident::ShowPad(ctx, model)) => {
+                if let Some(p) = &pad {
+                    eval_model(&p.webview, "render", &model);
+                    p.window.set_minimized(false);
+                    p.window.set_focus();
+                    return;
+                }
+                forget_shown(Surface::Pad);
+                match surface_window(target, &mut context, &proxy, Surface::Pad, pad_html(&model)) {
+                    Ok((window, webview)) => {
+                        Surface::Pad.open_flag().store(true, std::sync::atomic::Ordering::SeqCst);
+                        keep_current(Surface::Pad, std::sync::Arc::clone(&ctx), proxy.clone());
+                        pad = Some(OpenSurface { window, webview, ctx, anchor: None, focused: false, shown: false, size: (520.0, 640.0) });
+                    }
+                    Err(why) => ui_say!("genie: {why}"),
+                }
+            }
+            Event::UserEvent(Resident::View(surface, model)) => {
+                let slot = if surface == Surface::Panel { &panel } else { &pad };
+                if let Some(s) = slot {
+                    eval_model(&s.webview, "render", &model);
+                }
+            }
+            Event::UserEvent(Resident::Click(surface, id)) => {
+                let slot = if surface == Surface::Panel { &panel } else { &pad };
+                if let Some(s) = slot {
+                    eval_model(&s.webview, "genieClick", &Value::String(id));
+                }
+            }
+            Event::UserEvent(Resident::Close(surface)) => {
+                if surface == Surface::Panel { close(&mut panel, surface) } else { close(&mut pad, surface) }
+            }
+            Event::UserEvent(Resident::Reveal(surface)) => {
+                let slot = if surface == Surface::Panel { &mut panel } else { &mut pad };
+                if let Some(s) = slot.as_mut().filter(|s| !s.shown) {
+                    s.shown = true;
+                    s.window.set_visible(true);
+                    let _ = s.webview.evaluate_script("setTimeout(function () { window.genieReport && window.genieReport(); }, 250)");
+                    if surface == Surface::Panel {
+                        place_panel(&s.window, s.anchor, s.size);
+                    } else {
+                        place_pad(&s.window);
+                    }
+                    s.window.set_focus();
+                    ui_say!("genie: {} is shown before its page said it loaded", surface.name());
+                }
+            }
+            Event::UserEvent(Resident::Ipc(id, body)) if panel.as_ref().map_or(false, |s| s.window.id() == id) || pad.as_ref().map_or(false, |s| s.window.id() == id) => {
+                let surface = if panel.as_ref().map_or(false, |s| s.window.id() == id) { Surface::Panel } else { Surface::Pad };
+                let msg = serde_json::from_str::<Value>(&body).unwrap_or(Value::Null);
+                let slot = if surface == Surface::Panel { &mut panel } else { &mut pad };
+                match msg["kind"].as_str() {
+                    Some("shown") => {
+                        if let Ok(mut held) = SHOWN.lock() {
+                            held.retain(|(s, _)| *s != surface);
+                            held.push((surface, msg.clone()));
+                        }
+                        let Some(s) = slot.as_mut() else { return };
+                        let size = (msg["w"].as_f64().unwrap_or(s.size.0).max(1.0), msg["h"].as_f64().unwrap_or(s.size.1).max(1.0));
+                        if surface == Surface::Panel && (size != s.size || !s.shown) {
+                            s.size = size;
+                            // Its bounds first, then its size: a size outside the bounds would be held to them.
+                            s.window.set_min_inner_size(Some(LogicalSize::new(size.0, size.1)));
+                            s.window.set_max_inner_size(Some(LogicalSize::new(size.0, size.1)));
+                            s.window.set_inner_size(LogicalSize::new(size.0, size.1));
+                            place_panel(&s.window, s.anchor, size);
+                        }
+                        if !s.shown {
+                            s.shown = true;
+                            s.window.set_visible(true);
+                    let _ = s.webview.evaluate_script("setTimeout(function () { window.genieReport && window.genieReport(); }, 250)");
+                            s.window.set_focus();
+                            if surface == Surface::Pad {
+                                place_pad(&s.window);
+                            }
+                            ui_say!("genie: {} is shown: {}", surface.name(), msg["text"].as_str().unwrap_or("").replace('\n', " | "));
+                        }
+                    }
+                    Some("drag") => {
+                        if let Some(s) = slot.as_ref() {
+                            let _ = s.window.drag_window();
+                        }
+                    }
+                    Some("minimize") => {
+                        if let Some(s) = slot.as_ref() {
+                            s.window.set_minimized(true);
+                        }
+                    }
+                    Some("close") => close(slot, surface),
+                    Some("pick") => {
+                        let Some(item) = msg["id"].as_str().map(str::to_string) else { return };
+                        let Some(ctx) = slot.as_ref().map(|s| std::sync::Arc::clone(&s.ctx)) else { return };
+                        // The panel closes once an item is chosen, as a menu does; "Start when I sign in" turns over in place.
+                        if surface == Surface::Panel && item != "logon" {
+                            close(slot, surface);
+                        }
+                        pick(surface, ctx, &item, proxy.clone());
+                    }
+                    _ => {}
+                }
+            }
+            Event::WindowEvent { window_id, event: WindowEvent::Focused(focused), .. } if panel.as_ref().map_or(false, |s| s.window.id() == window_id) => {
+                ui_say!("genie: the tray panel {} the focus", if focused { "has" } else { "lost" });
+                if focused {
+                    if let Some(s) = panel.as_mut() {
+                        s.focused = true;
+                    }
+                } else if panel.as_ref().map_or(false, |s| s.focused) {
+                    close(&mut panel, Surface::Panel);
+                    panel_closed_at = Some(std::time::Instant::now());
+                }
+            }
+            Event::WindowEvent { window_id, event: WindowEvent::CloseRequested, .. } if panel.as_ref().map_or(false, |s| s.window.id() == window_id) => close(&mut panel, Surface::Panel),
+            Event::WindowEvent { window_id, event: WindowEvent::CloseRequested, .. } if pad.as_ref().map_or(false, |s| s.window.id() == window_id) => close(&mut pad, Surface::Pad),
             Event::UserEvent(Resident::ShowUpdates(ctx)) => {
                 if let Some((window, _, _)) = &updates {
                     window.set_minimized(false);
@@ -550,7 +855,7 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
                             }
                         });
                     }
-                    Err(why) => eprintln!("genie: {why}"),
+                    Err(why) => ui_say!("genie: {why}"),
                 }
             }
             Event::UserEvent(Resident::UpdatesView(v)) => {
@@ -561,7 +866,7 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
             Event::UserEvent(Resident::Ipc(id, body)) if updates.as_ref().map_or(false, |(w, _, _)| w.id() == id) => {
                 let msg = serde_json::from_str::<Value>(&body).unwrap_or(Value::Null);
                 match msg["kind"].as_str() {
-                    Some("shown") => eprintln!("genie: the Updates window is shown"),
+                    Some("shown") => ui_say!("genie: the Updates window is shown"),
                     Some("drag") => {
                         if let Some((window, _, _)) = &updates {
                             let _ = window.drag_window();
@@ -587,6 +892,15 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
             Event::WindowEvent { window_id, event: WindowEvent::CloseRequested, .. } if updates.as_ref().map_or(false, |(w, _, _)| w.id() == window_id) => {
                 UPDATES_OPEN.store(false, std::sync::atomic::Ordering::SeqCst);
                 updates = None;
+            }
+            Event::UserEvent(Resident::CancelAsks) => {
+                for (_, (window, webview, reply, title)) in open.drain() {
+                    ui_say!("genie: {title}: cancelled");
+                    let _ = reply.send(false);
+                    drop(webview);
+                    drop(window);
+                }
+                set_asking(Vec::new());
             }
             Event::UserEvent(Resident::Ask(q, reply)) => {
                 let made = (|| -> Result<(tao::window::Window, wry::WebView), String> {
@@ -624,9 +938,10 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
                 match made {
                     Ok((window, webview)) => {
                         open.insert(window.id(), (window, webview, reply, q.title.clone()));
+                        set_asking(open.values().map(|o| o.3.clone()).collect());
                     }
                     Err(why) => {
-                        eprintln!("genie: {why}; nothing was stopped");
+                        ui_say!("genie: {why}; nothing was stopped");
                         let _ = reply.send(false);
                     }
                 }
@@ -636,12 +951,13 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
                 match kind.as_str() {
                     "shown" => {
                         if let Some((_, _, _, title)) = open.get(&id) {
-                            eprintln!("genie: asking: {title}");
+                            ui_say!("genie: asking: {title}");
                         }
                     }
                     "confirm" | "cancel" => {
                         if let Some((window, webview, reply, title)) = open.remove(&id) {
-                            eprintln!("genie: {title}: {}", if kind == "confirm" { "confirmed" } else { "cancelled" });
+                            set_asking(open.values().map(|o| o.3.clone()).collect());
+                            ui_say!("genie: {title}: {}", if kind == "confirm" { "confirmed" } else { "cancelled" });
                             let _ = reply.send(kind == "confirm");
                             drop(webview);
                             drop(window);
@@ -652,6 +968,7 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
             }
             Event::WindowEvent { window_id, event: WindowEvent::CloseRequested, .. } => {
                 if let Some((window, webview, reply, _)) = open.remove(&window_id) {
+                    set_asking(open.values().map(|o| o.3.clone()).collect());
                     let _ = reply.send(false);
                     drop(webview);
                     drop(window);
@@ -670,14 +987,6 @@ pub fn moving_html() -> String {
     let css = format!("{}
 {}", include_str!("../ui/base.css"), include_str!("../ui/theme-c.css"));
     include_str!("../ui/moving.html").replace("/*GENIE_CSS*/", &css)
-}
-
-enum Card {
-    /// The page has loaded: the window may be shown.
-    Loaded,
-    /// Not loaded within `CARD_LOAD_WAIT`: shown anyway, so a slow WebView2 never hides the card altogether.
-    ShowAnyway,
-    Close,
 }
 
 /// How long the card waits, hidden, for its page to load before it is shown regardless.
@@ -701,7 +1010,7 @@ pub fn run_moving_card(roots: &Roots, work: Option<Box<dyn FnOnce() + Send>>) ->
         if std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_none() {
             return Err("no display".to_string());
         }
-        let event_loop = EventLoopBuilder::<Card>::with_user_event().build();
+        let event_loop = EventLoopBuilder::<Resident>::with_user_event().build();
         let window = WindowBuilder::new()
             .with_title("Genie")
             .with_inner_size(LogicalSize::new(460.0, 360.0))
@@ -723,7 +1032,7 @@ pub fn run_moving_card(roots: &Roots, work: Option<Box<dyn FnOnce() + Send>>) ->
             .with_background_color(CARD_BACKDROP)
             .with_ipc_handler(move |req: wry::http::Request<String>| {
                 if req.body() == "loaded" {
-                    let _ = loaded.send_event(Card::Loaded);
+                    let _ = loaded.send_event(Resident::CardLoaded);
                 }
             });
         #[cfg(windows)]
@@ -750,7 +1059,7 @@ pub fn run_moving_card(roots: &Roots, work: Option<Box<dyn FnOnce() + Send>>) ->
     let anyway = event_loop.create_proxy();
     std::thread::spawn(move || {
         std::thread::sleep(CARD_LOAD_WAIT);
-        let _ = anyway.send_event(Card::ShowAnyway);
+        let _ = anyway.send_event(Resident::CardShowAnyway);
     });
     let proxy = event_loop.create_proxy();
     let r = roots.clone();
@@ -771,25 +1080,25 @@ pub fn run_moving_card(roots: &Roots, work: Option<Box<dyn FnOnce() + Send>>) ->
             }
             std::thread::sleep(std::time::Duration::from_millis(500));
         }
-        let _ = proxy.send_event(Card::Close);
+        let _ = proxy.send_event(Resident::CardClose);
     });
     let mut shown = false;
     event_loop.run_return(|event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
-            Event::UserEvent(Card::Loaded) if !shown => {
+            Event::UserEvent(Resident::CardLoaded) if !shown => {
                 shown = true;
                 window.set_visible(true);
                 crate::migrate::log_line(roots, "the moving card is shown (its page loaded)");
                 println!("moving: shown");
             }
-            Event::UserEvent(Card::ShowAnyway) if !shown => {
+            Event::UserEvent(Resident::CardShowAnyway) if !shown => {
                 shown = true;
                 window.set_visible(true);
                 crate::migrate::log_line(roots, &format!("the moving card is shown before its page loaded ({} s)", CARD_LOAD_WAIT.as_secs()));
                 println!("moving: shown");
             }
-            Event::UserEvent(Card::Close) => *control_flow = ControlFlow::Exit,
+            Event::UserEvent(Resident::CardClose) => *control_flow = ControlFlow::Exit,
             _ => {}
         }
     });
@@ -798,4 +1107,383 @@ pub fn run_moving_card(roots: &Roots, work: Option<Box<dyn FnOnce() + Send>>) ->
     drop(window);
     drop(context);
     Ok(())
+}
+
+// --- Tynn #1058 (#1514, #1515): the tray panel and the launch pad -----------------------------------------------------
+
+/// A page with the mockup's CSS and its first model in place (a script literal: `<` escaped, so no text of the model can
+/// close the script element).
+fn page_with_model(html: &str, model: &Value) -> String {
+    let css = format!("{}\n{}", include_str!("../ui/base.css"), include_str!("../ui/theme-c.css"));
+    html.replace("/*GENIE_CSS*/", &css).replace("/*GENIE_MODEL*/null", &model.to_string().replace('<', "\\u003c"))
+}
+
+/// The tray panel's page (`panel::panel`'s model), the mockup's tray screen. On Windows the window is the panel itself
+/// (`framed`: opaque, its corners Windows' own).
+pub fn panel_html(model: &Value) -> String {
+    let page = page_with_model(include_str!("../ui/panel.html"), model);
+    if cfg!(windows) { page.replacen("<body class=\"only\">", "<body class=\"only framed\">", 1) } else { page }
+}
+
+/// The panel's own colour (theme-c's --menu over its night), behind its page on Windows.
+const PANEL_BACKDROP: (u8, u8, u8, u8) = (0x10, 0x0c, 0x28, 0xff);
+
+/// The launch pad's page (`panel::pad`'s model), the mockup's screen 0.
+pub fn pad_html(model: &Value) -> String {
+    page_with_model(include_str!("../ui/pad.html"), model)
+}
+
+/// The two windows: the tray panel and the launch pad.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Surface {
+    Panel,
+    Pad,
+}
+
+impl Surface {
+    pub fn parse(name: &str) -> Option<Surface> {
+        match name {
+            "panel" => Some(Surface::Panel),
+            "pad" => Some(Surface::Pad),
+            _ => None,
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            Surface::Panel => "the tray panel",
+            Surface::Pad => "the launch pad",
+        }
+    }
+    fn model(self, ctx: &crate::control::Context) -> Value {
+        let f = crate::panel::facts(ctx);
+        match self {
+            Surface::Panel => crate::panel::panel(&f),
+            Surface::Pad => crate::panel::pad(&f),
+        }
+    }
+    fn open_flag(self) -> &'static std::sync::atomic::AtomicBool {
+        match self {
+            Surface::Panel => &PANEL_OPEN,
+            Surface::Pad => &PAD_OPEN,
+        }
+    }
+}
+
+static PANEL_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static PAD_OPEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// What each window's page last said it shows (its own words, read in the webview: `launcher.uiProbe`).
+static SHOWN: std::sync::Mutex<Vec<(Surface, Value)>> = std::sync::Mutex::new(Vec::new());
+
+fn resident() -> Option<EventLoopProxy<Resident>> {
+    RESIDENT.get().and_then(|p| p.lock().ok().map(|p| p.clone()))
+}
+
+/// Opens the tray panel for a click at `anchor` (physical pixels; the pointer when `None`), or closes it when it is open:
+/// `false` when this launcher has no window loop (the caller falls back to the platform's menu).
+pub fn show_panel(ctx: std::sync::Arc<crate::control::Context>, anchor: Option<(i32, i32)>) -> bool {
+    let _ = UI_LOG.set(ctx.roots.logs_dir().join("genie-launcher-ui.log"));
+    let Some(proxy) = resident() else {
+        ui_say!("genie: the tray panel: this launcher has no window loop");
+        return false;
+    };
+    ui_say!("genie: the tray panel asked for (anchor {anchor:?})");
+    let model = Surface::Panel.model(&ctx);
+    let sent = proxy.send_event(Resident::ShowPanel(ctx, model, anchor)).is_ok();
+    ui_say!("genie: the tray panel: its model made, the request sent ({sent})");
+    sent
+}
+
+/// Opens the launch pad, or brings it forward: `false` when this launcher has no window loop.
+pub fn show_pad(ctx: std::sync::Arc<crate::control::Context>) -> bool {
+    let _ = UI_LOG.set(ctx.roots.logs_dir().join("genie-launcher-ui.log"));
+    let Some(proxy) = resident() else {
+        ui_say!("genie: the launch pad: this launcher has no window loop");
+        return false;
+    };
+    let model = Surface::Pad.model(&ctx);
+    proxy.send_event(Resident::ShowPad(ctx, model)).is_ok()
+}
+
+/// Whether the window is open now.
+pub fn is_open(surface: Surface) -> bool {
+    surface.open_flag().load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// What the window's page last said it shows: `{text, items: [{id, label, enabled}], …}`.
+pub fn shown(surface: Surface) -> Option<Value> {
+    SHOWN.lock().ok()?.iter().find(|(s, _)| *s == surface).map(|(_, v)| v.clone())
+}
+
+/// A click on the element `data-id=<id>` of the window's page, as the person's click (the page's own handler runs): the
+/// VM rows drive the windows with it (`launcher.uiProbe`, GENIE_LAUNCHER_TRAY_PROBE=1 only).
+pub fn click(surface: Surface, id: &str) -> bool {
+    resident().map_or(false, |p| p.send_event(Resident::Click(surface, id.to_string())).is_ok())
+}
+
+/// The window closed (a VM row's tidy-up).
+pub fn close_surface(surface: Surface) -> bool {
+    resident().map_or(false, |p| p.send_event(Resident::Close(surface)).is_ok())
+}
+
+/// Once every 2 s while the window is open: its model, from the launcher's own state, off the window's thread.
+fn keep_current(surface: Surface, ctx: std::sync::Arc<crate::control::Context>, proxy: EventLoopProxy<Resident>) {
+    std::thread::spawn(move || {
+        while surface.open_flag().load(std::sync::atomic::Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            if !surface.open_flag().load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            let _ = proxy.send_event(Resident::View(surface, surface.model(&ctx)));
+        }
+    });
+}
+
+/// A click on one of the windows' items or buttons, acted on off the window's thread.
+fn pick(surface: Surface, ctx: std::sync::Arc<crate::control::Context>, id: &str, proxy: EventLoopProxy<Resident>) {
+    use crate::panel::Pick;
+    ui_say!("genie: {}: {id}", surface.name());
+    match crate::panel::pick(id) {
+        Some(Pick::Act(action)) => crate::tray::act(ctx, action),
+        Some(Pick::Logon) => {
+            std::thread::spawn(move || {
+                match crate::panel::toggle_logon(&ctx.roots) {
+                    Ok(said) => ui_say!("genie: {}: start when I sign in: {said}", surface.name()),
+                    Err(why) => ui_say!("genie: {}: start when I sign in: {why}", surface.name()),
+                }
+                let _ = proxy.send_event(Resident::View(surface, surface.model(&ctx)));
+            });
+        }
+        Some(Pick::Pad) => {
+            std::thread::spawn(move || {
+                show_pad(ctx);
+            });
+        }
+        Some(Pick::Host(url)) => {
+            std::thread::spawn(move || {
+                // Only a host this computer paired with: the page names it, the launcher's own list decides.
+                if !crate::panel::read_paired(&ctx.roots.runtime_dir()).contains(&url) {
+                    ui_say!("genie: {}: {url} is not a paired host", surface.name());
+                    return;
+                }
+                if let Err(why) = crate::control::open_window_on(&ctx, &url) {
+                    ui_say!("genie: {}: a window on {url}: {why}", surface.name());
+                }
+            });
+        }
+        None => ui_say!("genie: {}: nothing is {id:?}", surface.name()),
+    }
+}
+
+/// What a window's page said is forgotten when it opens or closes: a reader never takes a closed window's words for a
+/// new one's.
+fn forget_shown(surface: Surface) {
+    if let Ok(mut held) = SHOWN.lock() {
+        held.retain(|(s, _)| *s != surface);
+    }
+}
+
+/// The launch pad at its own size: Hyprland gave its floating window more than it asked for (630 x 674, run
+/// 1128-083346-4f0fbb), so its socket sizes and centres it. Elsewhere the window is made at its size and centred.
+fn place_pad(window: &tao::window::Window) {
+    #[cfg(unix)]
+    if hypr::running() {
+        let title = window.title();
+        std::thread::spawn(move || hypr::place_pad(&title, (520, 640)));
+    }
+    #[cfg(not(unix))]
+    let _ = window;
+}
+
+/// The panel put where it belongs once its page says how big it is: against the tray it was opened from.
+fn place_panel(window: &tao::window::Window, anchor: Option<(i32, i32)>, size: (f64, f64)) {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::POINT;
+        use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+        let scale = window.scale_factor();
+        let at = anchor.unwrap_or_else(|| {
+            let mut p = POINT { x: 0, y: 0 };
+            unsafe { GetCursorPos(&mut p) };
+            (p.x, p.y)
+        });
+        let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        let monitor = unsafe { MonitorFromPoint(POINT { x: at.0, y: at.1 }, MONITOR_DEFAULTTONEAREST) };
+        if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
+            return;
+        }
+        let w = info.rcWork;
+        let work = crate::panel::Rect { left: w.left, top: w.top, right: w.right, bottom: w.bottom };
+        let px = ((size.0 * scale).round() as i32, (size.1 * scale).round() as i32);
+        let (x, y) = crate::panel::place(at, work, px, (12.0 * scale).round() as i32);
+        window.set_outer_position(tao::dpi::PhysicalPosition::new(x, y));
+    }
+    #[cfg(unix)]
+    {
+        if hypr::running() {
+            // Hyprland: a client cannot place its own window on Wayland; Hyprland's own socket does (no program run).
+            let title = window.title();
+            std::thread::spawn(move || hypr::place_panel(&title, (size.0.round() as i32, size.1.round() as i32)));
+            return;
+        }
+        // Elsewhere (X11; a Wayland desktop that ignores it): by the pointer, as the platform allows.
+        let at = anchor.or_else(|| window.cursor_position().ok().map(|p| (p.x as i32, p.y as i32)));
+        if let (Some(at), Some(m)) = (at, window.current_monitor().or_else(|| window.primary_monitor())) {
+            let (mp, ms) = (m.position(), m.size());
+            let scale = window.scale_factor();
+            let work = crate::panel::Rect { left: mp.x, top: mp.y, right: mp.x + ms.width as i32, bottom: mp.y + ms.height as i32 };
+            let px = ((size.0 * scale).round() as i32, (size.1 * scale).round() as i32);
+            let (x, y) = crate::panel::place(at, work, px, (8.0 * scale).round() as i32);
+            window.set_outer_position(tao::dpi::PhysicalPosition::new(x, y));
+        }
+    }
+}
+
+/// HYPRLAND'S OWN SOCKET (`$XDG_RUNTIME_DIR/hypr/<signature>/.socket.sock`): where the pointer is, the monitor's area
+/// less its bars (`reserved`), and the panel moved there (`movewindowpixel exact`). Spoken directly: no hyprctl is run.
+#[cfg(unix)]
+mod hypr {
+    use crate::panel::{place, Rect};
+    use serde_json::Value;
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    use std::path::PathBuf;
+
+    fn socket() -> Option<PathBuf> {
+        let sig = std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE")?;
+        let mut places = Vec::new();
+        if let Some(run) = std::env::var_os("XDG_RUNTIME_DIR") {
+            places.push(PathBuf::from(run).join("hypr").join(&sig).join(".socket.sock"));
+        }
+        places.push(PathBuf::from("/tmp/hypr").join(&sig).join(".socket.sock"));
+        places.into_iter().find(|p| p.exists())
+    }
+
+    pub fn running() -> bool {
+        socket().is_some()
+    }
+
+    fn ask(request: &str) -> Option<String> {
+        let mut s = UnixStream::connect(socket()?).ok()?;
+        s.set_read_timeout(Some(std::time::Duration::from_secs(2))).ok()?;
+        s.write_all(request.as_bytes()).ok()?;
+        let mut out = String::new();
+        s.read_to_string(&mut out).ok()?;
+        Some(out)
+    }
+
+    fn json(request: &str) -> Option<Value> {
+        serde_json::from_str(&ask(request)?).ok()
+    }
+
+    /// A monitor's area less what its bars reserve, in Hyprland's layout pixels.
+    fn work_area(m: &Value) -> Option<Rect> {
+        let scale = m["scale"].as_f64().filter(|s| *s > 0.0).unwrap_or(1.0);
+        let (x, y) = (m["x"].as_i64()? as i32, m["y"].as_i64()? as i32);
+        let (w, h) = ((m["width"].as_f64()? / scale) as i32, (m["height"].as_f64()? / scale) as i32);
+        let r: Vec<i32> = m["reserved"].as_array().map(|a| a.iter().map(|v| v.as_i64().unwrap_or(0) as i32).collect()).unwrap_or_default();
+        let g = |i: usize| r.get(i).copied().unwrap_or(0);
+        Some(Rect { left: x + g(0), top: y + g(1), right: x + w - g(2), bottom: y + h - g(3) })
+    }
+
+    /// One dispatch, in the words this Hyprland reads: the legacy line (`movewindowpixel exact …`) first, and when the reply
+    /// is Lua's (Hyprland 0.56 with a Lua config wraps it as `return hl.dispatch(…)` and says the legacy words do not
+    /// parse), its Lua dispatcher. What it answered is returned, for the log.
+    fn dispatch(legacy: &str, lua: &str) -> String {
+        let one_line = |t: String| t.split_whitespace().collect::<Vec<_>>().join(" ");
+        let said = one_line(ask(&format!("dispatch {legacy}")).unwrap_or_default());
+        if said == "ok" {
+            return said;
+        }
+        // Hyprland 0.56 (a Lua config): the dispatcher as `dispatch` wraps it (`return hl.dispatch(...)`), then as `eval`
+        // (the queue's own way of speaking to it, `hyprctl eval`).
+        let wrapped = one_line(ask(&format!("dispatch {lua}")).unwrap_or_default());
+        if wrapped == "ok" || (!wrapped.is_empty() && !wrapped.contains("error")) {
+            return format!("lua: {wrapped}");
+        }
+        let evaluated = one_line(ask(&format!("eval hl.dispatch({lua})")).unwrap_or_default());
+        format!("{said} / lua: {wrapped} / eval: {evaluated}")
+    }
+
+    /// The window of this launcher with this title, as Hyprland lists it, once it has mapped (looked for up to 2 s).
+    fn address_of(title: &str) -> Option<String> {
+        let me = std::process::id() as u64;
+        for _ in 0..40 {
+            let found = json("j/clients").and_then(|c| {
+                c.as_array()?.iter().find(|w| w["pid"].as_u64() == Some(me) && w["title"].as_str() == Some(title)).and_then(|w| w["address"].as_str().map(str::to_string))
+            });
+            if found.is_some() {
+                return found;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        None
+    }
+
+    /// The monitor's work area under `at` (else the focused monitor's).
+    fn work_at(at: (i32, i32)) -> Option<Rect> {
+        let list = json("j/monitors").and_then(|m| m.as_array().cloned()).unwrap_or_default();
+        let on = list.iter().find(|m| {
+            let Some(a) = work_area(m) else { return false };
+            let (x, y) = (m["x"].as_i64().unwrap_or(0) as i32, m["y"].as_i64().unwrap_or(0) as i32);
+            at.0 >= x && at.0 < a.right + 1 && at.1 >= y && at.1 < a.bottom + 1
+        });
+        on.or_else(|| list.iter().find(|m| m["focused"] == true)).and_then(work_area)
+    }
+
+    /// The window sized and put at `(x, y)`, focused; for the panel also without Hyprland's border and shadow (its corners
+    /// and its edge are the page's own). Each reply logged.
+    fn fit(name: &str, address: &str, size: (i32, i32), at: (i32, i32), bare: bool) {
+        let (w, h) = size;
+        let (x, y) = at;
+        let sel = format!("address:{address}");
+        let mut said = Vec::new();
+        let mut held = false;
+        for attempt in 1..=5 {
+            said.push(format!("size {}", dispatch(&format!("resizewindowpixel exact {w} {h},{sel}"), &format!("hl.dsp.window.resize({{ x = {w}, y = {h}, window = \"{sel}\" }})"))));
+            said.push(format!("at {}", dispatch(&format!("movewindowpixel exact {x} {y},{sel}"), &format!("hl.dsp.window.move({{ x = {x}, y = {y}, window = \"{sel}\" }})"))));
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let now = json("j/clients").and_then(|c| c.as_array()?.iter().find(|c| c["address"].as_str() == Some(address)).cloned());
+            let got = now.as_ref().map(|c| (c["at"][0].as_i64().unwrap_or(0) as i32, c["at"][1].as_i64().unwrap_or(0) as i32, c["size"][0].as_i64().unwrap_or(0) as i32, c["size"][1].as_i64().unwrap_or(0) as i32));
+            said.push(format!("try {attempt}: Hyprland has it at {got:?}"));
+            if let Some((gx, gy, gw, gh)) = got {
+                if (gw - w).abs() <= 2 && (gh - h).abs() <= 2 && (gx - x).abs() <= 2 && (gy - y).abs() <= 2 {
+                    held = true;
+                    break;
+                }
+            }
+        }
+        said.push(if held { "held".to_string() } else { "did not hold".to_string() });
+        if bare {
+            for (legacy, prop, value) in [("bordersize", "border_size", "0"), ("noshadow", "no_shadow", "1")] {
+                said.push(format!("{prop} {}", dispatch(&format!("setprop {sel} {legacy} {value}"), &format!("hl.dsp.window.set_prop({{ prop = \"{prop}\", value = \"{value}\", window = \"{sel}\" }})"))));
+            }
+        }
+        said.push(format!("focus {}", dispatch(&format!("focuswindow {sel}"), &format!("hl.dsp.focus({{ window = \"{sel}\" }})"))));
+        ui_say!("genie: {name}: {w}x{h} at {x},{y}: {}", said.join("; "));
+    }
+
+    /// The tray panel, its page's size, by the pointer under (or over) the bar it was opened from.
+    pub fn place_panel(title: &str, size: (i32, i32)) {
+        let Some(address) = address_of(title) else {
+            ui_say!("genie: the tray panel: Hyprland did not list its window, so it stays where Hyprland put it");
+            return;
+        };
+        let Some(cursor) = json("j/cursorpos") else { return };
+        let at = (cursor["x"].as_f64().unwrap_or(0.0) as i32, cursor["y"].as_f64().unwrap_or(0.0) as i32);
+        let Some(work) = work_at(at) else { return };
+        let pos = place(at, work, size, 8);
+        ui_say!("genie: the tray panel: pointer {},{}; work area {work:?}", at.0, at.1);
+        fit("the tray panel", &address, size, pos, true);
+    }
+
+    /// The launch pad at its own size (520 x 640), centred on the work area.
+    pub fn place_pad(title: &str, size: (i32, i32)) {
+        let Some(address) = address_of(title) else { return };
+        let at = json("j/cursorpos").map(|c| (c["x"].as_f64().unwrap_or(0.0) as i32, c["y"].as_f64().unwrap_or(0.0) as i32)).unwrap_or((0, 0));
+        let Some(work) = work_at(at) else { return };
+        let pos = (work.left + ((work.right - work.left - size.0) / 2).max(0), work.top + ((work.bottom - work.top - size.1) / 2).max(0));
+        fit("the launch pad", &address, size, pos, false);
+    }
 }
