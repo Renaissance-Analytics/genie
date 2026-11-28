@@ -219,6 +219,14 @@ async function click(cdp, selector) {
     }
     return true;
 }
+/**
+ * A button IN THE POPOVER pressed as itself (Tynn #1089 gate): the popover reflows as each account's usage read lands (a
+ * late "Could not read usage…" pushed Lab's Switch down), so a mouse event at coordinates read a moment earlier landed
+ * on the text above it and switched nothing. The element is what is pressed, as usage-on-switch-cdp.mjs does.
+ */
+async function press(cdp, selector) {
+    return cdp.evaluate(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el || el.disabled) return false; el.scrollIntoView({ block: 'nearest' }); el.click(); return true; })()`);
+}
 const q = (s) => JSON.stringify(s);
 const CHIP = '[data-title-bar] [data-account-chip="claude"]';
 const POP = '[data-account-popover="claude"]';
@@ -269,7 +277,7 @@ try {
 
     // SWITCH: one click, no login window. The chip and the book follow.
     const pagesBefore = (await targets()).filter((t) => t.type === 'page').length;
-    check(await click(cdp, `${POP} [data-account="${LAB}"] [data-action="account-switch"]`), '10. Switch on Lab takes a click');
+    check(await press(cdp, `${POP} [data-account="${LAB}"] [data-action="account-switch"]`), '10. Switch on Lab takes a click');
     const switched = await waitFor(cdp, `(document.querySelector(${q(CHIP)})?.textContent ?? '').includes('Lab')`, 15_000);
     check(switched, '11. the chip names Lab now', await cdp.evaluate(`document.querySelector(${q(CHIP)})?.textContent ?? ''`));
     const stored = JSON.parse(readFileSync(join(home, '.genie', 'runtime', 'accounts.json'), 'utf8'));
@@ -279,7 +287,7 @@ try {
     await cdp.shot('claude-accounts-1011-after-switch.png');
 
     // ADD: a Console account, waiting for its sign-in.
-    check(await click(cdp, `${POP} [data-action="account-add-console"]`), '14. Add Console (API) takes a click');
+    check(await press(cdp, `${POP} [data-action="account-add-console"]`), '14. Add Console (API) takes a click');
     const added = await waitFor(cdp, `(() => { const pop = document.querySelector(${q(POP)}); return pop ? pop.querySelectorAll('[data-account]').length >= 4 : false; })()`, 15_000)
         || (await openPopover(cdp) && await waitFor(cdp, `document.querySelectorAll(${q(POP + ' [data-account]')}).length >= 4`, 10_000));
     const book2 = JSON.parse(readFileSync(join(home, '.genie', 'runtime', 'accounts.json'), 'utf8'));
@@ -295,7 +303,7 @@ try {
     // to the browser; the stand-in, like Claude Code with no browser return, asks for the code, which the person pastes.
     const before = (await targets()).filter((t) => t.type === 'page').length;
     const calls = () => (existsSync(join(root, 'standin-calls.log')) ? readFileSync(join(root, 'standin-calls.log'), 'utf8') : '').split('\n').filter(Boolean).map((l) => JSON.parse(l));
-    check(await click(cdp, `${POP} [data-account="${TEAM}"] [data-action="account-sign-in"]`), '18. Sign in on Team API takes a click');
+    check(await press(cdp, `${POP} [data-account="${TEAM}"] [data-action="account-sign-in"]`), '18. Sign in on Team API takes a click');
     check(await waitFor(cdp, `/Finish signing in to Team API in your browser|asks for the code/.test(document.querySelector(${q(POP)})?.innerText ?? '')`, 15_000), '19. the popover says to finish signing in in the browser, with Cancel');
     let login = null;
     for (const until = Date.now() + 15_000; Date.now() < until && !login; await sleep(300)) login = calls().find((c) => c.args[0] === 'auth' && c.args[1] === 'login') ?? null;
@@ -306,7 +314,7 @@ try {
     await cdp.shot('claude-accounts-1011-sign-in-code.png');
     await click(cdp, field);
     await cdp.send('Input.insertText', { text: 'stand-in-code-123' });
-    check(await click(cdp, `${POP} [data-action="sign-in-send-code"]`), '22. Send takes a click');
+    check(await press(cdp, `${POP} [data-action="sign-in-send-code"]`), '22. Send takes a click');
     check(await waitFor(cdp, `(() => { const live = document.querySelector(${q(`${POP} [data-account="${TEAM}"] [data-account-live]`)}); return live?.getAttribute('data-account-live') === 'ready'; })()`, 30_000)
         || (await openPopover(cdp) && await waitFor(cdp, `document.querySelector(${q(`${POP} [data-account="${TEAM}"] [data-account-live]`)})?.getAttribute('data-account-live') === 'ready'`, 15_000)),
         '23. the code reached the CLI and Team API now reads Signed in, from describe in its own folder');

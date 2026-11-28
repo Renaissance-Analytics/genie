@@ -42,7 +42,7 @@ ROWS=(
     deps electron-binary
     typecheck unit build bundles sounds
     seed no-pty smoke layout local-door-break local-door host-late-ready files-watch chat-drafts gapp-open artboard ui-lag plan-popover ftq-survives-restart
-    trust-step accounts-popover claude-accounts usage-on-switch sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash quit-keeps-host rebuilt-machine
+    trust-step accounts-popover claude-accounts usage-on-switch limit-hold sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process spawn-host safe-mode hang renderer-crash quit-keeps-host rebuilt-machine
     flows zip64 host-plain-node mailpit
     package package-fuse
     logon
@@ -548,6 +548,7 @@ row_question-maximize() { need_build && need_display && on_display timeout 240 n
 row_esc-unsend() { need_build && need_display && on_display timeout 240 node scripts/esc-unsend-cdp.mjs; }
 # Tynn #1084: after a switch the new account's usage is read at once; agents say which account they are really on.
 row_usage-on-switch() { need_build && need_display && on_display timeout 480 node scripts/usage-on-switch-cdp.mjs; }
+row_limit-hold() { need_build && need_display && on_display timeout 480 node scripts/limit-hold-cdp.mjs; }
 row_site-panel() { need_app && need_keyring && timeout 280 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/site-panel-cdp.mjs; }
 row_site-panel-locked() { need_app && SITE_PANEL_LOCKED=1 CDP_PORT=9408 timeout 120 node scripts/site-panel-cdp.mjs; }
 row_browser-process() { need_app && need_keyring && timeout 260 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/browser-process-cdp.mjs; }
@@ -707,6 +708,7 @@ ceiling() {
         sound-picker|question-maximize) echo 300 ;;
         esc-unsend) echo 300 ;;
         usage-on-switch) echo 540 ;;
+        limit-hold) echo 540 ;;
         files-watch) echo 240 ;;
         chat-drafts|artboard) echo 420 ;;
         ui-lag|renderer-crash) echo 480 ;;
@@ -909,7 +911,7 @@ run_rows() {
     for name in "${selected[@]}"; do
         echo "=== $name"
         machine_line "$name"
-        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover ftq-survives-restart trust-step accounts-popover claude-accounts usage-on-switch sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash quit-keeps-host host-late-ready package-fuse logon toolchain client-only-update host-update " in
+        case " local-door-break local-door files-watch chat-drafts gapp-open artboard ui-lag plan-popover ftq-survives-restart trust-step accounts-popover claude-accounts usage-on-switch limit-hold sound-picker esc-unsend question-maximize site-panel site-panel-locked browser-process safe-mode hang renderer-crash quit-keeps-host host-late-ready package-fuse logon toolchain client-only-update host-update " in
             *" $name "*) reap_leftovers "$name" ;;
         esac
         from="$(now_ms)"

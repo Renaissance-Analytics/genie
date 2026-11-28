@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { chatContext } from '../src/core/chat-view.js';
 import { statusOf, type AgentRow } from '../src/core/dashboard-view.js';
 import { limitWords } from '../src/core/limit-words.js';
@@ -16,6 +16,10 @@ const NOW = Date.UTC(2026, 9, 17, 3, 0, 0);
 const hhmm = (at: number) => new Date(at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }).replace(/\u202f/g, ' ');
 const full = (at: number) => new Date(at).toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short' }).replace(/\u202f/g, ' ');
 const paused = { state: 'paused' as const, window: 'five_hour', resetsAtMs: NOW + 60_000, resumeAtMs: NOW + 180_000, message: null };
+
+// THE FIXTURES' DAY (Tynn #1089): a resume on another day says the day, so "the same day" is pinned to this one.
+beforeAll(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW); });
+afterAll(() => { vi.useRealTimers(); });
 
 describe('one wording', () => {
     it('paused / retrying / needs you; open and absent are nothing', () => {
