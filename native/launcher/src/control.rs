@@ -12,7 +12,9 @@
 //! `updates`): `launcher.check` (the feed read, every newer build made ready), `launcher.updates` (what is ready, the host
 //! update in flight), `launcher.apply {track}` (a client or browser pointed at, open windows told `launcher.updateReady`;
 //! the host asked to install through its own drain, and `{track: host, afterPid}` from the host that drained; the launcher
-//! itself handed over, `self_update`), `launcher.channel {channel}`. Each program is a component of the registry (`components`), run from its own track: the
+//! itself handed over, `self_update`), `launcher.channel {channel}`. L7: `launcher.updates` and `launcher.check` carry the
+//! host's tools beside the tracks (not for a caller that says `{tools: false}`: the host's own updater), and
+//! `launcher.apply {tool}` asks the host's installer. Each program is a component of the registry (`components`), run from its own track: the
 //! window is the client's, the browser the browser's (L3). Every one is told where the launcher is (GENIE_LAUNCHER_EXE)
 //! and the host build to link to (GENIE_LAUNCHER_HOST_BUILD): `src/core/launcher-link.ts` reads them.
 
@@ -404,13 +406,13 @@ pub fn handle_line(ctx: &Context, conn: &mut Connection, line: &str) -> Vec<Valu
             }
             started
         }
-        "launcher.updates" => Ok(crate::updates::view(&ctx.updates, roots)),
+        "launcher.updates" => Ok(if crate::updates::wants_tools(&args) { crate::updates::view(&ctx.updates, roots) } else { crate::updates::view_tracks(&ctx.updates, roots) }),
         // A client window's "Updates (N)" (L6): the launcher's Updates window, opened once this answer is sent.
         "launcher.openUpdates" => {
             conn.tray_act = Some(crate::tray::Action::Updates);
             Ok(json!({"opening": true}))
         }
-        "launcher.check" => crate::updates::check_now(&ctx.updates, roots),
+        "launcher.check" => if crate::updates::wants_tools(&args) { crate::updates::check_with_tools(&ctx.updates, roots) } else { crate::updates::check_now(&ctx.updates, roots) },
         "launcher.channel" => crate::updates::set_channel(roots, args.first().unwrap_or(&Value::Null)),
         "launcher.apply" => apply(ctx, conn, args.first().cloned().unwrap_or(Value::Null)),
         other => return vec![unsupported(&id, other)],
@@ -438,7 +440,13 @@ fn started_window(ctx: &Context, v: &Value) {
 fn apply(ctx: &Context, conn: &mut Connection, a: Value) -> Result<Value, String> {
     let roots = &ctx.roots;
     let track = match a["track"].as_str() {
-        None => return Err("launcher.apply needs {track}".to_string()),
+        // A host's tool (L7): its own installer, asked; nothing is installed here.
+        None if a.get("tool").is_some() => {
+            let asked = crate::updates::apply_tool(roots, &a);
+            crate::updates::tools_changed(&ctx.updates);
+            return asked;
+        }
+        None => return Err("launcher.apply needs {track} or {tool}".to_string()),
         Some(t) => Track::parse(t).ok_or_else(|| format!("there is no track '{t}'"))?,
     };
     match track {

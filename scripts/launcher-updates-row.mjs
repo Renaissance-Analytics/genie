@@ -531,6 +531,11 @@ async function clientOnlyUpdate() {
     check(host?.state === 'ready' && host?.offer?.build === NEW && host?.withClient === NEW && host?.restartsHost === true, `10c. the host ${NEW} is offered too, with its client ${NEW}, and says it restarts the host`, JSON.stringify(host));
     check(state().client?.current === OLD && state().host?.current === OLD, '10d. a check applies nothing: state.json still points client and host at OLD', JSON.stringify(state()));
     check(feed.hits().assets.length > 0, '10e. the launcher downloaded the packages from the feed', JSON.stringify(feed.hits()));
+    // L7 (Tynn #716): a person's check asks the host to check its tools too; the real genie-host answers engine.toolchain on
+    // the launcher's link, and its rows sit beside the tracks (photographed in step 12's Updates window).
+    const tools = checked.value?.tools;
+    console.log(`  tools: ${JSON.stringify(tools)}`);
+    check(tools?.host === true && !tools?.why && Array.isArray(tools?.rows), "10f. the host's tools are beside the tracks: the real host answered engine.toolchain on the launcher's link", JSON.stringify(tools));
 
     step('11', 'the tray offers the updates: "Updates (N)" and "Update host", the build NEW in its tooltip (photographed)');
     const menu = await trayShot(`tray-offer-${OS}.png`);
@@ -624,7 +629,7 @@ function watchUpdate() {
 async function hostUpdate(broken) {
     const expectBuild = broken ? OLD : NEW;
     step('10', 'launcher.check: the host and its client made READY, nothing applied (≤ 600 s)');
-    const checked = await wireCall(RUNTIME, 'launcher.check', [], 600_000);
+    const checked = await wireCall(RUNTIME, 'launcher.check', [{ tools: false }], 600_000);
     console.log(`  ${JSON.stringify(checked.value?.tracks ?? checked.reason)}`);
     const host = trackRow(checked.value, 'host');
     check(checked.ok && host?.state === 'ready' && host?.offer?.build === NEW && host?.withClient === NEW, `10a. the host ${NEW} is READY with its client ${NEW}${broken ? ' (the broken one: its signature is good, only its start fails)' : ''}`, checked.reason ?? JSON.stringify(host));
@@ -774,7 +779,7 @@ async function skewTurn(session, id, label, tag) {
  */
 async function versionSkew() {
     step('10', 'launcher.check: the client and the host NEW made READY, nothing applied (≤ 600 s)');
-    const checked = await wireCall(RUNTIME, 'launcher.check', [], 600_000);
+    const checked = await wireCall(RUNTIME, 'launcher.check', [{ tools: false }], 600_000);
     const host = trackRow(checked.value, 'host');
     const client = trackRow(checked.value, 'client');
     check(checked.ok && client?.state === 'ready' && host?.state === 'ready' && host?.withClient === NEW, `10a. the client ${NEW} and the host ${NEW} (with its client ${NEW}) are READY`, checked.reason ?? JSON.stringify(checked.value?.tracks));
@@ -833,7 +838,7 @@ async function versionSkew() {
 
 async function launcherSelfUpdate() {
     step('10', 'launcher.check: the launcher NEW made READY (≤ 300 s)');
-    const checked = await wireCall(RUNTIME, 'launcher.check', [], 300_000);
+    const checked = await wireCall(RUNTIME, 'launcher.check', [{ tools: false }], 300_000);
     console.log(`  ${JSON.stringify(checked.value?.tracks ?? checked.reason)}`);
     const row = trackRow(checked.value, 'launcher');
     check(checked.ok && row?.state === 'ready' && row?.offer?.build === NEW && row?.current === OLD, `10. the launcher ${NEW} is READY, this one ${OLD}`, checked.reason ?? JSON.stringify(row));

@@ -393,7 +393,7 @@ fn updates_act(ctx: std::sync::Arc<crate::control::Context>, msg: Value, proxy: 
             "check" => {
                 CHECKING.store(true, Ordering::SeqCst);
                 let _ = proxy.send_event(Resident::UpdatesView(updates_data(&ctx, true)));
-                if let Err(why) = crate::updates::check_now(&ctx.updates, &ctx.roots) {
+                if let Err(why) = crate::updates::check_with_tools(&ctx.updates, &ctx.roots) {
                     eprintln!("genie: updates window: the check failed: {why}");
                 }
                 CHECKING.store(false, Ordering::SeqCst);
@@ -404,6 +404,13 @@ fn updates_act(ctx: std::sync::Arc<crate::control::Context>, msg: Value, proxy: 
                         eprintln!("genie: updates window: {why}");
                     }
                 }
+            }
+            // A host's tool (L7): the host's installer asked; the window redraws from the host's rows as it moves.
+            "applyTool" => {
+                if let Err(why) = crate::updates::apply_tool(&ctx.roots, &msg) {
+                    eprintln!("genie: updates window: {why}");
+                }
+                crate::updates::tools_changed(&ctx.updates);
             }
             "applyAll" => {
                 // The client and the browser first (nothing stops), then the host (its drain), the launcher last (it hands over).
