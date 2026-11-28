@@ -436,7 +436,15 @@ fn surface_window(target: &tao::event_loop::EventLoopWindowTarget<Resident>, con
     // hidden comes up at its webview's natural size, not its own (630 wide whatever was asked: run 1128-091020-80a227),
     // as the Updates window, made visible, never did; the panel is transparent until its page draws, and is placed at once.
     let start_visible = cfg!(unix);
-    let mut builder = WindowBuilder::new().with_resizable(false).with_decorations(false).with_visible(start_visible);
+    // On Linux resizable with its minimum and maximum its own size: GTK sizes a non-resizable window to its webview's
+    // natural size (630 wide whatever was asked, runs 1128-091020-80a227 and 1128-093247-055d6a), while a fixed minimum and
+    // maximum keep it exactly its size, and Hyprland floats a window whose minimum is its maximum as it floats a
+    // non-resizable one.
+    let size = if surface == Surface::Panel { LogicalSize::new(300.0, 470.0) } else { LogicalSize::new(520.0, 640.0) };
+    let mut builder = WindowBuilder::new().with_resizable(cfg!(unix)).with_decorations(false).with_visible(start_visible);
+    if cfg!(unix) {
+        builder = builder.with_min_inner_size(size).with_max_inner_size(size);
+    }
     builder = match surface {
         // The panel: frameless, over everything, out of the taskbar, its corners the page's own (transparent around them).
         // On Windows opaque, its corners rounded by DWM (a transparent WebView2 window never came up: run 1128-092400-b8b47e).
@@ -734,9 +742,10 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
                         let size = (msg["w"].as_f64().unwrap_or(s.size.0).max(1.0), msg["h"].as_f64().unwrap_or(s.size.1).max(1.0));
                         if surface == Surface::Panel && (size != s.size || !s.shown) {
                             s.size = size;
-                            s.window.set_inner_size(LogicalSize::new(size.0, size.1));
+                            // Its bounds first, then its size: a size outside the bounds would be held to them.
                             s.window.set_min_inner_size(Some(LogicalSize::new(size.0, size.1)));
                             s.window.set_max_inner_size(Some(LogicalSize::new(size.0, size.1)));
+                            s.window.set_inner_size(LogicalSize::new(size.0, size.1));
                             place_panel(&s.window, s.anchor, size);
                         }
                         if !s.shown {

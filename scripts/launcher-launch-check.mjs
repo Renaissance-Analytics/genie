@@ -76,18 +76,25 @@ let qsCalls = null;
 function quickshellDismissers() {
     if (qsCalls) return qsCalls;
     qsCalls = [];
+    // The running instance is named (a config's own instance, or the newest on this display), as `qs ipc` needs it.
+    let found = null;
     for (const qs of ['qs', 'quickshell']) {
-        const r = spawnSync(qs, ['ipc', 'show'], { encoding: 'utf8', timeout: 5_000 });
-        if (r.status !== 0) continue;
-        console.log(`  (${qs} ipc show: ${String(r.stdout).replace(/\s+/g, ' ').slice(0, 600)})`);
+        for (const where of [[], ['--newest'], ['--any-display'], ['--newest', '--any-display']]) {
+            const r = spawnSync(qs, ['ipc', ...where, 'show'], { encoding: 'utf8', timeout: 5_000 });
+            console.log(`  (${qs} ipc ${where.join(' ')} show: exit ${r.status ?? r.error?.code} ${String(r.stdout || r.stderr || '').replace(/\s+/g, ' ').slice(0, 400)})`);
+            if (r.status === 0 && String(r.stdout).trim()) { found = { qs, where, out: String(r.stdout) }; break; }
+        }
+        if (found) break;
+    }
+    for (const { qs, where, out } of found ? [found] : []) {
+        const r = { stdout: out };
         let target = null;
         for (const line of String(r.stdout).split('\n')) {
             const t = /^\s*target\s+(\S+)/.exec(line);
             if (t) { target = t[1]; continue; }
             const f = /^\s*function\s+(\w+)\(\s*\)/.exec(line);
-            if (f && target && /notif/i.test(target) && /dismiss|clear|close/i.test(f[1])) qsCalls.push([qs, 'ipc', 'call', target, f[1]]);
+            if (f && target && /notif/i.test(target) && /dismiss|clear|close/i.test(f[1])) qsCalls.push([qs, 'ipc', ...where, 'call', target, f[1]]);
         }
-        break;
     }
     return qsCalls;
 }
