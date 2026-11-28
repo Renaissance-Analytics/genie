@@ -799,3 +799,13 @@ pub fn run_moving_card(roots: &Roots, work: Option<Box<dyn FnOnce() + Send>>) ->
     drop(context);
     Ok(())
 }
+
+// --- Tynn #1058 (#1514/#1515): the tray panel and the launch pad. RED STUB: the tests come first. --------------------
+
+pub fn panel_html(_model: &Value) -> String {
+    String::new()
+}
+
+pub fn pad_html(_model: &Value) -> String {
+    String::new()
+}
