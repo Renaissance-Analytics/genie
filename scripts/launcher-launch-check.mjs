@@ -40,13 +40,20 @@ const exe = (track, name) => join(code, track, build, WIN ? `${name}.exe` : name
 const samePath = (a, b) => (WIN ? String(a).toLowerCase() === String(b).toLowerCase() : a === b);
 
 /** The desktop's own notifications dismissed before a photograph (mako on the Linux VM), as the migrate row does. */
+let notifier = null;
 function clearNotifications() {
     if (WIN) return;
-    for (const args of [['dismiss', '--all'], ['dismiss', '-a']]) {
-        const r = spawnSync('makoctl', args, { encoding: 'utf8', timeout: 5_000 });
-        if (r.status === 0) return;
-        console.log(`  (makoctl ${args.join(' ')}: exit ${r.status}${r.error ? `, ${r.error.message}` : ''} ${String(r.stderr ?? '').trim().slice(0, 160)})`);
+    // The first daemon's own command that answers is kept for the run's later shots. makoctl is not on the Omarchy image
+    // (ENOENT in item 1128-035113-61152c), so each is tried, and when none answers the daemon that runs is named.
+    const tries = notifier ? [notifier] : [['makoctl', 'dismiss', '--all'], ['swaync-client', '--close-all'], ['dunstctl', 'close-all'], ['fnottctl', 'dismiss'], ['busctl', '--user', 'call', 'org.freedesktop.Notifications', '/fr/emersion/Mako', 'fr.emersion.Mako', 'DismissAllNotifications']];
+    const said = [];
+    for (const [cmd, ...args] of tries) {
+        const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: 5_000 });
+        if (r.status === 0) { if (!notifier) console.log(`  (notifications dismissed with ${cmd} ${args.join(' ')})`); notifier = [cmd, ...args]; return; }
+        said.push(`${cmd}: ${r.error ? r.error.code ?? r.error.message : `exit ${r.status} ${String(r.stderr ?? '').trim().slice(0, 80)}`}`);
     }
+    const daemons = spawnSync('sh', ['-c', 'ps -eo comm | grep -iE "mako|swaync|dunst|fnott|notif|walker|hyprpanel|ags|quickshell" | sort -u | tr "\\n" " "'], { encoding: 'utf8', timeout: 5_000 }).stdout ?? '';
+    console.log(`  (notifications not dismissed: ${said.join('; ')}; running: ${daemons.trim() || 'none of the known daemons'})`);
 }
 function photograph(name) {
     clearNotifications();
