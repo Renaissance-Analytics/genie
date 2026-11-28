@@ -10,6 +10,9 @@
 #   2. the installed launcher takes over and opens Genie: the host from its own folder, then the client window, which
 #      ADOPTS that host (never starts or replaces one); the host's supervisor is ready in the host's folder; the desktop
 #      entry run again asks the running launcher; a screenshot of Genie running (grim);
+#   2b. all three from the launcher (scripts/launcher-launch-check.mjs): the host from its folder, a client window attached
+#      to the launcher, and the Genie Browser opened from the tray's "Open Genie Browser", started by the launcher, its
+#      window on screen; the host and the client unchanged after it. Screenshots launch-{2,3,4}-*-linux.png;
 #   3. the client-only profile, in another home: the client and the browser, no host folder, no host;
 #   4. a package with one flipped byte installs nothing (in a third home), with the launcher's words;
 #   5. `genie uninstall` stops the host gracefully and removes the programs, the link and the desktop entry; the data root stays.
@@ -65,7 +68,9 @@ H="$(fresh_home both)"
 CODE="$H/.local/share/genie"
 SETUP_LOG="$OUT/setup.log"
 echo "--- 1. the downloaded launcher's setup window installs Genie ($BUILD) into $H"
-as_person "$H" setsid "$H/Downloads/genie" setup --from "$PKG" >"$SETUP_LOG" 2>&1 </dev/null &
+# GENIE_LAUNCHER_TRAY_PROBE=1: the installed launcher (which inherits it) answers launcher.trayAct, so step 2b chooses the
+# tray's "Open Genie Browser" as a click does (tray::act). Only this home's launcher has it; a person's never does.
+as_person "$H" env GENIE_LAUNCHER_TRAY_PROBE=1 setsid "$H/Downloads/genie" setup --from "$PKG" >"$SETUP_LOG" 2>&1 </dev/null &
 pids_started+=($!)
 wait_for() { local what="$1" secs="$2" i; for i in $(seq 1 "$secs"); do grep -q "$what" "$SETUP_LOG" 2>/dev/null && return 0; sleep 1; done; return 1; }
 # Keys as a person's keyboard sends them (wtype: the Wayland virtual-keyboard protocol) to the focused window, which is the
@@ -159,6 +164,11 @@ else
     fail 'grim is not on this machine: no visual proof'
 fi
 
+# --- 2b. all three from the launcher: the host, a client window attached to it, and the Genie Browser from the tray ------
+echo "--- 2b. the launcher's host, its client window and the Genie Browser from the tray, side by side"
+node "$ROOT/scripts/launcher-launch-check.mjs" --code "$CODE" --data "$H/.genie" --build "$BUILD" --launcher "$CODE/launcher/$BUILD/genie" --out "$OUT" 2>&1 | tee "$OUT/launch-check.log"
+grep -q '^### launcher-launch=PASS' "$OUT/launch-check.log" || fail "the launcher did not launch all three: $(grep -m1 '^### launcher-launch=' "$OUT/launch-check.log" || echo 'the check said nothing')"
+
 # --- 3. client only, in another home ---------------------------------------------------------------------------------
 C="$(fresh_home client)"
 echo "--- 3. the client-only profile ($C)"
@@ -202,4 +212,4 @@ grep -q 'genie-host' "$H/.genie/logs/genie-host.log" 2>/dev/null || true
 [ ! -e "$H/.local/bin/genie" ] && [ ! -e "$ENTRY" ] || fail 'the link or the desktop entry is still there'
 [ -d "$H/.genie" ] || fail 'the data root was removed'
 cleanup
-echo "### launcher-install=PASS the launcher installed the client, browser and host ($BUILD) verified, started the host from its own folder, the client window adopted it, client-only and a tampered package behaved, and uninstall stopped the host and removed the programs"
+echo "### launcher-install=PASS the launcher installed the client, browser and host ($BUILD) verified, started the host from its own folder, the client window adopted it, the tray opened the Genie Browser through the launcher beside them, client-only and a tampered package behaved, and uninstall stopped the host and removed the programs"

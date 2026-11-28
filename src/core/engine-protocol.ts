@@ -41,7 +41,8 @@ export const LAUNCHER_LINK_LABEL = 'genie launcher';
  * L6 (updates): the launcher may also ask the host's updater (`engine.updates`: `state`, `check`, `install`). L7 (Tynn #716):
  * and the host's toolchain for its Updates list (`engine.toolchain`: `state`, `check`, `update`), whose install is the host's.
  */
-export const LAUNCHER_LINK_METHODS = ['engine.ping', 'engine.shutdown', 'engine.activity', 'engine.updates', 'engine.toolchain'] as const;
+// engine.browser: `open` alone, the tray's "Open Genie Browser" (Tynn #1058; session-engine-server.ts refuses the rest).
+export const LAUNCHER_LINK_METHODS = ['engine.ping', 'engine.shutdown', 'engine.activity', 'engine.updates', 'engine.toolchain', 'engine.browser'] as const;
 
 export const ENGINE_METHODS = [
     // Commands (window → host): each answers with the session host's own answer.

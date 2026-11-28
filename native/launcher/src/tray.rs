@@ -316,6 +316,34 @@ fn open_genie_at(ctx: &Context, route: Option<&str>) {
     }
 }
 
+/// "Open Genie Browser" (Tynn #1058): asked of this computer's host, as a client window's Browser row asks it
+/// (`engine.browser open [null, "user-gesture"]`). The host holds the open and starts the Browser through this launcher
+/// (`launcher.startBrowser`, L4), or says it to the Browser already running, which brings its window up. Started here with
+/// nothing to open, the Browser showed no window and quit after 60 s (measured: Azure item 1128-033640-233be4). With no
+/// host running on a computer that has one, the host is started first. A computer with no host of its own (the client-only
+/// profile) has no host to ask: the Browser is started as before.
+fn open_browser(ctx: &Context) {
+    let roots = &ctx.roots;
+    let has_host = state::read(&roots.state_file()).ok().and_then(|s| s.track("host").and_then(|t| t.current.clone())).is_some();
+    if !has_host {
+        if let Err(why) = crate::components::component("browser").ok_or_else(|| "no browser component".to_string()).and_then(|c| control::start_component(roots, c, Vec::new())) {
+            eprintln!("genie: tray: Open Genie Browser: {why}");
+        }
+        return;
+    }
+    if host::read_record(roots).filter(|r| crate::spawn::pid_alive(r.pid)).is_none() {
+        let _g = ctx.busy.lock().unwrap_or_else(|p| p.into_inner());
+        if let Err(why) = host::ensure_host(roots, &crate::keys::trusted_keys(roots)) {
+            eprintln!("genie: tray: Open Genie Browser: the host could not be started: {why}");
+            return;
+        }
+    }
+    match host::call(roots, "engine.browser", serde_json::json!(["open", [Value::Null, "user-gesture"]]), std::time::Duration::from_secs(10)) {
+        Ok(v) => eprintln!("genie: tray: Open Genie Browser: asked the host ({v})"),
+        Err(why) => eprintln!("genie: tray: Open Genie Browser: the host did not take it: {why}"),
+    }
+}
+
 /// One of the menu's actions, on its own thread (the menu's thread never waits on a host or a question).
 pub fn act(ctx: Arc<Context>, action: Action) {
     std::thread::spawn(move || {
@@ -323,11 +351,7 @@ pub fn act(ctx: Arc<Context>, action: Action) {
         match action {
             Action::OpenGenie => open_genie(&ctx),
             Action::OpenDeck | Action::OpenSettings | Action::OpenTaskManager => open_genie_at(&ctx, action.route()),
-            Action::OpenBrowser => {
-                if let Err(why) = crate::components::component("browser").ok_or_else(|| "no browser component".to_string()).and_then(|c| control::start_component(&ctx.roots, c, Vec::new())) {
-                    eprintln!("genie: tray: Open Genie Browser: {why}");
-                }
-            }
+            Action::OpenBrowser => open_browser(&ctx),
             Action::StartHost => {
                 let _g = ctx.busy.lock().unwrap_or_else(|p| p.into_inner());
                 if let Err(why) = host::ensure_host(&ctx.roots, &crate::keys::trusted_keys(&ctx.roots)) {
