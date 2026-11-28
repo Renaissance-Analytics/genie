@@ -124,13 +124,28 @@ describe('scripts/quit-keeps-host-cdp.mjs runs as a CI row', () => {
         expect(script).toMatch(/'25t\. Cancel stopped NOTHING: the launcher, the host and the providers all alive'/);
     });
 
-    it('a Linux tray menu the row opened is closed as it was opened, not with wtype, so the question gets its Escape (gate 1128-113206-1315d5)', () => {
-        // wtype's Escape goes to the focused window, not to the open GTK menu: the menu stayed open and took the Escape
-        // meant for "Shut down everything?". It is closed through ydotool's own device (Esc) and a click outside it.
-        const fn = script.slice(script.indexOf('function closeLinuxTrayMenu('), script.indexOf('function activeWindow('));
-        expect(fn).toMatch(/ydotool\(\['key', '1:1', '1:0'\]\)/);
-        expect(fn).toMatch(/ydotool\(\['click', '0xC0'\]\)/);
-        expect(script).toMatch(/if \(linuxMenu && !WIN\) closeLinuxTrayMenu\(\); else pressKey\('Escape'\);/);
+    it('a Linux tray menu the row opened is closed by a click outside it, reached by ydotool alone, and shown to be gone before the question\'s Escape (gates 1128-113206-1315d5, 1128-125327-bdfbd1)', () => {
+        // A GTK menu on Waybar's bar never has the keyboard, so no Escape closes it; a click outside does. The cursor gets
+        // there by ydotool's small corrected steps (large ones overshot; Hyprland's dispatch is refused by its Lua config).
+        const close = script.slice(script.indexOf('function closeLinuxTrayMenu('), script.indexOf('function activeWindow('));
+        const move = script.slice(script.indexOf('function ydotoolMoveTo('), script.indexOf('let menuBefore'));
+        expect(close).toMatch(/ydotoolMoveTo\(at\.x, at\.y\)/);
+        expect(close).toMatch(/ydotool\(\['click', '0xC0'\]\)/);
+        expect(close).toMatch(/menuPixelsStill\(open, screenPixels\(\)\)/);
+        expect(move).toMatch(/ydotool\(\['mousemove', '-x', String\(Math\.max\(-120, Math\.min\(120, dx\)\)\), '-y', String\(Math\.max\(-120, Math\.min\(120, dy\)\)\)\]\)/);
+        expect(move).toMatch(/const c = cursorAt\(\);/);
+        for (const part of [close, move]) {
+            expect(part).not.toMatch(/dispatch|hl\.|eval|moveCursor\(/);
+        }
+        // The screen is read just before the right-click, so what the menu drew can be told from what was there.
+        const open = script.slice(script.indexOf('function openLinuxTrayMenu('), script.indexOf('function ydotoolMoveTo('));
+        expect(open.indexOf('menuBefore = screenPixels();')).toBeGreaterThan(-1);
+        expect(open.indexOf('menuBefore = screenPixels();')).toBeLessThan(open.indexOf("ydotool(['click', '0xC1'])"));
+        // Closed is a CHECK, before the question at 25s is answered with Escape: a menu left open fails the row there.
+        const gate = script.indexOf("'17c. the tray menu this row opened is closed again (its pixels are gone from the screen)'");
+        expect(gate).toBeGreaterThan(-1);
+        expect(gate).toBeLessThan(script.indexOf("step('25q'"));
+        expect(script).toMatch(/check\(gone\.closed, '17c\./);
         // Where the question's Escape goes is said before it is pressed.
         expect(script).toMatch(/the keyboard goes to: \$\{JSON\.stringify\(activeWindow\(\)\)\}/);
     });
