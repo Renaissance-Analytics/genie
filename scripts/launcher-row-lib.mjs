@@ -309,6 +309,41 @@ export function openLinuxTrayMenu() {
     return click.status === 0;
 }
 
+/**
+ * THE LINUX TRAY'S ICON, LEFT-CLICKED AS A PERSON CLICKS IT (Tynn #1058, #1514: a left click on a StatusNotifierItem is
+ * its Activate, which opens Genie's tray panel). The drawer behind Omarchy's "<" opened as `openLinuxTrayMenu` opens it,
+ * then each icon it showed is left-clicked, right to left, until `opened()` says the panel is up. Returns where the click
+ * was ({x, y}, the screen's pixels), or null with each step said.
+ */
+export async function leftClickLinuxTrayIcon(opened) {
+    const bar = screenPixels();
+    if (!bar) { console.log('  linux tray: the screen could not be read (grim -t ppm)'); return null; }
+    const rows = Math.min(28, bar.h);
+    const bright = (img) => (x) => { for (let y = 4; y < rows - 4; y++) if (lum(img, x, y) > 120) return true; return false; };
+    const glyphs = runsOf(bar.w, Math.floor(bar.w * 0.75), bright(bar));
+    console.log(`  linux tray: the bar's right group: ${JSON.stringify(glyphs)}`);
+    if (glyphs.length === 0) return null;
+    const expander = { x: Math.round((glyphs[0].from + glyphs[0].to) / 2), y: Math.round(rows / 2) };
+    const how = moveCursor(expander.x, expander.y);
+    if (!how) { console.log('  linux tray: Hyprland did not move the cursor'); return null; }
+    console.log(`  linux tray: the cursor is on the drawer at ${expander.x},${expander.y} (${how})`);
+    spawnSync('sleep', ['1.2']);
+    const open = screenPixels();
+    if (!open) return null;
+    const changed = runsOf(open.w, Math.floor(open.w * 0.5), (x) => { for (let y = 0; y < rows; y++) if (Math.abs(lum(open, x, y) - lum(bar, x, y)) > 40) return true; return false; });
+    console.log(`  linux tray: what the drawer showed: ${JSON.stringify(changed)}`);
+    const icons = changed.filter((r) => r.to - r.from >= 8 && Math.abs((r.from + r.to) / 2 - expander.x) > 10).reverse();
+    for (const icon of icons) {
+        const at = { x: Math.round((icon.from + icon.to) / 2), y: expander.y };
+        if (!moveCursor(at.x, at.y)) return null;
+        const click = ydotool(['click', '0xC0']);
+        console.log(`  linux tray: left-click on ${at.x},${at.y} (ydotool exit ${click.status}${click.stderr ? `: ${String(click.stderr).trim().slice(0, 120)}` : ''})`);
+        if (click.status === 0 && (await opened())) return at;
+        pressKey('Escape');
+    }
+    return null;
+}
+
 // ---------------------------------------------------------------- ports, CDP (Genie's page)
 /** Is anything answering HTTP on the port? Bounded: a port that accepts and never answers counts as busy, after 3 s. */
 export async function answers(port) {

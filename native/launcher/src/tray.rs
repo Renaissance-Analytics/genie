@@ -415,7 +415,13 @@ pub fn act(ctx: Arc<Context>, action: Action) {
             Action::Updates => open_updates(&ctx),
             Action::OpenPad => open_pad(&ctx),
             Action::OpenPanel => {
-                if !open_panel(Arc::clone(&ctx), None) {
+                // Windows: as the icon's own click opens it (its handler, at the icon). Elsewhere: by the pointer, as a
+                // left click on the StatusNotifierItem opens it.
+                #[cfg(windows)]
+                let shown = win::post_show_panel();
+                #[cfg(not(windows))]
+                let shown = open_panel(Arc::clone(&ctx), None);
+                if !shown {
                     eprintln!("genie: tray: the panel cannot be shown here (no window loop)");
                 }
             }
@@ -598,6 +604,8 @@ mod win {
     static TASKBAR_CREATED: OnceLock<u32> = OnceLock::new();
     const WM_TRAY: u32 = WM_APP + 1;
     const WM_SHOW_MENU: u32 = WM_APP + 2;
+    /// `launcher.trayPanel` (a VM row's): the panel, as a click on the icon opens it.
+    const WM_SHOW_PANEL: u32 = WM_APP + 3;
     const ICON_ID: u32 = 1;
 
     fn wide(s: &str) -> Vec<u16> {
@@ -657,6 +665,11 @@ mod win {
             let d = data(hwnd);
             unsafe { Shell_NotifyIconW(NIM_DELETE, &d) };
         }
+    }
+
+    pub fn post_show_panel() -> bool {
+        let hwnd = WINDOW.load(Ordering::SeqCst) as HWND;
+        !hwnd.is_null() && unsafe { PostMessageW(hwnd, WM_SHOW_PANEL, 0, 0) } != 0
     }
 
     pub fn post_show_menu() -> bool {
@@ -734,6 +747,17 @@ mod win {
             }
             WM_SHOW_MENU => {
                 show_menu(hwnd, false);
+                0
+            }
+            // The same as the icon's click above: forward, at the icon.
+            WM_SHOW_PANEL => {
+                if let Some(ctx) = CTX.get() {
+                    SetForegroundWindow(hwnd);
+                    let p = anchor(hwnd, false);
+                    if !super::open_panel(Arc::clone(ctx), Some((p.x, p.y))) {
+                        show_menu(hwnd, false);
+                    }
+                }
                 0
             }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),

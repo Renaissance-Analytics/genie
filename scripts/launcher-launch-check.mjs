@@ -38,7 +38,7 @@
 import { existsSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { WIN, OS, SYNC_MS, run, step, check, sleep, until, alive, executableOf, commandLine, processesNamed, parents, descends, shot, pressKey, wireCall, testMachineOrRefuse } from './launcher-row-lib.mjs';
+import { WIN, OS, SYNC_MS, run, step, check, sleep, until, alive, executableOf, commandLine, processesNamed, parents, descends, shot, pressKey, wireCall, testMachineOrRefuse, leftClickLinuxTrayIcon } from './launcher-row-lib.mjs';
 
 const arg = (name) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : undefined; };
 const code = arg('code');
@@ -172,6 +172,82 @@ async function openSurface(method, surface) {
     return until(async () => { const p = await wireCall(runtime, 'launcher.uiProbe', [{ surface }]); return p.ok && p.value?.open && p.value?.shown ? p.value : null; }, 20_000, 500);
 }
 const openPanel = () => openSurface('launcher.trayPanel', 'panel');
+/**
+ * THE PANEL IS ON SCREEN AND IN FRONT, BY THE WINDOW SYSTEM'S OWN WORD (not the page's, not the launcher's): Hyprland's
+ * client list and active window on Linux; user32 on Windows (FindWindow "Genie tray": visible, topmost, the launcher's,
+ * inside the work area against the taskbar). Its size is the page's own. With `click` (a real click on the tray icon), it
+ * opened by that click, under the bar. A panel whose page loaded but whose window never showed fails here (the red run).
+ */
+function hypr(args) {
+    const r = spawnSync('hyprctl', ['-i', '0', '-j', ...args], { encoding: 'utf8', timeout: SYNC_MS });
+    try { return JSON.parse(r.stdout); } catch { return null; }
+}
+function winPanel() {
+    const ps = join(run.out, 'panel-window.ps1');
+    writeFileSync(ps, [
+        'Add-Type @"',
+        'using System; using System.Runtime.InteropServices;',
+        'public static class GW {',
+        '  [StructLayout(LayoutKind.Sequential)] public struct R { public int L, T, Ri, B; }',
+        '  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string c, string t);',
+        '  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);',
+        '  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out R r);',
+        '  [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int i);',
+        '  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);',
+        '  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();',
+        '  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();',
+        '}',
+        '"@',
+        '[GW]::SetProcessDPIAware() | Out-Null',
+        'Add-Type -AssemblyName System.Windows.Forms',
+        "$h = [GW]::FindWindow($null, 'Genie tray')",
+        "if ($h -eq [IntPtr]::Zero) { 'none'; exit 0 }",
+        '$r = New-Object GW+R; [GW]::GetWindowRect($h, [ref]$r) | Out-Null',
+        '$p = [uint32]0; [GW]::GetWindowThreadProcessId($h, [ref]$p) | Out-Null',
+        '$wa = [System.Windows.Forms.Screen]::FromHandle($h).WorkingArea',
+        '@{ visible = [GW]::IsWindowVisible($h); left = $r.L; top = $r.T; right = $r.Ri; bottom = $r.B; topmost = (([GW]::GetWindowLong($h, -20) -band 8) -ne 0); pid = $p; foreground = ([GW]::GetForegroundWindow() -eq $h); work = @{ left = $wa.Left; top = $wa.Top; right = $wa.Right; bottom = $wa.Bottom } } | ConvertTo-Json -Compress',
+    ].join('\r\n'));
+    const r = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps], { encoding: 'utf8', timeout: 60_000, windowsHide: true });
+    const out = String(r.stdout ?? '').trim();
+    if (out === 'none') return { none: true };
+    try { return JSON.parse(out.split(/\r?\n/).pop()); } catch { return { error: `${out.slice(0, 200)} ${String(r.stderr ?? '').slice(0, 200)}` }; }
+}
+async function panelOnScreen(label, page, click = null) {
+    const want = { w: Number(page?.shown?.w ?? 0), h: Number(page?.shown?.h ?? 0) };
+    if (!WIN) {
+        let seen = null;
+        await until(() => { const list = hypr(['clients']) ?? []; seen = list.find((c) => c.pid === launcherPidNow && c.title === 'Genie tray' && c.mapped !== false && c.hidden !== true) ?? null; return seen; }, 10_000, 500);
+        console.log(`  ${label}: Hyprland lists the panel: ${JSON.stringify(seen && { at: seen.at, size: seen.size, floating: seen.floating, address: seen.address })}`);
+        check(Boolean(seen), `${label}: the tray panel's window is on screen (Hyprland lists it mapped)`);
+        if (!seen) return null;
+        const active = hypr(['activewindow']);
+        check(active?.address === seen.address, `${label}: the tray panel is in front (Hyprland's active window)`, `active ${active?.title} ${active?.address}`);
+        check(seen.floating === true, `${label}: the tray panel floats over the tiled windows`);
+        check(Math.abs(seen.size[0] - want.w) <= 4 && Math.abs(seen.size[1] - want.h) <= 4, `${label}: the panel's window is its page's size`, `window ${seen.size}, page ${want.w}x${want.h}`);
+        if (click) {
+            const mon = (hypr(['monitors']) ?? []).find((m) => m.focused) ?? {};
+            const top = Number(mon.y ?? 0) + Number(mon.reserved?.[1] ?? 0);
+            const right = Number(mon.x ?? 0) + Number(mon.width ?? 0) / Number(mon.scale || 1);
+            check(seen.at[1] >= top && seen.at[1] <= top + 24, `${label}: it opened just under the bar it was clicked in`, `top ${seen.at[1]}, the bar ends at ${top}`);
+            const spans = click.x >= seen.at[0] - 8 && click.x <= seen.at[0] + seen.size[0] + 8;
+            check(spans || seen.at[0] + seen.size[0] >= right - 24, `${label}: it opened by the click (over it, or against the screen's edge)`, `click ${click.x}, panel ${seen.at[0]}..${seen.at[0] + seen.size[0]}, screen right ${right}`);
+        }
+        return seen;
+    }
+    let w = null;
+    await until(() => { w = winPanel(); return w?.visible ? w : null; }, 10_000, 1_000);
+    console.log(`  ${label}: user32 says of "Genie tray": ${JSON.stringify(w)}`);
+    check(w?.visible === true, `${label}: the tray panel's window is on screen (user32: visible)`);
+    if (!w?.visible) return null;
+    check(Number(w.pid) === launcherPidNow, `${label}: it is the launcher's window`, `pid ${w.pid}`);
+    check(w.topmost === true, `${label}: the tray panel is in front (topmost)`);
+    const k = (w.right - w.left) / Math.max(1, want.w);
+    check(want.w > 0 && Math.abs((w.bottom - w.top) - want.h * k) <= 4, `${label}: the panel's window is its page's size`, `window ${w.right - w.left}x${w.bottom - w.top}, page ${want.w}x${want.h}`);
+    const inside = w.left >= w.work.left && w.right <= w.work.right && w.top >= w.work.top && w.bottom <= w.work.bottom;
+    check(inside && w.work.bottom - w.bottom <= 40, `${label}: it sits on the taskbar, inside the work area`, `panel ${w.left},${w.top}-${w.right},${w.bottom}, work ${JSON.stringify(w.work)}`);
+    return w;
+}
+let launcherPidNow = 0;
 /** Where the window system put the launcher's windows (Hyprland's own list; on Windows the screenshot says). */
 function launcherWindows(pid) {
     if (WIN) return;
@@ -192,6 +268,7 @@ if (!status.ok) fail(`launcher.status was not answered: ${status.reason}`);
 const s = status.value;
 console.log(`  launcher.status: launcher ${JSON.stringify(s.launcher)}, host ${JSON.stringify(s.host)}, clients ${JSON.stringify(s.clients)}, profile ${s.profile}`);
 const launcherPid = Number(s.launcher?.pid);
+launcherPidNow = launcherPid;
 check(s.launcher?.running === true && alive(launcherPid), 'the launcher runs', `pid ${launcherPid}`);
 check(samePath(executableOf(launcherPid), launcherExe), `the launcher is the installed one (${launcherExe})`, executableOf(launcherPid));
 const hostPid = Number(s.host?.pid);
@@ -224,6 +301,7 @@ check(Boolean(panel3), 'the tray panel opened and its page said what it shows', 
 for (const words of PANEL_WORDS) check(panelSays(panel3, words), `the tray panel says "${words}"`, panelText(panel3));
 check(panelItem(panel3, 'openBrowser')?.enabled === true, 'the tray panel offers "Open Genie Browser"', JSON.stringify(panel3?.items ?? null));
 await sleep(1_200);
+await panelOnScreen('step 3', panel3);
 photograph(`launch-3-tray-panel-${OS}.png`);
 const acted = await wireCall(runtime, 'launcher.uiProbe', [{ surface: 'panel', click: 'openBrowser' }]);
 check(acted.ok && acted.value?.clicked === true, 'the tray panel\'s "Open Genie Browser" was clicked', acted.ok ? JSON.stringify(acted.value?.clicked) : acted.reason);
@@ -375,12 +453,23 @@ await wireCall(runtime, 'launcher.uiProbe', [{ surface: 'pad', close: true }]);
 const pairedFile = join(runtime, 'device-hosts.json');
 const pairedBefore = existsSync(pairedFile) ? readFileSync(pairedFile, 'utf8') : null;
 writeFileSync(pairedFile, JSON.stringify({ hosts: ['https://studio-desktop.invalid:7443', 'https://build-box.invalid:7443'] }, null, 2));
-const panel7 = await openPanel();
+// On Linux as a person opens it: a left click on Genie's icon in Omarchy's Waybar tray (its drawer opened first).
+let panel7 = null;
+let click7 = null;
+if (!WIN) {
+    click7 = await leftClickLinuxTrayIcon(async () => {
+        panel7 = await until(async () => { const q = await wireCall(runtime, 'launcher.uiProbe', [{ surface: 'panel' }]); return q.ok && q.value?.open && q.value?.shown ? q.value : null; }, 5_000, 500);
+        return Boolean(panel7);
+    });
+    check(Boolean(click7), "the tray panel opened from a left click on Genie's icon in the Waybar tray", click7 ? JSON.stringify(click7) : 'no icon in the drawer opened it');
+}
+if (!panel7) panel7 = await openPanel();
 check(Boolean(panel7), 'the tray panel opened again');
 console.log(`  the tray panel says: ${panelText(panel7).replace(/\s*\n\s*/g, ' | ')}`);
 for (const words of [...PANEL_WORDS, 'studio-desktop.invalid', 'build-box.invalid', 'paired', 'agents keep running']) check(panelSays(panel7, words), `the tray panel says "${words}"`);
-launcherWindows(launcherPid);
 await sleep(1_200);
+await panelOnScreen('step 7', panel7, click7);
+launcherWindows(launcherPid);
 photograph(`launch-tray-panel-${OS}.png`);
 // "Start when I sign in": the logon setting, turned over in place and back.
 const logonFile = join(runtime, 'logon.json');
