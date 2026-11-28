@@ -15,7 +15,11 @@
  *      the launcher (never the host: a host that spawned Electron itself is what L4 removed), its window on screen
  *      -> launch-3-browser-<os>.png;
  *   4. side by side: the host and the client are the same pids as before the Browser opened, and all three are alive
- *      -> launch-4-side-by-side-<os>.png.
+ *      -> launch-4-side-by-side-<os>.png;
+ *   5. the UI closed ("Just close the UI", the tray's "Close Genie window"): the client gone, the host and the launcher the
+ *      same pids, the Browser closed as its window is -> launch-5-ui-closed-<os>.png; then the tray's "Open Genie Browser"
+ *      opens a Browser window with no client running, started by the launcher, and starts no client window
+ *      -> launch-5-browser-no-client-<os>.png.
  *
  *   node scripts/launcher-launch-check.mjs --code <code root> --data <data root> --build <build> --launcher <exe> --out <dir>
  * Prints `### launcher-launch=PASS|FAIL <why>`; exits 1 on a failure.
@@ -182,5 +186,52 @@ const winsNow = windowsOf(browserPid);
 check(winsNow.windows.length > 0 && windowsOf(clientPid).windows.length > 0, 'the client\'s and the Browser\'s windows are both on screen');
 photograph(`launch-4-side-by-side-${OS}.png`);
 
+// ---------------------------------------------------------------- 5. the UI closed: the tray still opens the Browser
+// "Just close the UI" (the tray's "Close Genie window", control::close_ui): every client goes, the host and the launcher
+// stay. The Browser is closed too, as a person closes its window (a graceful end: SIGTERM, taskkill without /F). Then the
+// tray's "Open Genie Browser" opens a Browser window with no client running: started by the launcher, its window on
+// screen, and no client window started for it.
+step(5, 'the UI closed (the host and the launcher left running), the tray opens the Genie Browser');
+/** Every live process of the client's program (the window, the Browser, their Chromium children), by a needle with no path. */
+const clientPrograms = async () => ((await processesNamed('genie-client')) ?? []).filter((p) => alive(p) && samePath(executableOf(p.pid), exe('client', 'genie-client')));
+// The gauge first: it finds the client window that runs now, so "none" after is a measurement (RULES: a gauge that reads one).
+const control5 = await clientPrograms();
+check(control5.some((p) => p.pid === clientPid), 'the gauge finds the running client window (a positive control)', control5.map((p) => p.pid).join(', '));
+const closed = await wireCall(runtime, 'launcher.trayAct', [{ action: 'closeUi' }]);
+check(closed.ok, 'the tray\'s "Close Genie window" was chosen', closed.ok ? JSON.stringify(closed.value) : closed.reason);
+const clientGone = await until(() => !alive(clientPid), 30_000, 500);
+check(Boolean(clientGone), 'the client window closed', `pid ${clientPid}`);
+if (alive(browserPid)) {
+    console.log(`  the Browser (pid ${browserPid}) is closed as its window is`);
+    if (WIN) spawnSync('taskkill', ['/PID', String(browserPid)], { timeout: SYNC_MS, windowsHide: true });
+    else { try { process.kill(browserPid, 'SIGTERM'); } catch { /* gone */ } }
+}
+let browserGone = await until(() => !alive(browserPid), 20_000, 500);
+if (!browserGone) { try { process.kill(browserPid, 'SIGKILL'); } catch { /* gone */ } browserGone = await until(() => !alive(browserPid), 10_000, 500); console.log('  (the Browser had to be ended)'); }
+check(Boolean(browserGone), 'the Browser closed', `pid ${browserPid}`);
+const quiet = await wireCall(runtime, 'launcher.status');
+const clientsLeft = (await clientPrograms()).map((p) => p.pid);
+check(quiet.ok && Number(quiet.value.host?.pid) === hostPid && alive(hostPid), 'the host is left running, the same pid', `before ${hostPid}, now ${quiet.ok ? quiet.value.host?.pid : quiet.reason}`);
+check(quiet.ok && Number(quiet.value.launcher?.pid) === launcherPid && alive(launcherPid), 'the launcher is left running, the same pid');
+check(quiet.ok && (quiet.value.clients ?? []).length === 0, 'no client is attached to the launcher', JSON.stringify(quiet.ok ? quiet.value.clients : null));
+check(clientsLeft.length === 0, 'no client program runs (no window, no Browser)', clientsLeft.join(', '));
+photograph(`launch-5-ui-closed-${OS}.png`);
+const before5 = new Set((await browserMains()).map((p) => p.key));
+const acted5 = await wireCall(runtime, 'launcher.trayAct', [{ action: 'openBrowser' }]);
+check(acted5.ok, 'the tray\'s "Open Genie Browser" was chosen with no client running', acted5.ok ? JSON.stringify(acted5.value) : acted5.reason);
+const started5 = await until(async () => (await browserMains()).find((p) => !before5.has(p.key)) ?? null, 30_000, 1_000);
+check(Boolean(started5), 'a new Genie Browser process started within 30 s with no client running', started5 ? `pid ${started5.pid}` : 'none');
+if (started5) {
+    check(samePath(executableOf(started5.pid), exe('client', 'genie-client')), 'the Browser runs the client\'s program', executableOf(started5.pid));
+    check(started5.ppid === launcherPid, 'the Browser\'s parent is the launcher', `ppid ${started5.ppid}, launcher ${launcherPid}, host ${hostPid}`);
+    const win5 = await windowOnScreen(started5.pid, 45_000);
+    check(win5.windows.length > 0, 'the Browser\'s window is on screen with no client running', win5.error ?? JSON.stringify(win5.windows));
+}
+const tree5 = parents();
+const windowsNow = (await clientPrograms()).filter((p) => !(started5 && (p.pid === started5.pid || descends(p.pid, started5.pid, tree5))));
+check(windowsNow.length === 0, 'no client window was started for it', windowsNow.map((p) => p.pid).join(', '));
+check(alive(hostPid), 'the host is still the same pid', `pid ${hostPid}`);
+photograph(`launch-5-browser-no-client-${OS}.png`);
+
 if (run.failures.length) fail(run.failures.join('; '));
-console.log(`### launcher-launch=PASS the launcher's host (pid ${hostPid}) from ${join(code, 'host', build)}, a client window (pid ${clientPid}) attached to it from ${join(code, 'client', build)}, and the Genie Browser (pid ${browserPid}, parent the launcher ${launcherPid}) opened from the tray's item with its window on screen; the host and the client unchanged`);
+console.log(`### launcher-launch=PASS the launcher's host (pid ${hostPid}) from ${join(code, 'host', build)}, a client window (pid ${clientPid}) attached to it from ${join(code, 'client', build)}, and the Genie Browser (pid ${browserPid}, parent the launcher ${launcherPid}) opened from the tray's item with its window on screen; the host and the client unchanged; with the UI closed the tray opened the Browser again (pid ${started5?.pid}) with no client`);

@@ -31,6 +31,7 @@ $StartMenu = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'
 $began = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 New-Item -ItemType Directory -Force $Out | Out-Null
 $script:HostPid = $null
+$script:RowInstalled = $false
 
 function Fail([string]$why) {
     Write-Output "### launcher-install=FAIL $why"
@@ -49,6 +50,18 @@ function Cleanup {
         $roots += @('--root', "$($p.Id)")
     }
     if ($roots.Count -gt 0) { node scripts/end-own-tree.mjs --since "$began" @roots | Out-Host }
+    # A row that failed after its install leaves no Genie behind: the uninstaller as on the passing path, so the next run
+    # on this machine meets a fresh one (a rerun after a red was refused with "already there": item 1128-041230-234328).
+    $uninstaller = Join-Path $Prog 'Uninstall Genie.exe'
+    if ($script:RowInstalled -and (Test-Path $uninstaller)) {
+        Write-Output '--- cleanup: the uninstaller, so this machine has no Genie for the next run'
+        $u = Start-Process -FilePath $uninstaller -ArgumentList '/S' -PassThru
+        [void]$u.WaitForExit(120000)
+        for ($i = 0; $i -lt 90 -and (Test-Path (Join-Path $Prog 'Genie.exe')); $i++) { Start-Sleep -Seconds 1 }
+    }
+    if ($script:RowInstalled) {
+        foreach ($left in @($Prog, $Code)) { if (Test-Path $left) { Remove-Item -Recurse -Force $left -ErrorAction SilentlyContinue; Write-Output "--- cleanup: removed what was left at $left" } }
+    }
     if (Test-Path $Aside) {
         if (Test-Path $Data) { Remove-Item -Recurse -Force $Data -ErrorAction SilentlyContinue }
         Rename-Item $Aside $Data -ErrorAction SilentlyContinue
@@ -98,6 +111,7 @@ $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9481'
 # the tray's "Open Genie Browser" as a click does (tray::act). Taken away again in Cleanup; a person's launcher never has it.
 [Environment]::SetEnvironmentVariable('GENIE_LAUNCHER_TRAY_PROBE', '1', 'User')
 $env:GENIE_LAUNCHER_TRAY_PROBE = '1'
+$script:RowInstalled = $true
 $proc = Start-Process -FilePath $installer.FullName -PassThru
 $done = $proc.WaitForExit(240000)
 if (-not $done) { Shot 'installer-stuck.png'; Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue; Fail 'the installer did not finish within 4 minutes (see installer-stuck.png)' }
