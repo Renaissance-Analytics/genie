@@ -432,7 +432,11 @@ const PANEL_TOGGLE: std::time::Duration = std::time::Duration::from_millis(400);
 
 /// A window for the panel or the pad, hidden until its page has said how it looks.
 fn surface_window(target: &tao::event_loop::EventLoopWindowTarget<Resident>, context: &mut WebContext, proxy: &EventLoopProxy<Resident>, surface: Surface, html: String) -> Result<(tao::window::Window, wry::WebView), String> {
-    let mut builder = WindowBuilder::new().with_resizable(false).with_decorations(false).with_visible(false);
+    // Hidden until its page has loaded on Windows (WebView2 paints white first). On Linux made visible: a GTK window made
+    // hidden comes up at its webview's natural size, not its own (630 wide whatever was asked: run 1128-091020-80a227),
+    // as the Updates window, made visible, never did; the panel is transparent until its page draws, and is placed at once.
+    let start_visible = cfg!(unix);
+    let mut builder = WindowBuilder::new().with_resizable(false).with_decorations(false).with_visible(start_visible);
     builder = match surface {
         // The panel: frameless, over everything, out of the taskbar, its corners the page's own (transparent around them).
         Surface::Panel => builder.with_title("Genie tray").with_inner_size(LogicalSize::new(300.0, 470.0)).with_always_on_top(true).with_transparent(true),
@@ -719,6 +723,8 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
                         if surface == Surface::Panel && (size != s.size || !s.shown) {
                             s.size = size;
                             s.window.set_inner_size(LogicalSize::new(size.0, size.1));
+                            s.window.set_min_inner_size(Some(LogicalSize::new(size.0, size.1)));
+                            s.window.set_max_inner_size(Some(LogicalSize::new(size.0, size.1)));
                             place_panel(&s.window, s.anchor, size);
                         }
                         if !s.shown {
@@ -1403,10 +1409,23 @@ mod hypr {
         let (w, h) = size;
         let (x, y) = at;
         let sel = format!("address:{address}");
-        let mut said = vec![
-            format!("size {}", dispatch(&format!("resizewindowpixel exact {w} {h},{sel}"), &format!("hl.dsp.window.resize({{ x = {w}, y = {h}, window = \"{sel}\" }})"))),
-            format!("at {}", dispatch(&format!("movewindowpixel exact {x} {y},{sel}"), &format!("hl.dsp.window.move({{ x = {x}, y = {y}, window = \"{sel}\" }})"))),
-        ];
+        let mut said = Vec::new();
+        let mut held = false;
+        for attempt in 1..=5 {
+            said.push(format!("size {}", dispatch(&format!("resizewindowpixel exact {w} {h},{sel}"), &format!("hl.dsp.window.resize({{ x = {w}, y = {h}, window = \"{sel}\" }})"))));
+            said.push(format!("at {}", dispatch(&format!("movewindowpixel exact {x} {y},{sel}"), &format!("hl.dsp.window.move({{ x = {x}, y = {y}, window = \"{sel}\" }})"))));
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let now = json("j/clients").and_then(|c| c.as_array()?.iter().find(|c| c["address"].as_str() == Some(address)).cloned());
+            let got = now.as_ref().map(|c| (c["at"][0].as_i64().unwrap_or(0) as i32, c["at"][1].as_i64().unwrap_or(0) as i32, c["size"][0].as_i64().unwrap_or(0) as i32, c["size"][1].as_i64().unwrap_or(0) as i32));
+            said.push(format!("try {attempt}: Hyprland has it at {got:?}"));
+            if let Some((gx, gy, gw, gh)) = got {
+                if (gw - w).abs() <= 2 && (gh - h).abs() <= 2 && (gx - x).abs() <= 2 && (gy - y).abs() <= 2 {
+                    held = true;
+                    break;
+                }
+            }
+        }
+        said.push(if held { "held".to_string() } else { "did not hold".to_string() });
         if bare {
             for (legacy, prop, value) in [("bordersize", "border_size", "0"), ("noshadow", "no_shadow", "1")] {
                 said.push(format!("{prop} {}", dispatch(&format!("setprop {sel} {legacy} {value}"), &format!("hl.dsp.window.set_prop({{ prop = \"{prop}\", value = \"{value}\", window = \"{sel}\" }})"))));
