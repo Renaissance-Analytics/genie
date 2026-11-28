@@ -31,6 +31,11 @@ fn journal(r: &Roots) -> Vec<String> {
     std::fs::read_to_string(r.data.join("journal.txt")).unwrap_or_default().lines().map(str::to_string).collect()
 }
 
+/// What the launcher asked of the host's tools (the fake host's `toolchain.txt`).
+fn asks(r: &Roots) -> Vec<String> {
+    std::fs::read_to_string(r.data.join("toolchain.txt")).unwrap_or_default().lines().map(str::to_string).collect()
+}
+
 fn host_pid(r: &Roots) -> Option<u32> {
     genie_launcher::host::read_record(r).filter(|h| pid_alive(h.pid)).map(|h| h.pid)
 }
@@ -63,7 +68,7 @@ fn with_a_host_its_tools_are_listed_beside_the_tracks() {
     assert_eq!(rows[0]["to"], "24.11.1");
     assert_eq!(rows[1]["tone"], "security-update");
     assert_eq!(tools["checkedAt"], 1700000000000u64);
-    assert!(journal(&r).iter().any(|l| l == &format!("toolchain-state {pid}")), "the rows came from the host: {:?}", journal(&r));
+    assert!(asks(&r).iter().any(|l| l == &format!("toolchain-state {pid}")), "the rows came from the host: {:?}", asks(&r));
 }
 
 #[test]
@@ -83,7 +88,7 @@ fn with_no_host_the_tools_say_why_and_applying_one_starts_nothing() {
     assert_eq!(applied["reason"], NO_HOST, "{applied}");
     // Nothing was started to install it: no host, no client, nothing in the host's journal.
     assert_eq!(host_pid(&r), None, "no host was started for a tool");
-    assert!(journal(&r).is_empty(), "{:?}", journal(&r));
+    assert!(journal(&r).is_empty() && asks(&r).is_empty(), "{:?} {:?}", journal(&r), asks(&r));
     assert!(!r.data.join("client-args.txt").exists(), "no client was started for a tool");
 }
 
@@ -99,10 +104,10 @@ fn applying_a_tool_is_the_hosts_installer_and_the_host_keeps_running() {
     let current = std::fs::read_to_string(r.state_file()).unwrap();
     let applied = w.call("launcher.apply", json!([{"tool": "node", "version": "24.11.1"}]));
     assert_eq!(ok(&applied)["started"], true, "{applied}");
-    assert!(journal(&r).iter().any(|l| l == &format!("toolchain-update {pid} node 24.11.1 confirmed=false")), "the host's installer ran it: {:?}", journal(&r));
+    assert!(asks(&r).iter().any(|l| l == &format!("toolchain-update {pid} node 24.11.1 confirmed=false")), "the host's installer ran it: {:?}", asks(&r));
     // An Update anyway (the host's warning) is passed on as the person said it.
     ok(&w.call("launcher.apply", json!([{"tool": "node", "version": "24.11.1", "confirmed": true}])));
-    assert!(journal(&r).iter().any(|l| l == &format!("toolchain-update {pid} node 24.11.1 confirmed=true")), "{:?}", journal(&r));
+    assert!(asks(&r).iter().any(|l| l == &format!("toolchain-update {pid} node 24.11.1 confirmed=true")), "{:?}", asks(&r));
     assert_eq!(host_pid(&r), Some(pid), "a tool's update never restarts the host");
     assert_eq!(std::fs::read_to_string(r.state_file()).unwrap(), current, "a tool's update moves no track");
     assert!(!journal(&r).iter().any(|l| l.starts_with("drain ") || l.starts_with("shutdown ")), "{:?}", journal(&r));
@@ -118,7 +123,7 @@ fn a_check_asks_the_host_to_check_its_tools_too() {
     let mut w = Wire::hello(&r);
     let pid = ok(&w.call("launcher.ensureHost", json!([])))["pid"].as_u64().unwrap() as u32;
     let v = ok(&w.call("launcher.check", json!([]))).clone();
-    assert!(journal(&r).iter().any(|l| l == &format!("toolchain-check {pid}")), "{:?}", journal(&r));
+    assert!(asks(&r).iter().any(|l| l == &format!("toolchain-check {pid}")), "{:?}", asks(&r));
     assert_eq!(v["tools"]["rows"][0]["tool"], "node", "{v}");
 }
 
@@ -137,7 +142,7 @@ fn the_hosts_own_updater_is_answered_its_tracks_only_and_never_asked_back() {
     let read = ok(&w.call("launcher.updates", json!([{"tools": false}]))).clone();
     assert!(checked.get("tools").is_none() && read.get("tools").is_none(), "{checked} {read}");
     assert!(checked["tracks"].is_array() && read["tracks"].is_array(), "{checked} {read}");
-    assert!(!journal(&r).iter().any(|l| l.starts_with("toolchain-")), "{:?}", journal(&r));
+    assert!(asks(&r).is_empty(), "{:?}", asks(&r));
 }
 
 #[test]
