@@ -276,6 +276,7 @@ function openLinuxTrayMenu() {
     const at = { x: Math.round((ours.from + ours.to) / 2), y: expander.y };
     const moved = moveCursor(at.x, at.y);
     if (!moved) return false;
+    menuBefore = screenPixels();
     const click = ydotool(['click', '0xC1']);
     console.log(`  linux tray: right-click on ${at.x},${at.y} (ydotool exit ${click.status}${click.stderr ? `: ${String(click.stderr).trim().slice(0, 120)}` : ''})`);
     return click.status === 0;
@@ -288,14 +289,67 @@ let barBefore = null;
  * 1128-113206-1315d5, the first gate whose VM had ydotool when this row ran: the launcher-install row installs it). Says
  * what each step answered.
  */
+/**
+ * The cursor to (x, y) by ydotool alone, the way this row reaches the tray's drawer: relative steps of at most 120 px,
+ * each corrected against where `hyprctl cursorpos` (a read, which this Hyprland answers) says the cursor is. Large
+ * steps overshot under pointer acceleration and ran out of tries (gate 1128-125327-bdfbd1: aimed at 384, left at 75),
+ * and Hyprland's own dispatch is refused by its Lua config, so none is used here. True when within 3 px.
+ */
+function ydotoolMoveTo(x, y) {
+    for (let i = 0; i < 40; i++) {
+        const c = cursorAt();
+        if (!c) return false;
+        const dx = Math.round(x - c.x);
+        const dy = Math.round(y - c.y);
+        if (Math.abs(dx) <= 3 && Math.abs(dy) <= 3) return true;
+        const r = ydotool(['mousemove', '-x', String(Math.max(-120, Math.min(120, dx))), '-y', String(Math.max(-120, Math.min(120, dy)))]);
+        if (r.status !== 0) return false;
+        spawnSync('sleep', ['0.08']);
+    }
+    return false;
+}
+/** The screen before the row right-clicked the tray (openLinuxTrayMenu): what the menu changed is measured against it. */
+let menuBefore = null;
+/**
+ * Of the pixels the open menu changed (against `menuBefore`), how many still look as they did while it was open: the
+ * menu's own pixels, so a share near 1 means it is still there. Waybar's menu is a popup of its bar's layer surface, so
+ * neither `hyprctl layers` nor `clients` lists it: the screen is the only witness.
+ */
+function menuPixelsStill(open, now) {
+    if (!menuBefore || !open || !now || open.w !== menuBefore.w || now.w !== open.w) return null;
+    const diff = (a, b, k) => Math.abs(a.px[k] - b.px[k]) + Math.abs(a.px[k + 1] - b.px[k + 1]) + Math.abs(a.px[k + 2] - b.px[k + 2]);
+    let changed = 0;
+    let still = 0;
+    for (let y = 28; y < open.h; y += 2) {
+        for (let x = Math.floor(open.w / 2); x < open.w; x += 2) {
+            const k = (y * open.w + x) * 3;
+            if (diff(open, menuBefore, k) < 60) continue;
+            changed++;
+            if (diff(now, open, k) < 24) still++;
+        }
+    }
+    return { changed, still, share: changed ? still / changed : 0 };
+}
+/**
+ * THE LINUX TRAY'S MENU CLOSED AGAIN, and shown to be. A GTK menu on Waybar's bar never has the keyboard (the bar's layer
+ * takes none), so Escape cannot close it, by wtype or by ydotool (gates 1128-113206-1315d5 and 1128-125327-bdfbd1): a
+ * click outside it does. The cursor goes to the bar's empty middle by ydotool alone (`ydotoolMoveTo`), the left button
+ * is clicked there, and the screen is read: the pixels the menu drew must be gone. Returns whether they are, with why.
+ */
 function closeLinuxTrayMenu() {
-    const esc = ydotool(['key', '1:1', '1:0']);
-    spawnSync('sleep', ['0.4']);
-    const w = screenPixels()?.w ?? 1280;
-    const at = { x: Math.round(w * 0.3), y: 13 };
-    const moved = moveCursor(at.x, at.y);
-    const click = moved ? ydotool(['click', '0xC0']) : null;
-    console.log(`  linux tray: the menu closed: Esc (ydotool exit ${esc.status}), a click on the bar's empty middle ${at.x},${at.y} (${moved ? `ydotool exit ${click.status}` : 'the cursor could not be moved there'})`);
+    const open = screenPixels();
+    const w = open?.w ?? 1280;
+    const tries = [];
+    for (const at of [{ x: Math.round(w * 0.3), y: 13 }, { x: Math.round(w * 0.4), y: 13 }]) {
+        const moved = ydotoolMoveTo(at.x, at.y);
+        const click = moved ? ydotool(['click', '0xC0']) : null;
+        spawnSync('sleep', ['0.6']);
+        const still = menuPixelsStill(open, screenPixels());
+        tries.push(`click on the bar's empty middle ${at.x},${at.y}: ${moved ? `ydotool exit ${click.status}` : `the cursor did not get there (it is at ${JSON.stringify(cursorAt())})`}; the menu's pixels still there: ${still ? `${still.still} of ${still.changed}` : 'not measurable'}`);
+        if (still && still.changed > 50 && still.share < 0.2) return { closed: true, detail: tries.join('; ') };
+        if (still && still.changed <= 50) return { closed: false, detail: `${tries.join('; ')}; the menu changed only ${still.changed} pixels: it cannot be told apart` };
+    }
+    return { closed: false, detail: tries.join('; ') };
 }
 /** The window Hyprland sends the keyboard to now (title, pid): where a pressed key goes. */
 function activeWindow() {
@@ -898,7 +952,12 @@ try {
     await sleep(1_500);
     shot(`tray-menu-${WIN ? 'windows' : 'linux'}.png`);
     console.log(`  the tray menu ${linuxMenu ? 'was opened for this screenshot' : 'could not be opened on this desktop: the screenshot shows the bar and its icon only'}`);
-    if (linuxMenu && !WIN) closeLinuxTrayMenu(); else pressKey('Escape');
+    if (linuxMenu && !WIN) {
+        // The question at 25s is answered with Escape: a menu left open would take it. Measured, never assumed.
+        const gone = closeLinuxTrayMenu();
+        console.log(`  linux tray: ${gone.detail}`);
+        check(gone.closed, '17c. the tray menu this row opened is closed again (its pixels are gone from the screen)', gone.detail);
+    } else pressKey('Escape');
 
     // -------------------------------------------------------------------------------- Genie opened again
     lifecycleAt = readOr(LIFECYCLE).length;
