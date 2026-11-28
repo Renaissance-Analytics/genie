@@ -4,6 +4,7 @@ import { ENGINE_METHODS, LAUNCHER_LINK_METHODS } from '../src/core/engine-protoc
 import type { CallContext } from '../src/core/remote-protocol.js';
 import type { ToolStatus } from '../src/core/toolchain.js';
 import { LAUNCHER_FEATURE_CALLER, launcherToolchain, type LauncherToolchainFeatures } from '../src/main/launcher-toolchain.js';
+import { launcherUpdaterPort } from '../src/main/launcher-updates.js';
 import type { FeatureAction, FeatureData, ToolchainSection } from '../src/renderer/features.js';
 
 /**
@@ -111,6 +112,21 @@ describe('the launcher asks the host to check and to install (never installs its
 
     it('nothing else is the launcher’s to ask', async () => {
         await expect(launcherToolchain(() => fakeFeatures({}).features).call('install', [{ tool: 'php' }])).rejects.toThrow('Genie’s launcher may not ask the toolchain for install.');
+    });
+});
+
+describe('the host’s own updater asks the launcher for its tracks only', () => {
+    it('launcher.check and launcher.updates from the host say {tools: false}: the launcher does not ask the host back about its tools', async () => {
+        const calls: { method: string; args: readonly unknown[] }[] = [];
+        const rows = [{ track: 'host', current: '2026.11.25-1', state: 'ready', offer: { build: '2026.11.26-1' }, withClient: '2026.11.26-1' }];
+        const call = async (method: string, args: readonly unknown[] = []) => { calls.push({ method, args }); return { ok: true as const, value: { tracks: rows } }; };
+        const port = launcherUpdaterPort(call, 4242);
+        await port.check();
+        await port.prepareInstall?.();
+        expect(calls.filter((c) => c.method !== 'launcher.channel')).toEqual([
+            { method: 'launcher.check', args: [{ tools: false }] },
+            { method: 'launcher.updates', args: [{ tools: false }] },
+        ]);
     });
 });
 

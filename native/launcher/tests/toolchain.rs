@@ -123,6 +123,24 @@ fn a_check_asks_the_host_to_check_its_tools_too() {
 }
 
 #[test]
+fn the_hosts_own_updater_is_answered_its_tracks_only_and_never_asked_back() {
+    // genie-host's updater asks `launcher.check` / `launcher.updates` with {tools: false}: the launcher must not call the
+    // host about its tools while the host waits on it about its build.
+    let _one = one_at_a_time();
+    let (base, r, key) = setup("t-tools-host");
+    install_fakes(&r, &key, &base);
+    let feed = Feed::start(&base.join("feed"));
+    let _l = start_with(&r, &key, launcher_reading(&r, &key, &feed));
+    let mut w = Wire::hello(&r);
+    ok(&w.call("launcher.ensureHost", json!([])));
+    let checked = ok(&w.call("launcher.check", json!([{"tools": false}]))).clone();
+    let read = ok(&w.call("launcher.updates", json!([{"tools": false}]))).clone();
+    assert!(checked.get("tools").is_none() && read.get("tools").is_none(), "{checked} {read}");
+    assert!(checked["tracks"].is_array() && read["tracks"].is_array(), "{checked} {read}");
+    assert!(!journal(&r).iter().any(|l| l.starts_with("toolchain-")), "{:?}", journal(&r));
+}
+
+#[test]
 fn the_launcher_names_no_installer_of_its_own() {
     // What installs a tool is the host's (Genie's own per-version installers, the package managers it drives): the
     // launcher's source never names one, so nothing can install from the launcher process.
