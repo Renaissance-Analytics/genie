@@ -254,7 +254,7 @@ function ydotool(args) {
     }
     return spawnSync('ydotool', args, { encoding: 'utf8', timeout: SYNC_MS, env: { ...process.env, YDOTOOL_SOCKET: YDOTOOL_SOCK } });
 }
-function moveCursor(x, y) {
+export function moveCursor(x, y) {
     for (let i = 0; i < 12; i++) {
         const c = cursorAt();
         if (!c) break;

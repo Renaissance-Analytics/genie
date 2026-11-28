@@ -38,7 +38,7 @@
 import { existsSync, readFileSync, readdirSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { WIN, OS, SYNC_MS, run, step, check, sleep, until, alive, executableOf, commandLine, processesNamed, parents, descends, shot, pressKey, wireCall, testMachineOrRefuse, leftClickLinuxTrayIcon } from './launcher-row-lib.mjs';
+import { WIN, OS, SYNC_MS, run, step, check, sleep, until, alive, executableOf, commandLine, processesNamed, parents, descends, shot, pressKey, wireCall, testMachineOrRefuse, leftClickLinuxTrayIcon, moveCursor } from './launcher-row-lib.mjs';
 
 const arg = (name) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : undefined; };
 const code = arg('code');
@@ -54,47 +54,68 @@ const runtime = join(data, 'runtime');
 const exe = (track, name) => join(code, track, build, WIN ? `${name}.exe` : name);
 const samePath = (a, b) => (WIN ? String(a).toLowerCase() === String(b).toLowerCase() : a === b);
 
-/** The desktop's own notifications dismissed before a photograph (mako on the Linux VM), as the migrate row does. */
-let notifier = null;
+/**
+ * THE DESKTOP'S NOTIFICATIONS DISMISSED BEFORE A PHOTOGRAPH. Omarchy's toasts are drawn by quickshell, a layer above every
+ * window; run 1128-101943-c231fa photographed the tray panel under four of them. Dismissed through the notification
+ * server's own interface: org.freedesktop.Notifications.CloseNotification for each id issued since the session began (the
+ * spec's, so any server answers it), then quickshell's own IPC (its running instance named from its command line, in a
+ * UTF-8 locale: under "C" it refused, exit 255), then the other daemons' commands. Whether anything is still drawn over
+ * the panel is measured, not assumed (`nothingOver`). GENIE_ROW_KEEP_NOTIFICATIONS=1 leaves them up: the red run.
+ */
+const KEEP_NOTIFICATIONS = process.env.GENIE_ROW_KEEP_NOTIFICATIONS === '1';
+const sessionEnv = () => ({ ...process.env, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid?.() ?? 1000}` });
+let notifierSaid = false;
 function clearNotifications() {
     if (WIN) return;
-    // The first daemon's own command that answers is kept for the run's later shots. makoctl is not on the Omarchy image
-    // (ENOENT in item 1128-035113-61152c), so each is tried, and when none answers the daemon that runs is named.
-    const tries = notifier ? [notifier] : [...quickshellDismissers(), ['makoctl', 'dismiss', '--all'], ['swaync-client', '--close-all'], ['dunstctl', 'close-all'], ['fnottctl', 'dismiss'], ['busctl', '--user', 'call', 'org.freedesktop.Notifications', '/fr/emersion/Mako', 'fr.emersion.Mako', 'DismissAllNotifications']];
+    if (KEEP_NOTIFICATIONS) { if (!notifierSaid) console.log('  (notifications left up: GENIE_ROW_KEEP_NOTIFICATIONS=1)'); notifierSaid = true; return; }
     const said = [];
-    for (const [cmd, ...args] of tries) {
-        const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: 5_000 });
-        if (r.status === 0) { if (!notifier) console.log(`  (notifications dismissed with ${cmd} ${args.join(' ')})`); notifier = [cmd, ...args]; return; }
-        said.push(`${cmd}: ${r.error ? r.error.code ?? r.error.message : `exit ${r.status} ${String(r.stderr ?? '').trim().slice(0, 80)}`}`);
+    let closed = 0;
+    let last = '';
+    for (let id = 1; id <= 200; id++) {
+        const r = spawnSync('busctl', ['--user', 'call', 'org.freedesktop.Notifications', '/org/freedesktop/Notifications', 'org.freedesktop.Notifications', 'CloseNotification', 'u', String(id)], { encoding: 'utf8', timeout: 3_000, env: sessionEnv() });
+        if (r.status === 0) closed++; else last = String(r.stderr || r.error?.code || `exit ${r.status}`).trim().slice(0, 120);
     }
-    const daemons = spawnSync('sh', ['-c', 'ps -eo comm | grep -iE "mako|swaync|dunst|fnott|notif|walker|hyprpanel|ags|quickshell" | sort -u | tr "\\n" " "'], { encoding: 'utf8', timeout: 5_000 }).stdout ?? '';
-    console.log(`  (notifications not dismissed: ${said.join('; ')}; running: ${daemons.trim() || 'none of the known daemons'})`);
+    said.push(`CloseNotification answered for ${closed} of ids 1-200${last ? ` (else: ${last})` : ''}`);
+    for (const call of quickshellDismissers()) {
+        const r = spawnSync(call[0], call.slice(1), { encoding: 'utf8', timeout: 5_000, env: sessionEnv() });
+        said.push(`${call.join(' ')}: exit ${r.status ?? r.error?.code}`);
+    }
+    for (const [cmd, ...args] of [['makoctl', 'dismiss', '--all'], ['swaync-client', '--close-all'], ['dunstctl', 'close-all']]) {
+        const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: 5_000, env: sessionEnv() });
+        if (r.status === 0) said.push(`${cmd} ${args.join(' ')}: done`);
+    }
+    if (!notifierSaid) console.log(`  (notifications: ${said.join('; ')})`);
+    notifierSaid = true;
+    spawnSync('sleep', ['0.6']);
 }
-/** quickshell's own IPC calls that dismiss notifications, read from `qs ipc show` (a target named for notifications, a
- * function that dismisses, clears or closes them, taking no argument). */
+/** quickshell's own IPC calls that dismiss notifications: its running instance named by the config on its command line,
+ * `qs ipc show` read for a target named for notifications and a function that dismisses, clears or closes them. */
 let qsCalls = null;
 function quickshellDismissers() {
     if (qsCalls) return qsCalls;
     qsCalls = [];
-    // The running instance is named (a config's own instance, or the newest on this display), as `qs ipc` needs it.
-    let found = null;
-    for (const qs of ['qs', 'quickshell']) {
-        for (const where of [[], ['--newest'], ['--any-display'], ['--newest', '--any-display']]) {
-            const r = spawnSync(qs, ['ipc', ...where, 'show'], { encoding: 'utf8', timeout: 5_000 });
-            console.log(`  (${qs} ipc ${where.join(' ')} show: exit ${r.status ?? r.error?.code} ${String(r.stdout || r.stderr || '').replace(/\s+/g, ' ').slice(0, 400)})`);
-            if (r.status === 0 && String(r.stdout).trim()) { found = { qs, where, out: String(r.stdout) }; break; }
-        }
-        if (found) break;
+    const where = [];
+    for (const pid of readdirSync('/proc').filter((n) => /^\d+$/.test(n))) {
+        let argv = [];
+        try { argv = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean); } catch { continue; }
+        if (!/(^|\/)(qs|quickshell)$/.test(argv[0] ?? '')) continue;
+        console.log(`  (quickshell runs: ${argv.join(' ')})`);
+        for (let i = 1; i < argv.length; i++) if (['-c', '--config', '-p', '--path'].includes(argv[i]) && argv[i + 1]) where.push([argv[i], argv[i + 1]]);
+        where.push(['--pid', pid]);
+        break;
     }
-    for (const { qs, where, out } of found ? [found] : []) {
-        const r = { stdout: out };
+    for (const w of [...where, []]) {
+        const r = spawnSync('qs', ['ipc', ...w, 'show'], { encoding: 'utf8', timeout: 5_000, env: sessionEnv() });
+        console.log(`  (qs ipc ${w.join(' ')} show: exit ${r.status ?? r.error?.code} ${String(r.stdout || r.stderr || '').replace(/\s+/g, ' ').slice(0, 500)})`);
+        if (r.status !== 0 || !String(r.stdout).trim()) continue;
         let target = null;
         for (const line of String(r.stdout).split('\n')) {
             const t = /^\s*target\s+(\S+)/.exec(line);
             if (t) { target = t[1]; continue; }
             const f = /^\s*function\s+(\w+)\(\s*\)/.exec(line);
-            if (f && target && /notif/i.test(target) && /dismiss|clear|close/i.test(f[1])) qsCalls.push([qs, 'ipc', ...where, 'call', target, f[1]]);
+            if (f && target && /notif/i.test(target) && /dismiss|clear|close/i.test(f[1])) qsCalls.push(['qs', 'ipc', ...w, 'call', target, f[1]]);
         }
+        break;
     }
     return qsCalls;
 }
@@ -224,6 +245,10 @@ function winPanel() {
         '  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);',
         '  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();',
         '  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();',
+        '  [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr h, uint cmd);',
+        '  [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int a, out int v, int size);',
+        '  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr h, System.Text.StringBuilder s, int n);',
+        '  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, System.Text.StringBuilder s, int n);',
         '}',
         '"@',
         '[GW]::SetProcessDPIAware() | Out-Null',
@@ -233,7 +258,20 @@ function winPanel() {
         '$r = New-Object GW+R; [GW]::GetWindowRect($h, [ref]$r) | Out-Null',
         '$p = [uint32]0; [GW]::GetWindowThreadProcessId($h, [ref]$p) | Out-Null',
         '$wa = [System.Windows.Forms.Screen]::FromHandle($h).WorkingArea',
-        '@{ visible = [GW]::IsWindowVisible($h); left = $r.L; top = $r.T; right = $r.Ri; bottom = $r.B; topmost = (([GW]::GetWindowLong($h, -20) -band 8) -ne 0); pid = $p; foreground = ([GW]::GetForegroundWindow() -eq $h); work = @{ left = $wa.Left; top = $wa.Top; right = $wa.Right; bottom = $wa.Bottom } } | ConvertTo-Json -Compress',
+        '$over = @(); $o = [GW]::GetWindow($h, 3)',
+        'while ($o -ne [IntPtr]::Zero) {',
+        '  if ([GW]::IsWindowVisible($o)) {',
+        '    $c = 0; [GW]::DwmGetWindowAttribute($o, 14, [ref]$c, 4) | Out-Null',
+        '    $q = New-Object GW+R; [GW]::GetWindowRect($o, [ref]$q) | Out-Null',
+        '    if ($c -eq 0 -and $q.Ri -gt $q.L -and $q.B -gt $q.T -and $q.L -lt $r.Ri -and $r.L -lt $q.Ri -and $q.T -lt $r.B -and $r.T -lt $q.B) {',
+        '      $cn = New-Object System.Text.StringBuilder 256; [GW]::GetClassName($o, $cn, 256) | Out-Null',
+        '      $tn = New-Object System.Text.StringBuilder 256; [GW]::GetWindowText($o, $tn, 256) | Out-Null',
+        '      $over += "$($cn.ToString()) [$($tn.ToString())] $($q.L),$($q.T)-$($q.Ri),$($q.B)"',
+        '    }',
+        '  }',
+        '  $o = [GW]::GetWindow($o, 3)',
+        '}',
+        '@{ visible = [GW]::IsWindowVisible($h); left = $r.L; top = $r.T; right = $r.Ri; bottom = $r.B; topmost = (([GW]::GetWindowLong($h, -20) -band 8) -ne 0); pid = $p; foreground = ([GW]::GetForegroundWindow() -eq $h); over = $over; work = @{ left = $wa.Left; top = $wa.Top; right = $wa.Right; bottom = $wa.Bottom } } | ConvertTo-Json -Compress',
     ].join('\r\n'));
     const r = spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps], { encoding: 'utf8', timeout: 60_000, windowsHide: true });
     const out = String(r.stdout ?? '').trim();
@@ -251,6 +289,12 @@ async function panelOnScreen(label, page, click = null) {
         const active = hypr(['activewindow']);
         check(active?.address === seen.address, `${label}: the tray panel is in front (Hyprland's active window)`, `active ${active?.title} ${active?.address}`);
         check(seen.floating === true, `${label}: the tray panel floats over the tiled windows`);
+        const over = [];
+        const meet = (x, y, w, h) => w > 0 && h > 0 && x < seen.at[0] + seen.size[0] && seen.at[0] < x + w && y < seen.at[1] + seen.size[1] && seen.at[1] < y + h;
+        for (const m of Object.values(hypr(['layers']) ?? {})) {
+            for (const level of ['2', '3']) for (const l of m?.levels?.[level] ?? []) if (meet(l.x, l.y, l.w, l.h)) over.push(`layer "${l.namespace}" ${l.x},${l.y} ${l.w}x${l.h}`);
+        }
+        check(over.length === 0, `${label}: nothing is drawn over the panel (no layer above the windows meets it)`, over.join('; '));
         check(Math.abs(seen.size[0] - want.w) <= 4 && Math.abs(seen.size[1] - want.h) <= 4, `${label}: the panel's window is its page's size`, `window ${seen.size}, page ${want.w}x${want.h}`);
         const mon = (hypr(['monitors']) ?? []).find((m) => m.focused) ?? {};
         const top = Number(mon.y ?? 0) + Number(mon.reserved?.[1] ?? 0);
@@ -276,6 +320,8 @@ async function panelOnScreen(label, page, click = null) {
     check(want.w > 0 && Math.abs((w.bottom - w.top) - want.h * k) <= 4, `${label}: the panel's window is its page's size`, `window ${w.right - w.left}x${w.bottom - w.top}, page ${want.w}x${want.h}`);
     const inside = w.left >= w.work.left && w.right <= w.work.right && w.top >= w.work.top && w.bottom <= w.work.bottom;
     check(inside && w.work.bottom - w.bottom <= 40, `${label}: it sits on the taskbar, inside the work area`, `panel ${w.left},${w.top}-${w.right},${w.bottom}, work ${JSON.stringify(w.work)}`);
+    const overW = [].concat(w.over ?? []).filter(Boolean);
+    check(overW.length === 0, `${label}: nothing is drawn over the panel (no visible window above it meets it)`, overW.join('; '));
     return w;
 }
 let launcherPidNow = 0;
@@ -520,6 +566,10 @@ check(Boolean(panel7), 'the tray panel opened again');
 console.log(`  the tray panel says: ${panelText(panel7).replace(/\s*\n\s*/g, ' | ')}`);
 for (const words of [...PANEL_WORDS, 'agents keep running']) check(panelSays(panel7, words), `the tray panel says "${words}"`);
 panelHostsAreReal('step 7', panel7);
+if (!WIN && click7) {
+    const at = (hypr(['clients']) ?? []).find((c) => c.pid === launcherPid && c.title === 'Genie tray');
+    if (at) console.log(`  the pointer rests on the panel's edge: ${moveCursor(at.at[0] + at.size[0] - 3, at.at[1] + 3) ?? 'it could not be moved'}`);
+}
 await sleep(1_200);
 await panelOnScreen('step 7', panel7, click7);
 launcherWindows(launcherPid);
