@@ -45,5 +45,9 @@ html,body{height:100%;overflow:hidden;user-select:none}
     </div>
   </div>
 </main>
+<!-- Loaded, then shown (run 1128-012125-5d34ca): the window stays hidden until this page has loaded, so the person never sees
+     WebView2's empty white surface; the card's dark backdrop is behind its first frame. Not requestAnimationFrame: a hidden
+     webview may never run one. The launcher shows the card anyway after a few seconds without this. -->
+<script>addEventListener('load', () => { if (window.ipc) window.ipc.postMessage('loaded'); });</script>
 </body>
 </html>

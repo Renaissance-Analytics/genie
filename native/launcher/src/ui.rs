@@ -666,8 +666,17 @@ pub fn moving_html() -> String {
 }
 
 enum Card {
+    /// The page has loaded: the window may be shown.
+    Loaded,
+    /// Not loaded within `CARD_LOAD_WAIT`: shown anyway, so a slow WebView2 never hides the card altogether.
+    ShowAnyway,
     Close,
 }
+
+/// How long the card waits, hidden, for its page to load before it is shown regardless.
+const CARD_LOAD_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+/// The card's own backdrop (theme-c.css's body colour), behind the page while it loads.
+const CARD_BACKDROP: (u8, u8, u8, u8) = (0x05, 0x04, 0x0f, 0xff);
 
 /// THE MIGRATION'S CARD, on this (the main) thread: shown at once, centred and on top; `work` (the bridge's install and
 /// hand-over) runs on another thread meanwhile; the card closes once the launcher has a client window attached
@@ -692,6 +701,8 @@ pub fn run_moving_card(roots: &Roots, work: Option<Box<dyn FnOnce() + Send>>) ->
             .with_resizable(false)
             .with_decorations(false)
             .with_always_on_top(true)
+            // Hidden until its page has loaded (run 1128-012125-5d34ca: an empty white window for a frame or more).
+            .with_visible(false)
             .build(&event_loop)
             .map_err(|e| format!("the card could not be made: {e}"))?;
         if let Some(m) = window.current_monitor().or_else(|| window.primary_monitor()) {
@@ -699,7 +710,15 @@ pub fn run_moving_card(roots: &Roots, work: Option<Box<dyn FnOnce() + Send>>) ->
             window.set_outer_position(tao::dpi::PhysicalPosition::new(mp.x + (ms.width.saturating_sub(ws.width) / 2) as i32, mp.y + (ms.height.saturating_sub(ws.height) / 2) as i32));
         }
         let mut context = WebContext::new(Some(roots.data.join("launcher").join("webview")));
-        let builder = WebViewBuilder::new_with_web_context(&mut context).with_html(moving_html());
+        let loaded = event_loop.create_proxy();
+        let builder = WebViewBuilder::new_with_web_context(&mut context)
+            .with_html(moving_html())
+            .with_background_color(CARD_BACKDROP)
+            .with_ipc_handler(move |req: wry::http::Request<String>| {
+                if req.body() == "loaded" {
+                    let _ = loaded.send_event(Card::Loaded);
+                }
+            });
         #[cfg(windows)]
         let webview = builder.build(&window).map_err(|e| format!("the card's webview (WebView2) could not start: {e}"))?;
         #[cfg(unix)]
@@ -721,8 +740,11 @@ pub fn run_moving_card(roots: &Roots, work: Option<Box<dyn FnOnce() + Send>>) ->
             return Err(why);
         }
     };
-    crate::migrate::log_line(roots, "the moving card is shown");
-    println!("moving: shown");
+    let anyway = event_loop.create_proxy();
+    std::thread::spawn(move || {
+        std::thread::sleep(CARD_LOAD_WAIT);
+        let _ = anyway.send_event(Card::ShowAnyway);
+    });
     let proxy = event_loop.create_proxy();
     let r = roots.clone();
     std::thread::spawn(move || {
@@ -744,10 +766,24 @@ pub fn run_moving_card(roots: &Roots, work: Option<Box<dyn FnOnce() + Send>>) ->
         }
         let _ = proxy.send_event(Card::Close);
     });
+    let mut shown = false;
     event_loop.run_return(|event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
-        if let Event::UserEvent(Card::Close) = event {
-            *control_flow = ControlFlow::Exit;
+        match event {
+            Event::UserEvent(Card::Loaded) if !shown => {
+                shown = true;
+                window.set_visible(true);
+                crate::migrate::log_line(roots, "the moving card is shown (its page loaded)");
+                println!("moving: shown");
+            }
+            Event::UserEvent(Card::ShowAnyway) if !shown => {
+                shown = true;
+                window.set_visible(true);
+                crate::migrate::log_line(roots, &format!("the moving card is shown before its page loaded ({} s)", CARD_LOAD_WAIT.as_secs()));
+                println!("moving: shown");
+            }
+            Event::UserEvent(Card::Close) => *control_flow = ControlFlow::Exit,
+            _ => {}
         }
     });
     println!("moving: closed");
