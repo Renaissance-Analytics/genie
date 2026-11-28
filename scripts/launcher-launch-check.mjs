@@ -111,7 +111,7 @@ async function browserMains() {
 
 /** What the launcher and the Browser said, on a failure: the launcher's spawn log for the Browser, and its own. */
 function dumpLogs() {
-    for (const f of ['genie-browser.log', 'genie-launcher.log']) {
+    for (const f of ['genie-browser.log', 'genie-launcher.log', 'genie-launcher-ui.log']) {
         const p = join(data, 'logs', f);
         if (!existsSync(p)) { console.log(`--- ${p}: none`); continue; }
         const lines = readFileSync(p, 'utf8').split(/\r?\n/);

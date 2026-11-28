@@ -372,6 +372,29 @@ enum Resident {
     CancelAsks,
 }
 
+/// The launcher's UI log (`<data>/logs/genie-launcher-ui.log`): what the panel, the pad and the questions did, kept where a
+/// launcher started by the installer's shell (no stderr anyone reads, on Windows) still leaves it. Set when one first opens.
+static UI_LOG: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// A line said on stderr and kept in the UI log.
+pub fn ui_log(line: &str) {
+    eprintln!("{line}");
+    if let Some(file) = UI_LOG.get() {
+        use std::io::Write;
+        if let Some(dir) = file.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(file) {
+            let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+            let _ = writeln!(f, "{ms} {line}");
+        }
+    }
+}
+
+macro_rules! ui_say {
+    ($($t:tt)*) => { $crate::ui::ui_log(&format!($($t)*)) };
+}
+
 /// The questions open now, by title (`launcher.uiProbe`: the tray panel's Stop asks first, as the menu's did).
 static ASKING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
@@ -492,27 +515,27 @@ fn updates_act(ctx: std::sync::Arc<crate::control::Context>, msg: Value, proxy: 
     use std::sync::atomic::Ordering;
     std::thread::spawn(move || {
         let kind = msg["kind"].as_str().unwrap_or("");
-        eprintln!("genie: updates window: {kind} {}", msg["track"].as_str().unwrap_or(""));
+        ui_say!("genie: updates window: {kind} {}", msg["track"].as_str().unwrap_or(""));
         match kind {
             "check" => {
                 CHECKING.store(true, Ordering::SeqCst);
                 let _ = proxy.send_event(Resident::UpdatesView(updates_data(&ctx, true)));
                 if let Err(why) = crate::updates::check_with_tools(&ctx.updates, &ctx.roots) {
-                    eprintln!("genie: updates window: the check failed: {why}");
+                    ui_say!("genie: updates window: the check failed: {why}");
                 }
                 CHECKING.store(false, Ordering::SeqCst);
             }
             "apply" => {
                 if let Some(track) = msg["track"].as_str().and_then(Track::parse) {
                     if let Err(why) = crate::control::apply_track(&ctx, track) {
-                        eprintln!("genie: updates window: {why}");
+                        ui_say!("genie: updates window: {why}");
                     }
                 }
             }
             // A host's tool (L7): the host's installer asked; the window redraws from the host's rows as it moves.
             "applyTool" => {
                 if let Err(why) = crate::updates::apply_tool(&ctx.roots, &msg) {
-                    eprintln!("genie: updates window: {why}");
+                    ui_say!("genie: updates window: {why}");
                 }
                 crate::updates::tools_changed(&ctx.updates);
             }
@@ -523,14 +546,14 @@ fn updates_act(ctx: std::sync::Arc<crate::control::Context>, msg: Value, proxy: 
                 for track in [Track::Client, Track::Browser, Track::Host, Track::Launcher] {
                     if ready(track.as_str()) {
                         if let Err(why) = crate::control::apply_track(&ctx, track) {
-                            eprintln!("genie: updates window: {why}");
+                            ui_say!("genie: updates window: {why}");
                         }
                     }
                 }
             }
             "openGenie" => {
                 if let Err(why) = crate::control::open_window(&ctx) {
-                    eprintln!("genie: updates window: Open Genie: {why}");
+                    ui_say!("genie: updates window: Open Genie: {why}");
                 }
             }
             "hostLog" => {
@@ -538,7 +561,7 @@ fn updates_act(ctx: std::sync::Arc<crate::control::Context>, msg: Value, proxy: 
                 let path = log.display().to_string().replace('\\', "/");
                 let uri = if path.starts_with('/') { format!("file://{path}") } else { format!("file:///{path}") };
                 if let Err(why) = open_with_the_os(&uri) {
-                    eprintln!("genie: updates window: the host's log: {why}");
+                    ui_say!("genie: updates window: the host's log: {why}");
                 }
             }
             _ => {}
@@ -608,7 +631,7 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
         forget_shown(surface);
         if slot.take().is_some() {
             surface.open_flag().store(false, std::sync::atomic::Ordering::SeqCst);
-            eprintln!("genie: {} closed", surface.name());
+            ui_say!("genie: {} closed", surface.name());
         }
     }
     event_loop.run_return(|event, target, control_flow| {
@@ -616,10 +639,12 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
         match event {
             Event::UserEvent(Resident::ShowPanel(ctx, model, anchor)) => {
                 if panel.is_some() {
+                    ui_say!("genie: the tray panel was open: a click on the icon closes it");
                     close(&mut panel, Surface::Panel);
                     return;
                 }
                 if panel_closed_at.map_or(false, |t| t.elapsed() < PANEL_TOGGLE) {
+                    ui_say!("genie: the tray panel closed on this same click: it stays closed");
                     return;
                 }
                 forget_shown(Surface::Panel);
@@ -629,7 +654,7 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
                         keep_current(Surface::Panel, std::sync::Arc::clone(&ctx), proxy.clone());
                         panel = Some(OpenSurface { window, webview, ctx, anchor, focused: false, shown: false, size: (300.0, 470.0) });
                     }
-                    Err(why) => eprintln!("genie: {why}"),
+                    Err(why) => ui_say!("genie: {why}"),
                 }
             }
             Event::UserEvent(Resident::ShowPad(ctx, model)) => {
@@ -646,7 +671,7 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
                         keep_current(Surface::Pad, std::sync::Arc::clone(&ctx), proxy.clone());
                         pad = Some(OpenSurface { window, webview, ctx, anchor: None, focused: false, shown: false, size: (520.0, 640.0) });
                     }
-                    Err(why) => eprintln!("genie: {why}"),
+                    Err(why) => ui_say!("genie: {why}"),
                 }
             }
             Event::UserEvent(Resident::View(surface, model)) => {
@@ -676,7 +701,7 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
                         place_pad(&s.window);
                     }
                     s.window.set_focus();
-                    eprintln!("genie: {} is shown before its page said it loaded", surface.name());
+                    ui_say!("genie: {} is shown before its page said it loaded", surface.name());
                 }
             }
             Event::UserEvent(Resident::Ipc(id, body)) if panel.as_ref().map_or(false, |s| s.window.id() == id) || pad.as_ref().map_or(false, |s| s.window.id() == id) => {
@@ -704,7 +729,7 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
                             if surface == Surface::Pad {
                                 place_pad(&s.window);
                             }
-                            eprintln!("genie: {} is shown: {}", surface.name(), msg["text"].as_str().unwrap_or("").replace('\n', " | "));
+                            ui_say!("genie: {} is shown: {}", surface.name(), msg["text"].as_str().unwrap_or("").replace('\n', " | "));
                         }
                     }
                     Some("drag") => {
@@ -731,6 +756,7 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
                 }
             }
             Event::WindowEvent { window_id, event: WindowEvent::Focused(focused), .. } if panel.as_ref().map_or(false, |s| s.window.id() == window_id) => {
+                ui_say!("genie: the tray panel {} the focus", if focused { "has" } else { "lost" });
                 if focused {
                     if let Some(s) = panel.as_mut() {
                         s.focused = true;
@@ -793,7 +819,7 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
                             }
                         });
                     }
-                    Err(why) => eprintln!("genie: {why}"),
+                    Err(why) => ui_say!("genie: {why}"),
                 }
             }
             Event::UserEvent(Resident::UpdatesView(v)) => {
@@ -804,7 +830,7 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
             Event::UserEvent(Resident::Ipc(id, body)) if updates.as_ref().map_or(false, |(w, _, _)| w.id() == id) => {
                 let msg = serde_json::from_str::<Value>(&body).unwrap_or(Value::Null);
                 match msg["kind"].as_str() {
-                    Some("shown") => eprintln!("genie: the Updates window is shown"),
+                    Some("shown") => ui_say!("genie: the Updates window is shown"),
                     Some("drag") => {
                         if let Some((window, _, _)) = &updates {
                             let _ = window.drag_window();
@@ -833,7 +859,7 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
             }
             Event::UserEvent(Resident::CancelAsks) => {
                 for (_, (window, webview, reply, title)) in open.drain() {
-                    eprintln!("genie: {title}: cancelled");
+                    ui_say!("genie: {title}: cancelled");
                     let _ = reply.send(false);
                     drop(webview);
                     drop(window);
@@ -879,7 +905,7 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
                         set_asking(open.values().map(|o| o.3.clone()).collect());
                     }
                     Err(why) => {
-                        eprintln!("genie: {why}; nothing was stopped");
+                        ui_say!("genie: {why}; nothing was stopped");
                         let _ = reply.send(false);
                     }
                 }
@@ -889,13 +915,13 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
                 match kind.as_str() {
                     "shown" => {
                         if let Some((_, _, _, title)) = open.get(&id) {
-                            eprintln!("genie: asking: {title}");
+                            ui_say!("genie: asking: {title}");
                         }
                     }
                     "confirm" | "cancel" => {
                         if let Some((window, webview, reply, title)) = open.remove(&id) {
                             set_asking(open.values().map(|o| o.3.clone()).collect());
-                            eprintln!("genie: {title}: {}", if kind == "confirm" { "confirmed" } else { "cancelled" });
+                            ui_say!("genie: {title}: {}", if kind == "confirm" { "confirmed" } else { "cancelled" });
                             let _ = reply.send(kind == "confirm");
                             drop(webview);
                             drop(window);
@@ -1122,14 +1148,23 @@ fn resident() -> Option<EventLoopProxy<Resident>> {
 /// Opens the tray panel for a click at `anchor` (physical pixels; the pointer when `None`), or closes it when it is open:
 /// `false` when this launcher has no window loop (the caller falls back to the platform's menu).
 pub fn show_panel(ctx: std::sync::Arc<crate::control::Context>, anchor: Option<(i32, i32)>) -> bool {
-    let Some(proxy) = resident() else { return false };
+    let _ = UI_LOG.set(ctx.roots.logs_dir().join("genie-launcher-ui.log"));
+    let Some(proxy) = resident() else {
+        ui_say!("genie: the tray panel: this launcher has no window loop");
+        return false;
+    };
+    ui_say!("genie: the tray panel asked for (anchor {anchor:?})");
     let model = Surface::Panel.model(&ctx);
     proxy.send_event(Resident::ShowPanel(ctx, model, anchor)).is_ok()
 }
 
 /// Opens the launch pad, or brings it forward: `false` when this launcher has no window loop.
 pub fn show_pad(ctx: std::sync::Arc<crate::control::Context>) -> bool {
-    let Some(proxy) = resident() else { return false };
+    let _ = UI_LOG.set(ctx.roots.logs_dir().join("genie-launcher-ui.log"));
+    let Some(proxy) = resident() else {
+        ui_say!("genie: the launch pad: this launcher has no window loop");
+        return false;
+    };
     let model = Surface::Pad.model(&ctx);
     proxy.send_event(Resident::ShowPad(ctx, model)).is_ok()
 }
@@ -1171,14 +1206,14 @@ fn keep_current(surface: Surface, ctx: std::sync::Arc<crate::control::Context>, 
 /// A click on one of the windows' items or buttons, acted on off the window's thread.
 fn pick(surface: Surface, ctx: std::sync::Arc<crate::control::Context>, id: &str, proxy: EventLoopProxy<Resident>) {
     use crate::panel::Pick;
-    eprintln!("genie: {}: {id}", surface.name());
+    ui_say!("genie: {}: {id}", surface.name());
     match crate::panel::pick(id) {
         Some(Pick::Act(action)) => crate::tray::act(ctx, action),
         Some(Pick::Logon) => {
             std::thread::spawn(move || {
                 match crate::panel::toggle_logon(&ctx.roots) {
-                    Ok(said) => eprintln!("genie: {}: start when I sign in: {said}", surface.name()),
-                    Err(why) => eprintln!("genie: {}: start when I sign in: {why}", surface.name()),
+                    Ok(said) => ui_say!("genie: {}: start when I sign in: {said}", surface.name()),
+                    Err(why) => ui_say!("genie: {}: start when I sign in: {why}", surface.name()),
                 }
                 let _ = proxy.send_event(Resident::View(surface, surface.model(&ctx)));
             });
@@ -1192,15 +1227,15 @@ fn pick(surface: Surface, ctx: std::sync::Arc<crate::control::Context>, id: &str
             std::thread::spawn(move || {
                 // Only a host this computer paired with: the page names it, the launcher's own list decides.
                 if !crate::panel::read_paired(&ctx.roots.runtime_dir()).contains(&url) {
-                    eprintln!("genie: {}: {url} is not a paired host", surface.name());
+                    ui_say!("genie: {}: {url} is not a paired host", surface.name());
                     return;
                 }
                 if let Err(why) = crate::control::open_window_on(&ctx, &url) {
-                    eprintln!("genie: {}: a window on {url}: {why}", surface.name());
+                    ui_say!("genie: {}: a window on {url}: {why}", surface.name());
                 }
             });
         }
-        None => eprintln!("genie: {}: nothing is {id:?}", surface.name()),
+        None => ui_say!("genie: {}: nothing is {id:?}", surface.name()),
     }
 }
 
@@ -1378,20 +1413,20 @@ mod hypr {
             }
         }
         said.push(format!("focus {}", dispatch(&format!("focuswindow {sel}"), &format!("hl.dsp.focus({{ window = \"{sel}\" }})"))));
-        eprintln!("genie: {name}: {w}x{h} at {x},{y}: {}", said.join("; "));
+        ui_say!("genie: {name}: {w}x{h} at {x},{y}: {}", said.join("; "));
     }
 
     /// The tray panel, its page's size, by the pointer under (or over) the bar it was opened from.
     pub fn place_panel(title: &str, size: (i32, i32)) {
         let Some(address) = address_of(title) else {
-            eprintln!("genie: the tray panel: Hyprland did not list its window, so it stays where Hyprland put it");
+            ui_say!("genie: the tray panel: Hyprland did not list its window, so it stays where Hyprland put it");
             return;
         };
         let Some(cursor) = json("j/cursorpos") else { return };
         let at = (cursor["x"].as_f64().unwrap_or(0.0) as i32, cursor["y"].as_f64().unwrap_or(0.0) as i32);
         let Some(work) = work_at(at) else { return };
         let pos = place(at, work, size, 8);
-        eprintln!("genie: the tray panel: pointer {},{}; work area {work:?}", at.0, at.1);
+        ui_say!("genie: the tray panel: pointer {},{}; work area {work:?}", at.0, at.1);
         fit("the tray panel", &address, size, pos, true);
     }
 
