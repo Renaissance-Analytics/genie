@@ -67,7 +67,16 @@ const sessionEnv = () => ({ ...process.env, LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', 
 let notifierSaid = false;
 function clearNotifications() {
     if (WIN) return;
-    if (KEEP_NOTIFICATIONS) { if (!notifierSaid) console.log('  (notifications left up: GENIE_ROW_KEEP_NOTIFICATIONS=1)'); notifierSaid = true; return; }
+    if (KEEP_NOTIFICATIONS) {
+        if (!notifierSaid) {
+            for (const n of [1, 2, 3]) {
+                const r = spawnSync('busctl', ['--user', 'call', 'org.freedesktop.Notifications', '/org/freedesktop/Notifications', 'org.freedesktop.Notifications', 'Notify', 'susssasa{sv}i', 'genie-row', '0', '', `A toast left up (${n})`, 'The red run: drawn over the tray panel', '0', '0', '0'], { encoding: 'utf8', timeout: 5_000, env: sessionEnv() });
+                console.log(`  (a toast posted and left up: exit ${r.status} ${String(r.stdout || r.stderr || '').trim().slice(0, 80)})`);
+            }
+        }
+        notifierSaid = true;
+        return;
+    }
     const said = [];
     let closed = 0;
     let last = '';
@@ -291,12 +300,14 @@ async function panelOnScreen(label, page, click = null) {
         const active = hypr(['activewindow']);
         check(active?.address === seen.address, `${label}: the tray panel is in front (Hyprland's active window)`, `active ${active?.title} ${active?.address}`);
         check(seen.floating === true, `${label}: the tray panel floats over the tiled windows`);
-        const over = [];
+        // The layers above the windows, for the record: Omarchy's are full-screen and mostly clear (its bar 1280x720,
+        // its notifications a full-height strip: run 1128-103822-569d52), so their rectangles say nothing of what they draw.
         const meet = (x, y, w, h) => w > 0 && h > 0 && x < seen.at[0] + seen.size[0] && seen.at[0] < x + w && y < seen.at[1] + seen.size[1] && seen.at[1] < y + h;
-        for (const m of Object.values(hypr(['layers']) ?? {})) {
-            for (const level of ['2', '3']) for (const l of m?.levels?.[level] ?? []) if (meet(l.x, l.y, l.w, l.h)) over.push(`layer "${l.namespace}" ${l.x},${l.y} ${l.w}x${l.h}`);
-        }
-        check(over.length === 0, `${label}: nothing is drawn over the panel (no layer above the windows meets it)`, over.join('; '));
+        const layersMeeting = [];
+        for (const m of Object.values(hypr(['layers']) ?? {})) for (const level of ['2', '3']) for (const l of m?.levels?.[level] ?? []) if (meet(l.x, l.y, l.w, l.h)) layersMeeting.push(`${l.namespace} ${l.x},${l.y} ${l.w}x${l.h}`);
+        console.log(`  ${label}: layers above the windows whose rectangles meet the panel's: ${layersMeeting.join('; ') || 'none'}`);
+        const px = panelPixels(seen.at[0], seen.at[1], seen.size[0], seen.size[1]);
+        check(px.ok && px.off <= px.n * 0.03, `${label}: nothing is drawn over the panel (its own edge pixels are its own colour)`, px.ok ? `${px.off} of ${px.n} edge pixels are not the panel's #100c28${px.first ? `, e.g. ${px.first}` : ''}` : px.why);
         check(Math.abs(seen.size[0] - want.w) <= 4 && Math.abs(seen.size[1] - want.h) <= 4, `${label}: the panel's window is its page's size`, `window ${seen.size}, page ${want.w}x${want.h}`);
         const mon = (hypr(['monitors']) ?? []).find((m) => m.focused) ?? {};
         const top = Number(mon.y ?? 0) + Number(mon.reserved?.[1] ?? 0);
@@ -327,6 +338,38 @@ async function panelOnScreen(label, page, click = null) {
     return w;
 }
 let launcherPidNow = 0;
+/**
+ * THE PANEL'S OWN PIXELS, AS PHOTOGRAPHED (Linux): its rectangle captured from the screen (grim -g), and every pixel of its
+ * padding bands (left, right, top and bottom, inside its border and clear of its rounded corners), where the page paints
+ * nothing but its background, #100c28, compared with that colour. A toast, a tooltip or any window drawn over the panel
+ * changes them. Tolerance 12 a channel (the compositor's own rounding).
+ */
+function panelPixels(x, y, w, h) {
+    const r = spawnSync('grim', ['-g', `${x},${y} ${w}x${h}`, '-t', 'ppm', '-'], { maxBuffer: 32 * 1024 * 1024, timeout: SYNC_MS, encoding: 'buffer' });
+    if (r.status !== 0 || !r.stdout || r.stdout.length < 16) return { ok: false, why: `grim -g: exit ${r.status} ${String(r.stderr ?? '').slice(0, 120)}` };
+    const buf = r.stdout;
+    const fields = [];
+    let i = 0;
+    const space = (b) => b === 0x20 || b === 0x0a || b === 0x0d || b === 0x09;
+    while (fields.length < 4 && i < buf.length) { while (space(buf[i])) i++; let j = i; while (j < buf.length && !space(buf[j])) j++; fields.push(buf.subarray(i, j).toString('latin1')); i = j; }
+    const [magic, W, H] = [fields[0], Number(fields[1]), Number(fields[2])];
+    if (magic !== 'P6') return { ok: false, why: `not a PPM (${magic})` };
+    const px = buf.subarray(i + 1);
+    const at = (u, v) => { const k = (v * W + u) * 3; return [px[k], px[k + 1], px[k + 2]]; };
+    const want = [0x10, 0x0c, 0x28];
+    let n = 0;
+    let off = 0;
+    let first = null;
+    const look = (u, v) => {
+        if (u < 0 || v < 0 || u >= W || v >= H) return;
+        n++;
+        const got = at(u, v);
+        if (got.some((c, k) => Math.abs(c - want[k]) > 12)) { off++; if (!first) first = `(${u},${v}) rgb(${got.join(',')})`; }
+    };
+    for (let v = 18; v < H - 18; v++) for (const u of [2, 3, 4, W - 5, W - 4, W - 3]) look(u, v);
+    for (let u = 18; u < W - 18; u++) for (const v of [2, 3, H - 4, H - 3]) look(u, v);
+    return { ok: n > 0, why: 'no pixels read', n, off, first };
+}
 /** Mockup sample words that must never be in the panel unless the machine really has them (direction-c-tray.png). */
 const MOCKUP_SAMPLES = ['Studio desktop', 'Build box', 'studio-desktop', 'build-box', 'asleep'];
 /**
