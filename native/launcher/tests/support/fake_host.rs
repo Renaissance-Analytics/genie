@@ -22,6 +22,11 @@
 //! At boot a host that finds `running-at-quit.json` restores from it once and spends it. A staying client writes each
 //! `launcher.updateReady` it is told to `<GENIE_HOME>/client-update-ready-<pid>.txt`. `--handover <pid>` is a new launcher
 //! that never takes the pipe: it writes `<GENIE_HOME>/handover-pid.txt` and waits.
+//!
+//! L7 (the host's tools): `engine.toolchain` as genie-host answers the launcher (src/main/launcher-toolchain.ts): `state`
+//! and `check` answer the rows in `<GENIE_HOME>/fake-host-tools.json` (else one Node row, 24.10.0 → 24.11.1), and journal
+//! `toolchain-state` / `toolchain-check`; `update [{tool, version, confirmed}]` journals `toolchain-update <pid> <tool>
+//! <version> confirmed=<bool>` and answers `{started}`: the install is the host's, never the launcher's.
 
 use genie_launcher::local::LocalListener;
 use serde_json::{json, Value};
@@ -124,6 +129,33 @@ fn main() {
                         let _ = std::fs::write(home.join("host-clean-exit.txt"), format!("{me}"));
                         journal(&home, &format!("exit {me}"));
                         std::process::exit(0);
+                    }
+                    Some("engine.toolchain") => {
+                        let me = std::process::id();
+                        let rows = || -> Value {
+                            std::fs::read_to_string(home.join("fake-host-tools.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_else(|| {
+                                json!({"rows": [{"tool": "node", "label": "Node", "installed": "24.10.0", "to": "24.11.1", "tone": "update-available"}], "checkedAt": 1, "checking": false})
+                            })
+                        };
+                        let answer = match frame["args"][0].as_str() {
+                            Some("state") => {
+                                journal(&home, &format!("toolchain-state {me}"));
+                                json!({"kind": "result", "id": id, "ok": true, "value": rows()})
+                            }
+                            Some("check") => {
+                                journal(&home, &format!("toolchain-check {me}"));
+                                json!({"kind": "result", "id": id, "ok": true, "value": rows()})
+                            }
+                            Some("update") => {
+                                let a = &frame["args"][1][0];
+                                let tool = a["tool"].as_str().unwrap_or("-");
+                                let version = a["version"].as_str().unwrap_or("-");
+                                journal(&home, &format!("toolchain-update {me} {tool} {version} confirmed={}", a["confirmed"] == true));
+                                json!({"kind": "result", "id": id, "ok": true, "value": {"started": true, "tool": tool, "version": version}})
+                            }
+                            other => json!({"kind": "result", "id": id, "ok": false, "reason": format!("Genie’s launcher may not ask the toolchain for {}.", other.unwrap_or("-"))}),
+                        };
+                        let _ = writeln!(out, "{answer}");
                     }
                     Some("engine.ping") => { let _ = writeln!(out, "{}", json!({"kind": "result", "id": id, "ok": true, "value": "pong"})); }
                     Some("engine.shutdown") => {
