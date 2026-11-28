@@ -253,7 +253,9 @@ function winPanel() {
         '"@',
         '[GW]::SetProcessDPIAware() | Out-Null',
         'Add-Type -AssemblyName System.Windows.Forms',
-        "$h = [GW]::FindWindow($null, 'Genie tray')",
+        // [NullString]::Value, not $null: PowerShell hands $null to a string parameter as "", and FindWindow("", …) matches no
+        // class (run 1128-101927-62aca8 read a panel that was on screen as absent).
+        "$h = [GW]::FindWindow([NullString]::Value, 'Genie tray')",
         "if ($h -eq [IntPtr]::Zero) { 'none'; exit 0 }",
         '$r = New-Object GW+R; [GW]::GetWindowRect($h, [ref]$r) | Out-Null',
         '$p = [uint32]0; [GW]::GetWindowThreadProcessId($h, [ref]$p) | Out-Null',
