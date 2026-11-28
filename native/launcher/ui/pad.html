@@ -117,7 +117,8 @@ html,body{height:100%;overflow:hidden;user-select:none}
   function report() {
     var items = [];
     document.querySelectorAll('[data-id]').forEach(function (e) { items.push({ id: e.getAttribute('data-id'), label: e.textContent.trim(), enabled: !e.disabled }); });
-    say({ kind: 'shown', text: document.querySelector('.win').innerText, items: items, hour: new Date().getHours() });
+    var text = document.querySelector('.win').innerText || Array.prototype.filter.call(document.querySelectorAll('.win span, .win h1, .win p, .win div.muted, .win .row-title, .win button, .win a'), function (e) { return !e.closest('[hidden]') && !e.children.length; }).map(function (e) { return e.textContent.trim(); }).filter(Boolean).join('\n');
+    say({ kind: 'shown', text: text, items: items, hour: new Date().getHours() });
   }
 
   window.render = function (d) {
@@ -149,6 +150,7 @@ html,body{height:100%;overflow:hidden;user-select:none}
   });
   $('host-btn').addEventListener('click', function () { var id = $('host-btn').getAttribute('data-id'); if (id) say({ kind: 'pick', id: id }); });
   // A VM row's click (launcher.uiProbe {click}): the element's own handler, as the person's click runs it.
+  window.genieReport = report;
   window.genieClick = function (id) {
     var found = null;
     document.querySelectorAll('[data-id]').forEach(function (e) { if (e.getAttribute('data-id') === id) found = e; });

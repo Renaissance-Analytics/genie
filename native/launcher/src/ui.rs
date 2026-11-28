@@ -669,6 +669,7 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
                 if let Some(s) = slot.as_mut().filter(|s| !s.shown) {
                     s.shown = true;
                     s.window.set_visible(true);
+                    let _ = s.webview.evaluate_script("setTimeout(function () { window.genieReport && window.genieReport(); }, 250)");
                     if surface == Surface::Panel {
                         place_panel(&s.window, s.anchor, s.size);
                     } else {
@@ -698,6 +699,7 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
                         if !s.shown {
                             s.shown = true;
                             s.window.set_visible(true);
+                    let _ = s.webview.evaluate_script("setTimeout(function () { window.genieReport && window.genieReport(); }, 250)");
                             s.window.set_focus();
                             if surface == Surface::Pad {
                                 place_pad(&s.window);
@@ -1319,12 +1321,19 @@ mod hypr {
     /// is Lua's (Hyprland 0.56 with a Lua config wraps it as `return hl.dispatch(…)` and says the legacy words do not
     /// parse), its Lua dispatcher. What it answered is returned, for the log.
     fn dispatch(legacy: &str, lua: &str) -> String {
-        let said = ask(&format!("dispatch {legacy}")).unwrap_or_default();
-        if said.trim() == "ok" {
-            return said.trim().to_string();
+        let one_line = |t: String| t.split_whitespace().collect::<Vec<_>>().join(" ");
+        let said = one_line(ask(&format!("dispatch {legacy}")).unwrap_or_default());
+        if said == "ok" {
+            return said;
         }
-        let again = ask(&format!("dispatch {lua}")).unwrap_or_default();
-        format!("{} / lua: {}", said.trim(), again.trim())
+        // Hyprland 0.56 (a Lua config): the dispatcher as `dispatch` wraps it (`return hl.dispatch(...)`), then as `eval`
+        // (the queue's own way of speaking to it, `hyprctl eval`).
+        let wrapped = one_line(ask(&format!("dispatch {lua}")).unwrap_or_default());
+        if wrapped == "ok" || (!wrapped.is_empty() && !wrapped.contains("error")) {
+            return format!("lua: {wrapped}");
+        }
+        let evaluated = one_line(ask(&format!("eval hl.dispatch({lua})")).unwrap_or_default());
+        format!("{said} / lua: {wrapped} / eval: {evaluated}")
     }
 
     /// The window of this launcher with this title, as Hyprland lists it, once it has mapped (looked for up to 2 s).

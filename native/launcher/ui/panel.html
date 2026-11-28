@@ -95,7 +95,8 @@ body{display:block}
     var m = $('menu').getBoundingClientRect();
     var items = [];
     document.querySelectorAll('[data-id]').forEach(function (e) { items.push({ id: e.getAttribute('data-id'), label: e.textContent.trim(), enabled: !e.classList.contains('off'), on: e.getAttribute('aria-checked') }); });
-    say({ kind: 'shown', w: Math.ceil(m.width), h: Math.ceil(m.height), text: $('menu').innerText, items: items });
+    var text = $('menu').innerText || Array.prototype.map.call(document.querySelectorAll('#menu .m-head, #menu [data-id], #menu .m-label'), function (e) { return e.textContent.trim(); }).join('\n');
+    say({ kind: 'shown', w: Math.ceil(m.width), h: Math.ceil(m.height), text: text, items: items });
   }
 
   window.render = function (p) {
@@ -109,6 +110,7 @@ body{display:block}
     setTimeout(report, 0);
   };
   // A VM row's click (launcher.uiProbe {click}): the element's own handler, as the person's click runs it.
+  window.genieReport = report;
   window.genieClick = function (id) {
     var found = null;
     document.querySelectorAll('[data-id]').forEach(function (e) { if (e.getAttribute('data-id') === id) found = e; });
