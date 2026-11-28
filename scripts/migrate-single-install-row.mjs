@@ -319,8 +319,8 @@ async function main() {
     const card = await until(() => /the moving card closed/.test(readOr(migrationLog)), 60_000, 1_000);
     check(/the moving card is shown/.test(readOr(migrationLog)), '5f. the card "Moving Genie to its new launcher…" was shown during the move', readOr(migrationLog).trim().split('\n').slice(-6).join(' | '));
     // NEVER A WHITE BOX (run 1128-012125-5d34ca, during-06 of the unchanged case): the card's window was on screen before
-    // WebView2 had painted its page, an empty white rectangle for a frame or more. It is shown once its page has painted.
-    check(/the moving card is shown \(its page painted\)/.test(readOr(migrationLog)) && !/before its page painted/.test(readOr(migrationLog)), '5f2. the card was shown only once its page had painted (never an empty white window)', readOr(migrationLog).trim().split('\n').filter((l) => /moving card/.test(l)).join(' | '));
+    // WebView2 had painted its page, an empty white rectangle for a frame or more. It is shown once its page has loaded, on its dark backdrop.
+    check(/the moving card is shown \(its page loaded\)/.test(readOr(migrationLog)) && !/before its page loaded/.test(readOr(migrationLog)), '5f2. the card was shown only once its page had loaded (never an empty white window)', readOr(migrationLog).trim().split('\n').filter((l) => /moving card/.test(l)).join(' | '));
     check(card === true && /the moving card closed: a client window is attached/.test(readOr(migrationLog)), '5g. it closed once the launcher\'s client window was attached');
     // NO CONSOLE WINDOW (the coordinator, 2026-11-27): Genie.exe is a windows program, so nothing of the launcher's has a
     // console host (conhost.exe) of its own, the card's process included.
