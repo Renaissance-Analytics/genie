@@ -605,6 +605,7 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
     let mut pad: Option<OpenSurface> = None;
     let mut panel_closed_at: Option<std::time::Instant> = None;
     fn close(slot: &mut Option<OpenSurface>, surface: Surface) {
+        forget_shown(surface);
         if slot.take().is_some() {
             surface.open_flag().store(false, std::sync::atomic::Ordering::SeqCst);
             eprintln!("genie: {} closed", surface.name());
@@ -621,6 +622,7 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
                 if panel_closed_at.map_or(false, |t| t.elapsed() < PANEL_TOGGLE) {
                     return;
                 }
+                forget_shown(Surface::Panel);
                 match surface_window(target, &mut context, &proxy, Surface::Panel, panel_html(&model)) {
                     Ok((window, webview)) => {
                         Surface::Panel.open_flag().store(true, std::sync::atomic::Ordering::SeqCst);
@@ -637,6 +639,7 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
                     p.window.set_focus();
                     return;
                 }
+                forget_shown(Surface::Pad);
                 match surface_window(target, &mut context, &proxy, Surface::Pad, pad_html(&model)) {
                     Ok((window, webview)) => {
                         Surface::Pad.open_flag().store(true, std::sync::atomic::Ordering::SeqCst);
@@ -665,10 +668,12 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
                 let slot = if surface == Surface::Panel { &mut panel } else { &mut pad };
                 if let Some(s) = slot.as_mut().filter(|s| !s.shown) {
                     s.shown = true;
+                    s.window.set_visible(true);
                     if surface == Surface::Panel {
                         place_panel(&s.window, s.anchor, s.size);
+                    } else {
+                        place_pad(&s.window);
                     }
-                    s.window.set_visible(true);
                     s.window.set_focus();
                     eprintln!("genie: {} is shown before its page said it loaded", surface.name());
                 }
@@ -694,6 +699,9 @@ pub fn run_resident(data_dir: PathBuf) -> Result<(), String> {
                             s.shown = true;
                             s.window.set_visible(true);
                             s.window.set_focus();
+                            if surface == Surface::Pad {
+                                place_pad(&s.window);
+                            }
                             eprintln!("genie: {} is shown: {}", surface.name(), msg["text"].as_str().unwrap_or("").replace('\n', " | "));
                         }
                     }
@@ -1194,6 +1202,26 @@ fn pick(surface: Surface, ctx: std::sync::Arc<crate::control::Context>, id: &str
     }
 }
 
+/// What a window's page said is forgotten when it opens or closes: a reader never takes a closed window's words for a
+/// new one's.
+fn forget_shown(surface: Surface) {
+    if let Ok(mut held) = SHOWN.lock() {
+        held.retain(|(s, _)| *s != surface);
+    }
+}
+
+/// The launch pad at its own size: Hyprland gave its floating window more than it asked for (630 x 674, run
+/// 1128-083346-4f0fbb), so its socket sizes and centres it. Elsewhere the window is made at its size and centred.
+fn place_pad(window: &tao::window::Window) {
+    #[cfg(unix)]
+    if hypr::running() {
+        let title = window.title();
+        std::thread::spawn(move || hypr::place_pad(&title, (520, 640)));
+    }
+    #[cfg(not(unix))]
+    let _ = window;
+}
+
 /// The panel put where it belongs once its page says how big it is: against the tray it was opened from.
 fn place_panel(window: &tao::window::Window, anchor: Option<(i32, i32)>, size: (f64, f64)) {
     #[cfg(windows)]
@@ -1287,35 +1315,83 @@ mod hypr {
         Some(Rect { left: x + g(0), top: y + g(1), right: x + w - g(2), bottom: y + h - g(3) })
     }
 
-    pub fn place_panel(title: &str, size: (i32, i32)) {
+    /// One dispatch, in the words this Hyprland reads: the legacy line (`movewindowpixel exact …`) first, and when the reply
+    /// is Lua's (Hyprland 0.56 with a Lua config wraps it as `return hl.dispatch(…)` and says the legacy words do not
+    /// parse), its Lua dispatcher. What it answered is returned, for the log.
+    fn dispatch(legacy: &str, lua: &str) -> String {
+        let said = ask(&format!("dispatch {legacy}")).unwrap_or_default();
+        if said.trim() == "ok" {
+            return said.trim().to_string();
+        }
+        let again = ask(&format!("dispatch {lua}")).unwrap_or_default();
+        format!("{} / lua: {}", said.trim(), again.trim())
+    }
+
+    /// The window of this launcher with this title, as Hyprland lists it, once it has mapped (looked for up to 2 s).
+    fn address_of(title: &str) -> Option<String> {
         let me = std::process::id() as u64;
-        // The window maps a moment after it is shown: looked for for up to 2 s.
-        let mut address = None;
         for _ in 0..40 {
-            address = json("j/clients").and_then(|c| {
+            let found = json("j/clients").and_then(|c| {
                 c.as_array()?.iter().find(|w| w["pid"].as_u64() == Some(me) && w["title"].as_str() == Some(title)).and_then(|w| w["address"].as_str().map(str::to_string))
             });
-            if address.is_some() {
-                break;
+            if found.is_some() {
+                return found;
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        let Some(address) = address else {
-            eprintln!("genie: the tray panel: Hyprland did not list its window, so it stays where Hyprland put it");
-            return;
-        };
-        let Some(cursor) = json("j/cursorpos") else { return };
-        let at = (cursor["x"].as_f64().unwrap_or(0.0) as i32, cursor["y"].as_f64().unwrap_or(0.0) as i32);
+        None
+    }
+
+    /// The monitor's work area under `at` (else the focused monitor's).
+    fn work_at(at: (i32, i32)) -> Option<Rect> {
         let list = json("j/monitors").and_then(|m| m.as_array().cloned()).unwrap_or_default();
         let on = list.iter().find(|m| {
             let Some(a) = work_area(m) else { return false };
             let (x, y) = (m["x"].as_i64().unwrap_or(0) as i32, m["y"].as_i64().unwrap_or(0) as i32);
             at.0 >= x && at.0 < a.right + 1 && at.1 >= y && at.1 < a.bottom + 1
         });
-        let Some(work) = on.or_else(|| list.iter().find(|m| m["focused"] == true)).and_then(work_area) else { return };
-        let (x, y) = place(at, work, size, 8);
-        let said = ask(&format!("dispatch movewindowpixel exact {x} {y},address:{address}")).unwrap_or_default();
-        let _ = ask(&format!("dispatch focuswindow address:{address}"));
-        eprintln!("genie: the tray panel: at {x},{y} (pointer {},{}; work area {work:?}): {}", at.0, at.1, said.trim());
+        on.or_else(|| list.iter().find(|m| m["focused"] == true)).and_then(work_area)
+    }
+
+    /// The window sized and put at `(x, y)`, focused; for the panel also without Hyprland's border and shadow (its corners
+    /// and its edge are the page's own). Each reply logged.
+    fn fit(name: &str, address: &str, size: (i32, i32), at: (i32, i32), bare: bool) {
+        let (w, h) = size;
+        let (x, y) = at;
+        let sel = format!("address:{address}");
+        let mut said = vec![
+            format!("size {}", dispatch(&format!("resizewindowpixel exact {w} {h},{sel}"), &format!("hl.dsp.window.resize({{ x = {w}, y = {h}, window = \"{sel}\" }})"))),
+            format!("at {}", dispatch(&format!("movewindowpixel exact {x} {y},{sel}"), &format!("hl.dsp.window.move({{ x = {x}, y = {y}, window = \"{sel}\" }})"))),
+        ];
+        if bare {
+            for (legacy, prop, value) in [("bordersize", "border_size", "0"), ("noshadow", "no_shadow", "1")] {
+                said.push(format!("{prop} {}", dispatch(&format!("setprop {sel} {legacy} {value}"), &format!("hl.dsp.window.set_prop({{ prop = \"{prop}\", value = \"{value}\", window = \"{sel}\" }})"))));
+            }
+        }
+        said.push(format!("focus {}", dispatch(&format!("focuswindow {sel}"), &format!("hl.dsp.focus({{ window = \"{sel}\" }})"))));
+        eprintln!("genie: {name}: {w}x{h} at {x},{y}: {}", said.join("; "));
+    }
+
+    /// The tray panel, its page's size, by the pointer under (or over) the bar it was opened from.
+    pub fn place_panel(title: &str, size: (i32, i32)) {
+        let Some(address) = address_of(title) else {
+            eprintln!("genie: the tray panel: Hyprland did not list its window, so it stays where Hyprland put it");
+            return;
+        };
+        let Some(cursor) = json("j/cursorpos") else { return };
+        let at = (cursor["x"].as_f64().unwrap_or(0.0) as i32, cursor["y"].as_f64().unwrap_or(0.0) as i32);
+        let Some(work) = work_at(at) else { return };
+        let pos = place(at, work, size, 8);
+        eprintln!("genie: the tray panel: pointer {},{}; work area {work:?}", at.0, at.1);
+        fit("the tray panel", &address, size, pos, true);
+    }
+
+    /// The launch pad at its own size (520 x 640), centred on the work area.
+    pub fn place_pad(title: &str, size: (i32, i32)) {
+        let Some(address) = address_of(title) else { return };
+        let at = json("j/cursorpos").map(|c| (c["x"].as_f64().unwrap_or(0.0) as i32, c["y"].as_f64().unwrap_or(0.0) as i32)).unwrap_or((0, 0));
+        let Some(work) = work_at(at) else { return };
+        let pos = (work.left + ((work.right - work.left - size.0) / 2).max(0), work.top + ((work.bottom - work.top - size.1) / 2).max(0));
+        fit("the launch pad", &address, size, pos, false);
     }
 }

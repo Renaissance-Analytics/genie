@@ -106,7 +106,7 @@ body{display:block}
     $('head-pill').title = p.head.state === 'running' ? 'Running' : p.head.state === 'stopped' ? 'Stopped' : 'No host here';
     var box = $('items'); box.textContent = '';
     (p.items || []).forEach(function (it) { box.appendChild(row(it)); });
-    requestAnimationFrame(report);
+    setTimeout(report, 0);
   };
   // A VM row's click (launcher.uiProbe {click}): the element's own handler, as the person's click runs it.
   window.genieClick = function (id) {

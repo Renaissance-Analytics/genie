@@ -141,7 +141,7 @@ html,body{height:100%;overflow:hidden;user-select:none}
     $('updates-count').hidden = !(u.count > 0);
     $('updates-count').textContent = String(u.count || 0);
     $('updates-label').textContent = u.label;
-    requestAnimationFrame(report);
+    setTimeout(report, 0);
   };
 
   document.querySelectorAll('[data-id]').forEach(function (e) {
